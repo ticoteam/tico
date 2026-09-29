@@ -9,7 +9,7 @@ anyio==4.15.1
     #   httpx
     #   starlette
 boto3==1.43.92
-    # via -r backend/requirements.in
+    # via -r requirements.in
 botocore==1.43.92
     # via
     #   boto3
@@ -24,19 +24,19 @@ cffi==2.1.1
 click==8.5.0
     # via uvicorn
 croniter==6.2.4
-    # via -r backend/requirements.in
+    # via -r requirements.in
 cryptography==50.0.1
     # via
-    #   -r backend/requirements.in
+    #   -r requirements.in
     #   pyjwt
 dnspython==2.8.0
     # via
-    #   -r backend/requirements.in
+    #   -r requirements.in
     #   pymongo
 execnet==2.1.2
     # via pytest-xdist
 fastapi==0.141.1
-    # via -r backend/requirements.in
+    # via -r requirements.in
 greenlet==3.5.5
     # via playwright
 h11==0.16.0
@@ -46,7 +46,7 @@ h11==0.16.0
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
-    # via -r backend/requirements.in
+    # via -r requirements.in
 idna==3.19
     # via
     #   anyio
@@ -60,11 +60,11 @@ jmespath==1.1.0
 packaging==26.3
     # via pytest
 playwright==1.62.0
-    # via -r backend/requirements-dev.in
+    # via -r requirements-dev.in
 pluggy==1.6.0
     # via pytest
-psycopg==3.3.6
-    # via -r backend/requirements.in
+psycopg[binary]==3.3.6
+    # via -r requirements.in
 psycopg-binary==3.3.6
     # via psycopg
 pycparser==3.0
@@ -77,45 +77,45 @@ pyee==13.0.1
     # via playwright
 pygments==2.21.0
     # via pytest
-pyjwt==2.13.0
-    # via -r backend/requirements.in
+pyjwt[crypto]==2.14.0
+    # via
+    #   -r requirements.in
+    #   pyjwt
 pymongo==4.18.2
-    # via -r backend/requirements.in
+    # via -r requirements.in
 pymysql==1.2.3
-    # via -r backend/requirements.in
+    # via -r requirements.in
 pypdf==6.19.0
-    # via -r backend/requirements.in
+    # via -r requirements.in
 pytest==9.1.1
     # via
-    #   -r backend/requirements.in
+    #   -r requirements.in
     #   pytest-xdist
 pytest-xdist==3.8.0
-    # via -r backend/requirements-dev.in
+    # via -r requirements-dev.in
 python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   croniter
 pyyaml==6.0.3
-    # via -r backend/requirements.in
+    # via -r requirements.in
 s3transfer==0.19.2
     # via boto3
 sentry-sdk==2.69.1
-    # via -r backend/requirements.in
+    # via -r requirements.in
 six==1.17.0
     # via python-dateutil
 slack-sdk==3.44.1
-    # via -r backend/requirements.in
+    # via -r requirements.in
 starlette==1.6.0
     # via fastapi
 typing-extensions==4.16.0
     # via
     #   anyio
     #   fastapi
-    #   psycopg
     #   pydantic
     #   pydantic-core
     #   pyee
-    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
@@ -126,6 +126,6 @@ urllib3==2.7.0
     #   botocore
     #   sentry-sdk
 uvicorn==0.52.4
-    # via -r backend/requirements.in
+    # via -r requirements.in
 websockets==15.0.1
-    # via -r backend/requirements.in
+    # via -r requirements.in
