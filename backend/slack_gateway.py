@@ -47,9 +47,17 @@ so there is no public receiver and no signing secret. What it does, in order, fo
    the same transaction. Nothing unread, nothing sent, no turn. A reply in a thread a bot
    already has a conversation in does not wait for the hour: it goes through step 3 at once.
 
-It never runs a bot turn and never loads an employee's secrets; the tokens it holds are the one
-Slack app's, read by `backend.config.slack_credentials`. Kill switch: `TICO_SLACK_GATEWAY_ENABLED`;
-`TICO_SLACK_DIGEST_MINUTES=0` pauses the readers' pass while storage goes on.
+7. **A human's mentions** (`backend/mentions.py`, docs/mentions.md). A human who connects their
+   own Slack through the mentions app (`SLACK_MENTIONS_APP_TOKEN` and their
+   `<HUMAN>_SLACK_USER_TOKEN` in the vault, read every `VAULT_SECONDS`) has every channel message
+   that names them kept as a mention, one per Slack thread; the gateway reads the thread for
+   context, and posts the reply they approve as them. Nothing else they can see is stored, and
+   DMs are never read.
+
+It never runs a bot turn and never loads a bot's secrets; the tokens it holds are the Tico app's,
+read by `backend.config.slack_credentials`, and each connected human's, read from the vault. Kill
+switch: `TICO_SLACK_GATEWAY_ENABLED`; `TICO_SLACK_DIGEST_MINUTES=0` pauses the readers' pass while
+storage goes on.
 """
 
 import argparse
@@ -69,6 +77,7 @@ import urllib.request
 import yaml
 
 from . import hubdb as H
+from . import mentions as M
 from . import people as P
 from . import providers
 from . import slack_app
@@ -106,6 +115,12 @@ MAX_BOTS = 60
 NEEDED_SCOPES = ("app_mentions:read", "im:history", "channels:history", "groups:history", "chat:write",
                  "chat:write.customize", "users:read", "users:read.email")
 CUSTOMIZE_SCOPE = "chat:write.customize"
+VAULT_SECONDS = 300             # how often the vault is read for tokens a person stored there
+# A human's own Slack, for their mentions: the mentions app's socket and their user token.
+MENTION_USER_ENV = re.compile(r"^([A-Z][A-Z0-9_]*)" + M.USER_TOKEN_SUFFIX + "$")
+# Channels and private channels only: a DM or group DM is never read for mentions, and the
+# mentions app has no scopes to receive one.
+MENTION_TYPES = ("channel", "group")
 MENTION_RE = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
 USER_RE = MENTION_RE
 CHAN_RE = re.compile(r"<#([A-Z0-9]+)(?:\|([^>]*))?>")
@@ -200,6 +215,19 @@ class SlackAPI:
             "icon_emoji": icon_emoji, "icon_url": icon_url, "unfurl_links": False, "unfurl_media": False},
             post=True)
 
+    def permalink(self, channel, ts):
+        return str(self.call("chat.getPermalink", {"channel": channel, "message_ts": ts}).get("permalink") or "")
+
+    def thread(self, channel, root, limit=HISTORY_PAGE):
+        """A thread with its root, oldest first."""
+        data = self.call("conversations.replies", {"channel": channel, "ts": root, "limit": limit})
+        return sorted(data.get("messages") or [], key=lambda m: float(m.get("ts") or 0))
+
+    def before(self, channel, ts, limit=8):
+        """The channel's last messages up to and including `ts`, oldest first."""
+        data = self.call("conversations.history", {"channel": channel, "latest": ts, "inclusive": True, "limit": limit})
+        return sorted(data.get("messages") or [], key=lambda m: float(m.get("ts") or 0))
+
     def conversations_open(self, user_id):
         """The IM with this Slack user, created if needed. Needs `im:write`."""
         return self.call("conversations.open", {"users": user_id}, post=True).get("channel") or {}
@@ -239,6 +267,15 @@ class SlackAPI:
             except Exception:
                 pass
             self._socket = None
+
+
+class MentionPerson:
+    """A human whose own Slack the mentions app reads: their client (their user token), who they
+    are in Slack, and the credential revision it was verified with, so a rotated token reconnects."""
+
+    def __init__(self, person, slack, revision):
+        self.person, self.slack, self.revision = person, slack, revision
+        self.user_id = ""
 
 
 # ----------------------------------------------------------------------------- pure helpers
@@ -436,7 +473,8 @@ def ends_with_question(body):
 class Gateway:
     """Verify, persist, route, write, mirror. One instance per process; tests drive `tick()`."""
 
-    def __init__(self, store, slack, judge_engine=None, clock=None):
+    def __init__(self, store, slack, judge_engine=None, clock=None, slack_factory=None, cipher=None,
+                 mention_tokens=None):
         self.store, self.slack = store, slack
         self.settings = store.settings
         self._judge = judge_engine
@@ -455,6 +493,17 @@ class Gateway:
         self.pin_workspace = False          # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None               # called every loop turn; the process uses it for health
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
+        # Tokens people store in the vault. Tests hand in the Slack fakes and the tokens; the process
+        # makes clients and reads the vault. `listening` is set once Tico's own socket is up.
+        self.make_slack = slack_factory or SlackAPI
+        self._cipher = cipher
+        self.next_vault = self.clock()
+        self.listening = False
+        # Humans' own Slack, for their mentions (backend/mentions.py).
+        self._mention_tokens = mention_tokens
+        self.mention_people = {}            # person id -> MentionPerson, verified
+        self.mentions_socket = None         # (credential revision, client) of the mentions app's socket
+        self._mention_logged = {}           # person id -> the revision whose failure was logged
 
     # ------------------------------------------------------------------ start-up
     @property
@@ -510,9 +559,272 @@ class Gateway:
             for row in rows:
                 c.execute("UPDATE slack_posts SET state='uncertain',error=?,updated=? WHERE message_id=?",
                           ("gateway restarted while sending", self.clock(), row["message_id"]))
-        if rows:
-            LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows))
+            replies = c.execute("UPDATE mention_items SET state='uncertain',error=?,updated=? WHERE kind='reply' "
+                                "AND state='sending'", ("gateway restarted while sending", self.clock())).rowcount
+        if rows or replies:
+            LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows) + replies)
+        return len(rows) + replies
+
+    # ------------------------------------------------------------------ tokens in the vault
+    def _vault(self, want):
+        """Bot variable name -> (credential id, revision, secret) for the stored credentials `want` accepts,
+        the newest per name. Only what is wanted is decrypted. Only a credential administrator can
+        store one, so a name is as trusted as the vault."""
+        if not self.settings.credential_kms_key:
+            return {}
+        if self._cipher is None:
+            from .credentials import CredentialCipher
+            self._cipher = CredentialCipher(self.settings.credential_kms_key)
+        rows = {}
+        with self.store.read() as c:
+            for row in c.execute("SELECT id,env,nonce,ciphertext,revision FROM credentials "
+                                 "WHERE env LIKE '%SLACK%TOKEN' AND ciphertext IS NOT NULL ORDER BY updated, id"):
+                if want(row["env"]):
+                    rows[row["env"]] = row
+            return {env: (row["id"], row["revision"], self._cipher.decrypt(c, row).strip()) for env, row in rows.items()}
+
+    # ------------------------------------------------------------------ a human's mentions
+    def mention_tokens(self):
+        """The mentions app's socket token and each human's Slack user token, from the vault:
+        `SLACK_MENTIONS_APP_TOKEN` and `<HUMAN>_SLACK_USER_TOKEN` for a human in the hub."""
+        if self._mention_tokens is not None:
+            return self._mention_tokens()
+        found = self._vault(lambda env: env == M.APP_TOKEN_ENV or bool(MENTION_USER_ENV.match(env)))
+        app = found.pop(M.APP_TOKEN_ENV, None)
+        people = {}
+        with self.store.read() as c:
+            for env, (cid, revision, secret) in found.items():
+                pid = MENTION_USER_ENV.match(env).group(1).lower().replace("_", "-")
+                if H.human(c, pid):
+                    people[pid] = {"user_token": secret, "revision": (cid, revision), "ids": [cid]}
+        return {"app_token": app[2] if app else "", "revision": app[:2] if app else None,
+                "ids": [app[0]] if app else [], "people": people}
+
+    def verify_mention_person(self, who):
+        """A human's token must be this workspace's, a person's (not a bot's), and theirs: the
+        Slack account's verified email is the one the hub has for them."""
+        auth = who.slack.auth_test()
+        if str(auth.get("team_id") or "") != self.team_id:
+            raise RuntimeError(f"the token belongs to workspace {auth.get('team_id')}, not {self.team_id}")
+        if auth.get("bot_id"):
+            raise RuntimeError("that is a bot's token, not the human's own")
+        user_id = str(auth.get("user_id") or "")
+        profile = (who.slack.users_info(user_id) or {}).get("profile") or {}
+        email = str(profile.get("email") or "").strip().lower()
+        with self.store.read() as c:
+            expected = str((H.human(c, who.person) or {}).get("email") or "").strip().lower()
+        if not email or email != expected:
+            raise RuntimeError(f"the token is {email or 'an account with no email'}'s, not {who.person}'s")
+        who.user_id = user_id
+
+    def connect_mentions(self):
+        """Match the humans whose Slack is read, and the mentions app's socket, to the vault. A
+        human is read only while the app's token is there too. A failure is logged once per
+        revision and tried again next time. Returns the humans read."""
+        self.next_vault = H.shift(self.clock(), seconds=VAULT_SECONDS)
+        try:
+            tokens = self.mention_tokens()
+        except Exception as exc:                    # the vault or KMS: keep what is connected
+            LOG.error("Mentions not read from the vault: %s", type(exc).__name__)
+            return sorted(self.mention_people)
+        people = tokens["people"] if tokens["app_token"] else {}
+        for pid in [p for p, who in self.mention_people.items()
+                    if p not in people or people[p]["revision"] != who.revision]:
+            self.mention_people.pop(pid, None)
+            LOG.info("Stopped reading %s's Slack for mentions", pid)
+        for pid, t in sorted(people.items()):
+            if pid in self.mention_people:
+                continue
+            who = MentionPerson(pid, self.make_slack(t["user_token"], tokens["app_token"]), t["revision"])
+            try:
+                self.verify_mention_person(who)
+            except Exception as exc:
+                if self._mention_logged.get(pid) != t["revision"]:
+                    LOG.error("%s's Slack not read for mentions: %s", pid,
+                              exc if isinstance(exc, (RuntimeError, SlackError)) else type(exc).__name__)
+                    self._mention_logged[pid] = t["revision"]
+                continue
+            self.mention_people[pid] = who
+            self._mention_logged.pop(pid, None)
+            with self.store.transaction() as c:
+                for cid in t["ids"] + tokens["ids"]:
+                    H.event(c, H.KEEPER, "credential.revealed", cid, {"for": "slack gateway", "mentions": pid})
+            LOG.info("Reading %s's Slack for mentions (user %s)", pid, who.user_id)
+        want = tokens["revision"] if self.mention_people else None
+        if self.mentions_socket and self.mentions_socket[0] != want:
+            self.mentions_socket[1].close()
+            self.mentions_socket = None
+        if want and self.listening and not self.mentions_socket:
+            client = self.make_slack(people[sorted(self.mention_people)[0]]["user_token"], tokens["app_token"])
+            try:
+                client.connect(lambda payload: self.receive_mention(payload))
+                self.mentions_socket = (want, client)
+                LOG.info("Mentions app connected")
+            except Exception as exc:
+                LOG.error("Mentions app not connected: %s", type(exc).__name__)
+        return sorted(self.mention_people)
+
+    def receive_mention(self, payload):
+        """An event from the mentions app: a message in a channel a connected human is in. One that
+        names them is a mention of theirs; a later message in a thread they have a mention in is
+        kept with it. Everything else, and every DM, is dropped unread. Persisted before the ack."""
+        if str(payload.get("team_id") or "") != self.team_id:
+            return "foreign"
+        event = payload.get("event") or {}
+        if event.get("type") != "message" or event.get("channel_type") not in MENTION_TYPES:
+            return "type"
+        if str(event.get("subtype") or "") not in ("", "thread_broadcast", "file_share") or event.get("bot_id"):
+            return "bot_or_subtype"
+        channel, ts, author = str(event.get("channel") or ""), str(event.get("ts") or ""), str(event.get("user") or "")
+        if not channel or not ts or not author:
+            return "shape"
+        text = str(event.get("text") or "")
+        thread = str(event.get("thread_ts") or ts)
+        people = list(self.mention_people.values())
+        # Naming yourself counts too (a note to self, or a test). A reply posted through Tico
+        # cannot name anyone: its text is escaped, so it never comes back as a mention.
+        named = [who for who in people if who.user_id and "<@" + who.user_id in text]
+        with self.store.read() as c:
+            joined = [r["person"] for r in c.execute(
+                "SELECT person FROM mentions WHERE source='slack' AND place=? AND thread=? AND status!='ignored'",
+                (channel, thread))]
+        followers = [who for who in people if who.person in joined and who not in named]
+        if not named and not followers:
+            return "not_a_mention"
+        recorded = 0
+        with self.store.transaction() as c:
+            for who in named:
+                recorded += bool(M.record_slack(c, who.person, channel, ts, thread, author, text, "mention", self.clock()))
+            for who in followers:
+                kind = "reply" if author == who.user_id else "message"
+                recorded += bool(M.record_slack(c, who.person, channel, ts, thread, author, text, kind, self.clock()))
+        if recorded:
+            self.wake.set()
+        return "mention" if named else "context"
+
+    def slack_name(self, client, uid):
+        """What to call a Slack user: their real name, cached."""
+        if uid not in self._names:
+            try:
+                user = client.users_info(uid)
+            except (SlackError, SlackUnreachable):
+                return uid
+            profile = user.get("profile") or {}
+            self._names[uid] = str(profile.get("real_name") or profile.get("display_name") or user.get("real_name")
+                                   or user.get("name") or uid)
+        return self._names[uid]
+
+    def named_text(self, client, text):
+        """Slack markup with every mentioned user named."""
+        return humanize(text, {uid: self.slack_name(client, uid) for uid in USER_RE.findall(str(text or ""))})
+
+    def enrich_mentions(self):
+        """New mention items get what the human needs to answer: names, where, permalinks, and the
+        thread so far. A channel shared outside the company, or a DM that got through anyway, makes
+        the mention `ignored`. Any Slack call that fails leaves that piece out; nothing waits on it."""
+        people = sorted(self.mention_people)
+        if not people:
+            return 0
+        with self.store.read() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT i.id,i.kind,i.source_id,i.author_id,i.text,m.id AS mention_id,m.person,m.place,m.thread,"
+                "m.status,m.title,m.permalink AS mention_link FROM mention_items i JOIN mentions m ON m.id=i.mention_id "
+                "WHERE i.state='new' AND m.source='slack' AND m.person IN (%s) ORDER BY i.created LIMIT 20"
+                % ",".join("?" * len(people)), tuple(people))]
+        for row in rows:
+            self.enrich_one(self.mention_people[row["person"]], row)
         return len(rows)
+
+    def enrich_one(self, who, row):
+        client, channel, ts, root = who.slack, row["place"], row["source_id"], row["thread"]
+
+        def attempt(fn, default):
+            try:
+                return fn()
+            except (SlackError, SlackUnreachable) as exc:
+                LOG.warning("Mention context for %s: %s", row["mention_id"], getattr(exc, "code", exc))
+                return default
+        info = attempt(lambda: client.conversations_info(channel), {})
+        now = self.clock()
+        if is_external(info) or info.get("is_im") or info.get("is_mpim"):
+            with self.store.transaction() as c:
+                c.execute("UPDATE mentions SET status='ignored',updated=? WHERE id=?", (now, row["mention_id"]))
+                c.execute("UPDATE mention_items SET state='ready',updated=? WHERE mention_id=? AND state='new'",
+                          (now, row["mention_id"]))
+            return
+        where = "#" + str(info.get("name") or channel).lstrip("#")
+        # The thread so far; a message nobody has replied to yet gets what came before it.
+        messages = attempt(lambda: client.thread(channel, root, M.CONTEXT_LINES + 1), []) if root else []
+        if len(messages) <= 1:
+            messages = attempt(lambda: client.before(channel, ts), messages)
+        seen, context = set(), []
+        for m in sorted(messages, key=lambda m: float(m.get("ts") or 0))[-M.CONTEXT_LINES:]:
+            if str(m.get("ts")) in seen:
+                continue
+            seen.add(str(m.get("ts")))
+            author = (m.get("user") and self.slack_name(client, str(m["user"]))) or m.get("username") or \
+                (m.get("bot_profile") or {}).get("name") or "a bot"
+            context.append({"author": author, "at": M.slack_time(m.get("ts")), "ts": str(m.get("ts")),
+                            "text": self.named_text(client, message_text(m))[:1500],
+                            "mention": bool(who.user_id and "<@" + who.user_id in str(m.get("text") or ""))})
+        link = attempt(lambda: client.permalink(channel, ts), "")
+        thread_link = row["mention_link"] or (attempt(lambda: client.permalink(channel, root), "") if root and root != ts else link)
+        author = self.slack_name(client, row["author_id"])
+        text = self.named_text(client, row["text"])
+        title = row["title"] or (f"{author}: {' '.join(text.split())}"[:120] if row["kind"] == "mention" else "")
+        reopen = row["kind"] == "mention" and row["status"] in ("pending", "done")
+        with self.store.transaction() as c:
+            c.execute("UPDATE mention_items SET author=?,text=?,permalink=?,state='ready',updated=? WHERE id=?",
+                      (author, text[:M.TEXT_CHARS], link, now, row["id"]))
+            c.execute("UPDATE mentions SET status=CASE WHEN ? THEN 'open' ELSE status END,"
+                      "done_at=CASE WHEN ? THEN NULL ELSE done_at END,place_name=?,permalink=?,title=?,context_json=?,"
+                      "updated=? WHERE id=?",
+                      (reopen, reopen, where, thread_link or "", title, json.dumps(context), now, row["mention_id"]))
+
+    def deliver_mention_replies(self):
+        """Post what a human approved, as them, in the mention's thread, once. A crash or a network
+        fault between send and record is `uncertain`, never resent."""
+        people = sorted(self.mention_people)
+        if not people:
+            return []
+        with self.store.read() as c:
+            due = [dict(r) for r in c.execute(
+                "SELECT i.id,i.mention_id,i.text,m.person,m.place,m.thread FROM mention_items i "
+                "JOIN mentions m ON m.id=i.mention_id WHERE i.kind='reply' AND i.state='ready' AND m.source='slack' "
+                "AND m.person IN (%s) ORDER BY i.created LIMIT 10" % ",".join("?" * len(people)), tuple(people))]
+        results = []
+        for item in due:
+            with self.store.transaction() as c:
+                if not c.execute("UPDATE mention_items SET state='sending',updated=? WHERE id=? AND state='ready'",
+                                 (self.clock(), item["id"])).rowcount:
+                    continue
+            who = self.mention_people[item["person"]]
+            state, ts, error, link = "sent", "", None, ""
+            try:
+                ts = str(who.slack.post_message(item["place"], item["thread"] or None, slack_escape(item["text"])).get("ts") or "")
+            except SlackError as exc:
+                state, error = "failed", exc.code
+            except Exception as exc:                # unreachable, unreadable: it may have gone out
+                state, error = "uncertain", f"{type(exc).__name__}: {exc}"[:300]
+            if ts:
+                try:
+                    link = who.slack.permalink(item["place"], ts)
+                except (SlackError, SlackUnreachable):
+                    link = ""
+            with self.store.transaction() as c:
+                if ts:
+                    # Its own copy may already have come back through the socket as a reply.
+                    c.execute("DELETE FROM mention_items WHERE mention_id=? AND kind='reply' AND source_id=? AND id<>?",
+                              (item["mention_id"], ts, item["id"]))
+                c.execute("UPDATE mention_items SET state=?,error=?,source_id=?,permalink=?,at=?,updated=? WHERE id=?",
+                          (state, error, ts or "queued:" + item["id"], link, M.slack_time(ts) if ts else self.clock(),
+                           self.clock(), item["id"]))
+                c.execute("UPDATE mentions SET updated=? WHERE id=?", (self.clock(), item["mention_id"]))
+                H.event(c, "human:" + item["person"], "mention.posted", item["mention_id"], {"state": state, "error": error})
+            if state != "sent":
+                LOG.warning("Reply %s for %s is %s: %s", item["id"], item["person"], state, error)
+            results.append({"item": item["id"], "state": state, "ts": ts})
+        return results
 
     # ------------------------------------------------------------------ ingress
     def receive(self, payload):
@@ -1185,16 +1497,7 @@ class Gateway:
         """What a digest calls the author: the roster name for a person, the bot's own name for a bot."""
         if row["author"] == "bot":
             return row["author_name"] or ("the " + self.settings.assistant_name + " app" if row["user_id"] == self.bot_user_id else "a bot")
-        uid = row["user_id"]
-        if uid not in self._names:
-            try:
-                user = self.slack.users_info(uid)
-                profile = user.get("profile") or {}
-                self._names[uid] = str(profile.get("real_name") or profile.get("display_name") or user.get("real_name")
-                                       or user.get("name") or uid)
-            except (SlackError, SlackUnreachable):
-                return uid
-        return self._names[uid]
+        return self.slack_name(self.slack, row["user_id"])
 
     def render_line(self, row, marker=""):
         text = str(row["text"] or "").strip()
@@ -1365,7 +1668,10 @@ class Gateway:
 
     # ------------------------------------------------------------------ the loop
     def tick(self):
-        """One pass: pending events, then replies to mirror, then posts to send, then the readers' pass when due."""
+        """One pass: the vault's tokens when due, pending events, then replies to mirror, then posts
+        to send, then mentions' context and replies, then the readers' pass when due."""
+        if self.clock() >= self.next_vault:
+            self.connect_mentions()
         out = []
         for event in self.pending():
             try:
@@ -1378,6 +1684,8 @@ class Gateway:
         self.originate()
         self.mirror()
         posts = self.deliver()
+        self.enrich_mentions()
+        self.deliver_mention_replies()
         digests = self.maybe_digest()
         return {"events": out, "posts": posts, "digests": digests}
 
@@ -1456,6 +1764,7 @@ def main(argv=None, make_slack=None):
             return 0
         LOG.info("Verified workspace %s app %s bot user %s", verified["team_id"], verified["app_id"], verified["bot_user_id"])
         if args.check:
+            verified["mentions"] = gateway.connect_mentions()
             print(json.dumps(verified))
             return 0
         if stored is not None and not (stored["team_id"] and stored["app_id"]):
@@ -1472,6 +1781,7 @@ def main(argv=None, make_slack=None):
             if _sleep(stopping, 60):
                 continue
             return 0
+        gateway.listening = True                # the mentions app connects on the first tick
         LOG.info("Socket Mode connected; listening for app_mention, message.im, message.channels and message.groups; "
                  "readers' pass every %d minute(s)", settings.slack_digest_minutes)
         state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
@@ -1494,6 +1804,8 @@ def main(argv=None, make_slack=None):
         try:
             gateway.run()
         finally:
+            if gateway.mentions_socket:
+                gateway.mentions_socket[1].close()
             gateway.slack.close()
             LOG.info("Slack gateway stopped")
         if stopping.is_set() or not wait or state["stamp"] is None:

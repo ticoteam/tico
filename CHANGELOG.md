@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **A human's Slack mentions.** A human who connects their own Slack through the mentions app
+  (`connectors/slack-mentions-app-manifest.yaml`; an app-level token and their user token in the credential vault) has
+  every channel thread that names them kept as a mention, with the thread so far as context, and the reply they approve
+  posted in the thread as them. DMs and group DMs are never read, a channel shared outside the company is ignored, and
+  only that human can read their mentions. `GET /api/v2/mentions[?since=]` (with `connected`), `GET|POST
+  /api/v2/mentions/{id}`, `POST /api/v2/mentions/{id}/reply`. See docs/mentions.md.
+
 ## [0.2.24] - 2026-09-30
 
 ### Changed

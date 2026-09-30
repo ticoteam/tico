@@ -1,0 +1,48 @@
+# Slack app manifest for the mentions app: a human's own Slack, read for what people ask them
+# (backend/mentions.py, docs/mentions.md). One app for the company; each human who wants their
+# mentions in Tico installs it for themselves, which gives Tico their user token.
+#   1. https://api.slack.com/apps > Create New App > From an app manifest, paste this, create.
+#   2. Basic Information > App-Level Tokens > Generate: scope connections:write (the xapp- token).
+#      Store it once, as a credential administrator, in Settings > Credentials with the bot variable
+#      name SLACK_MENTIONS_APP_TOKEN, granted to nobody.
+#   3. Each human: Install App > Install to Workspace (or the app's install link), then copy the
+#      User OAuth Token (xoxp-) into a credential whose bot variable name is
+#      <HUMAN>_SLACK_USER_TOKEN, their Tico id in capitals (ana: ANA_SLACK_USER_TOKEN), granted
+#      to nobody.
+# The Slack gateway reads the vault every five minutes; nothing else needs a deploy or a setting.
+#
+# User scopes, all used by the gateway:
+#   channels:history, groups:history  the messages that name you, and their thread
+#   channels:read, groups:read        where they were (Slack Connect is ignored)
+#   users:read, users:read.email      names, and that the token is yours
+#   chat:write                        post the reply you approve, as you
+# No im:* or mpim:* scopes: your DMs and group DMs are never read. Scopes on a user token only
+# ever add up, so after taking any away revoke the old token (OAuth & Permissions > Revoke All
+# OAuth Tokens) before reinstalling. The gateway receives every message in the channels you are
+# in and keeps only those that name you (and later messages in those threads); the rest is
+# dropped unread.
+
+display_information:
+  name: Tico Mentions
+  description: "Brings what people ask you in Slack to Tico, and posts the reply you approve as you."
+  background_color: "#1f2933"
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - users:read
+      - users:read.email
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+  interactivity:
+    is_enabled: false
+  event_subscriptions:
+    user_events:
+      - message.channels
+      - message.groups

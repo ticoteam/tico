@@ -3092,6 +3092,8 @@ def create_app(settings=None):
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
+    from .mentions import install_mentions
+    install_mentions(app, store, mutate)
     from .sql import install_sql
     install_sql(app, store, auth)
     from .judge import install_judge

@@ -168,6 +168,13 @@ record is `uncertain` and waits for a human.
 Thread replies are solicited: they are not stopped by `post: false` in `registry/slack-channels.yaml` and
 grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
 
+## A human's mentions
+
+A human can connect their own Slack through a second app, the mentions app, so that every
+channel thread that names them is kept for them alone and their approved reply is posted as
+them. The gateway holds that app's socket and each connected human's user token, read from the
+credential vault; it never reads their DMs. See [mentions.md](mentions.md).
+
 ## Tables
 
 | Table | One row per | States |
@@ -269,4 +276,7 @@ the pass never handing a reader the same message twice, a thread delivered with 
 lines as context, edits and deletions before and after delivery, the cap and the cursor moving
 past what it skipped, a reply in a bot's thread routed at once, the channel copy of a mention
 routed once, history filling a gap without routing and an unreadable channel skipped, a refused
-delivery leaving the cursors where they were, and the pause. Nothing live is called.
+delivery leaving the cursors where they were, and the pause. Nothing live is called. `backend/tests/test_mentions.py` covers a
+human's mentions: one mention per thread with its context, the reply posted as them once, a DM
+never read, a token used only for the human whose Slack it is, and only that human reading
+their mentions.

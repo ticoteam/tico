@@ -308,6 +308,27 @@ CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt)
 """
 SCHEMA += SLACK_SCHEMA
 
+# A person's mentions in Slack (backend/mentions.py, docs/mentions.md): one row per thread that
+# names them, its messages in `mention_items`. Only that person reads them; `hub sql` does not
+# name these tables, so it denies them to everyone.
+MENTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mentions(
+ id TEXT PRIMARY KEY, person TEXT NOT NULL, source TEXT NOT NULL, place TEXT NOT NULL,
+ thread TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', title TEXT NOT NULL DEFAULT '',
+ place_name TEXT NOT NULL DEFAULT '', permalink TEXT NOT NULL DEFAULT '', bot TEXT,
+ context_json TEXT NOT NULL DEFAULT '[]', created TEXT NOT NULL, updated TEXT NOT NULL,
+ last_at TEXT NOT NULL, done_at TEXT, UNIQUE(person, source, place, thread));
+CREATE INDEX IF NOT EXISTS mentions_person ON mentions(person, updated);
+CREATE TABLE IF NOT EXISTS mention_items(
+ id TEXT PRIMARY KEY, mention_id TEXT NOT NULL REFERENCES mentions(id), kind TEXT NOT NULL,
+ source_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', author_id TEXT NOT NULL DEFAULT '',
+ text TEXT NOT NULL, at TEXT NOT NULL, permalink TEXT NOT NULL DEFAULT '',
+ state TEXT NOT NULL DEFAULT 'new', error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL,
+ UNIQUE(mention_id, kind, source_id));
+CREATE INDEX IF NOT EXISTS mention_items_state ON mention_items(state, kind, created);
+"""
+SCHEMA += MENTIONS_SCHEMA
+
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
 # days of stored responses is generous. Without a bound the table kept every mutating
