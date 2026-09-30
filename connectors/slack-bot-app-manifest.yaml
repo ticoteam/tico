@@ -1,0 +1,62 @@
+# Slack app manifest for one bot's own app (backend/slack_gateway.py, docs/slack-gateway.md,
+# "A bot's own Slack app"). Replace the two names and the description with the bot's, then:
+#   1. https://api.slack.com/apps > Create New App > From an app manifest, paste this, create.
+#   2. Basic Information > App-Level Tokens > Generate: scope connections:write (the xapp- token).
+#   3. Install App > Install to Workspace (the xoxb- Bot User OAuth Token).
+#   4. Settings > Credentials, as a credential administrator: two credentials, granted to nobody,
+#      whose bot variable names are <SLUG>_SLACK_BOT_TOKEN and <SLUG>_SLACK_APP_TOKEN, the slug in
+#      capitals with dashes as underscores (product-manager: PRODUCT_MANAGER_SLACK_BOT_TOKEN).
+#   5. /invite @<Bot name> in each channel people should reach it from. DMs work anywhere.
+# The gateway reads the vault every five minutes; nothing else needs a restart or a setting.
+#
+# Scopes, all used by the gateway for this app:
+#   app_mentions:read     receive @<Bot name> mentions in channels it is in (app_mention)
+#   im:history            receive DMs people send it                         (message.im)
+#   im:read               see its DM conversations
+#   im:write              open a DM when the bot writes to a human first
+#   chat:write            post the bot's replies
+#   users:read            the sender's account (guest, deactivated, workspace)
+#   users:read.email      the sender's work email, checked against the roster
+#   channels:read         a public channel's details (Slack Connect is refused)
+#   groups:read           a private channel's details, for channels it is in
+#   channels:history, groups:history  read a thread it is mentioned in (reserved; the gateway
+#                         stores channels through Tico's app)
+# No chat:write.customize: the app is the bot, with its own name and icon, so replies carry no
+# "(sent from ...)" footer.
+
+display_information:
+  name: Product Manager
+  description: "Acme's AI product manager. @mention it or DM it; it answers in the thread."
+  background_color: "#5b3fd1"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Product Manager
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - channels:history
+      - channels:read
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+      - users:read.email
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
+  interactivity:
+    is_enabled: false
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im

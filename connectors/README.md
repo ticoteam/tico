@@ -14,6 +14,9 @@ not a shortcut.
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
   subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`). The gateway itself is `backend/slack_gateway.py`
   on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
+- `slack-bot-app-manifest.yaml` - one bot's own Slack app: people @mention or DM the bot itself
+  and it answers as itself. Its tokens are vault credentials the gateway reads by bot variable
+  name; the file lists the steps (`docs/slack-gateway.md`, "A bot's own Slack app").
 - `mail/` - read and file email as ana@acme.example or legal@acme.example, and the deterministic inbox
   rules. Run it as `scripts/mail.sh`. One Google service account with domain-wide delegation,
   key at `secrets/google-sa.json`, never in a bot's environment. Employee guide: `docs/mail.md`;

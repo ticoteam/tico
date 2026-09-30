@@ -168,13 +168,41 @@ record is `uncertain` and waits for a human.
 Thread replies are solicited: they are not stopped by `post: false` in `registry/slack-channels.yaml` and
 grant no bot any posting right there; `connectors/slack.py` and its gates are unchanged.
 
+## A bot's own Slack app
+
+A bot can have a Slack app of its own, so people write `@Product Manager` instead of
+`@Tico product manager …` and the answer comes from Product Manager itself, not an app posting
+under its name. One more Socket Mode connection in the same gateway process, nothing new on the
+server:
+
+| In Slack | What happens |
+|---|---|
+| `@<Bot>` in a channel the app is in, or a DM to it | Goes to that bot and no other: no decision model (`routing.routed_by: "own app"`). When the sender may not write to the bot, or the write layer refuses it (paused), the event is `failed` with the reason, never handed to the assistant. Same checks on the sender and the channel as for Tico. |
+| The bot's reply in that thread or DM | Posted by the bot's app with `chat.postMessage`: its own name and icon, no footer, no `chat:write.customize`. |
+| The bot writes to a human with no Slack thread yet | Opened in the human's DM with the bot's app, not Tico's DM. |
+| Tico's copy of a channel message that names the bot's app | Stored, never routed by the decision model; the app's own `app_mention` takes the stored row, so the message is routed once whichever arrives first. |
+| `@Tico product manager …` | Unchanged: the decision model routes it, and the bot still answers through Tico's app with the footer. A thread keeps the app it started with, until the bot's own app is addressed in it; from then its replies there come from its own app. |
+
+The app's tokens are two credentials in the credential vault ([credential-vault.md](credential-vault.md)),
+added by a credential administrator in Settings > Credentials, granted to nobody, whose bot
+variable names are `<SLUG>_SLACK_BOT_TOKEN` and `<SLUG>_SLACK_APP_TOKEN` (the slug in capitals,
+dashes as underscores: `PRODUCT_MANAGER_SLACK_BOT_TOKEN`). The gateway reads them every five
+minutes with the vault key (`TICO_CREDENTIAL_KMS_KEY`), newest per name, for a bot that exists;
+each read that connects an app is a `credential.revealed` event by the keeper. A new pair
+connects, a changed one reconnects, a removed one disconnects, all without a restart. The app
+must be in the configured workspace and must not be Tico's app; a token that fails is logged once
+and tried again every five minutes. Unlike Tico's own tokens, these live in the vault so a bot's
+owner can have them added and rotated without touching the server.
+`connectors/slack-bot-app-manifest.yaml` is the app, with the steps;
+`python -m backend.slack_gateway --check` lists the bot apps that verify.
+
 ## Tables
 
 | Table | One row per | States |
 |---|---|---|
-| `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted` | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message the readers get |
-| `slack_threads` | Slack thread and bot: the Tico conversation it continues | |
-| `slack_posts` | bot reply to mirror | `ready`, `sending`, `sent`, `rate_limited`, `failed`, `uncertain` |
+| `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted`; `app`, the bot whose own app it came through ('' for Tico) | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message the readers get |
+| `slack_threads` | Slack thread and bot: the Tico conversation it continues; `app`, whose app posts its replies | |
+| `slack_posts` | bot reply to mirror; `app`, the app that posts it (a post for an app not connected waits) | `ready`, `sending`, `sent`, `rate_limited`, `failed`, `uncertain` |
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
@@ -269,4 +297,9 @@ the pass never handing a reader the same message twice, a thread delivered with 
 lines as context, edits and deletions before and after delivery, the cap and the cursor moving
 past what it skipped, a reply in a bot's thread routed at once, the channel copy of a mention
 routed once, history filling a gap without routing and an unreadable channel skipped, a refused
-delivery leaving the cursors where they were, and the pause. Nothing live is called.
+delivery leaving the cursors where they were, and the pause. For a bot's own app: a mention and a
+DM reaching only that bot with no decision model, its reply posted by its app without the footer,
+Tico's channel copy of a follow-up waiting for the app's own event, a DM the bot starts opened
+through its app while another bot's goes through Tico, a sender without Write on the bot reaching
+nobody, and the tokens read from the vault by bot variable name (Tico's own, a half pair and an
+unknown bot ignored; rotation reconnects, removal disconnects). Nothing live is called.

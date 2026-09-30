@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **A bot's own Slack app.** A bot can have a Slack app of its own (`connectors/slack-bot-app-manifest.yaml`), so
+  people `@Product Manager` or DM it and it answers as itself, with its own name and icon and no footer. Its two tokens
+  are vault credentials named `<SLUG>_SLACK_BOT_TOKEN` and `<SLUG>_SLACK_APP_TOKEN`; the Slack gateway reads them every
+  five minutes and connects, reconnects or drops the app without a restart. A message to the app goes to that bot
+  only, with no decision model and no fallback to the assistant, and the same sender, channel and Write checks as
+  Tico's. See docs/slack-gateway.md, A bot's own Slack app.
+
 ## [0.2.24] - 2026-09-30
 
 ### Changed

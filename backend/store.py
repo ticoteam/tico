@@ -272,7 +272,8 @@ CREATE INDEX IF NOT EXISTS learnings_by_integration ON learnings(integration,cre
 # Every message in a channel Tico is in is stored too (state `stored`, `author` human or bot,
 # edits and deletions applied in place, nothing ever pruned); `slack_reads` is each reader
 # bot's cursor per channel, moved only in the transaction that delivers a digest, and
-# `slack_digests` is what each delivery covered (docs/slack-gateway.md, Channels).
+# `slack_digests` is what each delivery covered (docs/slack-gateway.md, Channels). `app` is the
+# bot whose own Slack app an event came through or a thread and its posts belong to; '' is Tico.
 SLACK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS slack_events(
  event_id TEXT PRIMARY KEY, team_id TEXT NOT NULL, channel TEXT NOT NULL,
@@ -281,7 +282,7 @@ CREATE TABLE IF NOT EXISTS slack_events(
  event_type TEXT NOT NULL, text TEXT NOT NULL, received TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'received', actor TEXT, reason TEXT, routing_json TEXT,
  processed TEXT, author TEXT NOT NULL DEFAULT 'human', author_name TEXT,
- edited TEXT, deleted TEXT, updated TEXT, UNIQUE(channel, ts));
+ edited TEXT, deleted TEXT, updated TEXT, app TEXT NOT NULL DEFAULT '', UNIQUE(channel, ts));
 CREATE INDEX IF NOT EXISTS slack_events_thread ON slack_events(channel, thread_ts, ts);
 CREATE INDEX IF NOT EXISTS slack_events_state ON slack_events(state, received);
 CREATE INDEX IF NOT EXISTS slack_events_channel_ts ON slack_events(channel, ts);
@@ -297,13 +298,13 @@ CREATE INDEX IF NOT EXISTS slack_digests_reader ON slack_digests(reader, created
 CREATE TABLE IF NOT EXISTS slack_threads(
  channel TEXT NOT NULL, thread_ts TEXT NOT NULL, bot TEXT NOT NULL,
  conversation_id TEXT NOT NULL REFERENCES conversations(id), created TEXT NOT NULL,
- last_routed TEXT, PRIMARY KEY(channel, thread_ts, bot));
+ last_routed TEXT, app TEXT NOT NULL DEFAULT '', PRIMARY KEY(channel, thread_ts, bot));
 CREATE INDEX IF NOT EXISTS slack_threads_conversation ON slack_threads(conversation_id);
 CREATE TABLE IF NOT EXISTS slack_posts(
  message_id TEXT PRIMARY KEY REFERENCES messages(id), channel TEXT NOT NULL,
  thread_ts TEXT NOT NULL, bot TEXT NOT NULL, text TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, next_attempt TEXT,
- slack_ts TEXT, error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+ slack_ts TEXT, error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, app TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt);
 """
 SCHEMA += SLACK_SCHEMA
@@ -522,6 +523,10 @@ class Store:
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
                 H.add_column(c, "settings_changes", "via", "TEXT")
+                # A bot's own Slack app (backend/slack_gateway.py): which app an event came through and
+                # which one a thread's replies go out by; '' is Tico's.
+                for table in ("slack_events", "slack_threads", "slack_posts"):
+                    H.add_column(c, table, "app", "TEXT NOT NULL DEFAULT ''")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")

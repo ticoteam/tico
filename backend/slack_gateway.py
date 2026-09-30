@@ -47,9 +47,19 @@ so there is no public receiver and no signing secret. What it does, in order, fo
    the same transaction. Nothing unread, nothing sent, no turn. A reply in a thread a bot
    already has a conversation in does not wait for the hour: it goes through step 3 at once.
 
-It never runs a bot turn and never loads an employee's secrets; the tokens it holds are the one
-Slack app's, read by `backend.config.slack_credentials`. Kill switch: `TICO_SLACK_GATEWAY_ENABLED`;
-`TICO_SLACK_DIGEST_MINUTES=0` pauses the readers' pass while storage goes on.
+7. **A bot's own app.** A bot may have a Slack app of its own: its tokens are the vault
+   credentials whose bot variable names are `<SLUG>_SLACK_BOT_TOKEN` and `<SLUG>_SLACK_APP_TOKEN`,
+   read every `VAULT_SECONDS`, so adding or rotating them needs no restart. The gateway holds one
+   more Socket Mode connection per such app. A mention of it or a DM to it goes to that bot with
+   no decision model (and no assistant to fall back to), and the bot's replies in that thread or
+   DM are posted by the app itself, with no footer. A thread keeps the app it started with,
+   unless the bot's own app is later addressed in it; Tico's copy of a channel message that
+   names a bot's app is stored and left for that app's own event.
+
+It never runs a bot turn and never loads a bot's secrets; the tokens it holds are the Tico app's,
+read by `backend.config.slack_credentials` or pasted in Settings, and each bot app's, read from the
+vault. Kill switch: `TICO_SLACK_GATEWAY_ENABLED`; `TICO_SLACK_DIGEST_MINUTES=0` pauses the readers'
+pass while storage goes on.
 """
 
 import argparse
@@ -106,6 +116,12 @@ MAX_BOTS = 60
 NEEDED_SCOPES = ("app_mentions:read", "im:history", "channels:history", "groups:history", "chat:write",
                  "chat:write.customize", "users:read", "users:read.email")
 CUSTOMIZE_SCOPE = "chat:write.customize"
+VAULT_SECONDS = 300             # how often the vault is read for tokens stored there
+# A bot's own app: the vault credentials that make one, and what the app needs to take a mention
+# or a DM, check who sent it, answer it and open a DM. `channels:read`/`groups:read` are optional:
+# without them Tico's client looks the channel up.
+BOT_APP_ENV = re.compile(r"^([A-Z][A-Z0-9_]*)_SLACK_(BOT|APP)_TOKEN$")
+BOT_APP_SCOPES = ("app_mentions:read", "im:history", "chat:write", "users:read", "users:read.email", "im:write")
 MENTION_RE = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
 USER_RE = MENTION_RE
 CHAN_RE = re.compile(r"<#([A-Z0-9]+)(?:\|([^>]*))?>")
@@ -239,6 +255,16 @@ class SlackAPI:
             except Exception:
                 pass
             self._socket = None
+
+
+class BotApp:
+    """One bot's own Slack app: its client, who it is in Slack, and the credential revisions it was
+    connected with, so a rotated token reconnects."""
+
+    def __init__(self, bot, slack, revision):
+        self.bot, self.slack, self.revision = bot, slack, revision
+        self.app_id = self.bot_user_id = ""
+        self.name = bot
 
 
 # ----------------------------------------------------------------------------- pure helpers
@@ -436,7 +462,8 @@ def ends_with_question(body):
 class Gateway:
     """Verify, persist, route, write, mirror. One instance per process; tests drive `tick()`."""
 
-    def __init__(self, store, slack, judge_engine=None, clock=None):
+    def __init__(self, store, slack, judge_engine=None, clock=None, slack_factory=None, cipher=None,
+                 bot_app_tokens=None):
         self.store, self.slack = store, slack
         self.settings = store.settings
         self._judge = judge_engine
@@ -455,6 +482,16 @@ class Gateway:
         self.pin_workspace = False          # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None               # called every loop turn; the process uses it for health
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
+        # Tokens stored in the vault. Tests hand in the Slack fakes and the tokens; the process makes
+        # clients and reads the vault. `listening` is set once Tico's own socket is up.
+        self.make_slack = slack_factory or SlackAPI
+        self._cipher = cipher
+        self.next_vault = self.clock()
+        self.listening = False
+        # Bots' own apps.
+        self._bot_app_tokens = bot_app_tokens
+        self.bot_apps = {}                  # bot slug -> BotApp, verified (and listening in the process)
+        self._bot_app_logged = {}           # bot slug -> the revision whose failure was logged
 
     # ------------------------------------------------------------------ start-up
     @property
@@ -514,18 +551,149 @@ class Gateway:
             LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows))
         return len(rows)
 
+    # ------------------------------------------------------------------ tokens in the vault
+    def _vault(self, want):
+        """Bot variable name -> (credential id, revision, secret) for the stored credentials `want` accepts,
+        the newest per name. Only what is wanted is decrypted. Only a credential administrator can
+        store one, so a name is as trusted as the vault."""
+        if not self.settings.credential_kms_key:
+            return {}
+        if self._cipher is None:
+            from .credentials import CredentialCipher
+            self._cipher = CredentialCipher(self.settings.credential_kms_key)
+        rows = {}
+        with self.store.read() as c:
+            for row in c.execute("SELECT id,env,nonce,ciphertext,revision FROM credentials "
+                                 "WHERE env LIKE '%SLACK%TOKEN' AND ciphertext IS NOT NULL ORDER BY updated, id"):
+                if want(row["env"]):
+                    rows[row["env"]] = row
+            return {env: (row["id"], row["revision"], self._cipher.decrypt(c, row).strip()) for env, row in rows.items()}
+
+    # ------------------------------------------------------------------ bots' own apps
+    def vault_tokens(self):
+        """Bot slug -> its app's tokens, from the vault: the newest credential with each bot variable name
+        `<SLUG>_SLACK_BOT_TOKEN` / `<SLUG>_SLACK_APP_TOKEN`, for a bot that exists, both present."""
+        if self._bot_app_tokens is not None:
+            return self._bot_app_tokens()
+        found = {}
+        with self.store.read() as c:
+            for env, value in self._vault(BOT_APP_ENV.match).items():
+                match = BOT_APP_ENV.match(env)
+                slug = match.group(1).lower().replace("_", "-")
+                if H.bot(c, slug):
+                    found.setdefault(slug, {})["bot_token" if match.group(2) == "BOT" else "app_token"] = value
+        out = {}
+        for slug, pair in found.items():
+            if set(pair) != {"bot_token", "app_token"}:
+                continue
+            out[slug] = {"ids": [pair[k][0] for k in ("bot_token", "app_token")],
+                         "revision": tuple(pair[k][:2] for k in ("bot_token", "app_token")),
+                         "bot_token": pair["bot_token"][2], "app_token": pair["app_token"][2]}
+        return out
+
+    def verify_bot_app(self, app):
+        """Refuse a bot's app unless its token is this workspace's and a different app from Tico's."""
+        auth = app.slack.auth_test()
+        team = str(auth.get("team_id") or "")
+        if team != self.team_id:
+            raise RuntimeError(f"its token belongs to workspace {team}, not {self.team_id}")
+        info = app.slack.bots_info(str(auth.get("bot_id") or ""))
+        app_id = str(info.get("app_id") or "")
+        if not app_id:
+            raise RuntimeError("bots.info did not name the app its token belongs to")
+        if app_id == self.app_id:
+            raise RuntimeError("its token is the Tico app's, not an app of its own")
+        taken = [other.bot for other in self.bot_apps.values() if other.app_id == app_id and other.bot != app.bot]
+        if taken:
+            raise RuntimeError(f"app {app_id} is already {taken[0]}'s")
+        app.app_id, app.bot_user_id = app_id, str(auth.get("user_id") or "")
+        with self.store.read() as c:
+            app.name = (H.bot(c, app.bot) or {}).get("display_name") or app.bot
+        scopes = tuple(getattr(app.slack, "scopes", ()) or ())
+        missing = [s for s in BOT_APP_SCOPES if scopes and s not in scopes]
+        if missing:
+            LOG.warning("%s's Slack app %s lacks scopes %s (connectors/slack-bot-app-manifest.yaml)",
+                        app.bot, app_id, ",".join(missing))
+        return missing
+
+    def connect_bot_apps(self):
+        """Match the connected bot apps to the vault: connect a new one, reconnect a rotated one,
+        drop one whose credentials are gone. A failure is logged once per revision and tried
+        again next time. Returns the connected bots."""
+        self.next_vault = H.shift(self.clock(), seconds=VAULT_SECONDS)
+        try:
+            wanted = self.vault_tokens()
+        except Exception as exc:                    # the vault or KMS: keep what is connected
+            LOG.error("Bots' Slack apps not read from the vault: %s", type(exc).__name__)
+            return sorted(self.bot_apps)
+        for slug in [s for s, app in self.bot_apps.items()
+                     if s not in wanted or wanted[s]["revision"] != app.revision]:
+            self.drop_bot_app(slug)
+        for slug, tokens in sorted(wanted.items()):
+            if slug in self.bot_apps:
+                continue
+            app = BotApp(slug, self.make_slack(tokens["bot_token"], tokens["app_token"]), tokens["revision"])
+            try:
+                self.verify_bot_app(app)
+                if self.listening:
+                    app.slack.connect(lambda payload: self.receive(payload))
+            except Exception as exc:                # a wrong token, Slack down: next time again
+                if self._bot_app_logged.get(slug) != tokens["revision"]:
+                    LOG.error("%s's own Slack app not connected: %s", slug,
+                              exc if isinstance(exc, (RuntimeError, SlackError)) else type(exc).__name__)
+                    self._bot_app_logged[slug] = tokens["revision"]
+                if hasattr(app.slack, "close"):
+                    app.slack.close()
+                continue
+            self.bot_apps[slug] = app
+            self._bot_app_logged.pop(slug, None)
+            if tokens.get("ids"):
+                with self.store.transaction() as c:
+                    for cid in tokens["ids"]:
+                        H.event(c, H.KEEPER, "credential.revealed", cid, {"for": "slack gateway", "bot": slug})
+            LOG.info("Connected %s's own Slack app %s (bot user %s)", slug, app.app_id, app.bot_user_id)
+        return sorted(self.bot_apps)
+
+    def drop_bot_app(self, slug):
+        app = self.bot_apps.pop(slug, None)
+        if app is not None:
+            if hasattr(app.slack, "close"):
+                app.slack.close()
+            LOG.info("Disconnected %s's own Slack app %s", slug, app.app_id)
+
+    def app_of(self, api_app_id):
+        """The bot whose own app this is, "" for Tico, None for an app this gateway does not hold."""
+        if api_app_id and api_app_id == self.app_id:
+            return ""
+        for app in list(self.bot_apps.values()):
+            if app.app_id and app.app_id == api_app_id:
+                return app.bot
+        return None
+
+    def mention_names(self):
+        """Slack user id -> what a mention of it reads as: Tico, and each bot app by its bot's name."""
+        names = {app.bot_user_id: app.name for app in list(self.bot_apps.values()) if app.bot_user_id}
+        names[self.bot_user_id] = self.settings.assistant_name
+        return names
+
     # ------------------------------------------------------------------ ingress
     def receive(self, payload):
         """Persist an envelope's event before it is acknowledged. Returns what happened."""
-        if str(payload.get("team_id") or "") != self.team_id or str(payload.get("api_app_id") or "") != self.app_id:
+        app = self.app_of(str(payload.get("api_app_id") or "")) \
+            if str(payload.get("team_id") or "") == self.team_id else None
+        own = self.bot_apps.get(app) if app else None
+        if app is None or (app and own is None):
             LOG.warning("Envelope from another workspace or app (%s/%s) ignored",
                         payload.get("team_id"), payload.get("api_app_id"))
             return "foreign"
-        event, why = event_from(payload, self.bot_user_id)
+        event, why = event_from(payload, own.bot_user_id if own else self.bot_user_id)
         if not event:
             return why
         if not event["event_id"]:
             return "shape"
+        if app and event["op"] != "route":
+            return "not_for_bot_app"        # channels are stored and read through Tico's app
+        event["app"] = app
         if event["op"] in ("edit", "delete"):
             return self.amend(event)
         with self.store.transaction() as c:
@@ -537,31 +705,35 @@ class Gateway:
     def persist(self, c, event):
         """One message into `slack_events`: `queued` for the fast lane, `stored` for the readers,
         `duplicate` when it is already there. Pure store; the caller holds the transaction."""
-        event["text"] = humanize(event["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS] or event["text"]
+        raw = event["text"]
+        event["text"] = humanize(raw, self.mention_names())[:TEXT_CHARS] or raw
         state = "received"
         if event["op"] == "store":
             # A person's reply in a thread a bot already talks in is for that bot, now; anything
-            # else in the channel waits for the readers' pass.
-            attached = event["author"] == "human" and event["thread_ts"] != event["ts"] and c.execute(
+            # else in the channel waits for the readers' pass. A message naming a bot's own app is
+            # that app's: its own mention event takes the stored row below, never the decision model first.
+            names_own_app = any("<@" + app.bot_user_id in raw for app in list(self.bot_apps.values()) if app.bot_user_id)
+            attached = not names_own_app and event["author"] == "human" and event["thread_ts"] != event["ts"] and c.execute(
                 "SELECT 1 FROM slack_threads WHERE channel=? AND thread_ts=?",
                 (event["channel"], event["thread_ts"])).fetchone() is not None
             state = "received" if attached else "stored"
         now = self.clock()
         cursor = c.execute(
             "INSERT OR IGNORE INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,"
-            "user_id,event_type,text,received,state,author,author_name,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "user_id,event_type,text,received,state,author,author_name,updated,app) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (event["event_id"], event["team_id"], event["channel"], event["channel_kind"], event["thread_ts"],
              event["reply_ts"], event["ts"], event["user_id"], event["event_type"], event["text"], now, state,
-             event["author"], event["author_name"], now))
+             event["author"], event["author_name"], now, event.get("app") or ""))
         if cursor.rowcount == 1:
             return "queued" if state == "received" else "stored"
         if event["op"] == "route":
             # The channel copy of an `@Tico` can arrive before the mention itself: the stored
             # row becomes the mention, so it is routed once and never twice.
             promoted = c.execute(
-                "UPDATE slack_events SET state='received',event_type=?,reply_ts=?,processed=NULL,updated=? "
+                "UPDATE slack_events SET state='received',event_type=?,reply_ts=?,app=?,processed=NULL,updated=? "
                 "WHERE channel=? AND ts=? AND state='stored'",
-                (event["event_type"], event["reply_ts"], now, event["channel"], event["ts"])).rowcount
+                (event["event_type"], event["reply_ts"], event.get("app") or "", now, event["channel"],
+                 event["ts"])).rowcount
             if promoted:
                 return "queued"
         return "duplicate"
@@ -571,7 +743,7 @@ class Gateway:
         now = self.clock()
         with self.store.transaction() as c:
             if event["op"] == "edit":
-                text = humanize(event["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS] or event["text"]
+                text = humanize(event["text"], self.mention_names())[:TEXT_CHARS] or event["text"]
                 changed = c.execute("UPDATE slack_events SET text=?,edited=?,updated=? WHERE channel=? AND ts=? AND deleted IS NULL",
                                     (text, event.get("edited_ts") or now, now, event["channel"], event["ts"])).rowcount
             else:
@@ -586,10 +758,10 @@ class Gateway:
                 "SELECT * FROM slack_events WHERE state='received' AND (processed IS NULL OR processed<=?) "
                 "ORDER BY received, ts LIMIT 50", (H.shift(self.clock(), seconds=-RETRY_SECONDS),))]
 
-    def verify_sender(self, c, event):
+    def verify_sender(self, c, event, client=None):
         """The verified person behind the event, or (None, reason). Network first, then the roster."""
         try:
-            user = self.slack.users_info(event["user_id"])
+            user = (client or self.slack).users_info(event["user_id"])
         except (SlackError, SlackUnreachable) as exc:
             return None, None, f"users.info: {getattr(exc, 'code', type(exc).__name__)}"
         if user.get("is_bot") or user.get("id") == "USLACKBOT":
@@ -615,17 +787,24 @@ class Gateway:
             return None, user, "sender is not a hub person"
         return person, user, None
 
-    def verify_channel(self, event):
+    def verify_channel(self, event, own=None):
+        dm = {"kind": "im", "name": "DM", "purpose": "a direct message to " + (own.name if own else self.settings.assistant_name)}
         if event["channel_kind"] == "im":
-            return {"kind": "im", "name": "DM", "purpose": "a direct message to " + self.settings.assistant_name}, None
-        try:
-            channel = self.slack.conversations_info(event["channel"])
-        except (SlackError, SlackUnreachable) as exc:
-            return None, f"conversations.info: {getattr(exc, 'code', type(exc).__name__)}"
+            return dm, None
+        channel, why = None, None
+        # A bot's own app asks first; without channels:read it cannot, and Tico's client answers.
+        for client in ([own.slack] if own else []) + [self.slack]:
+            try:
+                channel = client.conversations_info(event["channel"])
+                break
+            except (SlackError, SlackUnreachable) as exc:
+                why = f"conversations.info: {getattr(exc, 'code', type(exc).__name__)}"
+        if channel is None:
+            return None, why
         if is_external(channel):
             return None, "channel is shared outside the workspace"
         if channel.get("is_im"):
-            return {"kind": "im", "name": "DM", "purpose": "a direct message to " + self.settings.assistant_name}, None
+            return dm, None
         registry = registry_channels(self.settings.registry_dir).get(event["channel"]) or {}
         name = str(channel.get("name") or registry.get("name") or event["channel"])
         return {"kind": "channel", "name": "#" + name.lstrip("#"), "purpose": registry.get("purpose") or ""}, None
@@ -781,16 +960,27 @@ class Gateway:
                 "candidates": [], "fallback": True, "dropped": [],
                 "reason": "no decisions key configured; routed to " + (asker or "nobody (no assistant or BotOps is running)")}
 
+    def direct_decision(self, own):
+        """A message to a bot's own app is for that bot: no decision model, and no assistant to fall back to."""
+        return {"routed_by": "own app", "model": None, "app": own.bot, "scores": {}, "asks": None,
+                "reply_to_last": None, "names_bot": None, "recipients": [{"bot": own.bot, "confidence": None}],
+                "candidates": [], "fallback": False, "dropped": [], "reason": ""}
+
     # ------------------------------------------------------------------ writing into the hub
     def conversation_for(self, c, actor, bot, event):
-        row = c.execute("SELECT conversation_id FROM slack_threads WHERE channel=? AND thread_ts=? AND bot=?",
+        app = event.get("app") or ""
+        row = c.execute("SELECT conversation_id,app FROM slack_threads WHERE channel=? AND thread_ts=? AND bot=?",
                         (event["channel"], event["thread_ts"], bot)).fetchone()
         if row and H.conversation(c, row["conversation_id"]) and not H.conversation(c, row["conversation_id"])["closed_at"]:
+            if app and row["app"] != app:
+                # Addressed through the bot's own app: its replies here come from that app now.
+                c.execute("UPDATE slack_threads SET app=? WHERE channel=? AND thread_ts=? AND bot=?",
+                          (app, event["channel"], event["thread_ts"], bot))
             return row["conversation_id"], False
         conv = H.open_conversation(c, actor, [actor, "bot:" + bot], kind="chat",
                                    subject=f"Slack {event['channel']} {event['thread_ts']}", scope="direct")
-        c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                  "VALUES(?,?,?,?,?,NULL)", (event["channel"], event["thread_ts"], bot, conv["id"], self.clock()))
+        c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed,app) "
+                  "VALUES(?,?,?,?,?,NULL,?)", (event["channel"], event["thread_ts"], bot, conv["id"], self.clock(), app))
         return conv["id"], True
 
     def refs_for(self, event, channel, decision, thread, person):
@@ -844,7 +1034,7 @@ class Gateway:
             c.execute("UPDATE slack_threads SET last_routed=? WHERE channel=? AND thread_ts=? AND bot=?",
                       (self.clock(), event["channel"], event["thread_ts"], bot))
             delivered.append({"bot": bot, "conversation_id": cid, "message_id": message["id"], "opened": opened})
-        if not delivered and not decision["fallback"] and decision["dropped"]:
+        if not delivered and not decision["fallback"] and decision["dropped"] and decision["routed_by"] != "own app":
             # Everyone the decision model chose is unreachable: the assistant gets it, with the reasons on it.
             asker = self.fallback_bot([r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")
                                        if r["slug"] not in blocked])
@@ -906,9 +1096,15 @@ class Gateway:
 
     def process(self, event):
         """One persisted event, start to finish. Network calls happen outside the write lock."""
+        own = self.bot_apps.get(event.get("app")) if event.get("app") else None
+        if event.get("app") and own is None:
+            # Its app's credentials went from the vault after the event came in.
+            with self.store.transaction() as c:
+                self.finish(c, event, "failed", reason=f"{event['app']}'s own Slack app is not connected")
+            return {"event_id": event["event_id"], "state": "failed"}
         with self.store.read() as c:
-            person, user, denied = self.verify_sender(c, event)
-        channel, channel_denied = (self.verify_channel(event) if not denied else (None, None))
+            person, user, denied = self.verify_sender(c, event, own.slack if own else None)
+        channel, channel_denied = (self.verify_channel(event, own) if not denied else (None, None))
         denied = denied or channel_denied
         if denied:
             with self.store.transaction() as c:
@@ -918,7 +1114,9 @@ class Gateway:
         with self.store.read() as c:
             state = self.state(c, event, person, channel)
         fleet, thread = state["roster"], state["thread"]
-        if self.judge is None:
+        if own:
+            decision = self.direct_decision(own)
+        elif self.judge is None:
             decision = self.default_decision(fleet)
         else:
             try:
@@ -942,20 +1140,22 @@ class Gateway:
         return {"event_id": event["event_id"], "state": state_out, "decision": decision}
 
     # ------------------------------------------------------------------ egress
-    def im_channel(self, c, person_id):
-        """The existing Tico DM channel for this person, if anyone has already talked there."""
+    def im_channel(self, c, person_id, app=""):
+        """The existing DM channel with this person through this app (Tico's by default), if anyone
+        has already talked there."""
         actor = "human:" + person_id
         row = c.execute(
             "SELECT t.channel FROM slack_threads t JOIN conversations v ON v.id=t.conversation_id "
-            "WHERE t.thread_ts='' AND v.participants_json LIKE ? LIMIT 1",
-            ('%"' + actor + '"%',)).fetchone()
+            "WHERE t.thread_ts='' AND t.app=? AND v.participants_json LIKE ? LIMIT 1",
+            (app, '%"' + actor + '"%')).fetchone()
         return row["channel"] if row else None
 
     def originate(self):
         """A bot message to a person with no Slack mapping yet: open (or reuse) their Tico DM.
 
-        One Slack app posts it, under the sending bot's name. Their reply comes back through
-        the gateway into the same hub conversation, which the person's profile shows.
+        Tico's app posts it, under the sending bot's name, or the bot's own app when it has one.
+        Their reply comes back through the gateway into the same hub conversation, which the
+        person's profile shows.
         """
         with self.store.read() as c:
             rows = [dict(r) for r in c.execute(
@@ -968,12 +1168,14 @@ class Gateway:
         opened = 0
         for row in rows:
             bot, pid = row["from_actor"][4:], row["to_actor"][6:]
+            own = self.bot_apps.get(bot)
+            app = bot if own else ""
             slack_id = ""
             with self.store.transaction() as c:
                 if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=?",
                              (row["conversation_id"],)).fetchone():
                     continue
-                channel = self.im_channel(c, pid)
+                channel = self.im_channel(c, pid, app)
                 if not channel:
                     slack_id = str((H.human(c, pid) or {}).get("slack_id") or "").strip()
                     if not slack_id:
@@ -985,16 +1187,16 @@ class Gateway:
                 else:
                     now = self.clock()
                     c.execute("INSERT OR REPLACE INTO slack_threads"
-                              "(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                              "VALUES(?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now))
+                              "(channel,thread_ts,bot,conversation_id,created,last_routed,app) "
+                              "VALUES(?,?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now, app))
                     c.execute("INSERT OR IGNORE INTO slack_posts"
-                              "(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                              "VALUES(?,?,?,?,?,'ready',?,?)",
-                              (row["id"], channel, "", bot, row["body"], now, now))
+                              "(message_id,channel,thread_ts,bot,text,state,created,updated,app) "
+                              "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                              (row["id"], channel, "", bot, row["body"], now, now, app))
                     opened += 1
                     continue
             try:
-                opened_ch = self.slack.conversations_open(slack_id)
+                opened_ch = (own.slack if own else self.slack).conversations_open(slack_id)
                 channel = str(opened_ch.get("id") or "")
             except Exception as exc:
                 LOG.warning("Could not open a Slack DM with %s: %s", pid, type(exc).__name__)
@@ -1007,12 +1209,12 @@ class Gateway:
                     continue
                 now = self.clock()
                 c.execute("INSERT OR REPLACE INTO slack_threads"
-                          "(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                          "VALUES(?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now))
+                          "(channel,thread_ts,bot,conversation_id,created,last_routed,app) "
+                          "VALUES(?,?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now, app))
                 c.execute("INSERT OR IGNORE INTO slack_posts"
-                          "(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                          "VALUES(?,?,?,?,?,'ready',?,?)",
-                          (row["id"], channel, "", bot, row["body"], now, now))
+                          "(message_id,channel,thread_ts,bot,text,state,created,updated,app) "
+                          "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                          (row["id"], channel, "", bot, row["body"], now, now, app))
                 opened += 1
         return opened
 
@@ -1020,7 +1222,7 @@ class Gateway:
         """New bot replies in mapped conversations become posts to make, once each."""
         with self.store.transaction() as c:
             rows = c.execute(
-                "SELECT m.id,m.body,m.in_reply_to,t.channel,t.thread_ts,t.bot FROM messages m "
+                "SELECT m.id,m.body,m.in_reply_to,t.channel,t.thread_ts,t.bot,t.app FROM messages m "
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.from_actor='bot:'||t.bot "
                 "WHERE m.created>t.created AND m.kind IN ('say','ask','answer','notice') AND m.to_actor LIKE 'human:%' "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created LIMIT 50").fetchall()
@@ -1036,8 +1238,9 @@ class Gateway:
                                       "ORDER BY ts DESC LIMIT 1", (r["channel"], r["thread_ts"])).fetchone()
                 reply_ts = str(where["reply_ts"] if where else r["thread_ts"] or "")
                 now = self.clock()
-                c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                          "VALUES(?,?,?,?,?,'ready',?,?)", (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now))
+                c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,app) "
+                          "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                          (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now, r["app"] or ""))
         return len(rows)
 
     def rendered(self, c, post):
@@ -1048,17 +1251,22 @@ class Gateway:
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
             text = text[:POST_CHARS].rstrip() + " …"
+        if post.get("app"):
+            # The bot's own app is the bot in Slack, with its own name and icon: no footer.
+            return {"text": slack_escape(text), "username": None, "icon_emoji": None, "icon_url": None}
         return {"text": slack_escape(text) + f"\n\n(sent from {name})", "username": name,
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 
     def deliver(self):
-        """Post what is ready, one attempt each. A crash between send and record is uncertain."""
+        """Post what is ready, one attempt each. A crash between send and record is uncertain. A post
+        for a bot app that is not connected waits, and never holds up the others."""
         now = self.clock()
+        apps = ["", *sorted(self.bot_apps)]
         with self.store.read() as c:
             due = [dict(r) for r in c.execute(
-                "SELECT * FROM slack_posts WHERE state='ready' OR (state='rate_limited' AND next_attempt<=?) "
-                "ORDER BY created LIMIT 20", (now,))]
+                "SELECT * FROM slack_posts WHERE (state='ready' OR (state='rate_limited' AND next_attempt<=?)) "
+                "AND app IN (%s) ORDER BY created LIMIT 20" % ",".join("?" * len(apps)), (now, *apps))]
             shaped = {row["message_id"]: self.rendered(c, row) for row in due}
         results = []
         for post in due:
@@ -1068,7 +1276,8 @@ class Gateway:
             if not claimed:
                 continue
             body = shaped[post["message_id"]]
-            if not self.customize:
+            own = self.bot_apps.get(post["app"]) if post["app"] else None
+            if not own and not self.customize:
                 if not self._customize_warned:
                     LOG.warning("Posting without %s: replies show as %s with the footer only", CUSTOMIZE_SCOPE,
                                 self.settings.assistant_name)
@@ -1076,9 +1285,9 @@ class Gateway:
                 body = {**body, "username": None, "icon_emoji": None, "icon_url": None}
             state, slack_ts, error, next_attempt = "sent", None, None, None
             try:
-                answer = self.slack.post_message(post["channel"], post["thread_ts"] or None, body["text"],
-                                                 username=body["username"], icon_emoji=body["icon_emoji"],
-                                                 icon_url=body["icon_url"])
+                answer = (own.slack if own else self.slack).post_message(
+                    post["channel"], post["thread_ts"] or None, body["text"], username=body["username"],
+                    icon_emoji=body["icon_emoji"], icon_url=body["icon_url"])
                 slack_ts = str(answer.get("ts") or "")
             except SlackError as exc:
                 if exc.code == "ratelimited" and post["attempts"] + 1 < MAX_POST_ATTEMPTS:
@@ -1175,7 +1384,7 @@ class Gateway:
                     "user_id,event_type,text,received,state,author,author_name,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,'stored',?,?,?)",
                     (row["event_id"], row["team_id"], cid, "channel", row["thread_ts"], row["reply_ts"], row["ts"],
                      row["user_id"], row["event_type"],
-                     humanize(row["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS] or row["text"],
+                     humanize(row["text"], self.mention_names())[:TEXT_CHARS] or row["text"],
                      self.clock(), row["author"], row["author_name"], self.clock())).rowcount
         if stored:
             LOG.info("Backfilled %d channel message(s) the socket did not deliver", stored)
@@ -1365,7 +1574,10 @@ class Gateway:
 
     # ------------------------------------------------------------------ the loop
     def tick(self):
-        """One pass: pending events, then replies to mirror, then posts to send, then the readers' pass when due."""
+        """One pass: bots' own apps when due, pending events, then replies to mirror, then posts to
+        send, then the readers' pass when due."""
+        if self.clock() >= self.next_vault:
+            self.connect_bot_apps()
         out = []
         for event in self.pending():
             try:
@@ -1456,6 +1668,7 @@ def main(argv=None, make_slack=None):
             return 0
         LOG.info("Verified workspace %s app %s bot user %s", verified["team_id"], verified["app_id"], verified["bot_user_id"])
         if args.check:
+            verified["bot_apps"] = gateway.connect_bot_apps()
             print(json.dumps(verified))
             return 0
         if stored is not None and not (stored["team_id"] and stored["app_id"]):
@@ -1472,6 +1685,7 @@ def main(argv=None, make_slack=None):
             if _sleep(stopping, 60):
                 continue
             return 0
+        gateway.listening = True                # bots' own apps connect on the first tick
         LOG.info("Socket Mode connected; listening for app_mention, message.im, message.channels and message.groups; "
                  "readers' pass every %d minute(s)", settings.slack_digest_minutes)
         state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
@@ -1494,6 +1708,8 @@ def main(argv=None, make_slack=None):
         try:
             gateway.run()
         finally:
+            for slug in list(gateway.bot_apps):
+                gateway.drop_bot_app(slug)
             gateway.slack.close()
             LOG.info("Slack gateway stopped")
         if stopping.is_set() or not wait or state["stamp"] is None:

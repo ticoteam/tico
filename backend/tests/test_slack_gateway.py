@@ -55,17 +55,18 @@ CHANNELS = {
 class FakeSlack:
     """The Web API as the gateway sees it: canned users and channels, and every post it made."""
 
-    def __init__(self, team=TEAM, app=APP, scopes=SCOPES):
-        self.team, self.app, self.scopes = team, app, scopes
+    def __init__(self, team=TEAM, app=APP, scopes=SCOPES, bot_user=BOT_USER, bot_id=BOT_ID):
+        self.team, self.app, self.scopes, self.bot_user, self.bot_id = team, app, scopes, bot_user, bot_id
         self.posts, self.failures, self.calls = [], [], []
         self.pages, self.threads, self.unreadable = {}, {}, set()      # what history and replies return
 
     def auth_test(self):
-        return {"ok": True, "team_id": self.team, "user_id": BOT_USER, "bot_id": BOT_ID, "url": "https://acme.slack.com/"}
+        return {"ok": True, "team_id": self.team, "user_id": self.bot_user, "bot_id": self.bot_id,
+                "url": "https://acme.slack.com/"}
 
     def bots_info(self, bot_id):
-        assert bot_id == BOT_ID
-        return {"id": bot_id, "app_id": self.app, "user_id": BOT_USER, "name": "Tico"}
+        assert bot_id == self.bot_id
+        return {"id": bot_id, "app_id": self.app, "user_id": self.bot_user, "name": "Tico"}
 
     def users_info(self, user_id):
         self.calls.append(("users.info", user_id))
@@ -351,6 +352,103 @@ def test_a_dm_is_a_front_door_and_the_reply_goes_back_to_the_dm(gateway, hub):
 
 # ----------------------------------------------------------------------------- pure pieces
 # ----------------------------------------------------------------------------- the review's cases
+# ----------------------------------------------------------------------------- a bot's own app
+LEGAL_APP, LEGAL_USER, LEGAL_BOT_ID, LEGAL_DM = "A0LEGAL0001", "U0LEGALBOT", "B0LEGAL0001", "D0LEGAL00"
+
+
+def test_a_bots_own_app_reaches_that_bot_directly_and_answers_as_itself(hub):
+    tico, legal, made = FakeSlack(), FakeSlack(app=LEGAL_APP, bot_user=LEGAL_USER, bot_id=LEGAL_BOT_ID), []
+    gw = G.Gateway(hub, tico, judge_engine=FakeJudge(), clock=Clock(),
+                   slack_factory=lambda bot_token, app_token: made.append((bot_token, app_token)) or legal,
+                   bot_app_tokens=lambda: {"legal": {"bot_token": "xoxb-l", "app_token": "xapp-l", "revision": 1}})
+    gw.verify_app()
+    gw.tick()
+    assert made == [("xoxb-l", "xapp-l")] and sorted(gw.bot_apps) == ["legal"]
+
+    # A mention of Legal's app goes to Legal with no decision model; its reply is Legal's app's, bare.
+    assert gw.receive(envelope(f"<@{LEGAL_USER}> is this NDA ok?", app=LEGAL_APP)) == "queued"
+    result = gw.tick()["events"][-1]
+    assert result["state"] == "routed" and result["decision"]["routed_by"] == "own app"
+    assert [r["bot"] for r in result["decision"]["recipients"]] == ["legal"] and gw._judge.calls == []
+    assert rows(hub, "SELECT body FROM messages")[-1]["body"] == "@Legal is this NDA ok?"
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    assert thread["app"] == "legal"
+    with hub.transaction() as c:
+        H.say(c, "bot:legal", "human:ana", "Clause 4 needs a cap.", conversation_id=thread["conversation_id"])
+    gw.tick()
+    assert tico.posts == [] and legal.posts == [{"channel": MARKETING, "thread_ts": thread["thread_ts"],
+                                                 "text": "Clause 4 needs a cap.", "username": None,
+                                                 "icon_emoji": None, "icon_url": None}]
+
+    # A follow-up naming the app in its thread: Tico's channel copy comes first and waits for the
+    # app's own event, so it is routed once, by the app, never by the decision model.
+    ts = "1699999999.000100"
+    copy = envelope(f"<@{LEGAL_USER}> and clause 7?", kind="message", ts=ts, thread_ts=thread["thread_ts"])
+    copy["event"]["channel_type"] = "channel"
+    assert gw.receive(copy) == "stored"
+    assert gw.receive(envelope(f"<@{LEGAL_USER}> and clause 7?", app=LEGAL_APP, ts=ts,
+                               thread_ts=thread["thread_ts"])) == "queued"
+    gw.tick()
+    assert [(e["state"], e["app"]) for e in events(hub) if e["ts"] == ts] == [("routed", "legal")]
+    assert gw._judge.calls == [] and len(rows(hub, "SELECT 1 FROM slack_threads")) == 1
+
+    # A DM to Legal's app, and a conversation Legal starts with Ben, stay on Legal's app; a bot
+    # without an app of its own still opens Tico's DM.
+    assert send(gw, "can you read the lease?", channel=LEGAL_DM, kind="message", app=LEGAL_APP)["state"] == "routed"
+    with hub.transaction() as c:
+        c.execute("UPDATE humans SET slack_id='U2' WHERE id='ben'")
+        H.say(c, "bot:legal", "human:ben", "The lease renews in May.")
+        H.say(c, "bot:cmo", "human:ben", "Campaign is live.")
+    gw.tick()
+    assert ("conversations.open", "U2") in legal.calls and ("conversations.open", "U2") in tico.calls
+    assert [p["text"] for p in legal.posts][-1] == "The lease renews in May."
+    assert tico.posts[-1]["text"] == "Campaign is live.\n\n(sent from CMO)"
+
+    # Someone who may not write to Legal reaches nobody through its app: no assistant picks it up.
+    from backend.tests.test_api import restrict
+    with hub.transaction() as c:
+        restrict(c, "legal", people=["ana"])
+    refused = send(gw, "draft me a contract", channel="D0LEGAL02", kind="message", app=LEGAL_APP, user="U2")
+    assert refused["state"] == "failed" and refused["decision"]["recipients"] == []
+    assert refused["decision"]["dropped"][0]["reason"].startswith("access")
+    assert rows(hub, "SELECT body FROM messages")[-1]["body"] != "draft me a contract"
+
+
+def test_a_bots_app_tokens_come_from_the_vault_by_bot_variable_name(hub):
+    from backend.credentials import CredentialCipher
+    from backend.tests.test_credentials import FakeKMS
+    cipher = CredentialCipher("test-key", FakeKMS())
+
+    def credential(cid, env, secret):
+        with hub.transaction() as c:
+            ciphertext, nonce = cipher.encrypt(c, cid, secret)
+            c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created,updated,updated_by) "
+                      "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,"
+                      "nonce=excluded.nonce,revision=credentials.revision+1,updated=excluded.updated",
+                      (cid, env, "token", env, ciphertext, nonce, H.now(), H.now(), "human:ana"))
+
+    credential("c1", "LEGAL_SLACK_BOT_TOKEN", "xoxb-legal")
+    credential("c2", "LEGAL_SLACK_APP_TOKEN", "xapp-legal")
+    credential("c3", "SLACK_BOT_TOKEN", "xoxb-tico")            # the Tico app's own, not a bot's
+    credential("c4", "SLACK_APP_TOKEN", "xapp-tico")
+    credential("c5", "NOBODY_SLACK_BOT_TOKEN", "xoxb-nobody")   # no such bot
+    credential("c6", "NOBODY_SLACK_APP_TOKEN", "xapp-nobody")
+    credential("c7", "CMO_SLACK_BOT_TOKEN", "xoxb-cmo")         # half a pair
+    hub.settings.credential_kms_key = "test-key"
+    made = []
+    gw = G.Gateway(hub, FakeSlack(), clock=Clock(), cipher=cipher, slack_factory=lambda bot_token, app_token: made.append(
+        (bot_token, app_token)) or FakeSlack(app=LEGAL_APP, bot_user=LEGAL_USER, bot_id=LEGAL_BOT_ID))
+    gw.verify_app()
+    assert gw.connect_bot_apps() == ["legal"] and made == [("xoxb-legal", "xapp-legal")]
+    assert sorted(r["target"] for r in rows(hub, "SELECT target FROM events WHERE action='credential.revealed'")) == ["c1", "c2"]
+    assert gw.connect_bot_apps() == ["legal"] and len(made) == 1, "unchanged credentials are not reconnected"
+    credential("c1", "LEGAL_SLACK_BOT_TOKEN", "xoxb-legal-rotated")
+    assert gw.connect_bot_apps() == ["legal"] and made[-1] == ("xoxb-legal-rotated", "xapp-legal")
+    with hub.transaction() as c:
+        c.execute("DELETE FROM credentials WHERE id='c2'")
+    assert gw.connect_bot_apps() == [] and gw.app_of(LEGAL_APP) is None
+
+
 def test_a_bot_reply_is_escaped_so_it_cannot_page_the_channel_or_lose_prose(gateway, hub):
     routed_reply(gateway, hub, "<!channel> R&D says x < y and y > z")
     gateway.tick()
