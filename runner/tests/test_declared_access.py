@@ -99,5 +99,19 @@ class DeclaredAccess(unittest.TestCase):
         self.assertNotIn("tools", self.report()["bots"]["atlas"])
 
 
+    def test_a_copy_of_a_shared_bot_may_carry_the_originals_name(self):
+        # backend-reviewer-arthur runs from emp-backend-reviewer, whose employee.yaml says the original's name.
+        copy = self.projects / "bot-atlas-arthur"
+        copy.mkdir()
+        (copy / "AGENT.md").write_text("# Atlas\n")
+        (copy / "employee.yaml").write_text(MANIFEST)            # name: atlas
+        config = {"runtime": "codex", "model": "gpt-6-sol", "model_managed_by": "cloud"}
+        for shared_from, ok in (("atlas", True), (None, False)):
+            self.entries = [{"bot": "atlas-arthur", "runner_id": "r1", "state": "active",
+                             "config": {**config, **({"shared_from": shared_from} if shared_from else {})}}]
+            problems = self.report()["bots"]["atlas-arthur"]["problems"]
+            self.assertEqual("Configuration differs from server" not in problems, ok, problems)
+
+
 if __name__ == "__main__":
     unittest.main()

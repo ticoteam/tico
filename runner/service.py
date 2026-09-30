@@ -1046,9 +1046,13 @@ class Runner:
                             held=("GOOGLE_SA_KEY",) if mail_key.held_by_computer(self.config) else ())
                     expected = entry["config"]
                     cloud_model = expected.get("model_managed_by") == "cloud"
+                    # A copy of a shared bot (`shared_from` on the server) runs from the original's
+                    # repository, whose employee.yaml carries the original's name; that name is the
+                    # right one for it (Arthur's backend-reviewer-arthur, 2026-09-30).
+                    names = {bot, str(expected.get("shared_from") or bot)}
                     configuration_valid = (
                         isinstance(declared, dict)
-                        and str(declared.get("name") or bot) == bot
+                        and str(declared.get("name") or bot) in names
                         and (cloud_model or not declared.get("runtime") or declared["runtime"] == expected.get("runtime"))
                         and (cloud_model or not declared.get("model") or declared["model"] == expected.get("model"))
                     )
