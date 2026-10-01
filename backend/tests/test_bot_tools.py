@@ -468,3 +468,15 @@ def test_rejected_tool_report_is_visible_on_pending_tools(api):
     assert result["report_error"] == "Tool report rejected: invalid MCP declaration"
     pending = next(t for t in result["tools"] if t["service"] == "example-tool")
     assert pending["status"] == "problem" and "rejected" in pending["problem"]
+
+
+def test_a_held_credential_other_than_the_google_key_needs_no_message_bot(api):
+    # Response to Demo, 2026-10-01: its vault-held Close key was shown as a mail-token problem.
+    configure(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    close = {"service": "close-crm", "identity": "TIDY account", "can": ["read"], "env": "CLOSE_API_KEY"}
+    assert report(api, machine, "ops", [{**close, "credential": "present", "held": True}]).status_code == 200
+    tool = {t["id"]: t for t in tools_of(api)["tools"]}["close-crm"]
+    assert tool["status"] == "ready" and "problem" not in tool
+    assert not [i for i in get(api, "fleet/check", token="ana-test")["issues"] if "nobody's message bot" in i["text"]]

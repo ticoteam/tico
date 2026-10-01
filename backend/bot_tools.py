@@ -285,9 +285,13 @@ def listing(c, settings, bot):
                                       "A change is requested; waiting for BotOps to update it in bot.yaml")
     # The computer holds the Google key and gives a token, but only to a message bot the server has named
     # (routines.token_mailboxes): for any other bot "present" would be a promise its runs cannot keep.
-    if any(entry.get("held") for entry in state["raw"]) and not routines.token_mailboxes(c, bot):
+    # Only the Google key: a computer also holds other credentials for its bots (a vault grant), and
+    # those reach the run whoever its message bot is. Response to Demo's Close key was shown as a mail
+    # problem on 2026-10-01.
+    google = lambda entry: entry.get("held") and entry.get("env") == "GOOGLE_SA_KEY"
+    if any(google(entry) for entry in state["raw"]) and not routines.token_mailboxes(c, bot):
         for tool, entry in zip(declared, state["raw"]):
-            if entry.get("held"):
+            if google(entry):
                 tool.update(status="problem", held=True, detail="", problem=(
                     f"{label} holds the Google key, but {bot} is nobody's message bot on the server, so its runs get no mail "
                     "token. An owner or admin names it: POST /api/v2/access/people/<person> "
