@@ -153,6 +153,9 @@ def calendar_action(row, *, connector=False):
 
 
 MAIL_BODY_MAX = 32 * 1024
+MAIL_CLIP = {"thread_id": 200, "date": 80, "from_addr": 500, "from_header": 500, "subject": 998,
+             "snippet": 2000, "list_id": 500, "to": 100, "cc": 100, "labels": 50, "attachments": 50,
+             "rule_hits": 100}
 MAIL_BATCH = 100
 
 
@@ -175,6 +178,22 @@ class MailMessage(M.Contract):
     is_internal: bool = False
     has_unsubscribe: bool = False
     rule_hits: list = Field(default_factory=list, max_length=100)
+
+    # A field over its cap is cut, not refused: the batch is never acknowledged, so one refused
+    # message came back first on every retry and stopped its mailbox's copy for hours (Bruno
+    # 2026-09-27, Chris 2026-10-01). Only the message id stays strict; it has to be exact.
+    @model_validator(mode="before")
+    @classmethod
+    def clip(cls, data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if isinstance(data.get("body"), str) and len(data["body"]) > MAIL_BODY_MAX:
+            data["body"], data["body_truncated"] = data["body"][:MAIL_BODY_MAX], True
+        for key, cap in MAIL_CLIP.items():
+            if isinstance(data.get(key), (str, list)) and len(data[key]) > cap:
+                data[key] = data[key][:cap]
+        return data
 
 
 class ConnectorFailure(M.Contract):

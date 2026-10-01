@@ -408,9 +408,11 @@ def bodies_and_attachments(payload):
 
 
 def truncate(text):
+    """At most MAX_BODY characters, the note included: the hub refuses a longer body, and one such
+    message refused every batch of its mailbox (Bruno 2026-09-27, Chris 2026-10-01, 32,809 each)."""
     if len(text) <= MAX_BODY:
         return text, False
-    return text[:MAX_BODY] + TRUNCATED, True
+    return text[:MAX_BODY - len(TRUNCATED)] + TRUNCATED, True
 
 
 def find_unsubscribe(header_value, body_text, html_text):
