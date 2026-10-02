@@ -458,7 +458,9 @@ class SettingsAdmin:
         source = shared_bots.source_of(shared_bots.declared(c, bot))
         if source and (H.bot(c, source) or {}).get("state") == "archived":
             raise Problem("original_archived", "Restore the original before changing its branch's status", 409)
-        if body.model_fields_set - {"expected_revision", "on_behalf_of", "status"}:
+        # A branch's behaviour follows its original; where it sits on the chart is its own (Chris,
+        # 2026-10-02: Arthur's reviewer branches belong at the top of Engineering, not under Arthur).
+        if body.model_fields_set - {"expected_revision", "on_behalf_of", "status", "reports_to"}:
             shared_bots.refuse_copy(c, bot)
         if "template" in body.model_fields_set:
             self.validate_template(body.template)

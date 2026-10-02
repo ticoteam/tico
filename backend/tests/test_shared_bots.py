@@ -261,3 +261,14 @@ def test_architect_and_reviewer_templates_seed_branches_only_on_new_bots(api):
         with api.app.state.store.read() as c:
             assert shared_bots.declared(c, bot['slug'])['session'] == 'task'
     assert get(api, 'bots/cpo')['shared'] is False
+
+
+def test_a_branch_hangs_where_its_owner_puts_it_on_the_chart_but_still_follows_its_original(api):
+    # Chris, 2026-10-02: Arthur's reviewer branches belong at the top of Engineering, not under Arthur.
+    share(api)
+    branch(api, runner(api, 'cara'))
+    post(api, 'bots/cpo-cara/definition', {'reports_to': 'human:ana', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test')
+    with api.app.state.store.read() as c:
+        rows = {r['bot']: r['reports_to'] for r in c.execute("SELECT bot,reports_to FROM bot_config WHERE bot IN ('cpo','cpo-cara')")}
+    assert rows['cpo-cara'] == 'human:ana' and rows['cpo'] != 'human:ana'
+    post(api, 'bots/cpo-cara/definition', {'description': 'Mine', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
