@@ -46,6 +46,10 @@ MEETING_FIELDS = ("id,lead_id,user_id,title,starts_at,ends_at,duration,actual_du
 class CloseError(RuntimeError):
     """Sanitized provider failure. It never carries a key, URL, or transcript."""
 
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
 
 def load_key(path, name=KEY_NAME):
     value = os.environ.get(name, "").strip()
@@ -166,7 +170,7 @@ class CloseCallImporter:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
                 payload = response.read(MAX_RESPONSE + 1)
         except urllib.error.HTTPError as exc:
-            raise CloseError("Close returned HTTP " + str(exc.code)) from None
+            raise CloseError("Close returned HTTP " + str(exc.code), exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise CloseError("Close could not be reached") from None
         if len(payload) > MAX_RESPONSE:
@@ -359,7 +363,18 @@ class CloseCallImporter:
             checked = moment(pending["last_checked"])
             if checked and self.now() - checked < timedelta(minutes=5):
                 continue
-            detail = self.details(kind, {"id": cid})
+            # One activity Close no longer has (a deleted call or meeting answers 404) stopped every
+            # pull until a person removed it (2026-09-28, and again 2026-10-02 for 8 hours), and the
+            # queue behind it was never rechecked. Gone is gone; any other failure goes to the back.
+            try:
+                detail = self.details(kind, {"id": cid})
+            except CloseError as exc:
+                if exc.status == 404:
+                    self.state.close_pending(kind, cid, remove=True)
+                else:
+                    log("Tico Close transcripts: " + str(exc) + " checking a pending " + kind)
+                    self.state.close_pending(kind, cid, created=pending["created"], checked=self.now().isoformat())
+                continue
             imported += bool(self.import_activity(kind, detail))
         self.client.post("imports/sources/close/status", {
             "state": "ok", "pending": len(self.state.close_pending(limit=1_000_000)),
@@ -384,7 +399,7 @@ class CloseCallImporter:
                 try:
                     self.client.post("imports/sources/close/status", {
                         "state": "error", "error_code": "missing_key" if isinstance(exc, RuntimeError)
-                        else "sync_error", "pending": len(self.state.close_pending()) if self.state else 0})
+                        and not isinstance(exc, CloseError) else "sync_error", "pending": len(self.state.close_pending()) if self.state else 0})
                 except Exception:
                     pass
                 delay = min(INTERVAL, RETRY_SECONDS * 2 ** min(failures - 1, 3))

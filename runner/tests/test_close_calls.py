@@ -126,3 +126,27 @@ def test_late_transcript_is_retried_and_revisions_are_idempotent(setup):
     assert len(hub.imports()) == 3  # repeat poll is a safe no-op at the hub
     assert hub.imports()[-1]["turns"][0]["text"] == "Please send the revised pricing."
 
+
+def test_a_pending_activity_close_deleted_leaves_the_queue_and_the_rest_are_still_checked(setup):
+    # 2026-09-28 and 2026-10-02: one deleted activity (HTTP 404) failed every pull for hours.
+    close = Close([call()], call_transcript=None)
+    worker, hub = setup(close)
+    worker.tick()
+    worker.state.close_pending("call", "acti_gone", created="2026-09-18T18:00:00+00:00", checked="2026-09-18T18:00:00+00:00")
+    plain = close.__call__
+
+    def deleted(url, params=None):
+        if url == "activity/call/acti_gone/":
+            raise CC.CloseError("Close returned HTTP 404", 404)
+        return plain(url, params)
+    worker.transport = deleted
+    worker.now = lambda: NOW.replace(hour=21)
+    close.call_transcript = transcript()
+    assert worker.tick() == 1                       # the call behind it came in
+    assert [p["external_id"] for p in worker.state.close_pending()] == []
+    assert hub.posts[-1] == ("imports/sources/close/status", {"state": "ok", "pending": 0, "imported": 1})
+
+
+def test_a_close_failure_is_not_reported_as_a_missing_key():
+    assert issubclass(CC.CloseError, RuntimeError)          # why the old check misread it
+    assert CC.CloseError("Close returned HTTP 500", 500).status == 500
