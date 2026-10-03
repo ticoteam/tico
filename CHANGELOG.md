@@ -20,6 +20,7 @@ All notable changes to Tico are recorded here. The format follows
 - Remove Overview from mobile bottom navigation and use inline chat for Goal Manager ([#75](https://github.com/ticoteam/tico/pull/75), [#76](https://github.com/ticoteam/tico/pull/76)).
 
 ### Fixed
+- Include the copy-message icon in the shipped font and preserve updates explicitly marked unread while viewing the feed ([#80](https://github.com/ticoteam/tico/pull/80)).
 - Preserve subscription identity, assignments and usage history when renaming, and keep subscription bindings fixed throughout active runs and fallback ([#70](https://github.com/ticoteam/tico/pull/70), [#71](https://github.com/ticoteam/tico/pull/71)).
 - Correct release-candidate navigation and browser regressions ([#72](https://github.com/ticoteam/tico/pull/72)).
 - Honor task blockers and bound stalled-task retries so blocked work does not repeatedly restart ([#77](https://github.com/ticoteam/tico/pull/77)).
