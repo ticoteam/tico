@@ -7,6 +7,27 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-10-03
+
+### Added
+- Choose harness, model, effort and named subscription separately, and filter usage by those settings ([#62](https://github.com/ticoteam/tico/pull/62), [#67](https://github.com/ticoteam/tico/pull/67)).
+- View approximate weekly subscription usage and reset information, refresh supported Codex readings, and distinguish sign-in health from stale or unknown usage ([#68](https://github.com/ticoteam/tico/pull/68), [#69](https://github.com/ticoteam/tico/pull/69)).
+- Search bot templates, copy individual chat messages, and let bot managers mark setup complete from the bot page ([#63](https://github.com/ticoteam/tico/pull/63), [#74](https://github.com/ticoteam/tico/pull/74), [#79](https://github.com/ticoteam/tico/pull/79)).
+- Let administrators explicitly grant repository creation to selected bots ([#78](https://github.com/ticoteam/tico/pull/78)).
+
+### Changed
+- Simplify chat attachments, computer cards, settings navigation and subscription controls; hide archived repositories by default ([#61](https://github.com/ticoteam/tico/pull/61), [#64](https://github.com/ticoteam/tico/pull/64), [#65](https://github.com/ticoteam/tico/pull/65), [#66](https://github.com/ticoteam/tico/pull/66), [#73](https://github.com/ticoteam/tico/pull/73)).
+- Remove Overview from mobile bottom navigation and use inline chat for Goal Manager ([#75](https://github.com/ticoteam/tico/pull/75), [#76](https://github.com/ticoteam/tico/pull/76)).
+
+### Fixed
+- Preserve subscription identity, assignments and usage history when renaming, and keep subscription bindings fixed throughout active runs and fallback ([#70](https://github.com/ticoteam/tico/pull/70), [#71](https://github.com/ticoteam/tico/pull/71)).
+- Correct release-candidate navigation and browser regressions ([#72](https://github.com/ticoteam/tico/pull/72)).
+- Honor task blockers and bound stalled-task retries so blocked work does not repeatedly restart ([#77](https://github.com/ticoteam/tico/pull/77)).
+
+### Upgrade notes
+- Update both server and runner for the subscription changes. Named profiles begin a fresh provider session after the binding upgrade; app conversations remain intact.
+- Weekly usage is approximate, may include activity outside Tico, and is not a spending cap. Replacing credentials inside an active login directory is outside the per-run binding guarantee.
+
 ## [0.3.18] - 2026-10-03
 
 ### Fixed
@@ -1820,7 +1841,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.18...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.19...HEAD
+[0.3.19]: https://github.com/ticoteam/tico/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/ticoteam/tico/compare/v0.3.17...v0.3.18
 [0.3.17]: https://github.com/ticoteam/tico/compare/v0.3.16...v0.3.17
 [0.3.16]: https://github.com/ticoteam/tico/compare/v0.3.15...v0.3.16
