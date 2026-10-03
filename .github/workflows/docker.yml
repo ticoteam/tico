@@ -37,7 +37,10 @@ jobs:
           context: .
           target: ${{ matrix.image == 'tico' && 'server' || matrix.image == 'tico-runner' && 'runner' || 'updater' }}
           platforms: linux/${{ matrix.platform }}
-          build-args: TICO_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+          build-args: |
+            TICO_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+            TICO_COMMIT=${{ github.sha }}
+            TICO_REPOSITORY=${{ github.repository }}
           outputs: type=image,name=ghcr.io/ticoteam/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }},mode=max

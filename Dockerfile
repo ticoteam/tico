@@ -44,9 +44,25 @@ CMD ["python", "/usr/local/bin/tico-updater"]
 # What both the server and the runner run: this source tree in the shared venv.
 FROM ${PYTHON_IMAGE} AS base
 ARG TICO_VERSION=dev
+ARG TICO_COMMIT
+ARG TICO_REPOSITORY
 COPY --from=venv /opt/tico/.venv /opt/tico/.venv
 WORKDIR /opt/tico
 COPY . /opt/tico
+# Deployed task completion needs the source commit, not just the version label.
+RUN python - <<'PY'
+import json
+import os
+import re
+from pathlib import Path
+
+commit = os.environ.get("TICO_COMMIT", "")
+repository = os.environ.get("TICO_REPOSITORY", "")
+if os.environ.get("TICO_VERSION", "dev") != "dev" or commit or repository:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
+        raise SystemExit("Image provenance requires TICO_COMMIT (full SHA) and TICO_REPOSITORY (owner/repo)")
+Path("release-manifest.json").write_text(json.dumps({"commit": commit, "repository": repository}) + "\n")
+PY
 RUN chmod -R go-w,go+rX /opt/tico \
     && .venv/bin/python -c 'import backend.app, runner.service, clients.environments' \
     && .venv/bin/python -m compileall -q backend runner clients
