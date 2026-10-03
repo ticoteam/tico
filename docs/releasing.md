@@ -13,7 +13,7 @@ tagging, run the whole thing from the repository root:
 python scripts/release_checks.py
 ```
 
-That is the full suite (pytest and the browser batch run concurrently, with browser scripts three at a time) and it has to finish in under
+That is the full suite (pytest in parallel, then the browser scripts three at a time) and it has to finish in under
 5 minutes; the check records wall time and load and fails if the combined run reaches 300 seconds. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
 builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
