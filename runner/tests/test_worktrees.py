@@ -368,7 +368,7 @@ def test_cleanup_keeps_unsafe_large_and_ignored_files(trees, name):
     assert git(remote, 'show-ref', '--heads') == git(remote, 'show-ref', '--heads', 'main')
 
 
-def test_backoff_does_not_mint_more_tokens_and_alias_paths_are_refused(trees):
+def test_backoff_does_not_mint_more_tokens_and_alias_paths_are_refused(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
     (workspace / 'alias').symlink_to(path.parent, target_is_directory=True)
@@ -378,12 +378,15 @@ def test_backoff_does_not_mint_more_tokens_and_alias_paths_are_refused(trees):
     client.get.side_effect = lambda route: {'worktrees': [saved]} if route.endswith('/worktrees') else {'repositories': [{**row, 'access': 'write'}]}
     client.post.reset_mock()
     client.post.side_effect = APIError('forbidden', 'Synthetic refusal', 403)
+    clock = mock.Mock()
+    clock.monotonic.return_value = 1000
+    monkeypatch.setattr(W, 'time', clock)
     manager = W.Worktrees(workspace, client)
     try:
         action = {**row, 'action': 'remove'}
         manager.sync([action])
         until, failures = manager.retry[row['id']]
-        assert failures == 1 and 299 <= until - W.time.monotonic() <= 300
+        assert (until, failures) == (1300, 1)
         manager.sync([action])
         assert client.post.call_count == 1
         assert path.exists()
