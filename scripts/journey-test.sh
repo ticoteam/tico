@@ -164,6 +164,8 @@ step_turn() {
   if [ "$assigned" != "$rid" ]; then
     post bots/botops/assignment "{\"runner_id\": \"$rid\", \"expected_generation\": $generation}" >/dev/null || return 1
   fi
+  # The runner builds starter repositories asynchronously after enrollment.
+  retry 180 botops_ready || { say "BotOps repository never became ready on the runner"; return 1; }
   revision="$(get bots | json '[b for b in d if b["slug"] == "botops"][0]["revision"]')" || return 1
   post bots/botops/definition "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
   retry 180 botops_ready || { say "BotOps never became ready on the runner"; return 1; }
