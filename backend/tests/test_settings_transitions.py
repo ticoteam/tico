@@ -43,11 +43,11 @@ def _placed(api, bot):
         return c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()[0]
 
 
-def _company_default(api, bot):
-    """The company runs codex / gpt-6-sol and `bot` names neither."""
+def _company_default(api, bot, model="gpt-6-sol"):
+    """Set a company Codex default while `bot` names neither setting."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('providers',?)", (encode({
-            "enabled": ["openai"], "runtime": "codex", "model": "gpt-6-sol", "revision": 1}),))
+            "enabled": ["openai"], "runtime": "codex", "model": model, "revision": 1}),))
         c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({"name": bot}), bot))
 
 

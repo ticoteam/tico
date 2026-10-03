@@ -141,7 +141,7 @@ runner_id() { get operations | json 'd["machines"][0]["id"]'; }
 last_seen() { sql "SELECT coalesce(max(last_seen),'') FROM runners WHERE revoked_at IS NULL"; }
 
 step_turn() {
-  local rid revision cid
+  local rid revision cid assignment assigned generation
   # The fake harness: a `codex` on the runner's PATH that speaks the app-server protocol. The runner finds it, the
   # OPENAI_API_KEY given above satisfies its sign-in check, and no model or network is involved.
   docker cp scripts/journey-fake-codex.py "$RUNNER:/usr/local/bin/codex" && docker exec -u root "$RUNNER" chmod 755 /usr/local/bin/codex || return 1
@@ -149,7 +149,13 @@ step_turn() {
   api -X PUT -H "Idempotency-Key: j-$RANDOM$SECONDS" -d "{\"enabled\": [\"openai\"], \"runtime\": \"\", \"model\": \"\", \"expected_revision\": $revision}" \
     http://127.0.0.1:8765/api/v2/providers >/dev/null || { say "could not enable OpenAI"; return 1; }
   rid="$(runner_id)"
-  post bots/botops/assignment "{\"runner_id\": \"$rid\", \"expected_generation\": 0}" >/dev/null || return 1
+  # Enrollment may already place the starter bot. Preserve that assignment.
+  assignment="$(get bots/botops)" || return 1
+  assigned="$(printf '%s' "$assignment" | json '(d.get("assignment") or {}).get("runner_id", "")')"
+  generation="$(printf '%s' "$assignment" | json '(d.get("assignment") or {}).get("generation", 0)')"
+  if [ "$assigned" != "$rid" ]; then
+    post bots/botops/assignment "{\"runner_id\": \"$rid\", \"expected_generation\": $generation}" >/dev/null || return 1
+  fi
   revision="$(get bots | json '[b for b in d if b["slug"] == "botops"][0]["revision"]')" || return 1
   post bots/botops/definition "{\"status\": \"active\", \"expected_revision\": $revision}" >/dev/null || return 1
   retry 180 botops_ready || { say "BotOps never became ready on the runner"; return 1; }
@@ -276,7 +282,18 @@ step_runner_restart() {
 
 step_backup() {
   [ -x docker/backup-test.sh ] || return 1
-  # Its own project, network and MinIO; the candidate images are in the local cache by now.
+  # The upgrade may have failed before building; do not misreport a missing image as MinIO failure.
+  if ! docker image inspect "$SERVER_IMAGE:$CAND" >/dev/null 2>&1; then
+    if [ "$LOCAL" = 1 ]; then
+      docker build -q --target server --build-arg "TICO_VERSION=$CAND" \
+        --build-arg "TICO_COMMIT=$(git rev-parse HEAD)" \
+        --build-arg "TICO_REPOSITORY=${TICO_JOURNEY_REPOSITORY:-ticoteam/tico}" \
+        -t "$SERVER_IMAGE:$CAND" . >/dev/null || return 1
+    else
+      docker pull -q "$SERVER_IMAGE:$CAND" >/dev/null || return 1
+    fi
+  fi
+  # Its own project, network and MinIO.
   TICO_IMAGE="$SERVER_IMAGE" TICO_TAG="$CAND" docker/backup-test.sh > "$WORK/backup.log" 2>&1 || { tail -n 15 "$WORK/backup.log" | sed 's/^/    /'; return 1; }
 }
 

@@ -382,7 +382,7 @@ def test_botops_updates_a_tool_in_place_as_the_requester_and_only_on_her_bot(api
 
 def test_template_create_uses_team_default_and_validates_metadata(api, botops):
     from backend.tests.test_settings_transitions import _company_default
-    _company_default(api, "ops")
+    _company_default(api, "ops", model="gpt-6.1-sol")
     body = {"slug": "release-helper", "display_name": "Release Helper", "model": "", "effort": "",
             "template": "release-notes"}
     made = post(api, "bots", body)

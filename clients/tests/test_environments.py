@@ -45,10 +45,10 @@ class Providers(Base):
     def test_the_choice_reaches_the_server_env_and_fills_what_was_left_out(self):
         report = self.create(providers="openai,anthropic", default_runtime="claude")
         self.assertEqual(report["environment"]["providers"],
-                         {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5"})
+                         {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5-5"})
         env = dict(line.split("=", 1) for line in (ENV.path("acme") / "server.env").read_text().splitlines())
         self.assertEqual((env["TICO_ENABLED_PROVIDERS"], env["TICO_DEFAULT_RUNTIME"], env["TICO_DEFAULT_MODEL"]),
-                         ("openai,anthropic", "claude", "claude-opus-5"))
+                         ("openai,anthropic", "claude", "claude-opus-5-5"))
 
 class Remove(Base):
     def test_removing_refuses_while_the_company_still_has_data(self):

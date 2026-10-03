@@ -30,6 +30,7 @@ code
 code_blocks
 computer
 contact_page
+content_copy
 contract
 copyright
 credit_card

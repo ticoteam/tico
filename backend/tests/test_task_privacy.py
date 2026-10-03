@@ -244,7 +244,7 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     c.close()
     c = H.connect(path)
     try:
-        assert c.execute('PRAGMA user_version').fetchone()[0] == 24
+        assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
         assert not H.task_private(c, H.task(c, ordinary['id']))
         assert H.task_private(c, H.task(c, orphan['id']))
         assert {row[0] for row in c.execute('SELECT id FROM messages')} == ids
