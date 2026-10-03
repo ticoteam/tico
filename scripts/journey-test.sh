@@ -62,9 +62,17 @@ dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
 retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 2; done; }
 api() {  # curl arguments; the owner token never leaves the server container
-  dc exec -T server sh -c 'curl -fsS -H "Authorization: Bearer $(cat /data/local-owner.token)" -H "Content-Type: application/json" "$@"' sh "$@"
+  dc exec -T server sh -c 'curl -sS --fail-with-body -H "Authorization: Bearer $(cat /data/local-owner.token)" -H "Content-Type: application/json" "$@"' sh "$@"
 }
-post() { local path=$1 body=$2; api -X POST -H "Idempotency-Key: j-$RANDOM$RANDOM$SECONDS" -d "$body" "http://127.0.0.1:8765/api/v2/$path"; }
+post() {
+  local path=$1 body=$2 response
+  if response="$(api --fail-with-body -X POST -H "Idempotency-Key: j-$RANDOM$RANDOM$SECONDS" -d "$body" "http://127.0.0.1:8765/api/v2/$path")"; then
+    printf '%s\n' "$response"
+  else
+    printf 'journey: POST %s failed: %s\n' "$path" "$response" >&2
+    return 1
+  fi
+}
 get() { api "http://127.0.0.1:8765/api/v2/$1"; }
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 healthy() { dc exec -T server curl -fsS --max-time 3 http://127.0.0.1:8765/healthz; }

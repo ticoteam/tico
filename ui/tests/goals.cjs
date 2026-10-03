@@ -128,7 +128,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(last().path, '/api/v2/chat/goal-manager');
     assert.deepEqual(last().body, {text: 'Change the revenue goal', refs: {}});
     assert.equal(await page.locator('.gm-history').count(), 0, 'history stays inline');
-    assert.deepEqual(await page.locator('[data-gm-thread] .bubble').allTextContents(), ['anaChange the revenue goal', 'Goal ManagerUpdated the goal.']);
+    assert.deepEqual(await page.locator('[data-gm-thread] .bubble').evaluateAll(els => els.map(el => { const copy = el.cloneNode(true); copy.querySelectorAll('[data-chat-copy]').forEach(button => button.remove()); return copy.textContent; })), ['anaChange the revenue goal', 'Goal ManagerUpdated the goal.']);
     // A reload shows the same room the bot page uses (the viewer's personal room), with its latest exchange.
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText: 'Updated the goal.'}).waitFor();

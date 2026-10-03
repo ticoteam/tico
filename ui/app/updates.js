@@ -23,7 +23,7 @@ function pageUpdates() {
   // "a filter at the top, on by default, to only show my bots" (the bots I own).
   let mine = true;
   try { mine = localStorage.getItem('tico.updates.mine') !== '0'; } catch {}
-  const state = UPD = {kind, mine, data: cached, open: new Set(), threads: {}, pending: new Set(),
+  const state = UPD = {kind, mine, data: cached, open: new Set(), threads: {}, pending: new Set(), manualUnread: new Set(),
                        sel: -1, loading: !cached, fromCache: !!cached};
   if (cached) updOrder(state, true);
   $('#main').innerHTML = `<div class="upd-page">
@@ -152,7 +152,7 @@ function updWatch(state) {
 }
 function updSeen(state, id) {
   const u = state.data?.updates?.find(x => x.id === id);
-  if (!u || u.read || UPD !== state) return;
+  if (!u || u.read || state.manualUnread.has(id) || UPD !== state) return;
   u.read = true; state.pending.add(id);
   const el = document.querySelector(`#upd-feed [data-upd="${CSS.escape(id)}"]`);
   el?.classList.remove('unread'); el?.querySelector('.upd-dot')?.remove();
@@ -201,6 +201,9 @@ async function updReply(state, id, text) {
 async function updToggle(state, id) {
   const u = state.data.updates.find(x => x.id === id); if (!u) return;
   u.read = !u.read;
+  if (u.read) state.manualUnread.delete(id);
+  else { state.manualUnread.add(id); state.pending.delete(id); }
+  updCacheWrite(state.kind, state.data);
   updBadge(Math.max(0, (S.updUnread || 0) + (u.read ? -1 : 1)));
   updRender(state);
   try { await post('/v2/updates/read', {ids: [id], read: u.read}); } catch (e) { toast(e.message || 'Could not save', true); }
