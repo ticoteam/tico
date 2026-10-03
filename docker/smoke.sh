@@ -127,7 +127,11 @@ retry 120 online || fail "the runner did not enroll and come online"
 step "bot code cannot read the runner's registration"
 [ "$(docker exec smoke-runner stat -c '%U:%a' /home/runner/runner.json)" = "ticorun:600" ] || fail "runner.json is not the runner's alone"
 ! docker exec -u bot smoke-runner cat /home/runner/runner.json >/dev/null 2>&1 || fail "the bot user can read runner.json"
-docker exec -u bot smoke-runner sh -c 'git config --global user.name && test -w /home/runner/workspace/secrets' >/dev/null || fail "the bot user has no working home"
+docker exec -u bot smoke-runner sh -c 'git config --global user.name && test -w /home/runner/workspace' >/dev/null || fail "the bot user has no working home"
+# Legacy secrets belong to the supervisor; only the workspace is shared with bot code.
+[ "$(docker exec smoke-runner stat -c '%U:%a' /home/runner/workspace/secrets)" = "ticorun:700" ] || fail "legacy secrets are not private to the supervisor"
+! docker exec -u bot smoke-runner test -r /home/runner/workspace/secrets || fail "the bot user can read legacy secrets"
+! docker exec -u bot smoke-runner test -w /home/runner/workspace/secrets || fail "the bot user can write legacy secrets"
 
 step "the image holds no model CLI, and the runner reports every harness as not installed"
 for cli in codex claude gemini grok pi; do
