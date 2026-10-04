@@ -3570,7 +3570,8 @@ def stalled_tasks(conn, at=None):
 
 def wake_stalled(conn, at=None):
     """Wake the owner of each stalled task (at most once per STALL_REPEAT_MINUTES, STALL_WAKES_PER_DAY
-    a day); past that, one BotOps task per stuck task. Returns what it did."""
+    a day); past that, one diagnostic per stuck task. BotOps cannot be its own last resort:
+    its stalled work, or work it cannot take while unavailable, goes to a human. Returns what it did."""
     at = at or now()
     woke, escalated = [], []
     for row in stalled_tasks(conn, at):
@@ -3586,13 +3587,31 @@ def wake_stalled(conn, at=None):
                 continue
             if count >= STALL_WAKES_PER_DAY:
                 if not conn.execute("SELECT 1 FROM events WHERE action='task.stall_escalated' AND target=? AND ts>?",
-                                    (row["id"], shift(at, seconds=-86400))).fetchone() and _actor_exists(conn, "bot:botops"):
-                    title = f"Find why {actor_id(row['owner'])}'s task stays stuck after {count} wake-ups"
-                    task_create(conn, KEEPER, title[:150],
+                                    (row["id"], shift(at, seconds=-86400))).fetchone():
+                    repair_bot = bot(conn, "botops")
+                    if row["owner"] != "bot:botops" and repair_bot and repair_bot["state"] == "active":
+                        owner = "bot:botops"
+                    else:
+                        owner = (row["requester"] if is_human(row["requester"]) and _actor_exists(conn, row["requester"])
+                                 else human_actor(default_human(conn)))
+                        if not _actor_exists(conn, owner):
+                            continue
+                    # Identity comes from the source event, not the human-facing title: even
+                    # equally named tasks have separate diagnoses. Reuse unresolved work later.
+                    previous = _one(conn, "SELECT detail_json FROM events WHERE action='task.stall_escalated' "
+                                    "AND target=? ORDER BY rowid DESC LIMIT 1", (row["id"],))
+                    repair = task(conn, _json(previous["detail_json"], {}).get("recovery_task")) if previous else None
+                    if repair and (repair["owner"] != owner or repair["status"] not in ACTIVE_STATUSES):
+                        repair = None
+                    title = f"Find why {actor_id(row['owner'])}'s task stays stuck: {row['title']}"
+                    repair = repair or task_create(conn, KEEPER, title[:150],
                                 f"Task {row['id']} ({row['title'][:120]}) has been {row['status']} with nothing moving it; "
                                 f"{count} wake-ups today did not move it. Fix the cause (routine, runner, instructions) "
-                                "or set it waiting with the reason.", "bot:botops", deduplicate=True)
-                    event(conn, KEEPER, "task.stall_escalated", row["id"], {"bot": actor_id(row["owner"]), "wakes": count})
+                                "or set it waiting with the reason. Complete this diagnostic when the cause is known; "
+                                "record any remaining repair dependency on the original task.", owner,
+                                deduplicate=False, lint=False)
+                    event(conn, KEEPER, "task.stall_escalated", row["id"],
+                          {"bot": actor_id(row["owner"]), "wakes": count, "recovery_task": repair["id"], "owner": owner})
                     escalated.append(row["id"])
                 continue
             if row.get("next_run"):

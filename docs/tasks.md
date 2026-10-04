@@ -67,7 +67,10 @@ and wakes the waiting bot. **Waiting** does not mean a person must review the co
 
 For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
 24 hours, spaced at least 30 minutes apart. Updating a note does not reset that limit. Repeated
-stalls are escalated to BotOps; an explicit run is still available.
+stalls are escalated to BotOps with a separate diagnostic for each source task. If BotOps itself is
+stuck or unavailable, the diagnostic goes to the human requester, or the team's default human for
+bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
+runs have escalated a public task without progress; an explicit run is still available.
 
 Task worktrees have a separate lifecycle. The ten-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup

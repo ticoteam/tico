@@ -9,17 +9,18 @@ from pathlib import Path
 from . import isolation
 
 
-# One Claude/Codex/Gemini thread per bot. Conversation id and "new chat" epochs
-# do not fork it; token rotation and a failed turn still start a fresh one.
+# The default provider thread. BotOps isolates jobs by default; other bots can
+# opt into the same isolation with session: task.
 BOT_THREAD = "bot"
 
 
 def session_key(config, attempt):
-    """The provider thread this turn continues. A bot set to `session: task` gets one
+    """The provider thread this turn continues. BotOps and bots set to `session: task` get one
     per task, so a review never carries every earlier review into each call; a wake about the
     same task (a stalled nudge, a reconcile, a reply) resumes it. A wake with no task keys on
     its conversation, so a person's follow-up still lands where the first answer was."""
-    if (config or {}).get("session") != "task":
+    mode = (config or {}).get("session") or ("task" if attempt.get("bot") == "botops" else "bot")
+    if mode != "task":
         return BOT_THREAD
     task = (attempt.get("task") or {}).get("id")
     if task:

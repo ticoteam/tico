@@ -1,6 +1,10 @@
 """The stall watcher (hubdb.wake_stalled; Ana, 2026-09-27: "ideally never stuck for more than 5
 minutes"): a bot task nothing is going to move wakes its bot, spaced and capped, and BotOps takes
 the ones waking does not move. Waiting, busy, blocked and routine-covered work is left alone."""
+import json
+
+import pytest
+
 from backend.store import H, encode
 from backend.tests.test_api import api  # noqa: F401
 
@@ -73,3 +77,99 @@ def test_status_notes_do_not_reset_the_daily_stall_wake_cap(api):
         # The cap expires after a day; it does not strand the task permanently.
         tomorrow = H.shift(H.now(), hours=25)
         assert task['id'] in H.wake_stalled(c, at=tomorrow)['woke']
+
+
+def capped(c, task):
+    aged(c, task['id'], 120)
+    for _ in range(H.STALL_WAKES_PER_DAY):
+        H.event(c, H.KEEPER, 'task.stall_wake', task['id'], {})
+    c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+              (H.shift(H.now(), hours=-1), task['id']))
+
+
+def test_botops_cannot_be_its_own_last_resort_and_sources_do_not_share_a_repair_task(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        first = H.task_create(c, 'bot:finance', 'Repair the mail registry', '', 'bot:botops')
+        second = H.task_create(c, H.KEEPER, 'Investigate a stuck repair', '', 'bot:botops')
+        for task in (first, second):
+            capped(c, task)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='botops'")
+        assert H.wake_stalled(c)['escalated'] == [first['id'], second['id']]
+        recoveries = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester='keeper' AND id NOT IN (?,?)",
+                                               (first['id'], second['id']))]
+        assert len(recoveries) == 2
+        assert {r['owner'] for r in recoveries} == {H.human_actor(H.default_human(c))}
+        for task in (first, second):
+            event = c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' AND target=?",
+                              (task['id'],)).fetchone()
+            detail = json.loads(event[0])
+            recovery = H.task(c, detail['recovery_task'])
+            assert task['id'] in recovery['body']
+            assert detail['owner'] == recovery['owner']
+        assert H.wake_stalled(c) == {'woke': [], 'escalated': []}
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot='botops' AND state='queued'").fetchone()
+
+
+def test_different_stalled_tasks_on_one_bot_get_distinct_botops_diagnostics(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        tasks = [H.task_create(c, 'human:ana', title, '', 'bot:finance')
+                 for title in ('Check the bank balance', 'Reconcile the invoice')]
+        for task in tasks:
+            capped(c, task)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert set(H.wake_stalled(c)['escalated']) == {t['id'] for t in tasks}
+        repairs = list(c.execute("SELECT * FROM tasks WHERE owner='bot:botops'"))
+        assert len(repairs) == 2
+
+
+@pytest.mark.parametrize('state', ['paused', 'planned', 'archived', None])
+def test_unavailable_botops_routes_stalled_work_to_a_human(api, state):
+    with api.app.state.store.transaction() as c:
+        if state:
+            c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps',?)", (state,))
+        task = H.task_create(c, 'human:ben', 'Check the bank balance', '', 'bot:finance')
+        capped(c, task)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert H.wake_stalled(c)['escalated'] == [task['id']]
+        assert c.execute("SELECT owner FROM tasks WHERE requester='keeper'").fetchone()[0] == 'human:ben'
+
+
+def test_equally_named_source_tasks_keep_separate_recovery_identities(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        sources = [H.task_create(c, requester, 'Reconcile the invoice', '', 'bot:finance')
+                   for requester in ('human:ana', 'human:ben')]
+        for source in sources:
+            capped(c, source)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert set(H.wake_stalled(c)['escalated']) == {source['id'] for source in sources}
+        repairs = []
+        for source in sources:
+            details = json.loads(c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' "
+                                           "AND target=?", (source['id'],)).fetchone()[0])
+            repair = H.task(c, details['recovery_task'])
+            assert source['id'] in repair['body']
+            repairs.append(repair['id'])
+        assert len(set(repairs)) == 2
+
+
+def test_an_unresolved_diagnostic_is_reused_when_the_daily_retry_window_rolls_over(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        source = H.task_create(c, 'human:ana', 'Check the bank balance', '', 'bot:finance')
+        capped(c, source)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert H.wake_stalled(c)['escalated'] == [source['id']]
+        repair = c.execute("SELECT id FROM tasks WHERE requester=?", (H.KEEPER,)).fetchone()[0]
+        tomorrow = H.shift(H.now(), seconds=90000)
+        for _ in range(3):
+            H.event(c, H.KEEPER, 'task.stall_wake', source['id'], {})
+        c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(tomorrow, seconds=-3600), source['id']))
+        assert H.wake_stalled(c, at=tomorrow)['escalated'] == [source['id']]
+        assert c.execute("SELECT count(*) FROM tasks WHERE requester=?", (H.KEEPER,)).fetchone()[0] == 1
+        details = json.loads(c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' "
+                                      "AND target=? ORDER BY rowid DESC LIMIT 1", (source['id'],)).fetchone()[0])
+        assert details['recovery_task'] == repair

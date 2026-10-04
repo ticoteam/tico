@@ -133,6 +133,18 @@ class CleanClaude(unittest.TestCase):
 
 
 class Sessions(unittest.TestCase):
+    def test_botops_defaults_to_task_and_conversation_isolation(self):
+        from runner.state import session_key
+        first = {'bot': 'botops', 'task': {'id': 'mail-repair'}, 'conversation': {'id': 'room'}}
+        other = {**first, 'task': {'id': 'kpi-repair'}}
+        self.assertEqual(session_key({}, first), 'task:mail-repair')
+        self.assertEqual(session_key({}, first), session_key({}, dict(first)))
+        self.assertNotEqual(session_key({}, first), session_key({}, other))
+        self.assertEqual(session_key({}, {'bot': 'botops', 'conversation': {'id': 'ana'}}), 'conversation:ana')
+        self.assertNotEqual(session_key({}, {'bot': 'botops', 'conversation': {'id': 'ana'}}),
+                            session_key({}, {'bot': 'botops', 'conversation': {'id': 'ben'}}))
+        self.assertEqual(session_key({'session': 'bot'}, first), 'bot')
+
     def test_task_sessions_resume_the_same_task_and_chat_without_changing_existing_bots(self):
         from runner.state import session_key
         attempt = {'task': {'id': 'review-a'}, 'conversation': {'id': 'room-a'}}

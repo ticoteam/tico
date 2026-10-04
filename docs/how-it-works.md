@@ -226,8 +226,11 @@ Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limi
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
 
-**A bot's session is its own.** Each bot has one provider thread: chat, tasks and
-routines resume it in the same local `bot-<slug>` checkout, and only that Mac knows which thread
+**A bot's session is its own.** By default each bot has one provider thread. BotOps defaults to
+one thread per task and per chat conversation so unrelated jobs and requesters stay separate.
+Other bots can opt into that isolation with `session: task`; explicit `session: bot` keeps one
+thread. Wakes about the same task resume its thread. Sessions use the same local `bot-<slug>` checkout,
+and only that computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt: when the conversation fills the model's window
 the runtime compacts it, and a run carries only what the room said since the bot last answered.
