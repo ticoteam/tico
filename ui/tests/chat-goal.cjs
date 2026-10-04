@@ -9,7 +9,9 @@ const {html, uiFile} = require('./support/page.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 const LONG = 'Ship the Acme onboarding checklist: write the welcome email, set up the three sample projects, '
   + 'check every link in the help pages, fix any broken ones, then post a short summary in the chat with what changed '
-  + 'and what still needs a person. Keep going until all of it is done.';
+  + 'and what still needs a person. Keep going until all of it is done. '
+  + 'Document the result of every check, include the corrected links in the summary, and explain any remaining '
+  + 'setup steps so the next person can follow the checklist without needing the original conversation.';
 const COMMANDS = [
   {name: 'goal', args: '<objective>', help: 'Pin a goal the bot works toward', kind: 'tico', sub: ['pause', 'resume', 'clear', 'edit']},
   {name: 'new', help: 'New chat', kind: 'tico'},
