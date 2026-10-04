@@ -123,7 +123,7 @@ PY
   cd app
   TICO_HUB_URL="$HUB_URL" TICO_APP_NAME="$APP_NAME" TICO_ENV_SLUG="$ENV_SLUG" \
     TICO_TRAY_LABEL="$TRAY_LABEL" TICO_LOCAL_TOKEN_FILE="" CARGO_TARGET_DIR="$BUILD_ROOT/cargo-target" \
-    cargo tauri build --locked --target universal-apple-darwin --bundles app --no-sign --config "$OVERRIDE"
+    cargo tauri build --target universal-apple-darwin --bundles app --no-sign --config "$OVERRIDE" -- --locked
 )
 ```
 
