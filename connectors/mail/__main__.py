@@ -310,11 +310,18 @@ def cmd_doctor(args):
             continue
         want = sorted({n for s in (slugs or [access.OWNER]) for n in lb.wanted(s)})
         try:
-            _, created = lb.ensure(g, want)
-            c.ok(f"{box} hub labels",
-                 f"{len(want)} present" + (f" ({len(created)} created now)" if created else ""))
+            existing = g.label_ids()
+            missing = [name for name in want if name not in existing]
+            if missing:
+                c.fail(f"{box} hub labels", f"{len(missing)} missing: {', '.join(missing)}",
+                       "Create the missing hub/* labels in Gmail, then rerun doctor.")
+            else:
+                c.ok(f"{box} hub labels", f"{len(want)} present")
         except Failure as e:
             c.fail(f"{box} hub labels", e.msg, e.hint)
+        except Exception as e:
+            c.fail(f"{box} hub labels", f"unexpected {type(e).__name__}",
+                   "Check mailbox label access, then rerun doctor.")
         try:
             open_calendar(box).calendarList().list(maxResults=1).execute()
             c.ok(f"{box} calendar", "readable")

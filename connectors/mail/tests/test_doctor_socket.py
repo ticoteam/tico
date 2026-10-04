@@ -46,10 +46,16 @@ class DoctorSocket(unittest.TestCase):
             result = cli.cmd_doctor(args)
         return result, output.getvalue()
 
-    def configure_doctor(self, gmail=None):
+    def use_socket_mode(self):
+        os.environ[auth.SOCKET_ENV] = "/tmp/credential.sock"
+        os.environ["HUB_TOKEN"] = "synthetic-token"
+
+    def configure_doctor(self, gmail=None, wanted=(), existing_labels=None):
         class Gmail:
             def profile(self):
                 return {"emailAddress": "ana@example.com", "messagesTotal": 3}
+            def label_ids(self):
+                return existing_labels or {}
         class CalendarList:
             def list(self, **_kwargs):
                 return self
@@ -61,7 +67,7 @@ class DoctorSocket(unittest.TestCase):
         cli.access.mailbox_holders = lambda: {"ana@example.com": ["influencer"]}
         cli.open_gmail = gmail or (lambda _box: Gmail())
         cli.open_calendar = lambda _box: Calendar()
-        cli.lb.wanted = lambda _slug: []
+        cli.lb.wanted = lambda _slug: list(wanted)
         cli.lb.ensure = lambda _g, _want: ([], [])
 
     def test_socket_doctor_never_reads_supervisor_key(self):
@@ -83,6 +89,33 @@ class DoctorSocket(unittest.TestCase):
         self.assertEqual(result, 0)
         key_info.assert_called_once_with()
         self.assertIn("client id", output)
+
+    def test_missing_labels_are_reported_with_repair_hint_without_writing(self):
+        self.use_socket_mode()
+        self.configure_doctor(
+            wanted=["hub/drafted", "hub/noise"],
+            existing_labels={"hub/drafted": "label-1"},
+        )
+        with patch.object(cli.lb, "ensure") as ensure:
+            result, output = self.run_doctor()
+        self.assertEqual(result, 1)
+        self.assertIn("1 missing: hub/noise", output)
+        self.assertIn("Create the missing hub/* labels in Gmail", output)
+        ensure.assert_not_called()
+
+    def test_labels_read_failure_is_a_clear_non_crashing_check(self):
+        self.use_socket_mode()
+        class BrokenGmail:
+            def profile(self):
+                return {"emailAddress": "ana@example.com", "messagesTotal": 3}
+            def label_ids(self):
+                raise RuntimeError("private service detail")
+        self.configure_doctor(gmail=lambda _box: BrokenGmail(), wanted=["hub/drafted"])
+        result, output = self.run_doctor()
+        self.assertEqual(result, 1)
+        self.assertIn("hub labels: unexpected RuntimeError", output)
+        self.assertIn("Check mailbox label access", output)
+        self.assertNotIn("private service detail", output)
 
     def test_denied_mailbox_and_unexpected_socket_failure_are_clear_and_non_crashing(self):
         os.environ[auth.SOCKET_ENV] = "/tmp/credential.sock"
