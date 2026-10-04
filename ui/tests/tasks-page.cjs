@@ -797,7 +797,7 @@ async function donePagination(browser) {
   assert.match(await page.locator('#task-body .tl-empty').innerText(), /No matching finished tasks on this page/);
   assert.equal(await page.locator('#task-body #board-more').count(), 1, 'an empty filtered page still offers older results');
   await page.locator('#task-body #board-more').click();
-  await page.locator('#task-body [data-task-key="older-general-done"]').waitFor();
+  await page.locator('#task-body [data-task-key="tolder-general-done"]').waitFor();
   assert.equal(await page.locator('#task-body .tl-row').count(), 1, 'loading the next global page reaches the older matching task');
   assert.equal(await page.locator('#task-body #board-more').count(), 0, 'the exhausted matching page has no more control');
   assert.deepEqual(errors, []);
