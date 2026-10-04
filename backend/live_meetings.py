@@ -89,6 +89,10 @@ class AttachBots(Contract):
         return self
 
 
+class DetachBot(Contract):
+    pass
+
+
 class Chat(Contract):
     text: StrictStr = Field(min_length=1, max_length=20_000)
     at_ms: int | None = Field(default=None, ge=0)
@@ -174,6 +178,11 @@ def _view(c, auth, who, rid):
         "WHERE meeting_id=? ORDER BY window_index", (rid,))]
     for window in windows:
         window["trace"] = json.loads(window.pop("trace_json"))
+    chat_routes = [dict(r) for r in c.execute(
+        "SELECT chat_id,status,outcome,trace_json,started,finished FROM live_meeting_chat_routes "
+        "WHERE meeting_id=? ORDER BY started,chat_id", (rid,))]
+    for route in chat_routes:
+        route["trace"] = json.loads(route.pop("trace_json"))
     pending_turns = [dict(r) for r in c.execute(
         "SELECT id,bot,window_index,source_key,transcript_seq,status,skip_reason,created FROM live_meeting_turns "
         "WHERE meeting_id=? ORDER BY created,id", (rid,))]
@@ -190,7 +199,8 @@ def _view(c, auth, who, rid):
         "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
         "imported_meeting_id": row["imported_meeting_id"], "humans": humans, "bots": bots,
         "chunks": chunks, "chat": chat,
-        "router": {"windows": windows, "turns": pending_turns, "bypasses": bypasses},
+        "router": {"windows": windows, "chat_routes": chat_routes,
+                   "turns": pending_turns, "bypasses": bypasses},
     }
 
 
@@ -205,6 +215,66 @@ def _active_bot(c, slug):
 
 def _attached(c, rid):
     return c.execute("SELECT bot,last_reply_ms FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot", (rid,)).fetchall()
+
+
+def _clip_text(text, limit=800):
+    text = str(text or "")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _decision_input(c, rid, *, source_key, source_kind, window_index, transcript, bots,
+                    chat_id=None):
+    """Bound the exact context sent to the decision service for replay and audit."""
+    first_seq = min((row["seq"] for row in transcript), default=None)
+    prior_transcript = []
+    if first_seq is not None:
+        prior_transcript = [dict(row) for row in c.execute(
+            "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq<? "
+            "ORDER BY seq DESC LIMIT 12", (rid, first_seq))]
+        prior_transcript.reverse()
+    chat_before = c.execute("SELECT created FROM live_meeting_chat WHERE meeting_id=? AND id=?",
+                            (rid, chat_id)).fetchone() if chat_id else None
+    chat_sql = "SELECT id,actor,role,text,at_ms,transcript_seq FROM live_meeting_chat WHERE meeting_id=?"
+    chat_values = [rid]
+    if chat_before:
+        chat_sql += " AND (created<? OR (created=? AND id<=?))"
+        chat_values.extend((chat_before["created"], chat_before["created"], chat_id))
+    chat_sql += " ORDER BY created DESC,id DESC LIMIT 12"
+    recent_chat = [dict(row) for row in c.execute(chat_sql, chat_values)]
+    recent_chat.reverse()
+    for row in recent_chat:
+        row["text"] = _clip_text(row["text"])
+
+    bot_context = []
+    answered_questions = []
+    pending_question = None
+    for row in recent_chat:
+        if row["role"] == "human" and "?" in row["text"]:
+            pending_question = row
+        elif row["role"] == "bot" and pending_question:
+            answered_questions.append({"question": pending_question["text"],
+                                       "question_id": pending_question["id"],
+                                       "answer": row["text"], "answered_by": row["actor"]})
+            pending_question = None
+    for row in bots:
+        slug = row["bot"]
+        profile = H.bot(c, slug) or {}
+        previous = [dict(message) for message in c.execute(
+            "SELECT id,text,created FROM live_meeting_chat WHERE meeting_id=? AND role='bot' AND actor=? "
+            "ORDER BY created DESC,id DESC LIMIT 2", (rid, "bot:" + slug))]
+        previous.reverse()
+        bot_context.append({"slug": slug,
+                            "name": profile.get("name") or profile.get("display_name") or slug,
+                            "description": _clip_text(row["description"], 800),
+                            "last_messages": [{**message, "text": _clip_text(message["text"], 800)}
+                                              for message in previous]})
+    meeting = _meeting(c, rid)
+    return {"meeting_id": rid, "meeting_title": _clip_text(meeting["title"], 200),
+            "source": {"kind": source_kind, "key": source_key}, "window_index": window_index,
+            "transcript_before": [{**row, "text": _clip_text(row["text"])} for row in prior_transcript],
+            "transcript": [{**dict(row), "text": _clip_text(row["text"])} for row in transcript],
+            "recent_chat": recent_chat, "answered_questions": answered_questions,
+            "bots": bot_context}
 
 
 def _turn_prompt(c, rid, turn_id, slug):
@@ -244,7 +314,7 @@ def _dispatch_turn(c, rid, turn_id, slug):
 
 
 def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None):
-    """Persist concurrent bot turns; cooldown and busy checks are meeting-scoped."""
+    """Persist concurrent bot turns while respecting each bot's company-wide busy state."""
     skipped, selected = [], []
     meeting = _meeting(c, rid)
     if at_ms is None:
@@ -256,8 +326,13 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
         if not attached:
             skipped.append({"bot": slug, "reason": "not_attached"})
             continue
-        busy = c.execute("SELECT 1 FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND status IN ('pending','claimed') LIMIT 1",
-                         (rid, slug)).fetchone()
+        busy = c.execute("SELECT 1 FROM live_meeting_turns WHERE bot=? AND status IN ('pending','claimed') LIMIT 1",
+                         (slug,)).fetchone()
+        if not busy:
+            busy = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                             "WHERE j.bot=? AND j.state IN ('queued','leased','running','input') "
+                             "AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NULL LIMIT 1",
+                             (slug,)).fetchone()
         if busy:
             skipped.append({"bot": slug, "reason": "busy"})
             continue
@@ -392,49 +467,153 @@ def _window_ms(app, body):
     return 15_000 if jev else body.fallback_window_seconds * 1000
 
 
-def _decision(app, rid, index, transcript, bots, threshold, owner_actor):
+def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-meeting-route@1"):
     """One multi-bot decision using the existing calibrated decisions service."""
     if app.state.store.settings.rehearsal:
         return {"outcome": "pass", "targets": [],
-                "trace": {"reason": "rehearsal_mode", "answers": {}, "threshold": threshold}}
-    state = {"meeting_id": rid, "window_index": index, "transcript": transcript,
-             "bots": [{"slug": r["bot"], "name": r["display_name"] or r["bot"]} for r in bots]}
-    questions = {"reply_" + r["bot"]: {
-        "type": "noul", "instructions": f"Should {r['display_name'] or r['bot']} reply to this live meeting window? "
-                                            "Choose true only when a useful response from this teammate would help."}
+                "trace": {"reason": "rehearsal_mode", "answers": {}, "threshold": threshold,
+                          "decision_input": decision_input}}
+    state = decision_input
+    chat_route = state.get("source", {}).get("kind") == "chat"
+    questions = {"reply_" + r["slug"]: {
+        "type": "noul", "instructions": (f"Should {r['name']} reply to this human's live meeting chat message? "
+                                             "Choose true only when a useful response from this teammate would help."
+                                             if chat_route else
+                                             f"Should {r['name']} reply to this live meeting transcript window? "
+                                             "Choose true only when a useful response from this teammate would help.")}
         for r in bots}
     if not questions:
-        return {"outcome": "pass", "targets": [], "trace": {"reason": "no attached bots", "answers": {}}}
+        return {"outcome": "pass", "targets": [],
+                "trace": {"reason": "no attached bots", "answers": {}, "decision_input": state}}
     try:
         with app.state.store.read() as c:
             who = app.state.auth.identity_for_actor(c, owner_actor)
             used = used_today(c, owner_actor)
             if used >= DAILY_CALLS[who.role]:
                 return {"outcome": "pass", "targets": [],
-                        "trace": {"reason": "daily_decision_budget", "answers": {}, "threshold": threshold}}
+                        "trace": {"reason": "daily_decision_budget", "answers": {},
+                                  "threshold": threshold, "decision_input": state}}
             engine = (getattr(app.state, "live_meeting_decider", None) or getattr(app.state, "judge", None)
                       or fallback_engine(providers.load(c, app.state.store.settings)))
         if engine is None:
-            return {"outcome": "pass", "targets": [], "trace": {"reason": "decisions service unconfigured", "answers": {}}}
-        J.validate(state, questions, "live-meeting-route@1")
-        result = engine(state, questions, "live-meeting-route@1")
+            return {"outcome": "pass", "targets": [],
+                    "trace": {"reason": "decisions service unconfigured", "answers": {},
+                              "decision_input": state}}
+        J.validate(state, questions, label)
+        result = engine(state, questions, label)
         answers = J.check_answers(result.get("answers"), questions)
         targets = []
         scores = {}
         for row in bots:
-            key = "reply_" + row["bot"]
+            key = "reply_" + row["slug"]
             probability = float(answers[key]["noul"])
-            scores[row["bot"]] = probability
+            scores[row["slug"]] = probability
             if probability >= threshold:
-                targets.append((probability, row["bot"]))
+                targets.append((probability, row["slug"]))
         targets.sort(key=lambda pair: (-pair[0], pair[1]))
         trace = {"model": str(result.get("model") or ""), "ms": result.get("ms"),
-                 "answers": scores, "threshold": threshold}
+                 "answers": scores, "decision_answers": answers,
+                 "decision_input": state, "threshold": threshold}
         return {"outcome": "route" if targets else "pass", "targets": [slug for _, slug in targets], "trace": trace}
     except Exception as exc:
         # A route failure is a hidden PASS with a durable trace; it must never turn into transcript text.
         return {"outcome": "pass", "targets": [],
-                "trace": {"reason": "decision_error", "error": type(exc).__name__, "threshold": threshold}}
+                "trace": {"reason": "decision_error", "error": type(exc).__name__,
+                          "threshold": threshold, "decision_input": state}}
+
+
+def _route_human_chat(app, rid, chat_id):
+    """Decide once for an ordinary human chat message, outside the chat-write transaction."""
+    store = app.state.store
+    source_key = f"chat:{chat_id}"
+    with store.transaction() as c:
+        message = c.execute("SELECT * FROM live_meeting_chat WHERE meeting_id=? AND id=? AND role='human'",
+                            (rid, chat_id)).fetchone()
+        if not message:
+            return
+        meeting = _meeting(c, rid)
+        named = c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.router' "
+                          "AND json_extract(payload_json,'$.bypass')='named' "
+                          "AND json_extract(payload_json,'$.source_key')=? LIMIT 1", (rid, source_key)).fetchone()
+        if named:
+            return
+        previous = c.execute("SELECT status,started FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
+                             (rid, chat_id)).fetchone()
+        if previous:
+            if previous["status"] == "complete":
+                return
+            elapsed = H.parse_ts(H.now()) - H.parse_ts(previous["started"])
+            if elapsed.total_seconds() <= 60:
+                return
+            reason = "interrupted chat decision; not retried"
+            trace = json.loads(c.execute("SELECT trace_json FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
+                                         (rid, chat_id)).fetchone()[0])
+            trace.update({"reason": reason, "selected": [], "skipped": []})
+            stamp = H.now()
+            c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome='pass',trace_json=?,finished=? "
+                      "WHERE meeting_id=? AND chat_id=?",
+                      (encode(trace), stamp, rid, chat_id))
+            _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
+                                                "chat_id": chat_id, "outcome": "pass", "trace": trace})
+            return
+        if meeting["state"] != "live":
+            reason = "meeting_paused_before_chat_routing" if meeting["state"] == "paused" else "meeting_ended_before_chat_routing"
+            trace = {"reason": reason, "decision_input": None, "selected": [], "skipped": []}
+            stamp = H.now()
+            c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace_json,started,finished) "
+                      "VALUES(?,?,'complete','pass',?,?,?)",
+                      (rid, chat_id, encode(trace), stamp, stamp))
+            _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
+                                                "chat_id": chat_id, "outcome": "pass", "trace": trace})
+            return
+        bots = []
+        for row in c.execute("SELECT bm.bot,bc.description FROM live_meeting_bots bm "
+                             "LEFT JOIN bot_config bc ON bc.bot=bm.bot WHERE bm.meeting_id=? ORDER BY bm.bot", (rid,)):
+            bot = H.bot(c, row["bot"])
+            bots.append({"bot": row["bot"], "description": row["description"] or "",
+                         "display_name": (bot or {}).get("name") or row["bot"]})
+        transcript = [dict(row) for row in c.execute(
+            "SELECT seq,speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? "
+            "ORDER BY seq DESC LIMIT 20", (rid,))]
+        transcript.reverse()
+        decision_input = _decision_input(c, rid, source_key=source_key, source_kind="chat",
+                                         window_index=None, transcript=transcript, bots=bots,
+                                         chat_id=chat_id)
+        stamp = H.now()
+        c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace_json,started) "
+                  "VALUES(?,?,'deciding','',?,?)",
+                  (rid, chat_id, encode({"decision_input": decision_input}), stamp))
+        threshold, owner_actor = meeting["threshold"], meeting["owner_actor"]
+    outcome = _decision(app, decision_input, decision_input["bots"], threshold, owner_actor)
+    with store.transaction() as c:
+        route = c.execute("SELECT status FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
+                          (rid, chat_id)).fetchone()
+        if not route or route["status"] != "deciding":
+            return
+        meeting = _meeting(c, rid)
+        if meeting["state"] != "live":
+            reason = "meeting_paused_during_chat_decision" if meeting["state"] == "paused" else "meeting_ended_during_chat_decision"
+            outcome = {"outcome": "pass", "targets": [],
+                       "trace": {**outcome["trace"], "reason": reason, "discarded": True}}
+        selected, skipped = _enqueue(c, rid, outcome["targets"], source_key=source_key,
+                                     transcript_seq=message["transcript_seq"] or
+                                     (transcript[-1]["seq"] if transcript else None),
+                                     at_ms=message["at_ms"])
+        trace = {**outcome["trace"], "source_key": source_key,
+                 "selected": [row["bot"] for row in selected], "skipped": skipped}
+        if outcome["trace"].get("model"):
+            H.event(c, owner_actor, "judge.call", "live-meeting-route@1", {
+                "label": "live-meeting-route@1", "questions": len(decision_input["bots"]),
+                "types": ["noul"], "ms": outcome["trace"].get("ms"),
+                "model": outcome["trace"].get("model"),
+                "answers": outcome["trace"].get("answers", {})})
+        stamp = H.now()
+        c.execute("UPDATE live_meeting_chat_routes SET status='complete',outcome=?,trace_json=?,finished=? "
+                  "WHERE meeting_id=? AND chat_id=?",
+                  ("route" if selected else "pass", encode(trace), stamp, rid, chat_id))
+        _event(c, rid, "meeting.router", {"source_kind": "chat", "source_key": source_key,
+                                            "chat_id": chat_id, "outcome": "route" if selected else "pass",
+                                            "decision_ms": outcome["trace"].get("ms"), "trace": trace})
 
 
 def _run_windows(app, rid, *, final=False):
@@ -514,7 +693,11 @@ def _run_windows(app, rid, *, final=False):
         if not included or terminal_window:
             index += 1
             continue
-        outcome = _decision(app, rid, index, included, bots, meeting["threshold"], meeting["owner_actor"])
+        with app.state.store.read() as c:
+            decision_input = _decision_input(c, rid, source_key=f"window:{index}", source_kind="transcript",
+                                             window_index=index, transcript=included, bots=bots)
+        outcome = _decision(app, decision_input, decision_input["bots"],
+                            meeting["threshold"], meeting["owner_actor"])
         with app.state.store.transaction() as c:
             current = c.execute("SELECT status FROM live_meeting_windows WHERE meeting_id=? AND window_index=?",
                                 (rid, index)).fetchone()
@@ -526,7 +709,8 @@ def _run_windows(app, rid, *, final=False):
                 reason = ("meeting_paused_during_decision" if current_state == "paused" else
                           "meeting_ended_during_decision" if not final else "meeting_ended_final_window")
                 outcome = {"outcome": "pass", "targets": [],
-                           "trace": {"reason": reason, "threshold": meeting["threshold"]}}
+                           "trace": {**outcome["trace"], "reason": reason, "discarded": True,
+                                     "threshold": meeting["threshold"]}}
             selected, skipped = _enqueue(c, rid, outcome["targets"], source_key=f"window:{index}",
                                          window_index=index, transcript_seq=included[-1]["seq"],
                                          at_ms=end_ms) if current_state == "live" else ([], [])
@@ -789,6 +973,40 @@ def install_live_meetings(app, store, auth, mutate):
             return {"id": rid, "bots": attached, "added": added, "event_id": _meeting(c, rid)["next_event_id"]}
         return mutate(request, body, work)
 
+    @app.delete("/api/v2/live-meetings/{rid}/bots/{bot}")
+    def detach_bot(request: Request, rid: str, bot: str, body: DetachBot):
+        who = request.state.identity
+        slug = str(bot or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,60}", slug):
+            raise Problem("not_found", "Attached meeting bot not found", 404)
+        def work(c):
+            human_only(who)
+            auth.domain(who)
+            meeting = _meeting(c, rid)
+            if meeting["state"] not in ("live", "paused"):
+                raise Problem("meeting_state", "Bots can only be removed from a live or paused meeting", 409)
+            if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
+                             (rid, who.actor)).fetchone():
+                raise Problem("forbidden", "Join this live meeting before removing bots", 403)
+            membership = c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
+                                   (rid, slug)).fetchone()
+            if not membership:
+                return {"id": rid, "bot": slug, "removed": False, "cancelled_turns": [],
+                        "event_id": _meeting(c, rid)["next_event_id"]}
+            turns = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
+                              "AND status IN ('pending','claimed') ORDER BY created,id", (rid, slug)).fetchall()
+            cancelled = []
+            for turn in turns:
+                if _finish_pass(c, rid, turn, "bot_detached"):
+                    cancelled.append(turn["id"])
+            c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, slug))
+            _event(c, rid, "meeting.bot_left", {"bot": slug, "removed_by": who.actor,
+                                                  "cancelled_turns": cancelled,
+                                                  "reason": "meeting_only_access_revoked"})
+            return {"id": rid, "bot": slug, "removed": True, "cancelled_turns": cancelled,
+                    "event_id": _meeting(c, rid)["next_event_id"]}
+        return mutate(request, body, work)
+
     @app.post("/api/v2/live-meetings/{rid}/control")
     def control(request: Request, rid: str, body: Control):
         who = request.state.identity
@@ -857,7 +1075,12 @@ def install_live_meetings(app, store, auth, mutate):
                                 at_ms=None)
             return {"message": dict(c.execute("SELECT * FROM live_meeting_chat WHERE id=?", (cid,)).fetchone()),
                     "event_id": _meeting(c, rid)["next_event_id"]}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        if who.role in ("human", "owner"):
+            _route_human_chat(app, rid, result["message"]["id"])
+            with store.read() as c:
+                result["event_id"] = _meeting(c, rid)["next_event_id"]
+        return result
 
     @app.get("/api/v2/live-meetings/{rid}/turns")
     def turns(request: Request, rid: str):

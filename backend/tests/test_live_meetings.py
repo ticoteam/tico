@@ -359,6 +359,9 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     assert detail["router"]["windows"] == []
     assert detail["router"]["bypasses"][0]["source_key"] == "chunk:1"
     assert calls == []
+    first_turn = detail["router"]["turns"][0]
+    post(live, f"live-meetings/{mid}/turns/{first_turn['id']}/claim", {}, token="ops-live")
+    post(live, f"live-meetings/{mid}/chat", {"text": "PASS", "turn_id": first_turn["id"]}, token="ops-live")
 
     chat_meeting = connect(live, title="Named chat")
     attach(live, chat_meeting["id"], "ops")
@@ -388,6 +391,181 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     assert json.loads(finalized_event["payload_json"]) == {
         "id": mid, "meeting_id": one["meeting_id"], "source": "tico-live", "external_id": mid,
     }
+
+
+def test_ordinary_human_chat_routes_with_replayable_question_context(live):
+    calls = []
+
+    def decide(state, questions, label):
+        calls.append((state, label))
+        return {"model": "synthetic-chat-router", "ms": 4,
+                "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+
+    live.app.state.live_meeting_decider = decide
+    meeting = connect(live, cooldown_seconds=0)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    chunk(live, mid, 1, 0, 1000, "The current price is 42")
+    first = post(live, f"live-meetings/{mid}/chat", {"text": "Is the current price correct?"}, key="ordinary-chat-once")
+    replay = post(live, f"live-meetings/{mid}/chat", {"text": "Is the current price correct?"}, key="ordinary-chat-once")
+    assert replay["message"]["id"] == first["message"]["id"]
+    assert len(calls) == 1, "an idempotent retry replays the stored routing outcome without another decision"
+    detail = get(live, f"live-meetings/{mid}")
+    assert len(calls) == 1 and calls[0][1] == "live-meeting-route@1"
+    first_trace = detail["router"]["chat_routes"][0]["trace"]
+    assert first_trace["source_key"] == "chat:" + first["message"]["id"]
+    assert first_trace["decision_input"]["source"] == {
+        "kind": "chat", "key": "chat:" + first["message"]["id"]}
+    assert first_trace["decision_input"]["transcript"][0]["text"] == "The current price is 42"
+    assert first_trace["decision_input"]["recent_chat"][-1]["text"] == "Is the current price correct?"
+    assert first_trace["decision_answers"]["reply_ops"]["noul"] == 0.99
+    first_turn = detail["router"]["turns"][0]
+    post(live, f"live-meetings/{mid}/turns/{first_turn['id']}/claim", {}, token="ops-live")
+    post(live, f"live-meetings/{mid}/chat", {"text": "Yes, I verified it against the sheet.",
+                                              "turn_id": first_turn["id"]}, token="ops-live")
+
+    second = post(live, f"live-meetings/{mid}/chat", {"text": "Could someone verify whether that still holds?"})
+    detail = get(live, f"live-meetings/{mid}")
+    second_trace = detail["router"]["chat_routes"][1]["trace"]
+    assert len(calls) == 2, "unnamed human chat gets one ordinary routing decision"
+    assert any(item["question"] == "Is the current price correct?"
+               and item["answer"] == "Yes, I verified it against the sheet."
+               for item in second_trace["decision_input"]["answered_questions"])
+    assert any(item["text"] == "Yes, I verified it against the sheet."
+               for item in second_trace["decision_input"]["bots"][0]["last_messages"])
+    assert second_trace["decision_input"]["recent_chat"][-1]["id"] == second["message"]["id"]
+    with live.app.state.store.read() as c:
+        persisted = c.execute("SELECT trace_json FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
+                              (mid, second["message"]["id"])).fetchone()
+    assert json.loads(persisted["trace_json"]) == second_trace
+
+
+def test_chat_sent_while_paused_is_saved_but_never_dispatched(live):
+    calls = []
+    live.app.state.live_meeting_decider = lambda *args: calls.append(args) or {}
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    post(live, f"live-meetings/{mid}/control", {"action": "pause"})
+    sent = post(live, f"live-meetings/{mid}/chat", {"text": "Can somebody check this?"})
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["chat"][0]["text"] == "Can somebody check this?"
+    route = detail["router"]["chat_routes"][0]
+    assert route["outcome"] == "pass"
+    assert route["trace"]["reason"] == "meeting_paused_before_chat_routing"
+    assert route["trace"]["selected"] == []
+    assert calls == []
+    assert not detail["router"]["turns"]
+
+
+def test_active_live_reply_in_another_meeting_is_busy_until_settled(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+    first = connect(live, title="Meeting A", cooldown_seconds=0)
+    attach(live, first["id"], "ops")
+    chunk(live, first["id"], 1, 0, 30_000, "First meeting request")
+    first_turn = get(live, f"live-meetings/{first['id']}")["router"]["turns"][0]
+
+    second = connect(live, title="Meeting B", cooldown_seconds=0)
+    attach(live, second["id"], "ops")
+    chunk(live, second["id"], 1, 0, 30_000, "Second meeting request")
+    busy = get(live, f"live-meetings/{second['id']}")["router"]["windows"][0]
+    assert busy["trace"]["skipped"] == [{"bot": "ops", "reason": "busy"}]
+    assert not get(live, f"live-meetings/{second['id']}")["router"]["turns"]
+
+    post(live, f"live-meetings/{first['id']}/turns/{first_turn['id']}/claim", {}, token="ops-live")
+    post(live, f"live-meetings/{first['id']}/chat", {"text": "Done", "turn_id": first_turn["id"]},
+         token="ops-live")
+    chunk(live, second["id"], 2, 30_000, 60_000, "Try again after release")
+    available = get(live, f"live-meetings/{second['id']}")
+    assert available["router"]["windows"][1]["outcome"] == "route"
+    assert len(available["router"]["turns"]) == 1
+
+
+def test_running_regular_bot_attempt_is_busy_for_live_routing(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+    meeting = connect(live, cooldown_seconds=0)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    ordinary = post(live, "chat/ops", {"text": "Handle the regular company request"})
+    attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    post(live, f"attempts/{attempt['id']}/started", {"thread_id": "ordinary-work"}, token=machine["token"])
+
+    chunk(live, mid, 1, 0, 30_000, "A live request waits while ordinary work is running")
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["router"]["windows"][0]["trace"]["skipped"] == [{"bot": "ops", "reason": "busy"}]
+    post(live, f"attempts/{attempt['id']}/complete",
+         {"outcome": "completed", "text": "Regular work finished", "last_seq": 0}, token=machine["token"])
+    chunk(live, mid, 2, 30_000, 60_000, "Now the bot is free")
+    released = get(live, f"live-meetings/{mid}")
+    assert released["router"]["windows"][1]["outcome"] == "route"
+    assert len(released["router"]["turns"]) == 1
+
+
+def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+    meeting = connect(live, cooldown_seconds=0)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    chunk(live, mid, 1, 0, 30_000, "Queue a bot reply")
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+
+    path = f"/api/v2/live-meetings/{mid}/bots/ops"
+    removed = live.request("DELETE", path, json={}, headers=headers("ben-test", "remove-before-claim"))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["removed"] is True
+    replay = live.request("DELETE", path, json={}, headers=headers("ben-test", "remove-before-claim"))
+    assert replay.status_code == 200 and replay.json() == removed.json()
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["bots"] == []
+    assert next(row for row in detail["router"]["turns"] if row["id"] == turn["id"])["skip_reason"] == "bot_detached"
+    with live.app.state.store.read() as c:
+        event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+                          "AND type='meeting.bot_left'", (mid,)).fetchone()
+    assert json.loads(event["payload_json"]) == {
+        "bot": "ops", "removed_by": "human:ben", "cancelled_turns": [turn["id"]],
+        "reason": "meeting_only_access_revoked"}
+    denied = live.get("/api/v2/live-meetings/" + mid, headers=headers("ops-live"))
+    assert denied.status_code == 403
+    denied_turns = live.get("/api/v2/live-meetings/" + mid + "/turns", headers=headers("ops-live"))
+    assert denied_turns.status_code == 403
+
+
+def test_removing_bot_during_execution_suppresses_late_reply(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+    meeting = connect(live, cooldown_seconds=0)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    post(live, f"live-meetings/{mid}/join", {}, token="ben-test")
+    chunk(live, mid, 1, 0, 30_000, "Start a scoped bot reply")
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    post(live, f"attempts/{attempt['id']}/started", {"thread_id": "meeting-turn"}, token=machine["token"])
+
+    removed = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={},
+                           headers=headers("ben-test", "remove-during-execution"))
+    assert removed.status_code == 200 and removed.json()["removed"] is True
+    post(live, f"attempts/{attempt['id']}/complete",
+         {"outcome": "completed", "text": "This late reply must be suppressed", "last_seq": 0},
+         token=machine["token"])
+    detail = get(live, f"live-meetings/{mid}")
+    assert not any(message["text"] == "This late reply must be suppressed" for message in detail["chat"])
+    ended_turn = next(row for row in detail["router"]["turns"] if row["id"] == turn["id"])
+    assert (ended_turn["status"], ended_turn["skip_reason"]) == ("skipped", "bot_detached")
 
 
 def test_rehearsal_mode_keeps_live_router_a_hidden_pass(live):

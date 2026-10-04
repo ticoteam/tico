@@ -17,7 +17,8 @@ window.liveMeetingsStop = liveMeetingsStop;
 async function pageLiveMeetings() {
   meetStop();
   const state = LIVE_MEETINGS = {list: [], selected: '', detail: null, sources: new Map(), cursor: {},
-    poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: ''};
+    poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: '',
+    listVersion: 0, detailVersions: {}, chatSending: new Set()};
   $('#main').innerHTML = `<section class="live-page">
     <header class="live-head"><div><h1>Live now</h1><p class="muted">Transcript text stays in Tico. Audio is never sent.</p></div>
       <button type="button" class="ghost" id="live-back">Meetings</button></header>
@@ -67,15 +68,20 @@ async function liveConnect(state, options) {
 
 async function liveLoad(state) {
   if (LIVE_MEETINGS !== state || state.busy) return;
+  const version = ++state.listVersion;
   try {
     const response = await get(LIVE_API);
+    if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion) return;
     state.list = response.meetings || [];
     if (state.selected && !state.list.some(meeting => meeting.id === state.selected)) {
       // Ended meetings leave Live now; keep their transcript open until the user returns to Meetings.
-      try { state.detail = await get(LIVE_API + '/' + encodeURIComponent(state.selected)); }
-      catch { state.selected = ''; state.detail = null; }
+      const selected = state.selected;
+      try { state.detail = await get(LIVE_API + '/' + encodeURIComponent(selected)); }
+      catch { if (state.selected === selected) { state.selected = ''; state.detail = null; } }
+      if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion || state.selected !== selected) return;
     }
     if (!state.selected && state.list.length) state.selected = state.list[0].id;
+    if (LIVE_MEETINGS !== state || state.busy || version !== state.listVersion) return;
     livePaintList(state);
     if (state.selected) await liveLoadDetail(state, state.selected);
     else if (!state.detail) $('.live-detail').innerHTML = '<div class="empty">No live meetings. Connect when everyone is ready to share transcript text.</div>';
@@ -147,6 +153,8 @@ function livePaintDetail(state, detail) {
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
   const candidates = state.candidates.filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.slug));
   const chunks = detail.chunks || [], chat = detail.chat || [], router = detail.router || {windows: [], turns: []};
+  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.bot)}${me && active ?
+    ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
     <header class="live-card-head"><div><h2>${esc(detail.title)}</h2><span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
@@ -158,12 +166,13 @@ function livePaintDetail(state, detail) {
       ${candidates.map(bot => `<option value="${esc(bot.slug)}">${esc(bot.name)}${bot.team ? ' · ' + esc(bot.team) : ''}</option>`).join('')}
       </select></label><button class="ghost" type="submit"${candidates.length ? '' : ' disabled'}>Attach bots</button></form>` : ''}
     <div class="live-members"><span>People: ${(detail.humans || []).map(person => esc(person.name || person.actor)).join(', ') || '—'}</span>
-      <span>Teammates: ${(detail.bots || []).map(bot => esc(bot.bot)).join(', ') || '—'}</span></div>
+      <span>Teammates: ${teammates || '—'}</span></div>
     <section class="live-section"><h3>Transcript</h3><div class="live-transcript" aria-live="polite">${chunks.length ? chunks.map(chunk => `<p id="live-chunk-${chunk.seq}" data-seq="${chunk.seq}"><small>#${chunk.seq}${chunk.revision > 1 ? ' · revision ' + chunk.revision : ''} · ${esc(chunk.speaker || 'Speaker')}</small><span>${esc(chunk.text)}</span></p>`).join('') : '<p class="muted">Waiting for transcript text from Recorder.</p>'}</div></section>
     <section class="live-section"><h3>Chat</h3><div class="live-chat" aria-live="polite">${chat.length ? chat.map(message => `<p><b>${esc(liveActor(message.actor))}</b><span>${esc(message.text)}</span>${message.transcript_seq ? `<small><button type="button" class="live-transcript-link" data-live-transcript-seq="${message.transcript_seq}">Transcript #${message.transcript_seq}</button></small>` : ''}</p>`).join('') : '<p class="muted">No chat messages yet.</p>'}</div>
       ${me && active ? '<form id="live-chat-form" class="live-chat-form"><input name="text" data-live-focus-key="chat-input" maxlength="20000" required aria-label="Meeting chat" placeholder="Write to the meeting"><button class="primary" type="submit">Send</button></form>' : ''}</section>
     <section class="live-section"><h3>Router</h3><p class="muted">${detail.window_ms / 1000}s window · ${detail.cooldown_ms / 1000}s cooldown · up to ${detail.reply_cap ?? 3} turns per window</p>
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
+      ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
       ${router.bypasses?.length ? `<div class="live-bypasses"><b>Named mentions</b>${router.bypasses.map(bypass => `<pre>${esc(JSON.stringify(bypass, null, 2))}</pre>`).join('')}</div>` : ''}</div>
       ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${esc(turn.bot)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
     ${detail.imported_meeting_id ? `<p class="live-finalized">Saved in Meetings: <a href="#/meetings?meeting=${encodeURIComponent(detail.imported_meeting_id)}">Open transcript</a></p>` : ''}
@@ -171,6 +180,8 @@ function livePaintDetail(state, detail) {
   state.paintedId = detail.id;
   liveRestoreDraft(host, draft);
   host.querySelectorAll('[data-live-control]').forEach(button => button.onclick = () => void liveControl(state, detail.id, button.dataset.liveControl));
+  host.querySelectorAll('[data-live-bot-remove]').forEach(button => button.onclick = () =>
+    void liveRemoveBot(state, detail.id, button.dataset.liveBotRemove));
   host.querySelectorAll('[data-live-transcript-seq]').forEach(button => button.onclick = () => {
     const target = host.querySelector(`[data-seq="${Number(button.dataset.liveTranscriptSeq)}"]`);
     if (target) { target.tabIndex = -1; target.focus({preventScroll: true}); target.scrollIntoView({block: 'nearest'}); }
@@ -196,9 +207,12 @@ function liveActor(actor) {
 }
 
 async function liveLoadDetail(state, id) {
+  if (LIVE_MEETINGS !== state || state.busy) return;
+  const version = (state.detailVersions[id] || 0) + 1;
+  state.detailVersions[id] = version;
   try {
     const detail = await get(LIVE_API + '/' + encodeURIComponent(id));
-    if (LIVE_MEETINGS !== state || state.selected !== id) return;
+    if (LIVE_MEETINGS !== state || state.busy || state.selected !== id || state.detailVersions[id] !== version) return;
     state.detail = detail;
     livePaintDetail(state, detail);
   } catch (error) { liveStatus(state, error.message); }
@@ -209,7 +223,7 @@ function liveSubscribe(state, id, after) {
   const source = new EventSource(API + LIVE_API + '/' + encodeURIComponent(id) + '/events?after=' + encodeURIComponent(state.cursor[id] ?? after));
   state.sources.set(id, source);
   const types = ['meeting.state', 'meeting.joined', 'meeting.chunk', 'meeting.chunk_corrected', 'meeting.chat',
-    'meeting.bot_joined', 'meeting.bot_turn', 'meeting.bot_turn_claimed', 'meeting.bot_turn_skipped',
+    'meeting.bot_joined', 'meeting.bot_left', 'meeting.bot_turn', 'meeting.bot_turn_claimed', 'meeting.bot_turn_skipped',
     'meeting.bot_reply', 'meeting.router', 'meeting.finalized'];
   for (const type of types) source.addEventListener(type, event => {
     state.cursor[id] = Number(event.lastEventId) || state.cursor[id] || 0;
@@ -219,6 +233,7 @@ function liveSubscribe(state, id, after) {
 }
 
 async function liveAction(state, id, path, body, message) {
+  if (state.busy) return;
   try { state.busy = true; await post(LIVE_API + '/' + encodeURIComponent(id) + path, body);
     liveStatus(state, message); state.busy = false; await liveLoad(state); }
   catch (error) { liveStatus(state, error.message); }
@@ -230,9 +245,42 @@ const liveControl = (state, id, action) => liveAction(state, id, '/control', {ac
 const liveAttach = (state, id, bots) => liveAction(state, id, '/bots', {bots}, 'Teammates attached to this meeting.');
 const liveFinalize = (state, id) => liveAction(state, id, '/finalize', {}, 'Transcript saved to Meetings.');
 
-async function liveChat(state, id, text, input) {
-  try { state.busy = true; await post(LIVE_API + '/' + encodeURIComponent(id) + '/chat', {text: text.trim()});
-    input.value = ''; liveStatus(state, 'Message sent.'); state.busy = false; await liveLoad(state); }
-  catch (error) { liveStatus(state, error.message); }
+async function liveRemoveBot(state, id, bot) {
+  if (state.busy) return;
+  try {
+    state.busy = true;
+    await writeRequest('DELETE', LIVE_API + '/' + encodeURIComponent(id) + '/bots/' + encodeURIComponent(bot), {});
+    liveStatus(state, `${bot} no longer has access to this meeting.`);
+    state.busy = false;
+    await liveLoad(state);
+  } catch (error) { liveStatus(state, error.message); }
   finally { state.busy = false; }
+}
+
+async function liveChat(state, id, text, input) {
+  if (state.busy || state.chatSending.has(id)) return;
+  const sentText = String(text || '').trim();
+  if (!sentText) return;
+  state.chatSending.add(id);
+  try {
+    state.busy = true;
+    const sendButton = input.form?.querySelector('button[type="submit"]');
+    if (sendButton) sendButton.disabled = true;
+    await post(LIVE_API + '/' + encodeURIComponent(id) + '/chat', {text: sentText});
+    if (input.isConnected && input.value === sentText) input.value = '';
+    const current = $('.live-detail')?.querySelector('#live-chat-form input[name="text"]');
+    const draft = state.drafts[id] || {};
+    if (current) draft.chatText = current.value;
+    else if (input.value === sentText) draft.chatText = '';
+    state.drafts[id] = draft;
+    liveStatus(state, 'Message sent.'); state.busy = false; await liveLoad(state);
+  }
+  catch (error) { liveStatus(state, error.message); }
+  finally {
+    state.busy = false; state.chatSending.delete(id);
+    if (input.isConnected) {
+      const sendButton = input.form?.querySelector('button[type="submit"]');
+      if (sendButton) sendButton.disabled = false;
+    }
+  }
 }

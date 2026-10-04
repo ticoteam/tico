@@ -22,7 +22,8 @@ async function main() {
     await context.addInitScript(() => localStorage.setItem('tico.theme', 'dark'));
     const page = await context.newPage(), errors = [], calls = [];
     page.on('pageerror', error => errors.push(error.message));
-    const world = {meetings: [], detail: null};
+    const world = {meetings: [], detail: null, holdDetail: false, detailWaiters: [],
+      holdChat: false, chatWaiters: [], failChat: false};
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -49,9 +50,21 @@ async function main() {
         return json(world.detail);
       }
       if (p === '/api/v2/live-meetings/live-1/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/live-meetings/live-1' && method === 'GET') return json(world.detail);
+      if (p === '/api/v2/live-meetings/live-1' && method === 'GET') {
+        if (world.holdDetail) await new Promise(resolve => world.detailWaiters.push(resolve));
+        return json(world.detail);
+      }
       if (p.startsWith('/api/v2/live-meetings/live-1/')) {
         const operation = p.split('/').pop(), body = JSON.parse(route.request().postData() || '{}'); calls.push([operation, body]);
+        if (method === 'DELETE' && p.includes('/bots/')) {
+          world.detail.bots = world.detail.bots.filter(bot => bot.bot !== operation);
+          return json({id: 'live-1', bot: operation, removed: true, cancelled_turns: [], event_id: 10});
+        }
+        if (operation === 'chat' && world.holdChat) await new Promise(resolve => world.chatWaiters.push(resolve));
+        if (operation === 'chat' && world.failChat) {
+          world.failChat = false;
+          return route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Chat rejected'}})});
+        }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
         if (operation === 'bots') world.detail.bots.push({bot: body.bots[0]});
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
@@ -112,8 +125,49 @@ async function main() {
     assert.equal(chatCalls[0][1].text, draft);
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
       [...select.selectedOptions].map(option => option.value)), ['finance']);
+
+    // A detail response already in flight must not replace a draft while chat is submitted.
+    world.holdDetail = true;
+    await page.evaluate(() => { window.liveDetailRefresh = liveLoad(LIVE_MEETINGS); });
+    await page.waitForFunction(() => true); // yield once so the mocked route can hold its detail response
+    for (let tries = 0; !world.detailWaiters.length && tries < 30; tries++) await page.waitForTimeout(10);
+    assert.equal(world.detailWaiters.length, 1, 'a detail request is held in flight');
+    const chatInput = page.locator('#live-chat-form input');
+    const sent = 'First message while refresh is waiting';
+    await chatInput.fill(sent);
+    world.holdChat = true;
+    await page.locator('#live-chat-form button').click();
+    for (let tries = 0; !world.chatWaiters.length && tries < 30; tries++) await page.waitForTimeout(10);
+    assert.equal(world.chatWaiters.length, 1, 'chat request is held before acknowledgement');
+    const newerDraft = 'Keep this newer unsent draft';
+    await chatInput.fill(newerDraft);
+    await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1').dispatchEvent(
+      new MessageEvent('meeting.chat', {data: '{}', lastEventId: '9'})));
+    world.detailWaiters.shift()();
+    await page.evaluate(() => window.liveDetailRefresh);
+    assert.equal(await chatInput.inputValue(), newerDraft, 'stale detail response cannot replace text while sending');
+    await page.locator('#live-chat-form').evaluate(form => form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
+    assert.equal(calls.filter(([op, body]) => op === 'chat' && body.text === sent).length, 1, 'duplicate submit is suppressed');
+    world.holdChat = false;
+    world.chatWaiters.shift()();
+    await page.locator('.live-status').getByText('Message sent.').waitFor();
+    await page.waitForFunction(value => document.querySelector('#live-chat-form input')?.value === value, newerDraft);
+    for (let tries = 0; !world.detailWaiters.length && tries < 30; tries++) await page.waitForTimeout(10);
+    assert.equal(world.detailWaiters.length, 1, 'post-send refresh is held until the newer draft is saved');
+    world.detailWaiters.shift()();
+    await page.waitForFunction(value => document.querySelector('#live-chat-form input')?.value === value, newerDraft);
+    world.failChat = true;
+    await chatInput.fill('Retain this rejected message');
+    await page.locator('#live-chat-form button').click();
+    await page.locator('.live-status').getByText('Chat rejected').waitFor();
+    assert.equal(await chatInput.inputValue(), 'Retain this rejected message', 'failed send keeps the draft');
+    world.holdDetail = false;
+
     await page.locator('#live-bot-picker button').click();
     assert(calls.some(([op, body]) => op === 'bots' && body.bots.includes('finance')));
+    await page.locator('[data-live-bot-remove="finance"]').click();
+    await page.locator('[data-live-bot-remove="finance"]').waitFor({state: 'detached'});
+    assert(calls.some(([op]) => op === 'finance'), 'a joined person can revoke meeting-only bot access');
     await page.locator('[data-live-control=pause]').click();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));
     await page.locator('[data-live-control=resume]').click();

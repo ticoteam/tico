@@ -226,3 +226,19 @@ CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meet
 # Per-meeting routing limits are configurable from the connect request. Keep this separate from
 # LIVE_MEETINGS_SCHEMA: that migration has shipped, and migration indexes are append-only.
 LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20);"
+
+# Ordinary human chat decisions are separate from the one-per-transcript-window router decision.
+# Keep their exact input and outcome durable so replay never has to call a model again.
+LIVE_MEETINGS_CHAT_ROUTING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS live_meeting_chat_routes (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ chat_id TEXT NOT NULL REFERENCES live_meeting_chat(id) ON DELETE CASCADE,
+ status TEXT NOT NULL CHECK (status IN ('deciding','complete')),
+ outcome TEXT NOT NULL DEFAULT '',
+ trace_json TEXT NOT NULL DEFAULT '{}',
+ started TEXT NOT NULL,
+ finished TEXT,
+ PRIMARY KEY(meeting_id,chat_id)
+);
+CREATE INDEX IF NOT EXISTS live_meeting_chat_routes_status ON live_meeting_chat_routes(meeting_id,status,started);
+"""
