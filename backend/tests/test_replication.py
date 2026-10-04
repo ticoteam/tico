@@ -116,7 +116,9 @@ def test_the_credential_key_is_copied_when_it_appears_and_again_when_it_changes(
     mirror.put = lambda *a: pytest.fail("an unchanged key was sent again")
     assert replication.sync_credential_key(path, mirror, state)["copied_at"] == first["copied_at"]
     del mirror.put
+    before = path.stat()
     path.write_bytes(bytes(reversed(KEY)))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
     assert replication.sync_credential_key(path, mirror, state)["stamp"] != ""
     restored = tmp_path / "restored.key"
     assert replication.restore_credential_key(mirror, restored) == "restored"

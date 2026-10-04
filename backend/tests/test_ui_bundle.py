@@ -1,4 +1,5 @@
 """The UI is served as one script and one stylesheet (backend/ui_bundle.py), in the order index.html lists them."""
+import os
 import re
 
 import pytest
@@ -91,7 +92,10 @@ def test_a_change_to_a_listed_file_changes_the_url(tmp_path):
     bundles = ui_bundle.UiBundle(ui)
     first = bundles.get()
     assert first.js.decode().index("// file: app/b.js") < first.js.decode().index("// file: app/a.js")   # index.html's order
-    (ui / "app/a.js").write_text("'use strict';\nconst A = 2;\n")
+    changed = ui / "app/a.js"
+    before = changed.stat()
+    changed.write_text("'use strict';\nconst A = 2;\n")
+    os.utime(changed, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
     second = bundles.get()
     assert second.etag[ui_bundle.JS_PATH] != first.etag[ui_bundle.JS_PATH] and second.page != first.page
     (ui / "app/a.js").write_text("const A = 3;\n")                         # not strict: it cannot share a script
