@@ -72,8 +72,8 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, extraTasks = []} = {}) {
-  const tasks = [...fixtures(), ...extraTasks];
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = []} = {}) {
+  const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   const posts = [];
   let pref = prefs;
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -117,7 +117,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/tasks' && method === 'GET') {
       const wanted = (url.searchParams.get('status') || '').split(',').filter(Boolean);
       const rows = tasks.filter(x => !wanted.length || wanted.includes(x.status));
-      return json({tasks: rows, next_offset: null});
+      const donePage = url.searchParams.get('sort') === 'finished';
+      if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
+      const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || rows.length);
+      return json({tasks: donePage ? rows.slice(offset, offset + limit) : rows,
+        next_offset: donePage && rows.length > offset + limit ? offset + limit : null});
     }
     if (p === '/api/v2/tasks' && method === 'POST') { posts.push({p, body: req.postDataJSON()}); return json({task: {id: 't-new', ...req.postDataJSON()}}); }
     const tree = p.match(/^\/api\/v2\/tasks\/([^/]+)\/tree$/);
@@ -781,6 +785,35 @@ async function views(browser) {
   await page.close();
 }
 
+async function donePagination(browser) {
+  const types = [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}];
+  const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated, done_at: updated});
+  const firstPage = Array.from({length: 20}, (_, i) => task(`support-done-${i}`, 'support', at(i + 1)));
+  const matchingOlder = task('older-general-done', 'general', at(200));
+  const {page, errors} = await open(browser, {hash: '#/tasks?type=general&view=done', types, baseTasks: [],
+    extraTasks: [...firstPage, matchingOlder]});
+  await page.waitForFunction(() => TASKS_ST.doneLoaded && !TASKS_ST.doneLoading && TASKS_ST.doneNext === 20);
+  assert.equal(await page.locator('#task-body .tl-row').count(), 0, 'the newest global page has only another type');
+  assert.match(await page.locator('#task-body .tl-empty').innerText(), /No matching finished tasks on this page/);
+  assert.equal(await page.locator('#task-body #board-more').count(), 1, 'an empty filtered page still offers older results');
+  await page.locator('#task-body #board-more').click();
+  await page.locator('#task-body [data-task-key="older-general-done"]').waitFor();
+  assert.equal(await page.locator('#task-body .tl-row').count(), 1, 'loading the next global page reaches the older matching task');
+  assert.equal(await page.locator('#task-body #board-more').count(), 0, 'the exhausted matching page has no more control');
+  assert.deepEqual(errors, []);
+  await page.close();
+
+  const exhausted = await open(browser, {hash: '#/tasks?type=general&view=done', types, baseTasks: [],
+    extraTasks: firstPage.slice(0, 3)});
+  await exhausted.page.waitForFunction(() => TASKS_ST.doneLoaded && !TASKS_ST.doneLoading && TASKS_ST.doneNext == null);
+  assert.equal(await exhausted.page.locator('#task-body .tl-row').count(), 0);
+  assert.equal(await exhausted.page.locator('#task-body .tl-empty').count(), 1, 'an exhausted empty history keeps its empty state');
+  assert.equal(await exhausted.page.locator('#task-body #board-more').count(), 0, 'an exhausted empty history has no more control');
+  assert.deepEqual(exhausted.errors, []);
+  await exhausted.page.close();
+  console.log('Done pagination through filtered empty pages: ok');
+}
+
 async function polling(browser) {
   // The 30-second poll reloads the list: a changed row redraws, the others stay the same nodes, the focus and the
   // scroll stay put, and an open peek shows the newer task.
@@ -1046,7 +1079,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, donePagination, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

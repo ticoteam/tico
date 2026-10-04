@@ -345,7 +345,15 @@ function tasksEmptyHTML(state, what) {
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = state.view === 'done';
-  if (!items.length) return tasksEmptyHTML(state, state.view === 'foryou' ? 'Nothing needs you.' : done ? 'Nothing finished yet.' : 'Nothing open.');
+  if (!items.length) {
+    const emptyWhat = state.view === 'foryou' ? 'Nothing needs you.'
+      : done ? state.doneNext != null ? 'No matching finished tasks on this page.' : 'Nothing finished yet.' : 'Nothing open.';
+    const empty = tasksEmptyHTML(state, emptyWhat);
+    // Done is paged before type and chip filters are applied. An empty page can still have older rows to scan.
+    return done && state.doneNext != null
+      ? `<div class="tl">${empty}<button class="ghost tl-more" type="button" id="board-more">Show more</button></div>`
+      : empty;
+  }
   const groups = by === 'none' ? [{key: 'all', label: '', items}] : tasksGroupsFor(items, by, state);
   const nest = by === 'status' || by === 'owner';
   const select = tasksCanSelect();
