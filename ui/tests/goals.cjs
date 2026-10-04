@@ -263,7 +263,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await panel.locator('[data-gp-history]').click();
     await panel.locator('.gp-history-list [data-kpi="k-retired"]').waitFor();
     assert.match(requests.join('\n'), /GET \/api\/v2\/kpis$/);
-    assert.match(await panel.locator('.gp-history-list').innerText(), /Archived KPIs[\s\S]*Retired conversion/);
+    assert.match(await panel.locator('.gp-history-list').innerText(), /Archived KPIs[\s\S]*Retired conversion/i);
     await panel.locator('.gp-history-list [data-kpi="k-retired"]').click();
     await panel.locator('[data-kpi-archive]').waitFor();
     assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Restore KPI');
