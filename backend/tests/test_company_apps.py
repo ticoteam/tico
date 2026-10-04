@@ -48,7 +48,8 @@ def test_loopback_urls_and_matrix_contains_only_hashes(monkeypatch, capsys):
 
 
 def test_publisher_policies_are_tag_and_prefix_scoped():
-    provider, trust, access = policies("123456789012", "acme-files", "team")
+    provider, trust, access = policies("123456789012", "acme-files", "team",
+        subject="repo:ticoteam/tico:ref:refs/tags/v*")
     condition = trust["Statement"][0]["Condition"]
     assert condition["StringLike"]["token.actions.githubusercontent.com:sub"] == "repo:ticoteam/tico:ref:refs/tags/v*"
     assert condition["StringEquals"]["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
