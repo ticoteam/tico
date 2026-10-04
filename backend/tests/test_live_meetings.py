@@ -1,6 +1,7 @@
 """Live meetings use disposable SQLite fixtures and synthetic text only."""
 
 import asyncio
+import json
 import time
 
 import pytest
@@ -48,6 +49,10 @@ def chunk(api, mid, seq, start, end, text="Transcript", *, token="ana-test", exp
 
 def test_connect_is_explicit_team_visible_and_second_human_must_join_to_chat(live):
     meeting = connect(live, client_id="recorder-session-1")
+    candidates = get(live, "live-meetings/bot-candidates")
+    assert set(candidates) == {"bots"}
+    assert all(set(bot) == {"slug", "name", "description", "team"} for bot in candidates["bots"])
+    assert any(bot["slug"] == "ops" for bot in candidates["bots"])
     same = connect(live, client_id="recorder-session-1")
     assert same["id"] == meeting["id"]
     assert same["state"] == "live"
@@ -65,21 +70,30 @@ def test_chunk_sequence_idempotency_conflict_gap_and_lifecycle(live):
     meeting = connect(live)
     mid = meeting["id"]
     first = chunk(live, mid, 1, 0, 1000, "Hello")
+    assert set(first) == {"id", "state", "seq", "accepted", "event_id"}
+    assert first["id"] == mid and first["state"] == "live" and first["seq"] == 1
     event_id = first["event_id"]
     duplicate = chunk(live, mid, 1, 0, 1000, "Hello")
+    assert set(duplicate) == set(first)
     assert duplicate["accepted"] == [1]
     assert duplicate["event_id"] == event_id
-    chunk(live, mid, 1, 0, 1000, "Changed", expected=409)
-    chunk(live, mid, 3, 2000, 3000, expected=409)
+    conflict = chunk(live, mid, 1, 0, 1000, "Changed", expected=409)
+    assert conflict.json()["error"]["code"] == "sequence_conflict"
+    gap = chunk(live, mid, 3, 2000, 3000, expected=409)
+    assert gap.json()["error"]["code"] == "sequence_gap"
+    assert gap.json()["error"]["expected_seq"] == 2
     paused = post(live, f"live-meetings/{mid}/control", {"action": "pause"})
     assert paused["state"] == "paused"
-    chunk(live, mid, 2, 1000, 2000, expected=409)
+    paused_chunk = chunk(live, mid, 2, 1000, 2000, expected=409)
+    assert paused_chunk.json()["error"]["code"] == "meeting_state"
     resumed = post(live, f"live-meetings/{mid}/control", {"action": "resume"})
     assert resumed["state"] == "live"
     ended = post(live, f"live-meetings/{mid}/control", {"action": "end"})
     assert ended["state"] == "ended"
     assert mid not in {row["id"] for row in get(live, "live-meetings")["meetings"]}
     chunk(live, mid, 2, 1000, 2000, expected=409)
+    ended_retry = chunk(live, mid, 1, 0, 1000, "Hello")
+    assert ended_retry["state"] == "ended" and ended_retry["accepted"] == [1]
 
 
 def test_meeting_only_bot_read_and_parallel_turns_with_transcript_link(live):
@@ -180,15 +194,23 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     post(live, f"live-meetings/{mid}/control", {"action": "end"})
     one = post(live, f"live-meetings/{mid}/finalize", {})
     two = post(live, f"live-meetings/{mid}/finalize", {})
+    assert set(one) == {"id", "meeting_id", "existing", "changed", "event_id"}
+    assert one["id"] == mid and one["meeting_id"]
     assert one["meeting_id"] == two["meeting_id"]
+    assert two["existing"] is True and two["changed"] is False
     assert one["event_id"] == two["event_id"]
     with live.app.state.store.read() as c:
         refs = c.execute("SELECT count(*) FROM recording_source_refs WHERE source='tico-live' AND external_id=?",
                          ("human:ana:" + mid,)).fetchone()[0]
-        finalized_events = c.execute("SELECT count(*) FROM live_meeting_events WHERE meeting_id=? AND type='meeting.finalized'",
-                                     (mid,)).fetchone()[0]
+        finalized_event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+                                    "AND type='meeting.finalized'", (mid,)).fetchone()
+        finalized_events = c.execute("SELECT count(*) FROM live_meeting_events WHERE meeting_id=? "
+                                     "AND type='meeting.finalized'", (mid,)).fetchone()[0]
     assert refs == 1
     assert finalized_events == 1
+    assert json.loads(finalized_event["payload_json"]) == {
+        "id": mid, "meeting_id": one["meeting_id"], "source": "tico-live", "external_id": mid,
+    }
 
 
 def test_rehearsal_mode_keeps_live_router_a_hidden_pass(live):
@@ -241,14 +263,26 @@ def test_chunk_correction_versions_are_idempotent_and_final_transcript_uses_late
     revision = {"revision": 2, "speaker": "Ana", "start_ms": 0, "end_ms": 1000, "text": "Corrected text"}
     first = post(live, f"live-meetings/{mid}/chunks/1/corrections", revision)
     again = post(live, f"live-meetings/{mid}/chunks/1/corrections", revision)
+    assert set(first) == {"id", "seq", "revision", "replayed", "event_id"}
+    assert first["id"] == mid and first["seq"] == 1 and first["replayed"] is False
     assert first["revision"] == again["revision"] == 2
     assert again["replayed"] is True
     conflict = live.post("/api/v2/live-meetings/" + mid + "/chunks/1/corrections",
                          json={**revision, "text": "Different correction"}, headers=headers())
     assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "revision_conflict"
     gap = live.post("/api/v2/live-meetings/" + mid + "/chunks/1/corrections",
                     json={**revision, "revision": 4}, headers=headers())
     assert gap.status_code == 409
+    assert gap.json()["error"]["code"] == "revision_gap"
+    assert gap.json()["error"]["expected_revision"] == 3
+    with live.app.state.store.read() as c:
+        corrected_event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+                                    "AND type='meeting.chunk_corrected'", (mid,)).fetchone()
+    assert json.loads(corrected_event["payload_json"]) == {
+        "seq": 1, "revision": 2, "speaker": "Ana", "start_ms": 0, "end_ms": 1000,
+        "text": "Corrected text", "corrected_by": "human:ana",
+    }
     # A delayed retry of the original chunk acknowledges its stored version without undoing correction 2.
     assert chunk(live, mid, 1, 0, 1000, "Initial text")["accepted"] == [1]
     post(live, f"live-meetings/{mid}/control", {"action": "end"})
@@ -292,6 +326,8 @@ def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     private_meeting = connect(live, title="Visible roster")
     post(live, f"live-meetings/{private_meeting['id']}/join", {}, token="cara-test")
     candidates = get(live, "live-meetings/bot-candidates", token="cara-test")
+    assert set(candidates) == {"bots"}
+    assert all(set(bot) == {"slug", "name", "description", "team"} for bot in candidates["bots"])
     assert "ops" not in {bot["slug"] for bot in candidates["bots"]}
     hidden_bot = live.post("/api/v2/live-meetings/" + private_meeting["id"] + "/bots",
                            json={"bots": ["ops"]}, headers=headers("cara-test"))
@@ -302,10 +338,19 @@ def test_pause_keeps_chat_but_suppresses_named_bot_routing(live):
     meeting = connect(live, title="Paused routing")
     mid = meeting["id"]
     attach(live, mid, "ops")
+    chunk(live, mid, 1, 0, 1000, "Initial text")
     post(live, f"live-meetings/{mid}/control", {"action": "disconnect"})
+    stopped = chunk(live, mid, 2, 1000, 2000, "Must not stream after disconnect", expected=409)
+    assert stopped.json()["error"]["code"] == "meeting_state"
+    # Review corrections remain available without resuming live chunk streaming.
+    correction = post(live, f"live-meetings/{mid}/chunks/1/corrections", {
+        "revision": 2, "speaker": "Ana", "start_ms": 0, "end_ms": 1000, "text": "Reviewed text",
+    })
+    assert correction["revision"] == 2
     post(live, f"live-meetings/{mid}/chat", {"text": "Ops, please respond"})
     detail = get(live, f"live-meetings/{mid}")
     assert detail["state"] == "paused"
+    assert detail["chunks"][0]["text"] == "Reviewed text"
     assert len(detail["chat"]) == 1
     assert detail["router"]["turns"] == []
 
@@ -391,5 +436,27 @@ def test_sse_replays_persisted_events_after_last_event_id(live, monkeypatch):
 
     first, keepalive = asyncio.run(read_replay())
     assert first.startswith("id: 2\nevent: meeting.chunk\n")
-    assert '"text":"Persisted event"' in first
+    payload = json.loads(first.split("data: ", 1)[1])
+    assert payload == {"seq": 1, "speaker": "Ana", "start_ms": 0, "end_ms": 1000,
+                       "text": "Persisted event", "revision": 1}
     assert keepalive.startswith(": keep-alive")
+
+    # Recorder may resume using the query cursor instead; main-process fetch attaches Bearer auth.
+    after_request = Request({
+        "type": "http", "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": path, "raw_path": path.encode(), "query_string": b"after=1", "root_path": "",
+        "headers": [(b"authorization", b"Bearer ana-test")],
+        "client": ("testclient", 80), "server": ("testserver", 80),
+    })
+    after_request.state.identity = Identity("human:ana", "owner", "ana@acme.example")
+    disconnected = 0
+
+    async def read_after_cursor():
+        response = await event_route.endpoint(after_request, mid, after=1)
+        iterator = response.body_iterator
+        first_event = await iterator.__anext__()
+        await iterator.aclose()
+        return first_event
+
+    after_first = asyncio.run(read_after_cursor())
+    assert after_first == first
