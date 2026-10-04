@@ -637,8 +637,8 @@ function goalPanelRender(state) {
   const newGoal = body.querySelector('[data-gp-goal-new]'), newKpi = body.querySelector('[data-gp-kpi-new]');
   if (newGoal) newGoal.onclick = () => setGoal('new');
   if (newKpi) newKpi.onclick = () => { P.kpiAdd = '@owner'; P.goal = ''; redraw(); };
-  const history = body.querySelector('[data-gp-history]');
-  if (history) history.onclick = async () => {
+  const historyButton = body.querySelector('[data-gp-history]');
+  if (historyButton) historyButton.onclick = async () => {
     P.history = !P.history;
     if (!P.history || P.historyKpis !== null) { redraw(); return; }
     P.historyLoading = true;
