@@ -10,6 +10,7 @@ import plistlib
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -706,7 +707,7 @@ class Sync(Base):
 
     def run_check_script(self):
         script = self.profile / "scripts" / "tico-sync-check.py"
-        done = REAL_RUN(["python3", str(script)], capture_output=True, text=True, timeout=60,
+        done = REAL_RUN([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
                         env={"PATH": "/usr/bin:/bin", "HOME": str(self.home)})
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout.strip().splitlines()

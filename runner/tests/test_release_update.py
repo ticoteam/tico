@@ -156,7 +156,7 @@ class Clock:
 
 def follower(checkout, state, server=None, config=None, env=None, launched=None, supervised=True, **kw):
     launched = [] if launched is None else launched
-    f = ru.Follower(config or {}, state, server or Server(), root=checkout, env=env or {},
+    f = ru.Follower(config or {}, state, server or Server(), root=checkout, env={"TICO_RUNNER_KIND": "linux", **(env or {})},
                     supervised=lambda: supervised, launch=lambda *a: launched.append(a), clock=Clock(), wall=Clock(), **kw)
     f.poll()
     return f, launched
