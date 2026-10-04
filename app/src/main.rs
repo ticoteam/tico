@@ -707,7 +707,9 @@ async fn refresh_status(app: &App) {
 #[cfg(test)]
 mod updater_integration_tests {
     use super::*;
+    use url::Url;
     use minisign::{KeyPair, sign};
+    use base64::Engine;
     use std::io::{Cursor, Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::thread;
@@ -728,13 +730,16 @@ mod updater_integration_tests {
             Some("version: 0.3.21"),
             Some("synthetic updater test"),
         ).unwrap().into_string();
-        (public_key, signature)
+        (base64::engine::general_purpose::STANDARD.encode(public_key),
+         base64::engine::general_purpose::STANDARD.encode(signature))
     }
 
     fn test_app() -> tauri::App<tauri::test::MockRuntime> {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().plugins.0.insert("updater".into(), serde_json::json!({"pubkey": "", "dangerousInsecureTransportProtocol": true}));
         tauri::test::mock_builder()
             .plugin(tauri_plugin_updater::Builder::new().build())
-            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .build(context)
             .expect("build mock Tauri app")
     }
 

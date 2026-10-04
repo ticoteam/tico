@@ -264,7 +264,7 @@ mod updater_auth_tests {
         let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
         for path in ["download/latest.json", "download/file/0.3.21/Tico.tar.gz"] {
             let url = base.join(path).unwrap();
-            assert!(policy.allows_download(&url));
+            assert_eq!(policy.allows_download(&url), url.path().contains("/download/file/"));
             let response = client.get(url).send().await.unwrap();
             assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
         }
@@ -314,7 +314,7 @@ mod updater_auth_tests {
         assert!(!policy.has_cookie());
         let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
         for url in [feed, hub.join("download/file/0.3.21/Tico.tar.gz").unwrap()] {
-            assert!(policy.allows_download(&url));
+            assert_eq!(policy.allows_download(&url), url.path().contains("/download/file/"));
             assert_eq!(client.get(url).send().await.unwrap().status(), reqwest_updater::StatusCode::OK);
         }
         assert!(server.join().unwrap().iter().all(|request| !request.to_ascii_lowercase().contains("cookie:")));
@@ -354,7 +354,7 @@ mod updater_auth_tests {
     fn selected_hub_downloads_are_limited_to_the_versioned_file_route() {
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let feed = hub.join("download/latest.json").unwrap();
-        let policy = CompanyUpdatePolicy::new(hub, feed, None);
+        let policy = CompanyUpdatePolicy::new(hub, feed.clone(), None);
         assert!(policy.allows_download(&Url::parse(
             "https://tico.example.test/download/file/0.3.21/Tico.tar.gz"
         ).unwrap()));
@@ -378,7 +378,7 @@ mod updater_auth_tests {
     fn hub_artifact_redirect_requires_a_single_signed_s3_location() {
         let hub = Url::parse("https://tico.example.test/").unwrap();
         let feed = hub.join("download/latest.json").unwrap();
-        let policy = CompanyUpdatePolicy::new(hub, feed, None);
+        let policy = CompanyUpdatePolicy::new(hub, feed.clone(), None);
         let source = Url::parse(
             "https://tico.example.test/download/file/0.3.21/Tico.tar.gz"
         ).unwrap();
