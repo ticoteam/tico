@@ -1875,7 +1875,9 @@ class Runner:
             *([SETUP_TURN] if setup else
               ["Do not end the turn with only a plan or progress update. Continue until the work is complete or genuinely blocked; if blocked, report the concrete blocker and what you verified."]),
             "Use the hub CLI for all tasks, messages, approvals, and status. It calls the shared cloud API.",
-            "Never open, create, or modify a local Hub database. Never track work in GitHub Issues.",
+            "Never open, create, or modify a local Hub database containing real team state; use the shared cloud API for that state. "
+            "For authorized development tests, you may create disposable databases containing only synthetic fixtures, isolated from live team data and credentials. "
+            "Honor stricter task-specific restrictions. Never track work in GitHub Issues.",
             "Only act within this request's authority. Shared policies and approval rules still apply.",
             "Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose an arbitrary answer-length or list-length cap.",
             "A task owner marks work done; its requester or an authorized human closes it.",

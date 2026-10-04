@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Let authorized development tests use disposable synthetic databases while keeping live team state behind the shared API and honoring task-specific restrictions.
+
 ## [0.3.19] - 2026-10-03
 
 ### Added

@@ -50,6 +50,22 @@ class PromptLabels(unittest.TestCase):
         self.assertNotIn(NEXT_RUN_HEADER, prompt_of(self.runner, attempt(current, [])))
 
 
+class DevelopmentDataBoundary(unittest.TestCase):
+    def test_synthetic_test_permission_preserves_live_data_and_task_authority_boundaries(self):
+        runner = Runner.__new__(Runner)
+        runner.names = lambda: {"app_name": "Tico", "company_name": "Acme", "assistant_name": "Tico"}
+        message = {"id": "m1", "from_actor": "human:ana", "body": "Validate the release.", "refs": {}}
+        payload = {"bot": "engineering-lead", "conversation": {"id": "c", "kind": "chat"},
+                   "message": message, "history": [message]}
+        prompt = runner.prompt(payload)
+        self.assertIn("Never open, create, or modify a local Hub database containing real team state", prompt)
+        self.assertIn("use the shared cloud API for that state", prompt)
+        self.assertIn("For authorized development tests", prompt)
+        self.assertIn("only synthetic fixtures, isolated from live team data and credentials", prompt)
+        self.assertIn("Honor stricter task-specific restrictions", prompt)
+        self.assertIn("Only act within this request's authority", prompt)
+
+
 class SetupTurn(unittest.TestCase):
     """A person's chat with a parked starter bot is its onboarding: the template's flow, not the generic chat rules that
     made a Support Agent file tasks, run tools and write a "contract" into its own AGENT.md."""
