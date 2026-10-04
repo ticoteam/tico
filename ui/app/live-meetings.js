@@ -259,7 +259,8 @@ async function liveRemoveBot(state, id, bot) {
 
 async function liveChat(state, id, text, input) {
   if (state.busy || state.chatSending.has(id)) return;
-  const sentText = String(text || '').trim();
+  const submittedValue = String(text || '');
+  const sentText = submittedValue.trim();
   if (!sentText) return;
   state.chatSending.add(id);
   try {
@@ -267,11 +268,11 @@ async function liveChat(state, id, text, input) {
     const sendButton = input.form?.querySelector('button[type="submit"]');
     if (sendButton) sendButton.disabled = true;
     await post(LIVE_API + '/' + encodeURIComponent(id) + '/chat', {text: sentText});
-    if (input.isConnected && input.value === sentText) input.value = '';
+    if (input.isConnected && input.value === submittedValue) input.value = '';
     const current = $('.live-detail')?.querySelector('#live-chat-form input[name="text"]');
     const draft = state.drafts[id] || {};
     if (current) draft.chatText = current.value;
-    else if (input.value === sentText) draft.chatText = '';
+    else if (input.value === submittedValue) draft.chatText = '';
     state.drafts[id] = draft;
     liveStatus(state, 'Message sent.'); state.busy = false; await liveLoad(state);
   }

@@ -126,6 +126,16 @@ async function main() {
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
       [...select.selectedOptions].map(option => option.value)), ['finance']);
 
+    const padded = '  Please check the totals  ';
+    await page.locator('#live-chat-form input').fill(padded);
+    await page.locator('#live-chat-form button').click();
+    await page.locator('.live-status').getByText('Message sent.').waitFor();
+    await page.waitForFunction(() => document.querySelector('#live-chat-form input')?.value === '');
+    assert.equal(calls.filter(([op, body]) => op === 'chat' && body.text === 'Please check the totals').length, 1,
+      'the submitted message is trimmed for the API');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.drafts['live-1']?.chatText), '',
+      'successful whitespace-padded send clears its saved draft');
+
     // A detail response already in flight must not replace a draft while chat is submitted.
     world.holdDetail = true;
     await page.evaluate(() => { window.liveDetailRefresh = liveLoad(LIVE_MEETINGS); });
@@ -134,7 +144,8 @@ async function main() {
     assert.equal(world.detailWaiters.length, 1, 'a detail request is held in flight');
     const chatInput = page.locator('#live-chat-form input');
     const sent = 'First message while refresh is waiting';
-    await chatInput.fill(sent);
+    const submitted = `  ${sent}  `;
+    await chatInput.fill(submitted);
     world.holdChat = true;
     await page.locator('#live-chat-form button').click();
     for (let tries = 0; !world.chatWaiters.length && tries < 30; tries++) await page.waitForTimeout(10);
@@ -147,7 +158,8 @@ async function main() {
     await page.evaluate(() => window.liveDetailRefresh);
     assert.equal(await chatInput.inputValue(), newerDraft, 'stale detail response cannot replace text while sending');
     await page.locator('#live-chat-form').evaluate(form => form.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})));
-    assert.equal(calls.filter(([op, body]) => op === 'chat' && body.text === sent).length, 1, 'duplicate submit is suppressed');
+    assert.equal(calls.filter(([op, body]) => op === 'chat' && body.text === sent).length, 1,
+      'duplicate submit is suppressed and whitespace is trimmed');
     world.holdChat = false;
     world.chatWaiters.shift()();
     await page.locator('.live-status').getByText('Message sent.').waitFor();
