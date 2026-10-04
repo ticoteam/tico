@@ -113,6 +113,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-goal .kpi-check{margin-top:6px}
 .gp-actions{display:flex;gap:8px;margin:12px 0 4px}
 .gp-add{margin-top:8px}
+.gp-history{margin:14px 0 4px;padding-top:10px;border-top:1px solid var(--line)}
+.gp-history-list{margin-top:4px}
+.gp-history-list .kpi-lines{margin-left:0}
+.kpi-archived{padding:8px 10px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:12.5px}
 .kpi-add [data-new],.kpi-add [data-target]{display:grid;gap:var(--s3)}
 .kpi-ptitle{display:flex;align-items:center;gap:8px;min-width:0;font-size:15px}.kpi-ptitle .who{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kpi-big{font-size:22px;font-weight:600;letter-spacing:-.01em}.kpi-why{font-size:12.5px;margin-top:2px}
@@ -189,4 +193,3 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gm-form .p-chips:empty{display:none}
 .gm-chat .err{margin:0;font-size:12.5px}
 .gm-on{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
-

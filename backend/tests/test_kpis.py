@@ -198,6 +198,7 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, "chat/goal-manager", {"text": "Run the pass."})
     token = claim(api, machine)["token"]
     post(api, f"kpis/{kpi['id']}/archive", {}, token=token, expected=403)
+    post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
 def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_confirm(api):

@@ -28,6 +28,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [];
+    page.on('dialog', dialog => dialog.accept());
     let gmExtra = [];
     let gmLive = false;
     let gmQueued = false;   // the question waits on a missing AI provider
@@ -50,6 +51,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const detail = {kpi: activation, links: [{...activation.link, goal_title: 'Double organic signups', goal_owner: 'bot:cmo', target_label: activation.target_label, status: 'yellow', reason: activation.reason}],
       readings: [47, 50, 52].map((v, i) => ({id: 'r' + i, value: v, period_end: new Date(day - (2 - i) * 7 * 86400000).toISOString(), quality: 'measured', evidence: i === 2 ? 'https://analytics.example/q/12' : '', actor: 'bot:goal-manager', superseded_by: null})),
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
+    const archivedKpi = kpi('k-retired', 'Retired conversion', {owner: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
+    let archivedMayEdit = true;
     const requests = [];
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname, post = req.method() === 'POST';
@@ -82,9 +85,12 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
         const goal = {id: 'g-new-' + goals.length, status: null, rank: 5, kpis: [], ...body};
         goals.push(goal); return json({goal});
       }
-      if (p === '/api/v2/kpis' && !post) return json({kpis: []});
+      if (p === '/api/v2/kpis' && !post) return json({kpis: url.searchParams.get('include_archived') === 'true' && archivedKpi.archived_at ? [archivedKpi] : []});
       if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
       if (p === '/api/v2/kpis/k-act' && !post) return json(detail);
+      if (p === '/api/v2/kpis/k-retired' && !post) return json({...detail, kpi: archivedKpi, links: [], may_edit: archivedMayEdit});
+      if (p === '/api/v2/kpis/k-retired/restore' && post) { archivedKpi.archived_at = null; return json({kpi: archivedKpi}); }
+      if (p === '/api/v2/kpis/k-retired/archive' && post) { archivedKpi.archived_at = new Date().toISOString(); return json({kpi: archivedKpi}); }
       if (/^\/api\/v2\/kpis\/[^/]+\/readings$/.test(p) && post) return json({reading: {id: 'r-new'}});
       const link = p.match(/^\/api\/v2\/goals\/([^/]+)\/kpis$/);
       if (link && post) { goals.find(g => g.id === link[1]).kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
@@ -224,6 +230,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await until(() => panel.locator('[data-gp-checkins="g-cmo"] .kpi-check').count().then(n => n === 2), 'all check-ins');
     await panel.locator('.kpi-line[data-kpi="k-act"]').click();
     await panel.locator('.kchart').waitFor();
+    assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Archive KPI', 'editable KPI can be archived');
     assert.match((await panel.innerText()).replace(/\s+/g, ' '), /Activation v2[\s\S]*Signed-up accounts that finish setup[\s\S]*Product database/);
     assert.equal(await panel.locator('.kpi-r a[href="https://analytics.example/q/12"]').count(), 1, 'evidence');
     await panel.locator('[data-kpi-log] input[name=value]').fill('53');
@@ -252,6 +259,31 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     // The owner's panel holds the KPIs no goal uses.
     await row('human:ana').click();
     assert.match(await panel.locator('.gp-body').innerText(), /Other KPIs[\s\S]*Cash runway/i);
+    assert.equal(await panel.locator('[data-kpi="k-retired"]').count(), 0, 'archived KPI is absent from the default active view');
+    await panel.locator('[data-gp-history]').click();
+    await panel.locator('.gp-history-list [data-kpi="k-retired"]').waitFor();
+    assert.match(requests.join('\n'), /GET \/api\/v2\/kpis$/);
+    assert.match(await panel.locator('.gp-history-list').innerText(), /Archived KPIs[\s\S]*Retired conversion/);
+    await panel.locator('.gp-history-list [data-kpi="k-retired"]').click();
+    await panel.locator('[data-kpi-archive]').waitFor();
+    assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Restore KPI');
+    assert.match(await panel.locator('.kpi-archived').innerText(), /Readings and definition history are retained/);
+    archivedMayEdit = false;
+    await panel.locator('[data-kpi-back]').click();
+    await panel.locator('.gp-history-list [data-kpi="k-retired"]').click();
+    await panel.locator('.kpi-archived').waitFor();
+    assert.equal(await panel.locator('[data-kpi-archive]').count(), 0, 'read-only viewer cannot restore an archived KPI');
+    archivedMayEdit = true;
+    await panel.locator('[data-kpi-back]').click();
+    await panel.locator('.gp-history-list [data-kpi="k-retired"]').click();
+    await panel.locator('[data-kpi-archive]').click();
+    await until(() => last()?.path === '/api/v2/kpis/k-retired/restore', 'KPI restored');
+    assert.deepEqual(last().body, {});
+    await until(() => panel.locator('[data-kpi-archive]').innerText().then(t => t === 'Archive KPI'), 'restore refreshes the controls');
+    assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Archive KPI', 'restore returns to the active state');
+    await panel.locator('[data-kpi-archive]').click();
+    await until(() => last()?.path === '/api/v2/kpis/k-retired/archive', 'KPI archived again');
+    await panel.locator('[data-kpi-back]').click();
     await panel.locator('[data-gp-close]').click();
     // A link to one goal opens its owner's panel on it.
     await page.goto('http://tico-ui.test/#/goals/g-cmo2');

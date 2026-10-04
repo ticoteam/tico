@@ -622,34 +622,36 @@ async fn check_for_update(app: &App) {
     let selected = connection(app);
     if !config::is_generic() && selected.as_ref().map(|c| c.is_local()).unwrap_or(true) { return; }
     let builder = app.updater_builder();
-    let company_endpoint = if config::is_generic() { None } else {
+    let company_policy = if config::is_generic() { None } else {
         let Some(connection) = selected.as_ref() else { return };
-        Some(connection.hub.join("download/latest.json").unwrap())
-    };
-    let endpoint = company_endpoint.clone().or_else(|| Some(config::GENERIC_UPDATER.parse().unwrap()));
-    let updater_result = if let (Some(connection), Some(endpoint)) = (selected.as_ref(), company_endpoint.as_ref()) {
-        // Only the selected hub's Access cookie is attached. The updater's redirect policy is
-        // disabled below, and the artifact origin is checked again before its authenticated fetch.
         if connection.hub.scheme() != "https" {
             log::warn!("company updater requires an HTTPS hub origin");
             return;
         }
-        let client = Client::new(connection.clone());
-        let Some(cookie) = client.cookie_header(app, endpoint) else {
-            log::debug!("company updater is waiting for a signed-in hub session");
-            return;
+        let configured = app.config().plugins.0.get("updater").and_then(|p| p.get("endpoints"))
+            .and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str);
+        let endpoint = match hub::company_update_endpoint(&connection.hub, configured) {
+            Ok(endpoint) if endpoint.scheme() == "https" => endpoint,
+            Ok(_) => { log::warn!("company updater requires an HTTPS feed"); return; }
+            Err(_) => { log::warn!("company updater feed is invalid"); return; }
         };
-        let Some(cookie) = hub::company_cookie_header(&connection.hub, endpoint, &cookie) else {
-            log::warn!("company updater endpoint is outside the selected hub origin");
-            return;
+        let cookie = if hub::same_origin(&connection.hub, &endpoint) {
+            Client::new(connection.clone()).cookie_header(app, &endpoint)
+        } else {
+            None
         };
-        let Ok(cookie) = cookie.to_str() else { return };
-        builder.endpoints(vec![endpoint.clone()])
-            .and_then(|b| b.header("Cookie", cookie))
-            .map(|b| b.configure_client(hub::no_redirects))
+        // A cookie is optional: public team feeds work without an Access session. CompanyUpdatePolicy
+        // drops it for a configured runner_url on another origin and limits hub downloads/redirects.
+        Some(hub::CompanyUpdatePolicy::new(connection.hub.clone(), endpoint, cookie.as_deref()))
+    };
+    let updater_result = if let Some(policy) = &company_policy {
+        let endpoint = policy.endpoint().clone();
+        let policy = policy.clone();
+        builder.endpoints(vec![endpoint])
+            .map(|b| b.configure_client(move |client| policy.configure_client(client)))
             .and_then(|b| b.build())
     } else {
-        builder.endpoints(vec![endpoint.unwrap()]).and_then(|b| b.build())
+        builder.build()
     };
     let updater = match updater_result {
         Ok(updater) => updater,
@@ -660,9 +662,9 @@ async fn check_for_update(app: &App) {
         Ok(None) => return,
         Err(e) => { log::debug!("update check: {e}"); return; }
     };
-    if let Some(endpoint) = company_endpoint.as_ref() {
-        if !hub::same_origin(endpoint, &update.download_url) {
-            log::warn!("company updater artifact is outside the selected hub origin");
+    if let Some(policy) = company_policy.as_ref() {
+        if update.download_url.scheme() != "https" || !policy.allows_download(&update.download_url) {
+            log::warn!("company updater artifact is outside the allowed update origin");
             return;
         }
     }

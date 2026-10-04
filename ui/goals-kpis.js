@@ -191,6 +191,7 @@ function kpiPanelHtml(d, {back = false} = {}) {
   return `<div class="tmodal-head">${back ? '<button class="ghost tmodal-x gp-back" type="button" data-kpi-back aria-label="Back">‹</button>' : ''}<span class="kpi-ptitle">${gdot(status, state.reason || k.reason)}<span class="who">${esc(k.name)}</span>${k.auto ? '' : `<span class="pill" title="Definition version">v${esc(k.definition_version)}</span>`}</span><span class="spacer"></span>
       <button class="ghost tmodal-x" type="button" data-kpi-close aria-label="Close">✕</button></div>
     <div class="tmodal-body kpi-body" data-kpi-body="${esc(k.id)}">
+      ${k.archived_at ? `<p class="kpi-archived" role="status">Archived ${esc(kpiDay(k.archived_at))}. Readings and definition history are retained.</p>` : ''}
       <div class="kpi-now">${now}${k.reason && !kpiFresh(k) ? `<div class="muted kpi-why">${esc(k.reason)}</div>` : state.reason ? `<div class="muted kpi-why">${esc(state.reason)}</div>` : ''}</div>
       ${kpiChart(rows, links, k)}
       <dl class="kpi-meta">
@@ -215,7 +216,8 @@ function kpiPanelHtml(d, {back = false} = {}) {
           <label class="goal-f"><span>Quality</span><select name="quality"><option value="measured">Measured</option><option value="estimate">Estimate</option><option value="partial">Partial</option></select></label></div>
         <label class="goal-f kpi-note-f" hidden><span>What changed</span><input name="note" maxlength="2000"></label>
         <div class="goal-actions"><button class="primary" type="submit">Log reading</button><button class="ghost" type="button" data-correct-cancel hidden>Cancel</button></div></form>` : ''}
-      ${d.may_edit && !k.auto ? `<div class="kpi-edit-host"><button class="linkish" type="button" data-kpi-edit>Edit</button></div>` : ''}
+      ${d.may_edit && !k.auto ? `<div class="kpi-edit-host"><button class="linkish" type="button" data-kpi-edit>Edit</button>
+        <button class="linkish${k.archived_at ? '' : ' danger'}" type="button" data-kpi-archive>${k.archived_at ? 'Restore KPI' : 'Archive KPI'}</button></div>` : ''}
     </div>`;
 }
 
@@ -266,6 +268,20 @@ function kpiPanelBind(dlg, d) {
       try { await post(`/v2/goals/${encodeURIComponent(link.goal_id)}/kpis/${encodeURIComponent(k.id)}`, kpiTargetBody(form)); await again(); }
       catch (e) { toast(e.message || 'Could not save the target', true); }
     };
+  };
+  const archive = body.querySelector('[data-kpi-archive]');
+  if (archive) archive.onclick = async () => {
+    const restoring = Boolean(k.archived_at);
+    if (!restoring && !window.confirm(`Archive “${k.name}”? Its readings and definition history will stay available.`)) return;
+    archive.disabled = true;
+    try {
+      await post(`/v2/kpis/${encodeURIComponent(k.id)}/${restoring ? 'restore' : 'archive'}`, {});
+      if (GOALS_ST?.panel) {
+        GOALS_ST.panel.history = false;
+        GOALS_ST.panel.historyKpis = null;
+      }
+      await again();
+    } catch (e) { toast(e.message || `Could not ${restoring ? 'restore' : 'archive'} the KPI`, true); archive.disabled = false; }
   };
   const log = body.querySelector('[data-kpi-log]');
   if (log) {
@@ -532,7 +548,8 @@ function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
   const live = state.goals.filter(g => goalLive(g) && g.owner === owner);
   if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0].id;
-  state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped};
+  state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
+    historyLoading: false, historyError: false};
   history.replaceState(null, '', goal && goal !== 'new' ? GOALS + '/' + encodeURIComponent(goal) : GOALS);
   const dlg = goalPanelDialog(state);
   delete dlg.dataset.kpi;
@@ -568,11 +585,17 @@ function goalPanelHtml(state) {
   const newGoal = P.goal === 'new' ? `<div class="gp-add">${goalFormHtml({}, state.goals, actor === GOAL_COMPANY ? {company: true} : {owner: actor, fixed: true})}</div>` : '';
   const newKpi = P.kpiAdd === '@owner' ? `<div class="gp-add">${kpiAddHtml(null, actor)}</div>` : '';
   const actions = may && !newGoal && !newKpi && !P.kpiAdd ? `<div class="gp-actions"><button class="ghost" type="button" data-gp-goal-new>Add goal</button><button class="ghost" type="button" data-gp-kpi-new>Add KPI</button></div>` : '';
+  const history = may ? `<section class="gp-history" aria-label="Archived KPI history">
+      <button class="linkish" type="button" data-gp-history aria-expanded="${P.history ? 'true' : 'false'}">${P.history ? 'Hide archived KPIs' : 'Archived KPIs'}</button>
+      ${P.history ? `<div class="gp-history-list"><h3 class="kpi-h">Archived KPIs</h3>
+        ${P.historyLoading ? '<p class="muted">Loading history…</p>' : P.historyError ? '<p class="err">Could not load archived KPIs.</p>'
+          : P.historyKpis?.length ? kpiLinesHtml(P.historyKpis, {owner: true}) : '<p class="muted">No archived KPIs for this owner.</p>'}</div>` : ''}
+    </section>` : '';
   return `<div class="tmodal-head"><span class="gp-who">${av}<span>${esc(info.name)}</span></span><span class="spacer"></span>
       <button class="ghost tmodal-x" type="button" data-gp-close aria-label="Close">✕</button></div>
     <div class="tmodal-body gp-body">
       ${goals.length || profile ? `<ul class="gp-goals">${goals.map(item).join('')}${profile}</ul>` : ''}
-      ${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}
+      ${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}${history}
       ${!goals.length && !profile && !other.length && !newGoal && !newKpi && !actions ? '<p class="muted">No goals.</p>' : ''}
     </div>`;
 }
@@ -614,6 +637,20 @@ function goalPanelRender(state) {
   const newGoal = body.querySelector('[data-gp-goal-new]'), newKpi = body.querySelector('[data-gp-kpi-new]');
   if (newGoal) newGoal.onclick = () => setGoal('new');
   if (newKpi) newKpi.onclick = () => { P.kpiAdd = '@owner'; P.goal = ''; redraw(); };
+  const history = body.querySelector('[data-gp-history]');
+  if (history) history.onclick = async () => {
+    P.history = !P.history;
+    if (!P.history || P.historyKpis !== null) { redraw(); return; }
+    P.historyLoading = true;
+    P.historyError = false;
+    redraw();
+    const result = await v2Get(`/v2/kpis?owner=${encodeURIComponent(P.owner)}&include_archived=true`);
+    if (state.panel !== P) return;
+    P.historyLoading = false;
+    P.historyError = !result;
+    P.historyKpis = result ? (result.kpis || []).filter(k => k.archived_at && !goalBuiltInOwner(k.owner)) : null;
+    redraw();
+  };
   const kform = body.querySelector('[data-kpi-add]');
   if (kform) {
     kpiAddBind(kform, state.goals.find(g => g.id === kform.dataset.kpiAdd) || null, async ok => { P.kpiAdd = ''; if (ok) await reload(); else redraw(); });

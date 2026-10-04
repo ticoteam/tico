@@ -104,8 +104,48 @@ pub(crate) fn company_cookie_header(hub: &Url, request: &Url, cookie: &str) -> O
     cookie.parse::<HeaderValue>().ok()
 }
 
-pub(crate) fn no_redirects(builder: reqwest_updater::ClientBuilder) -> reqwest_updater::ClientBuilder {
-    builder.redirect(reqwest_updater::redirect::Policy::none())
+pub(crate) fn company_update_endpoint(hub: &Url, configured: Option<&str>) -> Result<Url, url::ParseError> {
+    match configured.filter(|endpoint| *endpoint != crate::config::GENERIC_UPDATER) {
+        Some(endpoint) => Url::parse(endpoint),
+        None => hub.join("download/latest.json"),
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CompanyUpdatePolicy {
+    hub: Url,
+    endpoint: Url,
+    cookie: Option<HeaderValue>,
+}
+
+impl CompanyUpdatePolicy {
+    pub(crate) fn new(hub: Url, endpoint: Url, cookie: Option<&str>) -> CompanyUpdatePolicy {
+        let cookie = cookie.and_then(|cookie| company_cookie_header(&hub, &endpoint, cookie));
+        CompanyUpdatePolicy { hub, endpoint, cookie }
+    }
+
+    pub(crate) fn endpoint(&self) -> &Url { &self.endpoint }
+
+    pub(crate) fn has_cookie(&self) -> bool { self.cookie.is_some() }
+
+    pub(crate) fn allows_download(&self, download: &Url) -> bool {
+        !same_origin(&self.hub, &self.endpoint) || same_origin(&self.hub, download)
+    }
+
+    // A hub feed may carry its Access cookie for both manifest and artifact requests. It must
+    // stay on the selected hub, so the same-origin download check and disabled redirects below
+    // are used together. A configured public runner feed gets no hub credentials at all.
+    pub(crate) fn configure_client(&self, builder: reqwest_updater::ClientBuilder) -> reqwest_updater::ClientBuilder {
+        if !same_origin(&self.hub, &self.endpoint) { return builder; }
+        let builder = builder.redirect(reqwest_updater::redirect::Policy::none());
+        if let Some(cookie) = &self.cookie {
+            let mut headers = reqwest_updater::header::HeaderMap::new();
+            headers.insert(reqwest_updater::header::COOKIE, cookie.clone());
+            builder.default_headers(headers)
+        } else {
+            builder
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,67 +156,128 @@ mod updater_auth_tests {
     use std::thread;
 
     #[test]
-    fn company_feed_and_artifact_paths_get_cookie_only_on_selected_origin() {
+    fn company_update_endpoint_keeps_public_runner_and_maps_default_feed_to_selected_hub() {
         let hub = Url::parse("https://tico.example.test/team/").unwrap();
-        let feed = hub.join("download/latest.json").unwrap();
-        let artifact = hub.join("download/app/Tico.dmg.tar.gz").unwrap();
-        let foreign = Url::parse("https://files.example.test/download/app.tar.gz").unwrap();
-        assert_eq!(company_cookie_header(&hub, &feed, "CF_Authorization=abc").unwrap().to_str().unwrap(), "CF_Authorization=abc");
-        assert_eq!(company_cookie_header(&hub, &artifact, "CF_Authorization=abc").unwrap().to_str().unwrap(), "CF_Authorization=abc");
-        assert!(company_cookie_header(&hub, &foreign, "CF_Authorization=abc").is_none());
-        assert!(!same_origin(&feed, &Url::parse("http://tico.example.test/team/download/latest.json").unwrap()));
-        assert!(!same_origin(&feed, &Url::parse("https://user@tico.example.test/team/download/latest.json").unwrap()));
+        assert_eq!(company_update_endpoint(&hub, Some(crate::config::GENERIC_UPDATER)).unwrap(),
+                   hub.join("download/latest.json").unwrap());
+        assert_eq!(company_update_endpoint(&hub, Some("https://runner.example.test/download/latest.json")).unwrap(),
+                   Url::parse("https://runner.example.test/download/latest.json").unwrap());
+        assert_eq!(company_update_endpoint(&hub, None).unwrap(), hub.join("download/latest.json").unwrap());
     }
 
     #[tokio::test]
-    async fn company_updater_http_client_does_not_follow_redirects() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            let mut request = [0; 2048];
-            let _ = socket.read(&mut request).unwrap();
-            socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://login.example.test/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-        });
-        let client = no_redirects(reqwest_updater::Client::builder()).build().unwrap();
-        let response = client.get(format!("http://{address}/download/latest.json"))
-            .header("Cookie", "CF_Authorization=synthetic")
-            .send().await.unwrap();
-        assert_eq!(response.status(), reqwest_updater::StatusCode::FOUND);
-        server.join().unwrap();
-    }
-
-    #[tokio::test]
-    async fn authenticated_feed_and_artifact_requests_use_selected_origin_cookie() {
+    async fn selected_hub_updater_client_uses_cookie_for_feed_and_artifact_and_rejects_foreign_downloads() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let mut seen = Vec::new();
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0; 1024];
-                loop {
-                    let n = socket.read(&mut chunk).unwrap();
-                    request.extend_from_slice(&chunk[..n]);
-                    if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                }
-                seen.push(String::from_utf8_lossy(&request).to_string());
+                seen.push(read_request(&mut socket));
                 socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
             }
             seen
         });
         let base = Url::parse(&format!("http://{address}/team/")).unwrap();
-        let client = no_redirects(reqwest_updater::Client::builder()).build().unwrap();
+        let feed = base.join("download/latest.json").unwrap();
+        let policy = CompanyUpdatePolicy::new(base.clone(), feed.clone(), Some("CF_Authorization=synthetic"));
+        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
         for path in ["download/latest.json", "download/app/Tico.dmg.tar.gz"] {
             let url = base.join(path).unwrap();
-            let cookie = company_cookie_header(&base, &url, "CF_Authorization=synthetic").unwrap();
-            let response = client.get(url).header(reqwest_updater::header::COOKIE, cookie).send().await.unwrap();
+            assert!(policy.allows_download(&url));
+            let response = client.get(url).send().await.unwrap();
             assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
         }
+        let foreign = Url::parse("https://files.example.test/download/app.tar.gz").unwrap();
+        assert!(!policy.allows_download(&foreign));
         let seen = server.join().unwrap();
         assert!(seen[0].starts_with("GET /team/download/latest.json "));
         assert!(seen[1].starts_with("GET /team/download/app/Tico.dmg.tar.gz "));
         assert!(seen.iter().all(|r| r.to_ascii_lowercase().contains("cookie: cf_authorization=synthetic")));
+    }
+
+    #[tokio::test]
+    async fn selected_hub_update_client_does_not_follow_access_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_request(&mut socket);
+            socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://login.example.test/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            request
+        });
+        let base = Url::parse(&format!("http://{address}/team/")).unwrap();
+        let feed = base.join("download/latest.json").unwrap();
+        let policy = CompanyUpdatePolicy::new(base, feed.clone(), Some("CF_Authorization=synthetic"));
+        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        let response = client.get(feed).send().await.unwrap();
+        assert_eq!(response.status(), reqwest_updater::StatusCode::FOUND);
+        assert!(server.join().unwrap().to_ascii_lowercase().contains("cookie: cf_authorization=synthetic"));
+    }
+
+    #[tokio::test]
+    async fn public_selected_hub_feed_is_checked_without_a_webview_cookie() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                seen.push(read_request(&mut socket));
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+            }
+            seen
+        });
+        let hub = Url::parse(&format!("http://{address}/team/")).unwrap();
+        let feed = hub.join("download/latest.json").unwrap();
+        let policy = CompanyUpdatePolicy::new(hub.clone(), feed.clone(), None);
+        assert!(!policy.has_cookie());
+        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        for url in [feed, hub.join("download/app/Tico.dmg.tar.gz").unwrap()] {
+            assert!(policy.allows_download(&url));
+            assert_eq!(client.get(url).send().await.unwrap().status(), reqwest_updater::StatusCode::OK);
+        }
+        assert!(server.join().unwrap().iter().all(|request| !request.to_ascii_lowercase().contains("cookie:")));
+    }
+
+    #[tokio::test]
+    async fn configured_public_runner_feed_and_download_never_receive_hub_cookie() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                seen.push(read_request(&mut socket));
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+            }
+            seen
+        });
+        let hub = Url::parse("https://tico.example.test/team/").unwrap();
+        let endpoint = Url::parse(&format!("http://127.0.0.1:{address}/download/latest.json")).unwrap();
+        let policy = CompanyUpdatePolicy::new(hub, endpoint.clone(), Some("CF_Authorization=synthetic"));
+        assert!(!policy.has_cookie());
+        let artifact = Url::parse(&format!("http://127.0.0.1:{address}/download/app/Tico.dmg.tar.gz")).unwrap();
+        assert!(policy.allows_download(&artifact));
+        let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
+        for url in [endpoint, artifact] {
+            let response = client.get(url).send().await.unwrap();
+            assert_eq!(response.status(), reqwest_updater::StatusCode::OK);
+        }
+        let seen = server.join().unwrap();
+        assert!(seen[0].starts_with("GET /download/latest.json "));
+        assert!(seen[1].starts_with("GET /download/app/Tico.dmg.tar.gz "));
+        assert!(seen.iter().all(|request| !request.to_ascii_lowercase().contains("cookie:")));
+    }
+
+    fn read_request(socket: &mut std::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let n = socket.read(&mut chunk).unwrap();
+            request.extend_from_slice(&chunk[..n]);
+            if n == 0 || request.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+        }
+        String::from_utf8_lossy(&request).to_string()
     }
 }

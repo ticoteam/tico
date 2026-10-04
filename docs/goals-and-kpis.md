@@ -185,7 +185,10 @@ and version, its owner, its targets and the Goal Manager's latest check-in, with
 (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. **Needs you** is a short strip at the
 top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
-waiting for your confirmation. The page is two requests, the tree and Needs you; the Goal Manager panel loads on its own.
+waiting for your confirmation. Initial page load makes two requests, the tree and Needs you; the Goal Manager panel and
+the historical KPI view load only when opened.
+People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
+from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
 
 ## Permissions
 
@@ -217,7 +220,7 @@ hub proposal create | list | decide
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
 has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
 
-Archived KPIs stay available in `hub kpi show <id>` and `hub kpi list --archived`. The active list, goal views,
+Archived KPIs stay available in `hub kpi show <id>`, `hub kpi list --archived`, and the owner's **Archived KPIs** view. The active list, goal views,
 Goal Manager freshness checks and Needs you omit them. Archive and restore require the KPI's owner or someone above
 them; each transition is audited, and neither changes its definition history, goal links, readings, privacy or owner.
 The Goal Manager cannot archive a KPI.
