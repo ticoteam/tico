@@ -59,6 +59,30 @@ def test_meeting_review_commands_use_the_same_personal_routes_as_mcp(monkeypatch
                     ('POST', 'meetings/m1/review', {'action': 'restore'})]
 
 
+def test_kpi_archive_and_historical_cli_commands_call_supported_routes(monkeypatch):
+    from clients import remotecli
+    sent = []
+    class Api:
+        def __init__(self, *args, **kwargs):
+            pass
+        def get(self, path, **query):
+            if path == "me":
+                return {"actor": "human:ana"}
+            sent.append(("GET", path, query))
+            return {"kpis": []}
+        def post(self, path, body, key=None):
+            sent.append(("POST", path, body))
+            return {"kpi": {"id": "K1"}}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "http://example.test")
+    monkeypatch.setenv("HUB_TOKEN", "test-token")
+    for argv in (["kpi", "list", "--archived"], ["kpi", "archive", "K1"], ["kpi", "restore", "K1"]):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert sent == [("GET", "kpis", {"goal_id": None, "owner": None, "unlinked": None,
+                                      "auto_for": None, "include_archived": "1"}),
+                    ("POST", "kpis/K1/archive", {}), ("POST", "kpis/K1/restore", {})]
+
+
 class Parser(unittest.TestCase):
     def test_kpi_archive_and_historical_list_commands_parse(self):
         historical = hubcli.parser().parse_args(["kpi", "list", "--archived", "--owner", "ana"])
