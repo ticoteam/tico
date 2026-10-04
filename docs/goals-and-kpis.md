@@ -196,13 +196,14 @@ waiting for your confirmation. The page is two requests, the tree and Needs you;
 - A KPI's owner (or anyone above them; the team owner for a team KPI) edits the KPI. Its readings are logged by that
   human, by the Goal Manager, or by the owner of a goal that uses it.
 - The Goal Manager reads every goal and KPI, writes readings and the automatic colours, records check-ins, and proposes. It
-  cannot set a colour by hand, edit a goal, create or link a KPI, or change a definition or a target.
+  cannot set a colour by hand, edit a goal, create or link a KPI, change a definition or a target, or archive a KPI.
 
 ## `hub` and the API
 
 ```
-hub goal list [--owner X] [--all]              hub kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG]
+hub goal list [--owner X] [--all]              hub kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]
 hub goal show <id>                         hub kpi show <id>
+                                             hub kpi archive <id> | restore <id>
 hub goal create / update                   hub kpi create "<name>" [--goal ID] [--definition ..] [--unit ..]
 hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
 hub goal status <id> auto                         hub kpi update <id> [fields]
@@ -215,6 +216,11 @@ hub proposal create | list | decide
 
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
 has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
+
+Archived KPIs stay available in `hub kpi show <id>` and `hub kpi list --archived`. The active list, goal views,
+Goal Manager freshness checks and Needs you omit them. Archive and restore require the KPI's owner or someone above
+them; each transition is audited, and neither changes its definition history, goal links, readings, privacy or owner.
+The Goal Manager cannot archive a KPI.
 
 The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 
@@ -230,6 +236,7 @@ The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 | `POST /api/v2/goals/{id}/kpis` | link a KPI (`kpi_id`) or make one and link it (`name`), with the target |
 | `POST /api/v2/goals/{id}/kpis/{kpi}` and `/unlink` | change the target on a link; remove the link |
 | `GET/POST /api/v2/kpis`, `GET/POST /api/v2/kpis/{id}` | list, create, read (with its links, readings, definition history and check-ins) and edit |
+| `POST /api/v2/kpis/{id}/archive`, `/restore` | hide or restore a KPI; only its owner or someone above them; history stays |
 | `GET/POST /api/v2/kpis/{id}/readings` | the readings (`?effective=true` leaves out corrected ones); post one |
 | `GET /api/v2/bots/{bot}/kpis` | a bot's automatic KPIs |
 | `GET/POST /api/v2/proposals`, `POST .../{id}/decide` | list, propose, confirm or reject |

@@ -60,6 +60,14 @@ def test_meeting_review_commands_use_the_same_personal_routes_as_mcp(monkeypatch
 
 
 class Parser(unittest.TestCase):
+    def test_kpi_archive_and_historical_list_commands_parse(self):
+        historical = hubcli.parser().parse_args(["kpi", "list", "--archived", "--owner", "ana"])
+        archived = hubcli.parser().parse_args(["kpi", "archive", "K1"])
+        restored = hubcli.parser().parse_args(["kpi", "restore", "K1"])
+        self.assertEqual((historical.fn, historical.include_archived, historical.owner), ("kpi list", True, "ana"))
+        self.assertEqual((archived.fn, archived.id), ("kpi archive", "K1"))
+        self.assertEqual((restored.fn, restored.id), ("kpi restore", "K1"))
+
     def test_every_subcommand_is_still_there(self):
         text = hubcli.parser().format_help()
         self.assertIn("{" + ",".join(SUBCOMMANDS) + "}", text)

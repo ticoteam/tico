@@ -797,11 +797,14 @@ def _target_body(args):
       "Read on the bot).",
       {"goal_id": _s("Only the KPIs this goal uses"), "owner": _s("Only this owner's: me, a bot slug or a person id"),
        "unlinked": {"type": "boolean", "default": False, "description": "Only the KPIs no goal uses"},
+       "include_archived": {"type": "boolean", "default": False,
+                            "description": "Include archived KPIs for explicit historical review"},
        "bot": _s("A bot slug: its automatic KPIs")})
 def kpi_list(api, args):
     return api.get("kpis", goal_id=args.get("goal_id") or None,
                    owner=_target(api, args["owner"]) if args.get("owner") else None,
-                   unlinked="1" if args.get("unlinked") else None, auto_for=args.get("bot") or None)
+                   unlinked="1" if args.get("unlinked") else None, auto_for=args.get("bot") or None,
+                   include_archived="1" if args.get("include_archived") else None)
 
 
 @tool("hub_kpi_show", "One KPI: its definition and version history, owner, the goals that use it with each "
@@ -840,6 +843,18 @@ def kpi_update(api, args):
     body = {k: args.get(k) for k in ("name", *KPI_PROPS)}
     body["owner"] = _target(api, args["owner"]) if args.get("owner") else None
     return api.post("kpis/" + args["id"], body, key=_key(args))["kpi"]
+
+
+@tool("hub_kpi_archive", "Archive a KPI from active lists and freshness checks. Definitions, links, readings and audit history stay; the owner or someone above them may restore it.",
+      {"id": _s("KPI id")}, required=("id",), writes=True)
+def kpi_archive(api, args):
+    return api.post("kpis/" + args["id"] + "/archive", {}, key=_key(args))["kpi"]
+
+
+@tool("hub_kpi_restore", "Restore an archived KPI to active lists and freshness checks. Its definitions, links, readings and audit history stay.",
+      {"id": _s("KPI id")}, required=("id",), writes=True)
+def kpi_restore(api, args):
+    return api.post("kpis/" + args["id"] + "/restore", {}, key=_key(args))["kpi"]
 
 
 @tool("hub_kpi_link", "Link a goal to a KPI and set the target on that link, or change the target of an "

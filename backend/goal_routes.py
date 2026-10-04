@@ -180,7 +180,8 @@ def install(app, store, auth, mutate, settings):
                 f"('open','doing','waiting') AND {readable} GROUP BY owner")}
             hidden = hidden_owners(c, who)
             unaligned = {owner: n for owner, n in unaligned.items() if owner not in hidden}
-            loose = [dict(r) for r in c.execute("SELECT * FROM kpis WHERE id NOT IN (SELECT kpi_id FROM goal_kpis) "
+            loose = [dict(r) for r in c.execute("SELECT * FROM kpis WHERE archived_at IS NULL "
+                                                "AND id NOT IN (SELECT kpi_id FROM goal_kpis) "
                                                 "ORDER BY created") if r["owner"] not in hidden]
             data = K.effective_many(c, [r["id"] for r in loose])
             other = [K.view(r, data.get(r["id"], []), None) for r in loose]
@@ -207,7 +208,8 @@ def install(app, store, auth, mutate, settings):
                     if k["status"] == "red":
                         items.append({"kind": "kpi_red", "goal_id": goal_id, "goal_title": title, "kpi_id": k["id"],
                                       "kpi_name": k["name"], "reason": k["reason"]})
-            owned = [dict(r) for r in c.execute("SELECT * FROM kpis ORDER BY created") if mine(r["owner"])]
+            owned = [dict(r) for r in c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created")
+                     if mine(r["owner"])]
             data = K.effective_many(c, [r["id"] for r in owned])
             for record in owned:
                 rows = data.get(record["id"], [])
@@ -431,7 +433,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/kpis")
     def kpi_list(request: Request, goal_id: str | None = None, owner: str | None = None, unlinked: bool = False,
-                 auto_for: str | None = None):
+                 auto_for: str | None = None, include_archived: bool = False):
         """The KPIs the caller may see. `unlinked` keeps the ones no goal uses; `auto_for` is one bot's five
         automatic KPIs (Read on the bot)."""
         who = request.state.identity
@@ -442,12 +444,16 @@ def install(app, store, auth, mutate, settings):
                 return {"kpis": botkpis.for_bot(c, auto_for)}
             hidden = hidden_owners(c, who)
             actor = goal_owner(c, who, owner) if owner else None
-            sql, args = "SELECT * FROM kpis", []
+            sql, args, clauses = "SELECT * FROM kpis", [], []
             if goal_id:
-                sql += " WHERE id IN (SELECT kpi_id FROM goal_kpis WHERE goal_id=?)"
+                clauses.append("id IN (SELECT kpi_id FROM goal_kpis WHERE goal_id=?)")
                 args.append(goal_id)
             elif unlinked:
-                sql += " WHERE id NOT IN (SELECT kpi_id FROM goal_kpis)"
+                clauses.append("id NOT IN (SELECT kpi_id FROM goal_kpis)")
+            if not include_archived:
+                clauses.append("archived_at IS NULL")
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
             records = [dict(r) for r in c.execute(sql + " ORDER BY created", args)
                        if r["owner"] not in hidden and (not actor or r["owner"] == actor)]
             data = K.effective_many(c, [r["id"] for r in records])
@@ -499,6 +505,28 @@ def install(app, store, auth, mutate, settings):
             G.kpi_edit(c, who.actor, kid, fields, owner)
             return kpi_detail(c, who, K.kpi(c, kid))
         return mutate(request, body, work)
+
+    def kpi_archive_change(request, kid, body, archived):
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            record = kpi_or_404(c, who, kid)
+            refuse_manager(who, "archiving or restoring a KPI definition")
+            if K.auto(kid) or not may_edit_kpi(c, who, record):
+                raise Problem("forbidden", "The KPI's owner or someone above them archives or restores it", 403)
+            updated = K.set_archived(c, who.actor, kid, archived)
+            return kpi_detail(c, who, updated)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/kpis/{kid}/archive")
+    def kpi_archive(request: Request, kid: str, body: M.Empty):
+        """Hide a stored KPI from active lists and freshness checks. Its history and links stay intact."""
+        return kpi_archive_change(request, kid, body, True)
+
+    @app.post("/api/v2/kpis/{kid}/restore")
+    def kpi_restore(request: Request, kid: str, body: M.Empty):
+        """Restore an archived KPI to active lists without changing its history or links."""
+        return kpi_archive_change(request, kid, body, False)
 
     @app.get("/api/v2/kpis/{kid}/readings")
     def kpi_readings(request: Request, kid: str, effective: bool = False):

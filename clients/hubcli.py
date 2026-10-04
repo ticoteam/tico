@@ -81,9 +81,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top]
-    hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG]
+    hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
                                            KPIs with latest reading and colour; --bot: that bot's five automatic KPIs
     hub kpi show <id> [--effective]        definition and versions, the goals using it, every reading, check-ins
+    hub kpi archive <id> | restore <id>    hide from active lists, or restore; history stays
     hub kpi create "<name>" [--goal ID] [--definition "..."] [--unit %] [--direction up|down|range]
                 [--cadence daily|weekly|monthly] [--owner me|X|company] [--source-note "..."] [target flags]
                                            a KPI of its own; with --goal it is linked, the target on the link
@@ -827,11 +828,17 @@ def parser():
     s.add_argument("--owner", help="only this owner's: me, a bot slug or a person id")
     s.add_argument("--unlinked", action="store_true", help="only the KPIs no goal uses")
     s.add_argument("--bot", help="a bot slug: its five automatic KPIs")
+    s.add_argument("--archived", dest="include_archived", action="store_true",
+                    help="include archived KPIs for historical review")
     s.set_defaults(fn="kpi list")
     s = kpi.add_parser("show", help="definition and versions, the goals using it, every reading, check-ins")
     s.add_argument("id")
     s.add_argument("--effective", action="store_true", help="leave out readings a correction replaced")
     s.set_defaults(fn="kpi show")
+    for action in ("archive", "restore"):
+        s = kpi.add_parser(action, help=f"{action} a KPI while keeping its definitions, links and readings")
+        s.add_argument("id")
+        s.set_defaults(fn="kpi " + action)
     s = kpi.add_parser("create", help="make a KPI; with --goal it is linked, the target on the link")
     s.add_argument("name", help="what is counted, per what: 'booked demos per two weeks'")
     s.add_argument("--goal", dest="goal_id", help="link it to this goal")

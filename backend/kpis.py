@@ -400,7 +400,8 @@ def view(record, rows, links=None, at=None):
     newest = latest(rows)
     state = assess(record, links, rows, at)
     base = {**{k: record.get(k) for k in ("id", "slug", "name", "definition", "unit", "direction", "cadence", "owner",
-                                          "source_note", "definition_version", "created", "created_by", "updated")},
+                                          "source_note", "definition_version", "created", "created_by", "updated",
+                                          "archived_at", "archived_by")},
             "auto": auto(record["id"]), "latest": reading_brief(newest), "readings": len(rows),
             "freshness": state["freshness"], "spark": spark(rows)}
     if links is not None:
@@ -429,7 +430,8 @@ def goal_views(conn, goal_ids, at=None):
     records = {}
     for start in range(0, len(real), 400):
         chunk = real[start:start + 400]
-        for row in conn.execute(f"SELECT * FROM kpis WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+        for row in conn.execute(f"SELECT * FROM kpis WHERE id IN ({','.join('?' * len(chunk))}) "
+                                "AND archived_at IS NULL", chunk):
             records[row["id"]] = dict(row)
     data = effective_many(conn, real)
     for r in rows:
@@ -530,6 +532,26 @@ def update(conn, actor, kpi_id, fields, owner=None):
     if "definition_version" in sets:
         _version(conn, after, actor, ts)
     return after, changes
+
+
+def set_archived(conn, actor, kpi_id, archived):
+    """Hide or restore a KPI without changing its definition, links, readings or history."""
+    row = kpi(conn, kpi_id)
+    if not row or auto(kpi_id):
+        raise ValueError("only a stored KPI can be archived")
+    archived = bool(archived)
+    if bool(row.get("archived_at")) == archived:
+        return row
+    if archived:
+        ts = H.now()
+        conn.execute("UPDATE kpis SET archived_at=?, archived_by=?, updated=? WHERE id=?",
+                     (ts, actor, ts, kpi_id))
+        H.event(conn, actor, "kpi.archive", kpi_id)
+    else:
+        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by=NULL, updated=? WHERE id=?",
+                     (H.now(), kpi_id))
+        H.event(conn, actor, "kpi.restore", kpi_id)
+    return kpi(conn, kpi_id)
 
 
 def definitions(conn, kpi_id):

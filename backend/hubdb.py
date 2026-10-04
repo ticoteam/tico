@@ -303,6 +303,11 @@ UPDATE goals SET status_source='person' WHERE status IS NOT NULL AND status_sour
 UPDATE goal_events SET status_by=actor, status_source='person' WHERE field='status' AND status_source IS NULL;
 """
 
+KPI_ARCHIVE_SCHEMA = """
+ALTER TABLE kpis ADD COLUMN archived_at TEXT;
+ALTER TABLE kpis ADD COLUMN archived_by TEXT;
+"""
+
 # The shared market model (backend/market.py).
 # Six tables plus an FTS index. Rows are retired, merged or ended, never deleted.
 MARKET_SCHEMA = """
@@ -623,7 +628,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
               REPLY_ANSWERS_ASKS, LISTENING_SCHEMA, KPIS_SCHEMA, USAGE_SCHEMA,
               USAGE_LIMITS_SCHEMA, TAGS_SCHEMA, PIPELINES_SCHEMA, CHAT_GOALS_SCHEMA, REPOSITORIES_SCHEMA, TASK_LINKS_V2_SCHEMA, SUBSCRIPTIONS_SCHEMA,
-              STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA, USAGE_SEGMENTS_SCHEMA]
+              STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA,
+              USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA]
 
 
 class Refused(Exception):

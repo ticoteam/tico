@@ -148,6 +148,58 @@ def test_a_goal_without_kpis_is_coloured_by_its_owners_check_in_or_stays_gray(ap
     post(api, f"goals/{goal['id']}/checkins", {"body": "Nothing to say.", "signal": "bogus"}, expected=422)
 
 
+def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(api):
+    goal, kpi = goal_with_kpi(api)
+    logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
+    stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
+    assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
+    post(api, f"kpis/{stale['id']}/archive", {})
+    assert all(item.get("kpi_id") != stale["id"] for item in get(api, "goals/needs-you")["items"])
+    post(api, f"kpis/{stale['id']}/restore", {}, token="cara-test", expected=403)
+    post(api, f"kpis/{stale['id']}/restore", {})
+    original = get(api, f"kpis/{kpi['id']}")
+    archived = post(api, f"kpis/{kpi['id']}/archive", {})["kpi"]
+    assert archived["archived_at"] and archived["archived_by"] == "human:ana"
+    assert all(row["id"] != kpi["id"] for row in get(api, "kpis")["kpis"])
+    historical = get(api, "kpis?include_archived=true")["kpis"]
+    assert next(row for row in historical if row["id"] == kpi["id"])["archived_at"]
+    detail = get(api, f"kpis/{kpi['id']}")
+    assert detail["readings"] == original["readings"]
+    assert detail["definitions"] == original["definitions"]
+    assert detail["links"] == original["links"]
+    assert detail["readings"][0]["id"] == logged["id"]
+    assert all(row["id"] != kpi["id"] for row in goal_of(api, goal["id"])["kpis"])
+    with api.app.state.store.read() as c:
+        actions = [r["action"] for r in c.execute(
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+    assert actions[-1:] == ["kpi.archive"]
+
+    restored = post(api, f"kpis/{kpi['id']}/restore", {})["kpi"]
+    assert restored["archived_at"] is None and restored["archived_by"] is None
+    assert any(row["id"] == kpi["id"] for row in get(api, "kpis")["kpis"])
+    assert any(row["id"] == kpi["id"] for row in goal_of(api, goal["id"])["kpis"])
+    with api.app.state.store.read() as c:
+        actions = [r["action"] for r in c.execute(
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+    assert actions[-2:] == ["kpi.archive", "kpi.restore"]
+
+
+def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused(api):
+    _, kpi = goal_with_kpi(api)
+    post(api, f"kpis/{kpi['id']}/archive", {}, token="cara-test", expected=403)
+
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+    machine = runner(api)
+    assign(api, machine, "goal-manager")
+    ready(api, machine, ["goal-manager"])
+    post(api, "chat/goal-manager", {"text": "Run the pass."})
+    token = claim(api, machine)["token"]
+    post(api, f"kpis/{kpi['id']}/archive", {}, token=token, expected=403)
+
+
 def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_confirm(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "

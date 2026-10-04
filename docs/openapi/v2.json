@@ -5330,7 +5330,7 @@
     },
     "/api/v2/kpis": {
       "get": {
-        "summary": "The KPIs the caller may see; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs",
+        "summary": "The KPIs the caller may see; archived KPIs are omitted unless include_archived=true; goal_id, owner, unlinked=true narrow it; auto_for=<bot> is that bot's five automatic KPIs",
         "operationId": "listKpis",
         "parameters": [
           {
@@ -5389,6 +5389,16 @@
                 }
               ],
               "title": "Auto For"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
             }
           }
         ],
@@ -5610,6 +5620,77 @@
         ]
       }
     },
+    "/api/v2/kpis/{kid}/archive": {
+      "post": {
+        "summary": "Hide a KPI from active views; only its owner or someone above them; definitions, links, readings and audit history stay",
+        "operationId": "archiveKpi",
+        "parameters": [
+          {
+            "name": "kid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "KPIs"
+        ]
+      }
+    },
     "/api/v2/kpis/{kid}/readings": {
       "get": {
         "summary": "Every reading oldest first, each with the reading that superseded it; effective=true leaves out the corrected ones",
@@ -5711,6 +5792,77 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/KpiReadingResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "KPIs"
+        ]
+      }
+    },
+    "/api/v2/kpis/{kid}/restore": {
+      "post": {
+        "summary": "Restore an archived KPI to active views; only its owner or someone above them; history stays",
+        "operationId": "restoreKpi",
+        "parameters": [
+          {
+            "name": "kid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Kid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpiDetail"
                 }
               }
             }
@@ -15734,6 +15886,18 @@
             ]
           },
           "updated": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "archived_by": {
             "type": [
               "string",
               "null"
