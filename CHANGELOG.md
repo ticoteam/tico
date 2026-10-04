@@ -7,6 +7,21 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-10-04
+
+### Added
+- Archive and restore KPIs through the owner interface, API and CLI while preserving definitions, readings and audit history. Archived KPIs leave active lists and freshness work by default; historical views remain available.
+
+### Fixed
+- Authenticate company desktop updates with the selected hub session, allow signed storage redirects without forwarding hub cookies, and retain updater signature verification and configured public runner feeds.
+- Keep mail doctor read-only and support supervisor-mediated credentials without reading the supervisor key. Missing labels are reported with a separate repair hint.
+- Derive company publisher OIDC trust from current GitHub repository settings, including immutable subjects, while restricting trust to this repository's version tags.
+- Keep older matching Done tasks reachable when the first globally paginated page contains only other task types.
+
+### Upgrade notes
+- Update the server, runners and company desktop. Older shells unable to authenticate the company update feed need the documented recovery bridge or a verified manual company install; publication alone does not prove automatic updating.
+- KPI archival is an explicit authorized action; no existing KPI definitions are automatically archived.
+
 ## [0.3.20] - 2026-10-04
 
 ### Fixed
@@ -1853,7 +1868,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.20...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.21...HEAD
+[0.3.21]: https://github.com/ticoteam/tico/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/ticoteam/tico/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/ticoteam/tico/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/ticoteam/tico/compare/v0.3.17...v0.3.18
