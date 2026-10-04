@@ -43,6 +43,33 @@ def test_all_good(environment, monkeypatch):
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
+def test_successful_runs_without_task_progress_are_visible_in_health_and_the_tool(environment):
+    api = environment()
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:morgan', 'Restore the mail registry', '', 'bot:helper', private=False)
+        H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+    checks = health_of(api)[1]
+    assert checks['stalled_tasks']['status'] == 'warn'
+    assert task['title'] in checks['stalled_tasks']['summary']
+    tool = api.get('/api/v2/health/issues', headers=signed_in()).json()
+    assert any(issue['kind'] == 'stalled_tasks' for issue in tool['issues'])
+    member = health_of(api, as_person(api, 'quinn'))[1]['stalled_tasks']
+    assert '1 task' in member['summary'] and task['title'] not in member['summary'] and not member['fixes']
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:helper', task['id'], status='done', note='Restored and validated.')
+    assert 'stalled_tasks' not in health_of(api)[1]
+
+
+def test_stalled_health_does_not_disclose_another_persons_private_task(environment):
+    api = environment()
+    add_bot(api, 'helper')
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:riley', 'Private repair request', '', 'bot:helper', private=True)
+        H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+    assert 'stalled_tasks' not in health_of(api)[1]
+
+
 def test_requested_server_settings_report_effective_state(environment, monkeypatch):
     from backend.credentials import CredentialCipher
     from backend.tests.test_credentials import FakeKMS

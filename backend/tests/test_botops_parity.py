@@ -11,6 +11,7 @@ import pytest
 
 from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
 from backend.tests.test_member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
+from backend.store import H
 
 
 def act(api, attempt, method, path, body=None, ref="turn"):
@@ -19,6 +20,26 @@ def act(api, attempt, method, path, body=None, ref="turn"):
     if body is not None:
         kwargs["json"] = body
     return getattr(api, method.lower())("/api/v2/" + path, **kwargs)
+
+
+@pytest.mark.parametrize("requester", ["bot:finance", "keeper", "bot:botops"])
+def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, botops, requester):
+    from backend.tests.test_mcp import call as mcp
+
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, requester, "Diagnose the missing mail registry", "Find its approved source.", "bot:botops")
+        blocker = H.task_create(c, 'bot:botops', "Find the approved registry source", "Identify the source.", "bot:finance")
+    attempt = claim(api, botops, "botops")
+    err, result = mcp(api, "hub_task_update", {"id": task["id"], "status": "waiting",
+                      "note": "The authorized registry source is missing.", "blocked_by": blocker["id"],
+                      "quiet": True}, attempt["token"])
+    assert not err, result
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "waiting"
+        note = c.execute("SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
+                         (task["id"],)).fetchone()
+        assert note["actor"] == "bot:botops"
+    assert act(api, attempt, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
 
 
 def test_routine_tools_delegate_canonical_ids_and_verify_schedules_before_activation(api, botops):

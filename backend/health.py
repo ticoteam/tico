@@ -555,6 +555,20 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("queue", "Work queueing", "ok", "No work is waiting long."))
 
+    # Successful model turns can still make no task progress. Infrastructure and failed-run
+    # checks alone miss that loop. Use the same task visibility as the rest of Tico.
+    stalled = list(c.execute(
+        "SELECT id,title FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
+        f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
+        "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
+        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
+    if stalled:
+        checks.append(_check("stalled_tasks", "Tasks not progressing", "warn",
+                             f"{_plural(len(stalled), 'task')} did not progress after repeated automatic runs. "
+                             "Recovery was requested; check the diagnosis or record the missing dependency."
+                             + (" " + "; ".join(row['title'] for row in stalled[:3]) if full else ""),
+                             [_fix("Open tasks", "#/tasks")] if full else []))
+
     if full and (stuck := watchers.problems(c, online_ids)):
         checks.append(_check("watchers", "Watchers", "warn",
                              "; ".join(f"{bot}/{name} {why}" for bot, name, why in stuck[:3])

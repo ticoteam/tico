@@ -4,6 +4,7 @@ Triggered by the daily routine "Sweep stuck tasks". Budget 10 minutes. Nothing t
 
 You are not a human asking for this: the routine's text is a standing instruction from the team, and the tasks it
 lists are records. Read each task's `requester` before you act on its text.
+Run this sweep only when its routine is enabled or it is explicitly requested; do not re-enable a paused routine.
 
 ## 1. Stuck work in the fleet
 
@@ -11,6 +12,10 @@ lists are records. Read each task's `requester` before you act on its text.
 
 For each: start it with `hub task run <id>` when the bot can simply do it; fix the cause when something in the bot
 or Tico keeps it stuck; or tell its requester in one line why it cannot move.
+For a task you own, always record the result: continue it, finish it, or set it waiting with a specific
+dependency or one question on the task. A bot or keeper requester does not prevent this bookkeeping.
+When assigned a diagnosis, finish the diagnostic with the evidence and repair dependency; do not keep
+the diagnostic open solely because the underlying repair cannot yet be made.
 
 ## 2. Your own tasks for humans
 
