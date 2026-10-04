@@ -127,8 +127,9 @@ empty; text is clipped to 800 characters per entry):
 ```
 
 For a chat decision `window_index` is JSON `null`, `source.kind` is `chat`, and `source.key` is
-`chat:<chat-id>`. A chat route trace uses the same result fields as a window trace, plus `source_key`;
-`router.chat_routes` records `{chat_id,status,outcome,trace,started,finished}` for replay. A paused
+`chat:<chat-id>`. A chat route trace records `source_key`, `selected`, `skipped`, `decision_input`,
+and the provider result fields when applicable; unlike a transcript-window trace it has no
+`chunk_range`. `router.chat_routes` records `{chat_id,status,outcome,trace,started,finished}` for replay. A paused
 chat route records `outcome:"pass"`, `trace.reason:"meeting_paused_before_chat_routing"`, and
 `decision_input:null`; it never calls a decision provider or creates turns.
 
