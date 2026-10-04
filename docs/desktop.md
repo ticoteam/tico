@@ -62,6 +62,54 @@ company app again and install it over the existing copy. Keep the app's saved da
 bundle ID preserves the selected server and sign-in state. The replacement shell uses the signed-in
 hub session for protected update files. Downloads remain behind Cloudflare Access.
 
+### Build-only recovery bridge for the 0.3.20 Team shell
+
+Use this only when the installed Team shell is 0.3.20 and needs to reach the official CI-signed
+0.3.21 release. The temporary shell reports version 0.3.20, checks the public GitHub release
+manifest, and keeps the official updater public key below. The public CI release uses the stable
+Team bundle identifier `team.tico.app`. The recipe checks the installed app's Info.plist for that
+exact identifier before building.
+
+From a Tico checkout on the Mac, set `TEAM_APP` to the existing Team `.app` path and run:
+
+```sh
+TEAM_APP="/absolute/path/to/the/current/Team.app"
+OVERRIDE="/tmp/tico-bridge-0.3.20-$$.json"
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TEAM_APP/Contents/Info.plist")"
+python3 - "$BUNDLE_ID" "$OVERRIDE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+bundle_id, output = sys.argv[1:3]
+config = json.loads(Path("app/tauri.conf.json").read_text())
+assert config["plugins"]["updater"]["pubkey"] == (
+    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBOEI5QUYyMDBCNUUzRkY"
+    "KUldULzQ3VUE4cHFMYXY1aVY4OHBBMnJZdkdtcXVSUEZ0QjdwTFNqVVY0cUVrUDhsN1h3SUdjdFIK"
+), "the checked-in official updater public key changed; stop and ask Engineering Lead"
+assert bundle_id == "team.tico.app", (
+    "the installed app has a different bundle identifier; stop and ask Engineering Lead"
+)
+config["version"] = "0.3.20"
+config["identifier"] = "team.tico.app"
+config["plugins"]["updater"]["endpoints"] = [
+    "https://github.com/ticoteam/tico/releases/latest/download/latest.json"
+]
+config["bundle"]["createUpdaterArtifacts"] = False
+Path(output).write_text(json.dumps(config))
+PY
+(cd app && cargo tauri build --locked --target universal-apple-darwin \
+  --bundles app --no-sign --config "$OVERRIDE")
+```
+
+The build output is `app/target/universal-apple-darwin/release/bundle/macos/Tico.app`.
+`createUpdaterArtifacts=false` means this bridge needs no updater signing private key; its embedded
+public key still verifies the official 0.3.21 update. This command writes the candidate under
+`app/target` and does not replace or install an app. Before installing it, save the current Team
+`.app` bundle. If the bridge cannot update or relaunch, restore that saved bundle at its original
+path; keep the bundle identifier and the app's saved data unchanged. Root owns installation and
+rollback.
+
 Owners can set the public team logo in **Settings → Team → Choose icon**, or with
 `hub team icon logo.png`, using their owner credential
 (`HUB_API_URL` and `HUB_TOKEN`). The API is `POST /api/v2/team/icon`, with an opaque binary PNG,
