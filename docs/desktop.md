@@ -64,51 +64,75 @@ hub session for protected update files. Downloads remain behind Cloudflare Acces
 
 ### Build-only recovery bridge for the 0.3.20 Team shell
 
-Use this only when the installed Team shell is 0.3.20 and needs to reach the official CI-signed
-0.3.21 release. The temporary shell reports version 0.3.20, checks the public GitHub release
-manifest, and keeps the official updater public key below. The public CI release uses the stable
-Team bundle identifier `team.tico.app`. The recipe checks the installed app's Info.plist for that
-exact identifier before building.
+Use this only when an installed company shell at version 0.3.20 needs to reach the official
+CI-signed 0.3.21 release. Root supplies the installed `.app`, HTTPS company hub, the exact updater
+feed already configured for that company, and its existing environment and tray settings from the
+managed verification checkout. Keep those private values in the local shell; do not put them in this
+public document or a commit. `UPDATE_URL` may be a separate configured public runner feed, so retain
+its exact value rather than substituting the generic GitHub feed or assuming the hub hosts updates.
 
-From a Tico checkout on the Mac, set `TEAM_APP` to the existing Team `.app` path and run:
+The recipe reads the installed app's bundle identifier, name, executable and version from its
+`Info.plist`. It builds into a new temporary directory with `cargo tauri build`; it does not use
+`scripts/app.sh build`, which copies a build over an installed app. The generated override inherits
+the checked-in official updater public key, sets the shell back to version 0.3.20, preserves the
+company endpoint, and disables updater artifact generation. No updater signing private key is
+needed for this unsigned verification shell.
+
+From a Tico checkout on the managed Mac, fill in the local values Root supplies, then run:
 
 ```sh
 TEAM_APP="/absolute/path/to/the/current/Team.app"
-OVERRIDE="/tmp/tico-bridge-0.3.20-$$.json"
-BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TEAM_APP/Contents/Info.plist")"
-python3 - "$BUNDLE_ID" "$OVERRIDE" <<'PY'
+HUB_URL="https://<company-hub-host>/"
+UPDATE_URL="https://<existing-company-update-feed>/download/latest.json"
+ENV_SLUG="<existing-company-environment-slug>"
+TRAY_LABEL="<existing-tray-label-or-empty>"
+BUILD_ROOT="$(mktemp -d /tmp/tico-bridge-0.3.20.XXXXXX)"
+OVERRIDE="$BUILD_ROOT/tauri.override.json"
+INFO="$TEAM_APP/Contents/Info.plist"
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")"
+APP_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$INFO")"
+APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO")"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")"
+test "$APP_VERSION" = "0.3.20"
+python3 - "$BUNDLE_ID" "$APP_NAME" "$APP_EXECUTABLE" "$HUB_URL" "$UPDATE_URL" "$TRAY_LABEL" "$OVERRIDE" <<'PY'
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
-bundle_id, output = sys.argv[1:3]
+bundle_id, name, executable, hub, feed, tray_label, output = sys.argv[1:8]
+for label, value in (("company hub", hub), ("company updater feed", feed)):
+    parsed = urlsplit(value)
+    assert parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password \
+        and not parsed.query and not parsed.fragment, f"{label} must be an HTTPS URL without credentials, query or fragment"
+assert bundle_id and name and executable, "installed company app identity is incomplete"
+assert len(tray_label) <= 4 and tray_label.isascii() and (not tray_label or tray_label.isalnum()), "tray label must be empty or 1-4 ASCII letters/digits"
 config = json.loads(Path("app/tauri.conf.json").read_text())
-assert config["plugins"]["updater"]["pubkey"] == (
-    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBOEI5QUYyMDBCNUUzRkY"
-    "KUldULzQ3VUE4cHFMYXY1aVY4OHBBMnJZdkdtcXVSUEZ0QjdwTFNqVVY0cUVrUDhsN1h3SUdjdFIK"
-), "the checked-in official updater public key changed; stop and ask Engineering Lead"
-assert bundle_id == "team.tico.app", (
-    "the installed app has a different bundle identifier; stop and ask Engineering Lead"
-)
+assert config["plugins"]["updater"].get("pubkey"), "the checked-in official updater public key is missing"
+generic_feed = "https://github.com/ticoteam/tico/releases/latest/download/latest.json"
+assert feed != generic_feed, "supply the company's existing updater endpoint, not the generic GitHub feed"
 config["version"] = "0.3.20"
-config["identifier"] = "team.tico.app"
-config["plugins"]["updater"]["endpoints"] = [
-    "https://github.com/ticoteam/tico/releases/latest/download/latest.json"
-]
+config["productName"] = name
+config["identifier"] = bundle_id
+config["mainBinaryName"] = executable
+config["plugins"]["updater"]["endpoints"] = [feed]
 config["bundle"]["createUpdaterArtifacts"] = False
 Path(output).write_text(json.dumps(config))
 PY
-(cd app && cargo tauri build --locked --target universal-apple-darwin \
-  --bundles app --no-sign --config "$OVERRIDE")
+(
+  cd app
+  TICO_HUB_URL="$HUB_URL" TICO_APP_NAME="$APP_NAME" TICO_ENV_SLUG="$ENV_SLUG" \
+    TICO_TRAY_LABEL="$TRAY_LABEL" TICO_LOCAL_TOKEN_FILE="" CARGO_TARGET_DIR="$BUILD_ROOT/cargo-target" \
+    cargo tauri build --locked --target universal-apple-darwin --bundles app --no-sign --config "$OVERRIDE"
+)
 ```
 
-The build output is `app/target/universal-apple-darwin/release/bundle/macos/Tico.app`.
-`createUpdaterArtifacts=false` means this bridge needs no updater signing private key; its embedded
-public key still verifies the official 0.3.21 update. This command writes the candidate under
-`app/target` and does not replace or install an app. Before installing it, save the current Team
-`.app` bundle. If the bridge cannot update or relaunch, restore that saved bundle at its original
-path; keep the bundle identifier and the app's saved data unchanged. Root owns installation and
-rollback.
+The candidate is under `$BUILD_ROOT/cargo-target/universal-apple-darwin/release/bundle/macos/`.
+`createUpdaterArtifacts=false` means this bridge needs no updater signing private key; its inherited
+official public key still verifies the signed 0.3.21 update. The command writes only to the temporary
+build directory and does not replace or install an app. Root owns installation and rollback: save the
+current company `.app` before any install, restore it to its original path if the bridge cannot update
+or relaunch, and keep the bundle identity and app data unchanged.
 
 Owners can set the public team logo in **Settings → Team → Choose icon**, or with
 `hub team icon logo.png`, using their owner credential
