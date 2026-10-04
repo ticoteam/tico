@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 
 const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
-  window_ms: 30000, cooldown_ms: 60000, imported_meeting_id: null,
+  window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
@@ -65,6 +65,8 @@ async function main() {
     await page.locator('#meet-live-now').click();
     await page.locator('#live-connect').waitFor();
     await page.locator('#live-connect input[name=title]').fill('Weekly sync');
+    await page.locator('#live-connect input[name=reply_cap]').fill('2');
+    await page.locator('#live-connect input[name=cooldown_seconds]').fill('90');
     await page.locator('#live-connect button[type=submit]').click();
     await page.locator('.live-card').waitFor();
     assert.equal(await page.locator('.live-transcript').innerText().then(text => text.includes('We should ship')), true);
@@ -76,6 +78,8 @@ async function main() {
     assert.equal(await page.evaluate(() => document.activeElement.id), 'live-chunk-1', 'chat reply links to its transcript sequence');
     assert.equal(calls[0][0], 'connect');
     assert.ok(calls[0][1].client_id);
+    assert.equal(calls[0][1].reply_cap, 2);
+    assert.equal(calls[0][1].cooldown_seconds, 90);
     world.detail.owner_actor = 'human:ben';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('#live-bot-picker').waitFor();
@@ -84,11 +88,32 @@ async function main() {
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('#live-bot-picker select option[value=finance]').waitFor();
     await page.locator('#live-bot-picker select').selectOption('finance');
+    const draft = 'Please review this plan';
+    await page.locator('#live-chat-form input').fill(draft);
+    await page.locator('#live-chat-form input').evaluate(input => input.setSelectionRange(8, 14));
+    // Exercise the real five-second poll and an incoming meeting event while both controls hold drafts.
+    await page.waitForTimeout(5200);
+    const afterPoll = await page.locator('#live-chat-form input').evaluate(input => ({value: input.value,
+      start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input}));
+    assert.deepEqual(afterPoll, {value: draft, start: 8, end: 14, focused: true});
+    assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
+      [...select.selectedOptions].map(option => option.value)), ['finance']);
+    await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1').dispatchEvent(
+      new MessageEvent('meeting.chat', {data: '{}', lastEventId: '8'})));
+    await page.waitForTimeout(400);
+    const afterEvent = await page.locator('#live-chat-form input').evaluate(input => ({value: input.value,
+      start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input}));
+    assert.deepEqual(afterEvent, {value: draft, start: 8, end: 14, focused: true});
+    assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
+      [...select.selectedOptions].map(option => option.value)), ['finance']);
+    await page.locator('#live-chat-form button').click();
+    const chatCalls = calls.filter(([op]) => op === 'chat');
+    assert.equal(chatCalls.length, 1);
+    assert.equal(chatCalls[0][1].text, draft);
+    assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
+      [...select.selectedOptions].map(option => option.value)), ['finance']);
     await page.locator('#live-bot-picker button').click();
     assert(calls.some(([op, body]) => op === 'bots' && body.bots.includes('finance')));
-    await page.locator('#live-chat-form input').fill('Good morning');
-    await page.locator('#live-chat-form button').click();
-    assert(calls.some(([op, body]) => op === 'chat' && body.text === 'Good morning'));
     await page.locator('[data-live-control=pause]').click();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));
     await page.locator('[data-live-control=resume]').click();

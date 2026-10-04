@@ -658,6 +658,11 @@ class Execution:
         if not privacy.message_readable(c, "bot:" + row["bot"], msg):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
             return {"attempt": None}
+        live_ref = (msg.get("refs") or {}).get("live_meeting")
+        if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
+                and msg.get("to_actor") == "bot:" + row["bot"]):
+            from .live_meetings import claim_runner_turn
+            claim_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"])
         conv = H.conversation(c, msg["conversation_id"])
         task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
         token = secrets.token_urlsafe(32)
@@ -1070,6 +1075,13 @@ class Execution:
         requeue = limited or retryable or silent or rejected
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "queued" if requeue else "uncertain", row["job_id"]))
+        live_ref = (msg.get("refs") or {}).get("live_meeting")
+        if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
+                and msg.get("to_actor") == "bot:" + row["bot"]):
+            from .live_meetings import complete_runner_turn
+            complete_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"],
+                                 body.text if body.outcome == "completed" else "", body.outcome,
+                                 requeued=requeue)
         turn_task = H.message_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():

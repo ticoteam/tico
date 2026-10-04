@@ -1,6 +1,6 @@
 # Live Meetings API and Recorder event contract
 
-This is Recorder wire contract revision 3 for the Tico Live Meetings API v2 server path in PR #92.
+This is Recorder wire contract revision 5 for the Tico Live Meetings API v2 server path in PR #92.
 It handles transcript text only. Raw audio is never sent to or stored by Tico. Request and response
 shapes below are part of the contract; change them only with a reviewed contract update.
 
@@ -34,20 +34,20 @@ fields are listed below.
 
 | Method and path | Access | Purpose |
 | --- | --- | --- |
-| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?}`. Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
+| `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?}`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
 | `GET /api/v2/live-meetings` | Human | List live and paused meetings newest first; ended meetings are excluded. |
 | `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots visible to this human are included; `bots` may be empty. |
-| `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, window traces, named-bypass traces, and pending/replied turns. |
+| `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, window traces, named-bypass traces, and turn outcomes. |
 | `POST /api/v2/live-meetings/{id}/chunks` | Connector | Append `{chunks:[{seq,speaker,start_ms,end_ms,text}]}` (1–500 chunks). Seq starts at 1 and is contiguous. HTTP 200 body is exactly `{"id":"<live-id>","state":"live|paused|ended","seq":<highest-seq>,"accepted":[<seq>,...],"event_id":<meeting-event-id>}`. Identical duplicate seq is acknowledged without a new event; a different payload for an existing seq returns `409` with `error.code = "sequence_conflict"`; a gap returns `409` with `error.code = "sequence_gap"` and `error.expected_seq`. New chunks are accepted only in `live`; an already-stored identical retry may still be acknowledged while paused or ended. |
 | `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
 | `POST /api/v2/live-meetings/{id}/join` | Human | Join the connected meeting. Joined people can chat; all company humans can read after connect. |
-| `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. An attached bot must claim its turn first and name it on reply. A transcript reference links chat/replies to the captured words. Named routing is suppressed during pause. |
+| `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. Named routing is suppressed during pause. |
 | `POST /api/v2/live-meetings/{id}/bots` | Joined human | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
 | `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. They do not stop Recorder's local device capture, local recording, or review. Recorder must stop uploading chunks while paused/disconnected; local capture/review behavior remains under Recorder and the person. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
 | `POST /api/v2/live-meetings/{id}/finalize` | Connector | Finalize an ended meeting with transcript text through the existing meeting import path, using stable source `tico-live` and external id equal to the live meeting id. HTTP 200 body is exactly `{"id":"<live-id>","meeting_id":"<imported-meeting-id>","existing":<bool>,"changed":<bool>,"event_id":<meeting-event-id>}`. `meeting_id` is the imported Tico meeting id to use when linking reviewed meeting items. Finalization uses latest corrected text. A later finalize call with a fresh idempotency key returns the same `meeting_id` with `existing:true` and `changed:false`; retrying with the same key/body replays the original saved response. |
 | `GET /api/v2/live-meetings/{id}/events?after={event_id}` | Company human, or attached bot | Authenticated SSE replay of persisted meeting events after a monotonically increasing meeting-local id. Recorder's main process must attach its existing Bearer credential. Use `after` or the `Last-Event-ID` header; when a positive `after` is supplied it takes precedence, otherwise `Last-Event-ID` is used. Resume from the last fully processed event id. The server sends keepalives and closes the stream after at most 55 one-second polling cycles; reconnect from the cursor. |
-| `GET /api/v2/live-meetings/{id}/turns` | Attached bot | Pull pending concurrent turns and their meeting-scoped transcript/chat context. |
-| `POST /api/v2/live-meetings/{id}/turns/{turn_id}/claim` | Attached bot | Claim its pending turn before composing a reply. |
+| `GET /api/v2/live-meetings/{id}/turns` | Attached bot | Pull pending turns and their meeting-scoped transcript/chat context for clients that execute meeting turns directly. |
+| `POST /api/v2/live-meetings/{id}/turns/{turn_id}/claim` | Attached bot | Claim a pending turn before composing a reply through the meeting API. |
 
 Initial Recorder setup calls connect once with a stable client id, then sends initial transcript
 and later transcript segments through the same ordered chunk route. A retry reuses the same client
@@ -57,7 +57,7 @@ event is committed with the state change it describes. Reconnect from the last f
 replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
-`state`, `owner_actor`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `threshold`, `created`,
+`state`, `owner_actor`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`, `created`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, and `router`.
 The `router` object contains `windows`, `turns`, and `bypasses`. Use the route-specific acknowledgments
 above for writes; the view is a snapshot, not an acknowledgment receipt.
@@ -69,7 +69,7 @@ schemas; nullable values are present as JSON `null` where noted:
 
 | Event | Exact `data` object |
 | --- | --- |
-| `meeting.state` on connect | `{state:"live",connected_by:<actor>,visibility:"team",window_ms:<integer>}` |
+| `meeting.state` on connect | `{state:"live",connected_by:<actor>,visibility:"team",window_ms:<integer>,cooldown_ms:<integer>,reply_cap:<integer>}` |
 | `meeting.state` on control | `{state:"paused|live|ended",by:<actor>,action:"pause|disconnect|resume|end"}` |
 | `meeting.chunk` | `{seq:<integer>,speaker:<string>,start_ms:<integer>,end_ms:<integer>,text:<string>,revision:1}` |
 | `meeting.chunk_corrected` | `{seq:<integer>,revision:<integer>,speaker:<string>,start_ms:<integer>,end_ms:<integer>,text:<string>,corrected_by:<actor>}` |
@@ -78,8 +78,11 @@ schemas; nullable values are present as JSON `null` where noted:
 | `meeting.chat` | `{id:<chat-id>,actor:<actor>,role:"human",text:<string>,at_ms:<integer|null>,transcript_seq:<integer|null>}` |
 | `meeting.bot_turn` | `{turns:[{id:<turn-id>,bot:<slug>,window_index:<integer|null>,transcript_seq:<integer|null>},...],source_key:<string>}` |
 | `meeting.bot_turn_claimed` | `{turn_id:<turn-id>,bot:<slug>}` |
+| `meeting.bot_turn_skipped` | `{turn_id:<turn-id>,bot:<slug>,reason:<string>}` |
 | `meeting.router` named bypass | `{bypass:"named",source_key:<string>,targets:[<slug>,...],skipped:[{bot:<slug>,reason:<string>},...],trace:{decision:"bypassed",reason:"named mention"}}` |
-| `meeting.router` window result | `{window_index:<integer>,start_ms:<integer>,end_ms:<integer>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}` |
+| `meeting.router` window result | `{window_index:<integer>,start_ms:<integer>,end_ms:<integer>,outcome:"route|pass",decision_ms:<integer|null>,trace:<router trace object>}`. Empty elapsed windows record `trace.reason:"no_transcript_text"` with empty `selected`, `skipped`, and `chunk_range`; an ended partial final window records `trace.reason:"meeting_ended_final_window"` and never dispatches a new turn. |
+| `meeting.router` bot PASS/skip | `{turn_id:<turn-id>,bot:<slug>,window_index:<integer|null>,outcome:"pass",trace:{reason:<reason>,source_key:<string>}}`; `reason` is `bot_pass`, `empty_bot_reply`, a terminal meeting reason, or a non-requeued runner outcome. |
+| `meeting.router` bot reply | `{turn_id:<turn-id>,bot:<slug>,window_index:<integer|null>,outcome:"reply",trace:{reason:"bot_replied",source_key:<string>}}` |
 | `meeting.bot_reply` | `{id:<chat-id>,actor:<actor>,text:<string>,at_ms:<integer>,transcript_seq:<integer|null>,turn_id:<turn-id>,window_index:<integer|null>}` |
 | `meeting.finalized` | `{id:<live-id>,meeting_id:<imported-meeting-id>,source:"tico-live",external_id:<live-id>}` |
 
@@ -89,22 +92,30 @@ should reconnect with the same identity after refreshing credentials. For a comp
 `chunk_range` (`[first_seq,last_seq]`); a provider-backed decision also records `model`, `ms`,
 `answers` (bot slug to score), and `threshold`. Fail-closed traces carry a `reason` such as
 `rehearsal_mode`, `daily_decision_budget`, `decisions service unconfigured`, or `decision_error`
-(the latter also includes the exception class in `error`). An interrupted in-flight decision emits
+(the latter also includes the exception class in `error`). A bot response of exactly `PASS`
+(optionally followed by `.` or `!`) marks its existing turn skipped with reason `bot_pass`, emits the
+router trace, and creates no Chat message. Ending a meeting marks open turns skipped and suppresses
+their queued jobs. An interrupted in-flight decision emits
 `{window_index,outcome:"pass",trace:{reason:"interrupted decision; not retried"}}` without window
-timing fields. PASS never creates a chat message or bot turn.
+timing fields. A router PASS creates no bot turn; a bot PASS settles its existing turn without
+creating visible chat.
 
 ## Router timing
 
 The server records the routing window start/end, model time, outcome, selected/busy bots and result
-trace. Use the 15-second window when Jev is attached; without Jev use a configurable value between
-30 and 45 seconds. At most one meeting-route decision is made per window. A 60-second cooldown and
-three automated replies per window apply; busy bots are skipped. A speaker addressing a bot by name
+trace. Every elapsed window without transcript text gets a hidden PASS trace with reason
+`no_transcript_text`; it does not call the decisions service. Use the 15-second window when Jev is attached; without Jev use a configurable value between
+30 and 45 seconds. At most one meeting-route decision is made per window. Each meeting stores its
+reply cap (1–20, default 3) and cooldown (0–3600 seconds, default 60); busy bots are skipped. A speaker addressing a bot by name
 and a direct chat message bypass window collection. PASS is persisted as a hidden router outcome.
 
-Automated turns may run concurrently, but each reply is attached to the originating meeting and
-transcript position. Router execution never creates external posts or action items. People review
-any future action-item proposal separately. In Tico rehearsal mode, routing records a hidden PASS
-without calling a decision provider.
+Each selected bot gets a durable normal Tico runner job containing only that meeting's title,
+transcript (up to 20 latest chunks through the routed sequence), and recent chat (up to 12 messages);
+source texts are clipped to 800 characters per entry. The runner lease claims the meeting turn and
+its completed response settles that same turn. Automated turns may run concurrently, but each reply
+is attached to the originating meeting and transcript position. Router execution never creates
+external posts or action items. People review any future action-item proposal separately. In Tico
+rehearsal mode, routing records a hidden PASS without calling a decision provider.
 
 ## Replay and lifecycle
 
@@ -113,8 +124,11 @@ no audio is involved. The Recorder can resume SSE by event id and can safely ret
 network loss. Pause/disconnect stop *server live sharing* while preserving received text; they do not
 stop or delete local device capture, local recording, or local review. Recorder must not stream new
 chunks while Tico is paused. Resume is an explicit user/server control that permits uploads to
-continue from the last acknowledged sequence. End prevents new chunks and allows one stable import
-finalization. The existing `recording_source_refs(source, resource_type, external_id)` uniqueness
+continue from the last acknowledged sequence. End prevents new chunks, marks pending or claimed bot
+turns as skipped, cancels queued runner jobs, and records the unprocessed final window as a hidden
+PASS instead of creating terminal work. A decision already in progress when End arrives is discarded
+as a hidden PASS and cannot dispatch new turns. It then allows one stable import finalization. The existing
+`recording_source_refs(source, resource_type, external_id)` uniqueness
 remains the finalization idempotency boundary.
 
 Recorder integration requirements remain client-side and are not claimed as implemented by PR #92:

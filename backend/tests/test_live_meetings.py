@@ -10,7 +10,7 @@ from starlette.requests import Request
 from backend import live_meetings as live_meetings_module
 from backend.auth import Identity
 from backend.store import H, digest, encode
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
 
 
 @pytest.fixture
@@ -28,8 +28,9 @@ def live(api):
     return api
 
 
-def connect(api, *, title="Replay", client_id=None, fallback=30):
-    body = {"title": title, "fallback_window_seconds": fallback}
+def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, cooldown_seconds=60):
+    body = {"title": title, "fallback_window_seconds": fallback,
+            "reply_cap": reply_cap, "cooldown_seconds": cooldown_seconds}
     if client_id:
         body["client_id"] = client_id
     return post(api, "live-meetings", body)
@@ -128,6 +129,182 @@ def test_meeting_only_bot_read_and_parallel_turns_with_transcript_link(live):
     with live.app.state.store.read() as c:
         meeting_bots = c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=?", (mid,)).fetchall()
         assert {row[0] for row in meeting_bots} == {"ops", "finance"}
+        direct_jobs = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                (mid,)).fetchone()[0]
+        assert direct_jobs == 2
+        direct_job_states = c.execute("SELECT DISTINCT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                      "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                      (mid,)).fetchall()
+        assert {row[0] for row in direct_job_states} == {"cancelled"}
+
+
+def test_live_turns_use_concurrent_runner_jobs_and_hidden_pass(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops", "finance")
+    chunk(live, mid, 1, 0, 30_000, "The rollout needs a reliability review")
+    routed = get(live, f"live-meetings/{mid}")
+    turns = {turn["bot"]: turn for turn in routed["router"]["turns"]}
+    assert set(turns) == {"ops", "finance"}
+
+    machine = runner(live)
+    for slug in ("ops", "finance"):
+        assign(live, machine, slug)
+    ready(live, machine, ["ops", "finance"])
+    attempts = {}
+    for slug in ("ops", "finance"):
+        attempt = post(live, "jobs/claim", {"bot": slug}, token=machine["token"])
+        assert attempt["attempt"]["bot"] == slug
+        attempts[slug] = attempt["attempt"]
+        assert "The rollout needs a reliability review" in attempt["attempt"]["message"]["body"]
+        assert turns[slug]["id"] in attempt["attempt"]["message"]["body"]
+    assert len({attempt["id"] for attempt in attempts.values()}) == 2
+    with live.app.state.store.read() as c:
+        assert {row["state"] for row in c.execute("SELECT state FROM attempts WHERE id IN (?,?)",
+                                                  tuple(attempt["id"] for attempt in attempts.values()))} == {"leased"}
+    for attempt in attempts.values():
+        post(live, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-live-turn"},
+             token=machine["token"])
+
+    post(live, f"attempts/{attempts['ops']['id']}/complete",
+         {"outcome": "completed", "text": "I will check the reliability risks.", "last_seq": 0},
+         token=machine["token"])
+    post(live, f"attempts/{attempts['finance']['id']}/complete",
+         {"outcome": "completed", "text": "PASS", "last_seq": 0}, token=machine["token"])
+    final = get(live, f"live-meetings/{mid}")
+    assert [message["text"] for message in final["chat"]] == ["I will check the reliability risks."]
+    states = {turn["bot"]: (turn["status"], turn["skip_reason"]) for turn in final["router"]["turns"]}
+    assert states["ops"] == ("replied", "")
+    assert states["finance"] == ("skipped", "bot_pass")
+    traces = [event for event in final["router"]["bypasses"]]
+    assert traces == []
+    with live.app.state.store.read() as c:
+        pass_events = [json.loads(row[0]) for row in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.router'", (mid,))]
+        assert any(item.get("turn_id") == turns["finance"]["id"] and item["outcome"] == "pass"
+                   and item["trace"]["reason"] == "bot_pass" for item in pass_events)
+        assert c.execute("SELECT count(*) FROM live_meeting_chat WHERE meeting_id=? AND text='PASS'",
+                         (mid,)).fetchone()[0] == 0
+
+
+def test_direct_bot_pass_ack_has_no_visible_chat_message(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    post(live, f"live-meetings/{mid}/chat", {"text": "Ops, please check this"})
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+    post(live, f"live-meetings/{mid}/turns/{turn['id']}/claim", {}, token="ops-live")
+    response = post(live, f"live-meetings/{mid}/chat", {"text": "PASS", "turn_id": turn["id"]},
+                    token="ops-live")
+    assert set(response) == {"message", "event_id", "outcome"}
+    assert response["message"] is None and response["outcome"] == "pass"
+    assert isinstance(response["event_id"], int)
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["router"]["turns"][0]["status"] == "skipped"
+    assert [message["text"] for message in detail["chat"]] == ["Ops, please check this"]
+
+
+def test_gap_windows_have_no_text_pass_traces_without_model_calls(live):
+    calls = []
+    live.app.state.live_meeting_decider = lambda state, questions, label: calls.append(state["window_index"]) or {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.1, "confidence": 0.95} for key in questions}}
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    response = live.post("/api/v2/live-meetings/" + mid + "/chunks", json={"chunks": [
+        {"seq": 1, "speaker": "Ana", "start_ms": 0, "end_ms": 1000, "text": "Start"},
+        {"seq": 2, "speaker": "Ana", "start_ms": 90_000, "end_ms": 91_000, "text": "After the gap"},
+    ]}, headers=headers())
+    assert response.status_code == 200, response.text
+    detail = get(live, f"live-meetings/{mid}")
+    assert calls == [0]
+    gaps = [window for window in detail["router"]["windows"] if window["window_index"] in (1, 2)]
+    assert len(gaps) == 2
+    assert all(window["outcome"] == "pass" and window["trace"]["reason"] == "no_transcript_text"
+               for window in gaps)
+    assert all(window["trace"]["chunk_range"] == [] for window in gaps)
+
+
+def test_per_meeting_reply_cap_cooldown_and_validation(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    meeting = connect(live, reply_cap=1, cooldown_seconds=5)
+    mid = meeting["id"]
+    assert meeting["reply_cap"] == 1 and meeting["cooldown_ms"] == 5000
+    attach(live, mid, "ops", "finance")
+    chunk(live, mid, 1, 0, 30_000, "A window for the team")
+    detail = get(live, f"live-meetings/{mid}")
+    assert len([turn for turn in detail["router"]["turns"] if turn["status"] == "pending"]) == 1
+    assert detail["router"]["windows"][0]["trace"]["skipped"] == [{"bot": "ops", "reason": "cap"}]
+    first = detail["router"]["turns"][0]
+    post(live, f"live-meetings/{mid}/turns/{first['id']}/claim", {}, token="finance-live")
+    post(live, f"live-meetings/{mid}/chat", {"text": "Reviewed", "turn_id": first["id"]},
+         token="finance-live")
+    post(live, f"live-meetings/{mid}/chat", {"text": "Finance, any follow-up?"})
+    after_cooldown = get(live, f"live-meetings/{mid}")
+    assert after_cooldown["router"]["bypasses"][-1]["skipped"] == [{"bot": "finance", "reason": "cooldown"}]
+    chunk(live, mid, 2, 40_000, 41_000, "Finance, please follow up")
+    after_window = get(live, f"live-meetings/{mid}")
+    assert any(turn["bot"] == "finance" and turn["status"] == "pending"
+               for turn in after_window["router"]["turns"])
+    assert live.post("/api/v2/live-meetings", json={"title": "Invalid cap", "reply_cap": 21},
+                     headers=headers()).status_code == 422
+    assert live.post("/api/v2/live-meetings", json={"title": "Invalid cooldown", "cooldown_seconds": 3601},
+                     headers=headers()).status_code == 422
+
+
+def test_end_cancels_open_turns_and_records_final_window_pass(live):
+    calls = []
+    live.app.state.live_meeting_decider = lambda *args: calls.append(args)
+    queued = connect(live, title="Open job")
+    attach(live, queued["id"], "ops")
+    post(live, f"live-meetings/{queued['id']}/chat", {"text": "Ops, please review"})
+    assert get(live, f"live-meetings/{queued['id']}")["router"]["turns"][0]["status"] == "pending"
+    ended = post(live, f"live-meetings/{queued['id']}/control", {"action": "end"})
+    assert ended["router"]["turns"][0]["status"] == "skipped"
+    assert ended["router"]["turns"][0]["skip_reason"] == "meeting_ended_before_reply"
+    with live.app.state.store.read() as c:
+        states = [row[0] for row in c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                                               "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                               (queued["id"],))]
+        assert states == ["cancelled"]
+
+    final_window = connect(live, title="Partial final window")
+    attach(live, final_window["id"], "ops")
+    chunk(live, final_window["id"], 1, 0, 1000, "Tail text")
+    finished = post(live, f"live-meetings/{final_window['id']}/control", {"action": "end"})
+    assert finished["router"]["windows"][0]["outcome"] == "pass"
+    assert finished["router"]["windows"][0]["trace"]["reason"] == "meeting_ended_final_window"
+    assert finished["router"]["turns"] == []
+    assert calls == []
+
+
+def test_end_during_inflight_window_discards_decision_without_turns(live):
+    meeting = connect(live)
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    decisions = []
+
+    def decide(state, questions, label):
+        decisions.append(state["window_index"])
+        post(live, f"live-meetings/{mid}/control", {"action": "end"})
+        return {"model": "synthetic-decider", "ms": 1,
+                "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+
+    live.app.state.live_meeting_decider = decide
+    chunk(live, mid, 1, 0, 30_000, "Decision is in flight")
+    ended = get(live, f"live-meetings/{mid}")
+    assert ended["state"] == "ended"
+    assert decisions == [0]
+    assert ended["router"]["turns"] == []
+    assert ended["router"]["windows"][0]["outcome"] == "pass"
+    assert ended["router"]["windows"][0]["trace"]["reason"] == "meeting_ended_during_decision"
 
 
 def test_router_windows_cap_cooldown_and_hidden_pass_trace(live):

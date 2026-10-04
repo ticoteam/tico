@@ -222,3 +222,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_turns (
 );
 CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meeting_id,bot,status,created);
 """
+
+# Per-meeting routing limits are configurable from the connect request. Keep this separate from
+# LIVE_MEETINGS_SCHEMA: that migration has shipped, and migration indexes are append-only.
+LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA = "ALTER TABLE live_meetings ADD COLUMN reply_cap INTEGER NOT NULL DEFAULT 3 CHECK (reply_cap BETWEEN 1 AND 20);"
