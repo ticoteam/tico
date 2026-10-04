@@ -147,6 +147,12 @@ is stamped from the tag. Every build uses the same updater signing key as the ge
 with `team.tico.env.<stable UUID>` as its bundle ID, its own name and PNG icon, its own server
 address, and `<runner_url or url>/download/latest.json` as the update endpoint.
 
+The company shell uses the selected hub's `/download/latest.json` at runtime so its update check
+can reuse the signed-in WebView session. It sends the Access cookie only to that hub origin,
+refuses cross-origin artifacts and does not follow redirects. Tauri still verifies each updater
+signature before installation. An older shell that cannot reach the protected feed must be
+replaced from the team's signed-in **Download** page; see [Desktop app](desktop.md#your-companys-app).
+
 Keep the JSON list in the private repository Actions **secret** `TICO_COMPANY_APPS`. A secret is
 used instead of an Actions variable because the runner prints variables in its pre-step environment
 banner before masking commands can run. Company names and URLs must never enter repository

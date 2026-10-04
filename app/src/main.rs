@@ -622,18 +622,36 @@ async fn check_for_update(app: &App) {
     let selected = connection(app);
     if !config::is_generic() && selected.as_ref().map(|c| c.is_local()).unwrap_or(true) { return; }
     let builder = app.updater_builder();
-    let configured = app.config().plugins.0.get("updater").and_then(|p| p.get("endpoints"))
-        .and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str);
-    let endpoint = if config::is_generic() {
-        Some(config::GENERIC_UPDATER.parse().unwrap())
-    } else if configured == Some(config::GENERIC_UPDATER) {
-        // A direct cargo build with TICO_HUB_URL also retains the hub updater; scripts can
-        // override this with the separate, public runner hostname.
-        selected.map(|c| c.hub.join("download/latest.json").unwrap())
-    } else { None };
-    let updater = match if let Some(endpoint) = endpoint {
-        builder.endpoints(vec![endpoint]).and_then(|b| b.build())
-    } else { builder.build() } {
+    let company_endpoint = if config::is_generic() { None } else {
+        let Some(connection) = selected.as_ref() else { return };
+        Some(connection.hub.join("download/latest.json").unwrap())
+    };
+    let endpoint = company_endpoint.clone().or_else(|| Some(config::GENERIC_UPDATER.parse().unwrap()));
+    let updater_result = if let (Some(connection), Some(endpoint)) = (selected.as_ref(), company_endpoint.as_ref()) {
+        // Only the selected hub's Access cookie is attached. The updater's redirect policy is
+        // disabled below, and the artifact origin is checked again before its authenticated fetch.
+        if connection.hub.scheme() != "https" {
+            log::warn!("company updater requires an HTTPS hub origin");
+            return;
+        }
+        let client = Client::new(connection.clone());
+        let Some(cookie) = client.cookie_header(app, endpoint) else {
+            log::debug!("company updater is waiting for a signed-in hub session");
+            return;
+        };
+        let Some(cookie) = hub::company_cookie_header(&connection.hub, endpoint, &cookie) else {
+            log::warn!("company updater endpoint is outside the selected hub origin");
+            return;
+        };
+        let Ok(cookie) = cookie.to_str() else { return };
+        builder.endpoints(vec![endpoint.clone()])
+            .and_then(|b| b.header("Cookie", cookie))
+            .map(|b| b.configure_client(hub::no_redirects))
+            .and_then(|b| b.build())
+    } else {
+        builder.endpoints(vec![endpoint.unwrap()]).and_then(|b| b.build())
+    };
+    let updater = match updater_result {
         Ok(updater) => updater,
         Err(e) => { log::debug!("updater unavailable: {e}"); return; }
     };
@@ -642,6 +660,12 @@ async fn check_for_update(app: &App) {
         Ok(None) => return,
         Err(e) => { log::debug!("update check: {e}"); return; }
     };
+    if let Some(endpoint) = company_endpoint.as_ref() {
+        if !hub::same_origin(endpoint, &update.download_url) {
+            log::warn!("company updater artifact is outside the selected hub origin");
+            return;
+        }
+    }
     log::info!("update {} available; installing", update.version);
     if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
         log::warn!("update failed: {e}");

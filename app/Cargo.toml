@@ -21,6 +21,8 @@ tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Keep this alias aligned with tauri-plugin-updater's reqwest 0.13 ClientBuilder hook.
+reqwest-updater = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["time", "rt-multi-thread", "macros", "sync"] }
 url = "2"
 log = "0.4"

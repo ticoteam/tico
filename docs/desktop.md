@@ -57,6 +57,11 @@ so its app can coexist with another company's app and the generic Tico app. The 
 `GET /api/download/{mac|windows|linux}` returns `app_kind: company` or `generic`; a frontend
 can show **Download Tico for <team name>** for a company build.
 
+If an older company app does not update itself, sign in to your team's Tico page, download the
+company app again and install it over the existing copy. Keep the app's saved data; its stable
+bundle ID preserves the selected server and sign-in state. The replacement shell uses the signed-in
+hub session for protected update files. Downloads remain behind Cloudflare Access.
+
 Owners can set the public team logo in **Settings → Team → Choose icon**, or with
 `hub team icon logo.png`, using their owner credential
 (`HUB_API_URL` and `HUB_TOKEN`). The API is `POST /api/v2/team/icon`, with an opaque binary PNG,
