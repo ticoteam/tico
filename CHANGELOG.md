@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-04
+
 ### Fixed
 - Let authorized development tests use disposable synthetic databases while keeping live team state behind the shared API and honoring task-specific restrictions.
 - BotOps accepts assigned bot-maintenance work with the requester's existing rights and records its own blockers without requiring a new human instruction. Notices still cannot override a human request.
@@ -1851,7 +1853,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.19...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.20...HEAD
+[0.3.20]: https://github.com/ticoteam/tico/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/ticoteam/tico/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/ticoteam/tico/compare/v0.3.17...v0.3.18
 [0.3.17]: https://github.com/ticoteam/tico/compare/v0.3.16...v0.3.17
