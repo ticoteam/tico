@@ -117,6 +117,101 @@ def metadata(client, name):
     return repo
 
 
+def _detail(link):
+    value = link.get('detail_json') or '{}'
+    return json.loads(value) if isinstance(value, str) else dict(value)
+
+
+def _patch_link(client, task, link_id, **fields):
+    return client.patch(f'tasks/{task}/links/{link_id}', fields)
+
+
+def _verify_worktree(path, workspace, repo, branch, env):
+    if not (path / '.git').is_file():
+        raise ValueError('Tracked path is not a Git worktree; left as it is')
+    origin = git(path, 'config', '--get', 'remote.origin.url', env=env).stdout.strip()
+    matches = git_repository.matches(origin, repo.get('full_name') or repo['repo']) if repo.get('machine_git') else git_credentials._same_repository(origin, repo.get('full_name') or repo['repo'])
+    if not matches:
+        raise ValueError('Worktree repository does not match its task link; left as it is')
+    if git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip() != branch:
+        raise ValueError('Worktree branch does not match its task link; left as it is')
+    common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=env).stdout.strip()).resolve()
+    if Path(workspace).resolve() not in common.parents:
+        raise ValueError('Worktree base must be inside the team workspace')
+    return common.parent
+
+
+def _porcelain_records(path, env):
+    done = isolation.run([*safe_git.prefix(path), '-C', str(path), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+                         env=safe_git.environment(env), capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL, timeout=120)
+    if done.returncode:
+        raise ValueError('Could not verify checkout contents; left as they are')
+    raw = done.stdout
+    return [record for record in raw.split('\0') if record]
+
+
+def _resume_interrupted_checkout(path, workspace, repo, branch, expected_head, env):
+    """Repair only an explicitly marked checkout with the exact expected commit and deletion-only damage."""
+    if not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected_head or ''):
+        raise ValueError('Interrupted checkout has no valid expected commit; left as it is')
+    _verify_worktree(path, workspace, repo, branch, env)
+    if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected_head:
+        raise ValueError('Interrupted checkout moved from its recorded commit; left as it is')
+    records = _porcelain_records(path, env)
+    if records:
+        if any(record[:2] != ' D' or len(record) < 4 for record in records):
+            raise ValueError('Interrupted checkout has user changes; kept worktree for manual recovery')
+        # The explicit initialization marker and exact original HEAD establish this as an
+        # unfinished materialization. Restore only paths Git reports as missing; never touch edits.
+        git(path, 'restore', '--worktree', '--source=HEAD', '--', '.', env=env)
+        if _porcelain_records(path, env):
+            raise ValueError('Checkout remains incomplete after restoring missing files; kept worktree')
+
+
+def _checkout_target(base, branch, default, env):
+    local = 'refs/heads/' + branch
+    remote = 'refs/remotes/origin/' + default
+    target = local if git(base, 'show-ref', '--verify', local, env=env, check=False).returncode == 0 else remote
+    return target, git(base, 'rev-parse', '--verify', target, env=env).stdout.strip()
+
+
+def _create_or_resume_checkout(path, workspace, base, default, link, repo, task, env, client):
+    state = link.get('checkout_state') or 'queued'
+    expected = link.get('expected_head')
+    target = link.get('checkout_target')
+    branch = checked_branch(link['branch'])
+    if state == 'initializing' and expected and target:
+        if target not in ('refs/heads/' + branch, 'refs/remotes/origin/' + default):
+            raise ValueError('Interrupted checkout target does not match its task; left as it is')
+        target_head = git(base, 'rev-parse', '--verify', target, env=env, check=False)
+        if target_head.returncode or target_head.stdout.strip() != expected:
+            raise ValueError('Task branch changed since checkout initialization; left as it is')
+    elif state == 'queued' or state == 'initializing':
+        target, expected = _checkout_target(base, branch, default, env)
+        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
+                    checkout_state='initializing', expected_head=expected, checkout_target=target)
+    else:
+        raise ValueError('Checkout is not in a resumable initialization state; leave it unchanged')
+
+    if path.exists():
+        _resume_interrupted_checkout(path, workspace, repo, branch, expected, env)
+    else:
+        isolation.mkdir(path.parent, mode=0o755)
+        if target == 'refs/heads/' + branch:
+            git(base, 'worktree', 'add', str(path), branch, env=env)
+        else:
+            git(base, 'worktree', 'add', '--no-track', '-b', branch, str(path), target, env=env)
+        if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected:
+            raise ValueError('New checkout does not match its recorded commit; kept worktree')
+        if _porcelain_records(path, env):
+            raise ValueError('New checkout is incomplete or has user changes; kept worktree')
+        _verify_worktree(path, workspace, repo, branch, env)
+    _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
+                checkout_state='checkout_ready', expected_head=expected, checkout_target=target)
+    return expected, target
+
+
 def command(client, operation, value, task=None):
     workspace = os.environ.get('HUB_WORKSPACE')
     task = task or os.environ.get('HUB_TASK_ID')
@@ -128,15 +223,34 @@ def command(client, operation, value, task=None):
             repo = metadata(client, value)
             rows = client.get(f'tasks/{task}/links')
             rows = rows.get('links', []) if isinstance(rows, dict) else rows
-            candidates = [r for r in rows if r['kind'] == 'worktree' and (r.get('repo') or '').lower() == value.lower() and r.get('state') == 'present']
-            candidates.sort(key=lambda r: not json.loads(r.get('detail_json') or '{}').get('setup_pending'))
+            candidates = [r for r in rows if r['kind'] == 'worktree' and (r.get('repo') or '').lower() == value.lower()
+                          and r.get('state') in ('present', 'pending')]
+            candidates.sort(key=lambda r: not (_detail(r).get('setup_pending') or _detail(r).get('checkout_state') in
+                                                ('checkout_ready', 'setup_failed', 'setup_running', 'initializing')))
             row = candidates[0] if candidates else None
             if not row:
-                raise ValueError('No present worktree for this repository on the task')
+                raise ValueError('No worktree needing setup for this repository on the task')
             path = safe_path(workspace, row['path'])
             with locked(workspace, row['path']):
-                setup(path, repo.get('setup_command'), env)
-                return client.patch(f'tasks/{task}/links/{row["id"]}', {'setup_pending': False})
+                detail = _detail(row)
+                state = detail.get('checkout_state')
+                if state == 'initializing':
+                    base, default = repositories.worktree_base(workspace, repo, env)
+                    _create_or_resume_checkout(path, workspace, base, default,
+                                               {**row, 'link_id': row['id'], **detail}, repo, task, env, client)
+                    detail['checkout_state'] = 'checkout_ready'
+                elif state in ('queued', 'unverified'):
+                    raise ValueError('Checkout is not verified; run hub task worktree add again or inspect it before setup')
+                if not path.exists():
+                    raise ValueError('Worktree is missing; restore it before setup')
+                _verify_worktree(path, workspace, repo, row['branch'], env)
+                _patch_link(client, task, row['id'], state='pending', setup_pending=True, checkout_state='setup_running')
+                try:
+                    setup(path, repo.get('setup_command'), env)
+                except (ValueError, OSError, subprocess.SubprocessError):
+                    _patch_link(client, task, row['id'], state='pending', setup_pending=True, checkout_state='setup_failed')
+                    raise
+                return _patch_link(client, task, row['id'], state='present', setup_pending=False, checkout_state='ready')
         if operation == 'add':
             disk_floor(workspace)
             repo = metadata(client, value)
@@ -146,29 +260,65 @@ def command(client, operation, value, task=None):
             with locked(workspace, link['path']):
                 checked_branch(link['branch'])
                 path = safe_path(workspace, link['path'])
+                state = link.get('checkout_state')
+                setup_pending = bool(link.get('setup_pending', False))
+                if state is None and path.exists():
+                    _verify_worktree(path, workspace, repo, link['branch'], env)
+                    if setup_pending:
+                        raise ValueError('Legacy worktree has pending setup but no initialization record; inspect it before retry')
+                    return {**link, 'workspace_path': str(path),
+                            'warning': 'Legacy worktree has no initialization record; left unchanged'}
+                if state is None:
+                    state = 'queued'
                 if path.exists():
-                    origin = git(path, 'config', '--get', 'remote.origin.url', env=env).stdout.strip()
-                    matches = git_repository.matches(origin, repo['full_name']) if repo.get('machine_git') else git_credentials._same_repository(origin, repo['full_name'])
-                    if not (path / '.git').is_file() or not matches:
-                        raise ValueError('Worktree path already exists and does not match the repository')
-                    if git(path, 'symbolic-ref', '--short', 'HEAD').stdout.strip() != link['branch']:
-                        raise ValueError('Existing worktree uses a different branch; attach it instead')
-                    common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()).resolve()
-                    if Path(workspace).resolve() not in common.parents:
-                        raise ValueError('Worktree base must be inside the team workspace')
+                    if state == 'queued':
+                        raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
+                    base = _verify_worktree(path, workspace, repo, link['branch'], env)
+                    detail = {**link, **_detail(link)}
+                    if state == 'initializing':
+                        default = repo.get('default_branch') or git(base, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD', env=env, check=False).stdout.strip().removeprefix('origin/')
+                        _create_or_resume_checkout(path, workspace, base, default,
+                                                   {**link, **detail, 'link_id': link['link_id']},
+                                                   repo, task, env, client)
+                        state = 'checkout_ready'
+                    elif state in ('setup_running', 'setup_failed'):
+                        raise ValueError('Setup did not finish; use hub task worktree setup to retry explicitly')
+                    elif state == 'checkout_ready':
+                        expected = link.get('expected_head') or detail.get('expected_head')
+                        if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected or _porcelain_records(path, env):
+                            raise ValueError('Checkout changed before setup; kept worktree for manual recovery')
+                    elif state != 'ready':
+                        raise ValueError('Worktree initialization is not verified; kept it unchanged')
                 else:
                     base, default = repositories.worktree_base(workspace, repo, env)
+                    if state not in ('queued', 'initializing'):
+                        raise ValueError('Missing worktree is not in a resumable initialization state')
+                    target = link.get('checkout_target')
+                    expected = link.get('expected_head')
+                    if state != 'initializing' or not target or not expected:
+                        target, expected = _checkout_target(base, link['branch'], default, env)
+                        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
+                                    checkout_state='initializing', expected_head=expected, checkout_target=target)
+                    elif target not in ('refs/heads/' + link['branch'], 'refs/remotes/origin/' + default) or \
+                            git(base, 'rev-parse', '--verify', target, env=env, check=False).stdout.strip() != expected:
+                        raise ValueError('Task branch changed since checkout initialization; left it unchanged')
                     git(base, 'worktree', 'prune', '--expire', 'now', env=env)
-                    isolation.mkdir(path.parent, mode=0o755)
-                    if git(base, 'show-ref', '--verify', 'refs/heads/' + link['branch'], check=False).returncode == 0:
-                        git(base, 'worktree', 'add', str(path), link['branch'], env=env)
-                    else:
-                        git(base, 'worktree', 'add', '--no-track', '-b', link['branch'], str(path), 'origin/' + default, env=env)
-                    # Confirm before setup: a failed setup still leaves a tracked tree.
-                    client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path']})
-                    client.patch(f'tasks/{task}/links/{link["link_id"]}', {'setup_pending': True})
-                    setup(path, repo.get('setup_command'), env)
-                    client.patch(f'tasks/{task}/links/{link["link_id"]}', {'setup_pending': False})
+                    _create_or_resume_checkout(path, workspace, base, default,
+                                               {**link, 'checkout_state': 'initializing', 'expected_head': expected,
+                                                'checkout_target': target}, repo, task, env, client)
+                    state = 'checkout_ready'
+                    setup_pending = True
+                if state == 'checkout_ready' or setup_pending:
+                    _patch_link(client, task, link['link_id'], state='pending', setup_pending=True, checkout_state='setup_running')
+                    try:
+                        setup(path, repo.get('setup_command'), env)
+                    except (ValueError, OSError, subprocess.SubprocessError):
+                        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True, checkout_state='setup_failed')
+                        raise
+                    _patch_link(client, task, link['link_id'], state='present', setup_pending=False, checkout_state='ready')
+                elif state != 'ready':
+                    raise ValueError('Worktree is not ready; no initialization or setup completion was recorded')
+                return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
         else:
             raw = Path(value)
             relative = str(raw.relative_to(Path(workspace).resolve())) if raw.is_absolute() else value
@@ -176,19 +326,25 @@ def command(client, operation, value, task=None):
             relative = str(path.relative_to(Path(workspace).resolve()))
             if not (path / '.git').is_file():
                 raise ValueError('Attach needs a Git worktree, not a base clone')
-            common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()).resolve()
+            attach_env = safe_git.machine_environment()
+            common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=attach_env).stdout.strip()).resolve()
             if Path(workspace).resolve() not in common.parents:
                 raise ValueError('Worktree base must be inside the team workspace')
-            origin = git(path, 'config', '--get', 'remote.origin.url').stdout.strip()
+            origin = git(path, 'config', '--get', 'remote.origin.url', env=attach_env).stdout.strip()
             repo_name = git_credentials.repository_name(origin) or origin
             repo = metadata(client, repo_name or '')
+            if repo.get('machine_git'):
+                env = safe_git.machine_environment()
+            else:
+                env = safe_git.environment()
             branch = checked_branch(git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip())
             link = client.post(f'tasks/{task}/worktrees/attach', {'path': relative, 'repo': repo['full_name'], 'branch': branch})
-        client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path']})
+        client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path'],
+                     'setup_pending': False, 'checkout_state': 'ready'})
         return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
     except (ValueError, OSError, subprocess.SubprocessError):
         if operation == 'add' and 'link' in locals() and ('path' not in locals() or not (path / '.git').is_file()):
-            client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'missing'})
+            client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'pending'})
         raise
     except APIError as exc:
         if exc.status in (404, 405):
@@ -242,23 +398,43 @@ def inspect(workspace, row, env=None, cache=None):
     env = safe_git.environment(env)
     try:
         path = safe_path(workspace, row['path'])
+        detail = _detail(row)
+        checkout_state = detail.get('checkout_state')
+        not_ready = bool(checkout_state and checkout_state != 'ready' or detail.get('setup_pending'))
+        if checkout_state is not None:
+            result['checkout_state'] = checkout_state
         if not path.exists():
-            result['state'] = 'removed' if row['state'] == 'removed' else 'missing'
+            result['state'] = 'removed' if row['state'] == 'removed' else ('pending' if not_ready else 'missing')
             return result
         if not (path / '.git').is_file():
             raise ValueError('Tracked path is not a Git worktree; left as it is')
         origin = git(path, 'config', '--get', 'remote.origin.url', env=env).stdout.strip()
-        result['repo'] = row.get('repo') or git_credentials.repository_name(origin) or origin
+        actual_repo = git_credentials.repository_name(origin) or origin
+        result['repo'] = row.get('repo') or actual_repo
+        if checkout_state == 'attached_pending':
+            expected_repo = row.get('repo')
+            if expected_repo:
+                matches = git_repository.matches(origin, expected_repo) if row.get('machine_git') else git_credentials._same_repository(origin, expected_repo)
+                if not matches:
+                    raise ValueError('Attached worktree repository does not match its task link')
         if result['repo'] and (len(result['repo']) > 200 or not repositories.valid_repository(result['repo'])):
             result['repo'] = None
             result['error'] = 'Invalid or oversized repository name'
         branch = git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip()
-        result.update(state='present', dirty_files=len(git(path, 'status', '--porcelain', env=env).stdout.splitlines()),
+        result.update(state='pending' if not_ready else 'present',
+                      dirty_files=len(git(path, 'status', '--porcelain', env=env).stdout.splitlines()),
                       last_commit=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()[:100])
         try:
             result['branch'] = checked_branch(branch)
         except ValueError:
             result['error'] = 'Invalid or oversized worktree branch'
+        if checkout_state == 'attached_pending':
+            if result.get('error'):
+                raise ValueError('Attached worktree metadata is invalid; left as it is')
+            if row.get('branch') and row['branch'] != result['branch']:
+                raise ValueError('Attached worktree branch does not match its task link')
+            result['checkout_state'] = 'ready'
+            checkout_state = 'ready'
         task_branch = row.get('branch')
         remote = 'refs/remotes/origin/' + task_branch if task_branch else ''
         if remote and git(path, 'show-ref', '--verify', remote, env=env, check=False).returncode == 0:
@@ -544,8 +720,17 @@ class Worktrees:
                     fresh = next((r for r in self.client.get('runners/me/worktrees')['worktrees'] if r['id'] == row['id']), None)
                     return fresh is not None and self.bot_idle(row['owner']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or json.loads(fresh.get('detail_json') or '{}').get('delete_requested'))
                 state = act(self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed)
-                self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}', {'state': state, 'cleanup': action['action'] == 'remove', 'setup_pending': action['action'] == 'restore', **{k: action_row[k] for k in ('snapshot_skipped', 'restore_source') if k in action_row}})
-                row['state'] = state
+                restore_pending = action['action'] == 'restore'
+                self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}',
+                                  {'state': 'pending' if restore_pending else state,
+                                   'cleanup': action['action'] == 'remove', 'setup_pending': restore_pending,
+                                   **({'checkout_state': 'checkout_ready'} if restore_pending else {}),
+                                   **{k: action_row[k] for k in ('snapshot_skipped', 'restore_source') if k in action_row}})
+                row['state'] = 'pending' if restore_pending else state
+                if restore_pending:
+                    detail = _detail(row)
+                    detail.update(checkout_state='checkout_ready', setup_pending=True)
+                    row['detail_json'] = json.dumps(detail)
                 errors.pop(row['id'], None)
                 self.retry.pop(row['id'], None)
             except Deferred:

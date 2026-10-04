@@ -1,5 +1,6 @@
 """Real Git worktree lifecycle, using only temporary repositories and synthetic credentials."""
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,7 +46,16 @@ def trees(tmp_path, monkeypatch):
            'state': 'present', 'owner': 'bot:engineer', 'setup_command': 'touch setup-ran'}
     client = mock.Mock()
     client.get.return_value = {'repositories': [{**row, 'access': 'write'}]}
-    client.post.return_value = {'link_id': row['id'], 'branch': row['branch'], 'path': row['path']}
+    client.post.return_value = {'link_id': row['id'], 'branch': row['branch'], 'path': row['path'],
+                                'checkout_state': 'queued', 'setup_pending': True}
+    def patch_link(_route, fields):
+        row.update({key: value for key, value in fields.items() if key in ('state', 'path', 'checkout_state', 'setup_pending')})
+        detail = json.loads(row.get('detail_json') or '{}')
+        detail.update({key: value for key, value in fields.items() if key in ('checkout_state', 'setup_pending', 'expected_head', 'checkout_target')})
+        row['detail_json'] = json.dumps(detail)
+        client.post.return_value.update(fields)
+        return row
+    client.patch.side_effect = patch_link
     return workspace, base, remote, row, client
 
 
@@ -70,6 +80,93 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
     assert (path / 'file').read_text() == 'changed'
     assert (path / 'setup-ran').exists()  # saved file, not a rerun of setup
+
+
+def test_interrupted_add_resumes_only_the_recorded_deletion_only_checkout(trees, monkeypatch):
+    workspace, base, remote, row, client = trees
+    link = {**client.post.return_value}
+    client.post.return_value = link
+    client.patch.side_effect = lambda route, body: (link.update(body), dict(link))[1]
+    real_git = W.git
+    interrupted = [False]
+
+    def interrupted_add(path, *args, **kwargs):
+        result = real_git(path, *args, **kwargs)
+        if args[:2] == ('worktree', 'add') and not interrupted[0]:
+            interrupted[0] = True
+            (Path(link['path']) if Path(link['path']).is_absolute() else workspace / link['path']).joinpath('file').unlink()
+            raise ValueError('synthetic interruption after worktree creation')
+        return result
+
+    monkeypatch.setattr(W, 'git', interrupted_add)
+    with pytest.raises(ValueError, match='synthetic interruption'):
+        W.command(client, 'add', 'org/product')
+    assert link['checkout_state'] == 'initializing' and link['state'] == 'pending'
+    path = workspace / link['path']
+    assert not (path / 'file').exists()
+
+    monkeypatch.setattr(W, 'git', real_git)
+    result = W.command(client, 'add', 'org/product')
+    assert (path / 'file').read_text() == 'initial'
+    assert (path / 'setup-ran').exists()
+    assert result['workspace_path'] == str(path)
+    assert link['checkout_state'] == 'ready' and link['state'] == 'present' and not link['setup_pending']
+
+
+def test_interrupted_add_keeps_user_edits_and_untracked_files(trees, monkeypatch):
+    workspace, base, remote, row, client = trees
+    link = {**client.post.return_value}
+    client.post.return_value = link
+    client.patch.side_effect = lambda route, body: (link.update(body), dict(link))[1]
+    real_git = W.git
+    interrupted = [False]
+
+    def interrupted_add(path, *args, **kwargs):
+        result = real_git(path, *args, **kwargs)
+        if args[:2] == ('worktree', 'add') and not interrupted[0]:
+            interrupted[0] = True
+            task_path = workspace / link['path']
+            (task_path / 'file').write_text('user edit to retain')
+            (task_path / 'notes.txt').write_text('untracked user file')
+            raise ValueError('synthetic interruption after worktree creation')
+        return result
+
+    monkeypatch.setattr(W, 'git', interrupted_add)
+    with pytest.raises(ValueError, match='synthetic interruption'):
+        W.command(client, 'add', 'org/product')
+    monkeypatch.setattr(W, 'git', real_git)
+    path = workspace / link['path']
+    with pytest.raises(ValueError, match='user changes; kept'):
+        W.command(client, 'add', 'org/product')
+    assert (path / 'file').read_text() == 'user edit to retain'
+    assert (path / 'notes.txt').read_text() == 'untracked user file'
+    assert link['checkout_state'] == 'initializing' and link['state'] == 'pending'
+
+
+def test_add_does_not_claim_or_overwrite_an_unrecorded_path(trees):
+    workspace, base, remote, row, client = trees
+    path = workspace / row['path']
+    path.mkdir(parents=True)
+    (path / 'keep.txt').write_text('existing user data')
+    with pytest.raises(ValueError, match='without an initialization record'):
+        W.command(client, 'add', 'org/product')
+    assert (path / 'keep.txt').read_text() == 'existing user data'
+
+
+def test_interrupted_add_refuses_a_worktree_on_a_different_branch(trees):
+    workspace, base, remote, row, client = trees
+    path = workspace / row['path']
+    path.parent.mkdir(parents=True)
+    git(base, 'worktree', 'add', '-b', 'unrelated', str(path), 'origin/main')
+    head = git(path, 'rev-parse', 'HEAD')
+    link = {'link_id': row['id'], 'branch': row['branch'], 'path': row['path'], 'checkout_state': 'initializing',
+            'setup_pending': True, 'expected_head': head, 'checkout_target': 'refs/remotes/origin/main'}
+    client.post.return_value = link
+    before = (path / 'file').read_text()
+    with pytest.raises(ValueError, match='branch does not match'):
+        W.command(client, 'add', 'org/product')
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == 'unrelated'
+    assert (path / 'file').read_text() == before
 
 
 def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
@@ -118,6 +215,9 @@ def test_disk_floor_paths_old_server_and_setup_failure(trees, monkeypatch):
     with pytest.raises(ValueError, match='setup failed'):
         W.command(client, 'add', 'org/product')
     assert client.patch.called
+    assert client.post.return_value['state'] == 'pending'
+    assert client.post.return_value['checkout_state'] == 'setup_failed'
+    assert client.post.return_value['setup_pending'] is True
     outside = workspace.parent / 'outside'
     outside.mkdir()
     (workspace / 'escape').symlink_to(outside, target_is_directory=True)
@@ -175,7 +275,8 @@ def test_computer_heartbeat_actions_use_scoped_token_and_wait_for_idle(trees):
         assert 'synthetic-worktree-token' not in str(manager.reports)
         saved['task_status'] = 'open'
         manager.sync([{**action, 'action': 'restore'}])
-        assert manager.reports[0]['state'] == 'present'
+        assert manager.reports[0]['state'] == 'pending'
+        assert any(call.args[1].get('checkout_state') == 'checkout_ready' for call in client.patch.call_args_list)
         saved['task_status'] = 'closed'
         client.post.side_effect = APIError('forbidden', 'This bot needs write access', 403)
         manager.sync([action])
@@ -414,7 +515,7 @@ def test_readiness_advertises_worktrees_and_setup_cli_runs_in_turn(trees):
     repo = client.get.return_value['repositories'][0]
     client.get.side_effect = lambda route: {'links': [{**row, 'kind': 'worktree'}]} if route.endswith('/links') else {'repositories': [repo]}
     W.command(client, 'setup', 'org/product')
-    assert client.patch.call_args.args[1] == {'setup_pending': False}
+    assert client.patch.call_args.args[1] == {'state': 'present', 'setup_pending': False, 'checkout_state': 'ready'}
 
 
 def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folder(trees, monkeypatch):

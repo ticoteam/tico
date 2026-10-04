@@ -758,8 +758,9 @@ class WorktreeStatus(Contract):
     repo: str | None = Field(default=None, max_length=200)
     last_activity: float | None = Field(default=None, ge=0)
     link_id: str = Field(max_length=100)
-    state: Literal["present", "missing", "removed", "unknown"]
+    state: Literal["pending", "present", "missing", "removed", "unknown"]
     branch: str | None = Field(default=None, max_length=200)
+    checkout_state: Literal["queued", "attached_pending", "initializing", "checkout_ready", "setup_running", "setup_failed", "ready", "unverified"] | None = None
     ahead: int = Field(default=0, ge=0)
     behind: int = Field(default=0, ge=0)
     dirty_files: int = Field(default=0, ge=0)

@@ -39,6 +39,12 @@ def post(api, path, body, token='owner-test'):
     return api.post('/api/v2/' + path, json=body, headers={**auth(token), 'Idempotency-Key': uuid.uuid4().hex})
 
 
+def mark_ready(api, tid, link_id):
+    return api.patch(f'/api/v2/tasks/{tid}/links/{link_id}',
+                     json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False},
+                     headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+
+
 def test_create_permissions_limit_old_computer_and_attach(prepared):
     api, tid, other = prepared
     path = f'tasks/{tid}/worktrees'
@@ -70,8 +76,10 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
 def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
     body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
-            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'], 'ahead': 2, 'dirty_files': 1, 'last_commit': 'abc'}]}
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
+                           'branch': link['branch'], 'ahead': 2, 'dirty_files': 1, 'last_commit': 'abc'}]}
     response = post(api, 'runners/heartbeat', body, 'runner-test')
     assert response.status_code == 200, response.text
     assert response.json()['worktree_actions'] == []
@@ -240,7 +248,8 @@ def test_unlink_needs_move_rights_and_keeps_inventory_until_cleanup(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state='present' WHERE id=?", (link['link_id'],))
+        c.execute("UPDATE task_links SET state='present',detail_json=? WHERE id=?",
+                  (json.dumps({'owner': 'bot:cmo', 'checkout_state': 'ready', 'setup_pending': False}), link['link_id']))
         with pytest.raises(H.Refused):
             H.task_unlink(c, 'bot:cpo', tid, link['link_id'])
         H.task_unlink(c, 'human:ana', tid, link['link_id'], mover=True)
@@ -248,7 +257,7 @@ def test_unlink_needs_move_rights_and_keeps_inventory_until_cleanup(prepared):
         rows = W.inventory(c, 'r1')
         assert len(rows) == 1 and rows[0]['owner'] == 'bot:cmo'
     body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'worktrees': True},
-            'worktrees': [{'link_id': link['link_id'], 'state': 'present'}]}
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready'}]}
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['action'] == 'remove'
     body['worktrees'][0]['state'] = 'removed'
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
@@ -332,3 +341,46 @@ def test_reassigned_task_can_create_fresh_worktree_while_old_owner_keeps_cleanup
     assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json() == new
     with api.app_state.store.read() as c:
         assert json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (old['link_id'],)).fetchone()[0])['owner'] == 'bot:cpo'
+
+
+def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert link['checkout_state'] == 'queued' and link['setup_pending'] is True
+    beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'initializing',
+                           'branch': link['branch'], 'repo': 'Acme/product'}]}
+    response = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        saved = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        assert saved['state'] == 'pending'
+        assert json.loads(saved['detail_json'])['checkout_state'] == 'initializing'
+
+    route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+    headers = {**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex}
+    response = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': True}, headers=headers)
+    assert response.status_code == 409 and response.json()['error']['code'] == 'worktree_not_ready'
+    response = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
+                                      'expected_head': 'a' * 40, 'checkout_target': 'refs/heads/tico/test'},
+                         headers={**headers, 'Idempotency-Key': uuid.uuid4().hex})
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        saved = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        assert saved['state'] == 'present'
+        assert json.loads(saved['detail_json'])['checkout_state'] == 'ready'
+
+
+def test_legacy_pending_link_is_not_promoted_by_git_directory_alone(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps({'owner': 'bot:cmo'}), link['link_id']))
+    beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'],
+                           'repo': 'Acme/product'}]}
+    response = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        saved = c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        assert saved['state'] == 'pending'
