@@ -3775,6 +3775,8 @@ def create_app(settings=None):
     install_sql(app, store, auth)
     from .judge import install_judge
     install_judge(app, store, auth)
+    from .live_meetings import install_live_meetings
+    install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail
     install_mail(app, store, auth)
     from .messaging import install_messaging

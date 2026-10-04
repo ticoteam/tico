@@ -111,3 +111,114 @@ CREATE TABLE IF NOT EXISTS recording_transcripts (
 );
 CREATE INDEX IF NOT EXISTS recording_transcripts_meeting ON recording_transcripts(meeting_id,id DESC);
 """
+
+# Live, text-only meetings have their own append-only sequence and replay cursor. Their bot
+# membership is deliberately separate from bot_config.access_json: joining one meeting never
+# changes a bot's standing company permissions.
+LIVE_MEETINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS live_meetings (
+ id TEXT PRIMARY KEY,
+ owner_actor TEXT NOT NULL,
+ title TEXT NOT NULL,
+ state TEXT NOT NULL CHECK (state IN ('live','paused','ended')),
+ client_id TEXT,
+ seq INTEGER NOT NULL DEFAULT 0,
+ next_event_id INTEGER NOT NULL DEFAULT 0,
+ window_ms INTEGER NOT NULL CHECK (window_ms BETWEEN 15000 AND 45000),
+ cooldown_ms INTEGER NOT NULL DEFAULT 60000,
+ threshold REAL NOT NULL DEFAULT 0.7,
+ imported_meeting_id TEXT,
+ created TEXT NOT NULL,
+ updated TEXT NOT NULL,
+ started_at TEXT NOT NULL,
+ ended_at TEXT,
+ UNIQUE(owner_actor,client_id)
+);
+CREATE INDEX IF NOT EXISTS live_meetings_state ON live_meetings(state,updated DESC);
+CREATE TABLE IF NOT EXISTS live_meeting_humans (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ actor TEXT NOT NULL,
+ joined_at TEXT NOT NULL,
+ PRIMARY KEY(meeting_id,actor)
+);
+CREATE TABLE IF NOT EXISTS live_meeting_bots (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ bot TEXT NOT NULL,
+ joined_by TEXT NOT NULL,
+ joined_at TEXT NOT NULL,
+ last_reply_ms INTEGER,
+ PRIMARY KEY(meeting_id,bot)
+);
+CREATE TABLE IF NOT EXISTS live_meeting_chunks (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ seq INTEGER NOT NULL,
+ revision INTEGER NOT NULL DEFAULT 1,
+ speaker TEXT NOT NULL,
+ start_ms INTEGER NOT NULL,
+ end_ms INTEGER NOT NULL,
+ text TEXT NOT NULL,
+ created TEXT NOT NULL,
+ PRIMARY KEY(meeting_id,seq)
+);
+CREATE INDEX IF NOT EXISTS live_meeting_chunks_time ON live_meeting_chunks(meeting_id,start_ms,seq);
+CREATE TABLE IF NOT EXISTS live_meeting_chunk_versions (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ seq INTEGER NOT NULL,
+ revision INTEGER NOT NULL,
+ speaker TEXT NOT NULL,
+ start_ms INTEGER NOT NULL,
+ end_ms INTEGER NOT NULL,
+ text TEXT NOT NULL,
+ authored_by TEXT NOT NULL,
+ created TEXT NOT NULL,
+ PRIMARY KEY(meeting_id,seq,revision)
+);
+CREATE TABLE IF NOT EXISTS live_meeting_chat (
+ id TEXT PRIMARY KEY,
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ actor TEXT NOT NULL,
+ role TEXT NOT NULL CHECK (role IN ('human','bot')),
+ text TEXT NOT NULL,
+ at_ms INTEGER,
+ transcript_seq INTEGER,
+ turn_id TEXT,
+ created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS live_meeting_chat_order ON live_meeting_chat(meeting_id,created,id);
+CREATE UNIQUE INDEX IF NOT EXISTS live_meeting_chat_turn ON live_meeting_chat(turn_id) WHERE turn_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS live_meeting_events (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ event_id INTEGER NOT NULL,
+ type TEXT NOT NULL,
+ payload_json TEXT NOT NULL,
+ created TEXT NOT NULL,
+ PRIMARY KEY(meeting_id,event_id)
+);
+CREATE TABLE IF NOT EXISTS live_meeting_windows (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ window_index INTEGER NOT NULL,
+ start_ms INTEGER NOT NULL,
+ end_ms INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK (status IN ('deciding','complete','interrupted')),
+ outcome TEXT NOT NULL DEFAULT '',
+ trace_json TEXT NOT NULL DEFAULT '{}',
+ started TEXT NOT NULL,
+ finished TEXT,
+ PRIMARY KEY(meeting_id,window_index)
+);
+CREATE TABLE IF NOT EXISTS live_meeting_turns (
+ id TEXT PRIMARY KEY,
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ bot TEXT NOT NULL,
+ window_index INTEGER,
+ source_key TEXT NOT NULL,
+ transcript_seq INTEGER,
+ status TEXT NOT NULL CHECK (status IN ('pending','claimed','replied','skipped')),
+ skip_reason TEXT NOT NULL DEFAULT '',
+ created TEXT NOT NULL,
+ claimed_at TEXT,
+ replied_at TEXT,
+ UNIQUE(meeting_id,source_key,bot)
+);
+CREATE INDEX IF NOT EXISTS live_meeting_turns_pending ON live_meeting_turns(meeting_id,bot,status,created);
+"""

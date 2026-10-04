@@ -7,10 +7,12 @@
 // with the transcript, the sections a human pushes to tasks, and an Import action.
 let MEET = null;
 function meetStop() {
-  if (!MEET) return;
-  clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
-  granolaStop(MEET);   // ui/app/meetings-granola.js
-  MEET = null;
+  if (MEET) {
+    clearInterval(MEET.poll); clearInterval(MEET.sourcesPoll);
+    granolaStop(MEET);   // ui/app/meetings-granola.js
+    MEET = null;
+  }
+  window.liveMeetingsStop?.();
 }
 async function pageNotes() {
   meetStop();
@@ -19,7 +21,8 @@ async function pageNotes() {
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <button class="primary" type="button" id="notes-manual">Add notes</button></div>
+      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now</button>
+      <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="true">Shared</button>
       <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span id="meet-pending-count"></span></button>
@@ -42,6 +45,7 @@ async function pageNotes() {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
+  $('#meet-live-now').onclick = () => pageLiveMeetings();
   const dialog = $('#notes-modal');
   const closeNote = () => {
     if (state.editing && !confirm('Discard unsaved changes?')) return;
