@@ -22,7 +22,8 @@ def oidc_subject(settings):
         if not isinstance(base, str) or not re.fullmatch(
                 r"repo:ticoteam@[0-9]+/tico@[0-9]+", base):
             raise ValueError("GitHub returned an unsupported immutable repository subject")
-    elif immutable is False:
+    elif immutable is False or (immutable is None and "sub_claim_prefix" not in settings
+                                and settings.get("include_claim_keys") in (None, [])):
         base = settings.get("sub_claim_prefix", "repo:ticoteam/tico")
         if base != "repo:ticoteam/tico":
             raise ValueError("GitHub returned an unsupported legacy repository subject")

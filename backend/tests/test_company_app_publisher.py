@@ -13,6 +13,8 @@ IMMUTABLE = {"use_default": True, "use_immutable_subject": True,
 class CompanyPublisherSubject(unittest.TestCase):
     def test_subject_uses_live_legacy_or_immutable_repository_prefix(self):
         self.assertEqual(publisher.oidc_subject(LEGACY), "repo:ticoteam/tico:ref:refs/tags/v*")
+        self.assertEqual(publisher.oidc_subject({"use_default": True}),
+                         "repo:ticoteam/tico:ref:refs/tags/v*")
         self.assertEqual(publisher.oidc_subject(IMMUTABLE),
                          "repo:ticoteam@335213986/tico@1395824547:ref:refs/tags/v*")
 
@@ -20,7 +22,7 @@ class CompanyPublisherSubject(unittest.TestCase):
     def test_subject_rejects_custom_incomplete_or_unrelated_settings(self):
         cases = [
             {"use_default": False, "include_claim_keys": ["repo", "ref"]},
-            {"use_default": True},
+            {"use_default": True, "include_claim_keys": ["repo", "ref"]},
             {"use_default": True, "use_immutable_subject": True,
              "sub_claim_prefix": "repo:attacker@1/other@2"},
             {"use_default": True, "use_immutable_subject": False,
