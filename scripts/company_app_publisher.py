@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare a company publisher role. Dry-run is offline; --apply changes IAM only."""
+"""Prepare a company publisher role. Dry-run reads GitHub settings; --apply changes IAM only."""
 import argparse
 import json
 import re
+import subprocess
 import sys
 
 if __package__:
@@ -11,13 +12,49 @@ else:
     from company_apps import key, parse
 
 
-def policies(account, bucket, prefix=""):
+def oidc_subject(settings):
+    """Derive the only supported tag subject shape from GitHub's live repo settings."""
+    if not isinstance(settings, dict) or settings.get("use_default") is not True:
+        raise ValueError("GitHub OIDC must use the default subject template")
+    immutable = settings.get("use_immutable_subject")
+    if immutable is True:
+        base = settings.get("sub_claim_prefix")
+        if not isinstance(base, str) or not re.fullmatch(
+                r"repo:ticoteam@[0-9]+/tico@[0-9]+", base):
+            raise ValueError("GitHub returned an unsupported immutable repository subject")
+    elif immutable is False:
+        base = settings.get("sub_claim_prefix", "repo:ticoteam/tico")
+        if base != "repo:ticoteam/tico":
+            raise ValueError("GitHub returned an unsupported legacy repository subject")
+    else:
+        raise ValueError("GitHub did not report whether OIDC subjects are immutable")
+    return base + ":ref:refs/tags/v*"
+
+
+def discover_oidc_subject():
+    """Read repository OIDC settings; never substitute a guessed legacy subject on failure."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "repos/ticoteam/tico/actions/oidc/customization/sub"],
+            check=True, capture_output=True, text=True)
+        settings = json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        raise ValueError("could not discover GitHub OIDC settings; authenticate gh and retry") from exc
+    return oidc_subject(settings)
+
+
+def policies(account, bucket, prefix="", subject=None):
+    if subject is None:
+        subject = discover_oidc_subject()
+    if not isinstance(subject, str) or not re.fullmatch(
+            r"repo:ticoteam(?:@[0-9]+/tico@[0-9]+|/tico):ref:refs/tags/v\*", subject):
+        raise ValueError("refusing an unsupported GitHub OIDC subject")
     provider = f"arn:aws:iam::{account}:oidc-provider/token.actions.githubusercontent.com"
     root = (prefix.strip("/") + "/" if prefix.strip("/") else "") + "releases/app/"
     trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Federated": provider},
              "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {
                  "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
-                 "StringLike": {"token.actions.githubusercontent.com:sub": "repo:ticoteam/tico:ref:refs/tags/v*"}}}]}
+                 "StringLike": {"token.actions.githubusercontent.com:sub": subject}}}]}
     access = {"Version": "2012-10-17", "Statement": [
         {"Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": f"arn:aws:s3:::{bucket}/{root}*"},
         {"Effect": "Allow", "Action": "s3:ListBucket", "Resource": f"arn:aws:s3:::{bucket}",
@@ -50,7 +87,10 @@ def main():
         parse(json.dumps([entry]))
     except ValueError as exc:
         p.error(str(exc))
-    provider, trust, access = policies(a.account_id, a.bucket, a.prefix)
+    try:
+        provider, trust, access = policies(a.account_id, a.bucket, a.prefix)
+    except ValueError as exc:
+        p.error(str(exc))
     if a.apply:
         import boto3
         from botocore.exceptions import ClientError

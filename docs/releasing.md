@@ -177,10 +177,14 @@ fonts or colored tray images are needed, and private labels are masked with othe
 configuration in CI.
 
 Prepare each company's IAM publisher role in its own AWS account, using the normal AWS
-credential chain. This script defaults to an offline dry run; inspect its output privately and
-run it with `--apply` when ready. It creates the GitHub OIDC provider if absent, trusts only
-`repo:ticoteam/tico:ref:refs/tags/v*` with audience `sts.amazonaws.com`, and grants only
-GetObject/PutObject beneath `[prefix/]releases/app/*` and ListBucket for that prefix.
+credential chain. This script defaults to a dry run that reads live OIDC settings with
+`gh api repos/ticoteam/tico/actions/oidc/customization/sub`; authenticate `gh` to the repository
+first. Inspect its output privately and run it with `--apply` when ready. It creates the GitHub
+OIDC provider if absent, trusts only the repository's default version-tag subject
+(`repo:ticoteam/tico:ref:refs/tags/v*` for legacy subjects or the configured repository-ID prefix
+for immutable subjects) with audience `sts.amazonaws.com`, and grants only GetObject/PutObject
+beneath `[prefix/]releases/app/*` and ListBucket for that prefix. Unsupported custom subject
+templates and failed settings discovery are rejected.
 
 ```bash
 scripts/aws/company-app-publisher.sh --slug acme --id 12345678-1234-4234-8234-123456789abc \
