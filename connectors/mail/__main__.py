@@ -255,15 +255,19 @@ def cmd_doctor(args):
         return cmd_e2e(args)
     c = Checks()
     info = None
-    try:
-        info = auth.key_info()
-        c.ok("service-account key", f"{info['path']} (mode 600, parses)")
-        c.ok("service account", info["client_email"])
-        c.ok("client id", info["client_id"] + "  (this is what the Admin console wants)")
-        if info["project_id"]:
-            c.ok("google cloud project", info["project_id"])
-    except Failure as e:
-        c.fail("service-account key", e.msg, e.hint)
+    socket_mode = bool(os.environ.get(auth.SOCKET_ENV))
+    if socket_mode:
+        c.ok("credential source", "runner supervisor socket (key remains on the runner)")
+    else:
+        try:
+            info = auth.key_info()
+            c.ok("service-account key", f"{info['path']} (mode 600, parses)")
+            c.ok("service account", info["client_email"])
+            c.ok("client id", info["client_id"] + "  (this is what the Admin console wants)")
+            if info["project_id"]:
+                c.ok("google cloud project", info["project_id"])
+        except Failure as e:
+            c.fail("service-account key", e.msg, e.hint)
 
     try:
         import google.oauth2                              # noqa: F401
@@ -299,6 +303,10 @@ def cmd_doctor(args):
             c.fail(f"{box} impersonation", e.msg,
                    e.hint or auth.delegation_hint(auth.GMAIL_SCOPE,
                                                   (info or {}).get("client_id", "NNN")))
+            continue
+        except Exception as e:
+            c.fail(f"{box} impersonation", f"unexpected {type(e).__name__}",
+                   "Check the runner credential socket and mailbox access, then run doctor again.")
             continue
         want = sorted({n for s in (slugs or [access.OWNER]) for n in lb.wanted(s)})
         try:

@@ -90,8 +90,11 @@ def supervisor_token(mailbox, scopes):
     (a Mac, or a Docker runner without the two-user layout: the key file is read directly)."""
     path = os.environ.get(SOCKET_ENV)
     service = next((k for k, v in SERVICE_SCOPES.items() if list(scopes or SCOPES) == v), None)
-    if not path or not os.environ.get("HUB_TOKEN"):
+    if not path:
         return None
+    if not os.environ.get("HUB_TOKEN"):
+        raise Failure("the runner credential socket is configured but HUB_TOKEN is missing",
+                      "Start mail through the runner so it can provide a scoped credential token.")
     if not service:
         raise Failure("mail access through the runner covers one service at a time", "Ask for gmail or calendar.")
     from runner import credential_socket                # noqa: PLC0415
