@@ -254,10 +254,10 @@ mod updater_auth_tests {
             seen
         });
         let hub = Url::parse("https://tico.example.test/team/").unwrap();
-        let endpoint = Url::parse(&format!("http://127.0.0.1:{address}/download/latest.json")).unwrap();
+        let endpoint = Url::parse(&format!("http://{address}/download/latest.json")).unwrap();
         let policy = CompanyUpdatePolicy::new(hub, endpoint.clone(), Some("CF_Authorization=synthetic"));
         assert!(!policy.has_cookie());
-        let artifact = Url::parse(&format!("http://127.0.0.1:{address}/download/app/Tico.dmg.tar.gz")).unwrap();
+        let artifact = Url::parse(&format!("http://{address}/download/app/Tico.dmg.tar.gz")).unwrap();
         assert!(policy.allows_download(&artifact));
         let client = policy.configure_client(reqwest_updater::Client::builder()).build().unwrap();
         for url in [endpoint, artifact] {
