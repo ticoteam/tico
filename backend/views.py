@@ -1167,8 +1167,11 @@ def install_views(app, store, auth, mutate, task_view):
                 state += "\n\nFocus: " + status["focus"]
             if status.get("last_result"):
                 state += "\n\nLast result: " + status["last_result"]
+            from .memory_history import documents
+            memory = documents(c, bot)
             return {"AGENT.md": instructions,
-                    "state.md": state + "\n", "memory/learnings.md": "", "memory/decisions.md": "",
+                    "state.md": state + "\n", "memory/learnings.md": memory.get("memory/learnings.md", ""),
+                    "memory/decisions.md": memory.get("memory/decisions.md", ""),
                     "bot.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                     "employee.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                     "playbooks": {}, "source": "cloud registry and status snapshot"}

@@ -3838,6 +3838,8 @@ def create_app(settings=None):
     install_messaging(app, store, auth)
     from .integrations import install_integrations
     install_integrations(app, store, auth, mutate)
+    from .memory_history import install_memory_history
+    install_memory_history(app, store, auth, mutate)
     from .mcp import install_mcp
     install_mcp(app, settings)
     from .github import install_github

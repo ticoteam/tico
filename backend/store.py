@@ -559,6 +559,8 @@ class Store:
             c.executescript(_runner_versions.SCHEMA)
             from . import files as _files
             c.executescript(_files.SCHEMA)
+            from . import memory_history as _memory_history
+            c.executescript(_memory_history.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import bot_tools as _bot_tools

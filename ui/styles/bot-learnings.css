@@ -1,0 +1,41 @@
+/* ui/styles/bot-learnings.css — The Learnings button beside a bot's name and its panel (ui/app/bot-learnings.js).
+   A panel on the right on a desktop, a sheet from the bottom on a phone. */
+.bot-learn{position:relative;flex:none;display:inline-grid;place-items:center;width:28px;height:28px;margin-left:4px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.bot-learn:hover{color:var(--ink);background:var(--hover)}
+.bot-learn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bot-learn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
+.bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--accent-ink);font-size:9.5px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+
+.learn-panel{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(460px,100vw);padding:0;border:0;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.35)}
+.learn-panel:not([open]){display:none}
+.learn-panel::backdrop{background:rgba(0,0,0,.35)}
+.learn-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.learn-head h2{margin:0;font-size:14px;font-weight:600;flex:1}
+.learn-switch{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--surface2)}
+.learn-switch button{border:0;background:none;color:var(--muted);font-size:12px;padding:3px 8px;border-radius:5px;cursor:pointer}
+.learn-switch button[aria-selected="true"]{background:var(--raised);color:var(--ink)}
+.learn-body{flex:1;overflow:auto;padding:4px 14px 16px;overscroll-behavior:contain}
+.learn-body .md{padding-top:8px;font-size:13px}
+.learn-list{list-style:none;margin:0;padding:0}
+.learn-row{padding:9px 0;border-bottom:1px solid var(--line);font-size:13px;line-height:18px}
+.learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--accent)}
+.lr-subject{overflow-wrap:anywhere}
+.lr-meta,.lr-source,.lr-files,.lr-diff summary{font-size:12px;color:var(--muted)}
+.lr-meta code{font-size:11px}
+.lr-local{color:var(--wait)}
+.lr-source a{color:var(--accent-quiet)}
+.lr-source a:hover{color:var(--accent)}
+.lr-diff summary{cursor:pointer;overflow-wrap:anywhere}
+.lr-diff pre{margin:6px 0 0;padding:8px;border-radius:6px;background:var(--bg);font:11.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}
+.lr-diff .add{color:var(--ok)}
+.lr-diff .del{color:var(--fail)}
+.lr-diff .hunk{color:var(--muted)}
+.learn-more{margin-top:10px}
+@media (max-width:760px){
+  .learn-panel{margin:auto 0 0;width:100vw;max-width:100vw;height:auto;max-height:85dvh;border-left:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;box-shadow:0 -12px 40px rgba(0,0,0,.35)}
+  .learn-head{padding:14px 16px}
+  .learn-switch button{padding:6px 10px;min-height:32px}
+  .learn-head .tmodal-x{min-width:44px;min-height:44px}
+  .learn-body{padding:4px 16px calc(16px + env(safe-area-inset-bottom))}
+  .bot-learn{width:36px;height:36px}
+}
