@@ -1234,11 +1234,21 @@ class Runner:
         source_env, _ = self.github_access(str(config.get("shared_from") or ""))
         if source_env is None:
             return False, "The source-scoped repository credential is unavailable; all local paths were retained"
-        origin = git(product, "remote", "get-url", "origin")
+        origins = git(product, "remote", "get-url", "--all", "origin")
         expected_origin = shared_repository_url(config)
-        if origin.returncode or not expected_origin or origin.stdout.strip() != expected_origin:
-            return False, "The assignment origin differs from its registered source repository; all local paths were retained"
-        fetched = git(product, "fetch", "--quiet", "--no-tags", "origin", git_env=source_env, timeout=45)
+        if origins.returncode or not expected_origin or origins.stdout.splitlines() != [expected_origin]:
+            return False, "The assignment origin is ambiguous or differs from its registered source repository; all local paths were retained"
+        refspecs = git(product, "config", "--get-all", "remote.origin.fetch")
+        if (refspecs.returncode
+                or refspecs.stdout.splitlines() != ["+refs/heads/*:refs/remotes/origin/*"]):
+            return False, "The assignment origin fetch refspec is ambiguous; all local paths were retained"
+        pushurls = git(product, "config", "--get-all", "remote.origin.pushurl")
+        if pushurls.returncode != 1 or pushurls.stdout.strip():
+            return False, "The assignment origin has a separate or ambiguous push URL; all local paths were retained"
+        # Prune deleted remote branches before treating tracking refs as preservation evidence.
+        # This only updates refs/remotes/origin under the validated default branch refspec.
+        fetched = git(product, "fetch", "--prune", "--quiet", "--no-tags", "origin",
+                      git_env=source_env, timeout=45)
         if fetched.returncode:
             return False, "The product branch could not be checked against its origin; all local paths were retained"
         head = git(product, "rev-parse", "--verify", "HEAD")
