@@ -784,7 +784,9 @@ class Auth:
             return
         slug = H.actor_id(actor)
         if H._has_table(c, "assignment_branches"):
-            assignment = c.execute("SELECT task_id FROM assignment_branches WHERE bot=?", (slug,)).fetchone()
+            assignment = c.execute("SELECT task_id,phase FROM assignment_branches WHERE bot=?", (slug,)).fetchone()
+            if assignment and assignment["phase"] in ("archived", "cancelled"):
+                raise Problem("assignment_retired", "This temporary assignment is retired; resume from its checkpoint or create a new generation", 409)
             if assignment and (kind not in ("task", "comment", "message")
                                or str(task_id or "") != str(assignment["task_id"])):
                 raise Problem("assignment_scope", "Temporary assignments accept work only on their linked delivery task", 403)

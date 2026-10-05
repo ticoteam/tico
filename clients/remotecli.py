@@ -556,6 +556,9 @@ def bots(client, args):
                     "reviewed_learning_note": reviewed_learning,
                     "confirm_learning_review": args.confirm_learning_review}
             return client.patch(f"assignment-branches/{args.assignment}", body, key=operation)
+        if action == "cleanup":
+            return client.post(f"assignment-branches/{args.assignment}/cleanup",
+                               {"expected_revision": args.revision}, key=operation)
     if args.fn == "template list":
         try:
             # The server's cards carry the instructions onboarding filled in; a server without

@@ -272,6 +272,77 @@
         ]
       }
     },
+    "/api/v2/assignment-branches/{ident}/cleanup": {
+      "post": {
+        "summary": "Request separate cleanup of a terminal assignment after its runner proves local trees are safe to remove",
+        "operationId": "requestAssignmentBranchCleanup",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentBranchCleanupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranchCleanup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/assignment-branches/{ident}/events": {
       "get": {
         "summary": "Assignment history",
@@ -12170,6 +12241,12 @@
               "object",
               "null"
             ]
+          },
+          "cleanup": {
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12178,6 +12255,7 @@
           "assignment_key",
           "bot",
           "checkpoint",
+          "cleanup",
           "created",
           "display_name",
           "generation",
@@ -12193,6 +12271,72 @@
           "updated"
         ],
         "additionalProperties": true
+      },
+      "AssignmentBranchCleanup": {
+        "type": "object",
+        "properties": {
+          "assignment_id": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "requested",
+              "blocked",
+              "complete"
+            ]
+          },
+          "runner_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "requested": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "completed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "attempt",
+          "completed",
+          "detail",
+          "requested",
+          "requested_by",
+          "runner_id",
+          "state",
+          "updated"
+        ],
+        "additionalProperties": true
+      },
+      "AssignmentBranchCleanupRequest": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "AssignmentBranchCleanupRequest"
       },
       "AssignmentBranchCreate": {
         "properties": {

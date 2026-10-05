@@ -63,6 +63,11 @@ const {html, uiFile} = require('./support/page.cjs');
         assignment = {...assignment, phase: body.phase || assignment.phase, revision: assignment.revision + 1};
         return json({...assignment, ...(body.confirm_learning_review ? {learning_message_id: 'learning-message'} : {})});
       }
+      if (p === '/api/v2/assignment-branches/assignment-1/cleanup' && request.method() === 'POST') {
+        const body = JSON.parse(request.postData()); writes.push([p, body]);
+        assignment = {...assignment, cleanup: {state: 'requested', detail: ''}};
+        return json({assignment_id: assignment.id, state: 'requested'});
+      }
       if (p.endsWith('/branches')) return json({original: 'architect', shared: original.shared,
         branches: bots.filter(b => b.shared_from).map(b => ({...b, slug: b.name}))});
       if (p.endsWith('/copies')) {
@@ -123,6 +128,14 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await dialog.locator('[name=model_effort]').count(), 0);
     await dialog.locator('[name=status]').selectOption('paused');
     await dialog.locator('[type=submit]').click();
+    assignment = {...assignment, phase: 'archived', revision: 5, cleanup: null,
+      task: {...assignment.task, status: 'done'}};
+    await page.evaluate(() => assignmentBranchesLoad('architect'));
+    await page.locator('[data-assignment-cleanup="assignment-1"]').waitFor();
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('[data-assignment-cleanup="assignment-1"]').click();
+    await page.locator('[data-assignment-cleanup="assignment-1"][disabled]').waitFor();
+    assert.deepEqual(writes.find(([path]) => path.endsWith('/assignment-1/cleanup'))[1], {expected_revision: 5});
     await dialog.locator('[data-branch-status]').filter({hasText: 'configuration changed'}).waitFor();
     await page.waitForFunction(() => !document.querySelector('#branch-editor [type=submit]').disabled);
     await dialog.locator('[type=submit]').click();

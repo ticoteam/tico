@@ -151,6 +151,12 @@ CREATE TABLE IF NOT EXISTS assignment_branch_events(
  id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES assignment_branches(id),
  actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}', created TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS assignment_branch_events_by_assignment ON assignment_branch_events(assignment_id,created);
+CREATE TABLE IF NOT EXISTS assignment_branch_cleanup(
+ assignment_id TEXT PRIMARY KEY REFERENCES assignment_branches(id), runner_id TEXT NOT NULL REFERENCES runners(id),
+ state TEXT NOT NULL CHECK(state IN ('requested','blocked','complete')), requested_by TEXT NOT NULL,
+ requested TEXT NOT NULL, updated TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', completed TEXT,
+ attempt INTEGER NOT NULL DEFAULT 1 CHECK(attempt>=1));
+CREATE INDEX IF NOT EXISTS assignment_branch_cleanup_pending ON assignment_branch_cleanup(runner_id,state,updated);
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot TEXT NOT NULL REFERENCES bots(slug), state TEXT NOT NULL DEFAULT 'queued',

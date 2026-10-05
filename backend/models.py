@@ -775,7 +775,7 @@ class Heartbeat(Contract):
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=32)
-    capabilities: list[Literal["assignment_instances_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1018,6 +1018,16 @@ class AssignmentBranchUpdate(Contract):
     handoff_task_id: str = Field(default="", max_length=200)
     reviewed_learning_note: str = Field(default="", max_length=6000)
     confirm_learning_review: StrictBool = False
+
+
+class AssignmentBranchCleanupRequest(Contract):
+    expected_revision: int = Field(ge=1)
+
+
+class AssignmentBranchCleanupResult(Contract):
+    attempt: int = Field(ge=1)
+    result: Literal["complete", "blocked"]
+    detail: str = Field(default="", max_length=2000)
 
 
 class BotArchive(Contract):

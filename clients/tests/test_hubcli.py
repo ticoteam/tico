@@ -642,6 +642,7 @@ def test_temporary_assignment_cli_uses_supported_authenticated_routes(monkeypatc
          "--note", "Checkpointed", "--checkpoint-json", '{"next":"tests"}', "--handoff-task", "follow-up-task"],
         ["bot", "assignment", "update", "assignment-id", "--revision", "3",
          "--reviewed-learning-file", str(lesson_file), "--confirm-learning-review"],
+        ["bot", "assignment", "cleanup", "assignment-id", "--revision", "5"],
     ):
         remotecli.run(hubcli.parser().parse_args(argv))
     assert sent[0] == ("GET", "bots/software-engineer/assignment-branches", {})
@@ -662,3 +663,5 @@ def test_temporary_assignment_cli_uses_supported_authenticated_routes(monkeypatc
         "handoff_task_id": "",
         "reviewed_learning_note": "Use bounded retries and preserve idempotency keys.\n",
         "confirm_learning_review": True})
+    assert sent[5][0:3] == ("POST", "assignment-branches/assignment-id/cleanup",
+                            {"expected_revision": 5})

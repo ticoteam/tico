@@ -1354,6 +1354,10 @@ def parser():
     s.add_argument("--confirm-learning-review", action="store_true",
                    help="confirm the lesson excludes task/customer details, private conversation content and credentials")
     s.set_defaults(fn="bot assignment")
+    s = assignment.add_parser("cleanup", help="request guarded local cleanup after archive or cancellation")
+    s.add_argument("assignment")
+    s.add_argument("--revision", type=int, required=True)
+    s.set_defaults(fn="bot assignment")
     s = bot.add_parser("copy", help="copy a bot into a new one the requester owns (BotOps)")
     s.add_argument("bot", help="the bot to copy")
     s.add_argument("--slug", help="the copy's slug; <bot>-copy by default")

@@ -1170,6 +1170,163 @@ class Runner:
             return "The explicit assignment learning trunk differs from its registration; all work was left untouched"
         return ""
 
+    def assignment_cleanup_problem(self, request):
+        """Prove both archived trees are clean and all their commits are already preserved remotely."""
+        bot = str(request.get("bot") or "")
+        config = request.get("config") or {}
+        assignment_id = str(request.get("assignment_id") or request.get("id") or "")
+        root = Path(self.config["projects_dir"]).resolve()
+        product = self.local_path(bot, config)
+        expected_product = root / "assignments" / bot
+        learning = self.assignment_learning_path(bot)
+        expected_learning = root / "assignment-learning" / bot
+        marker = self.assignment_marker(bot)
+        if (not bot or not assignment_id or not is_assignment(config)
+                or config.get("assignment_id") != assignment_id
+                or config.get("assignment_task_id") != request.get("task_id")
+                or config.get("generation") != request.get("generation")):
+            return False, "Runner cleanup identity does not match its archived assignment; all local paths were retained"
+        resolved_product, resolved_learning, resolved_marker = product.resolve(), learning.resolve(), marker.resolve()
+        if (resolved_product != expected_product.resolve() or resolved_learning != expected_learning.resolve()
+                or not resolved_product.is_relative_to(root) or not resolved_learning.is_relative_to(root)
+                or not resolved_marker.is_relative_to(root)):
+            return False, "Assignment paths do not match the fixed local registration; all local paths were retained"
+        paths = (product, learning, marker)
+        if all(not path.exists() and not path.is_symlink() for path in paths):
+            return True, "The assignment's product tree, learning tree, and registration were already absent"
+        if any(path.is_symlink() for path in paths):
+            return False, "An assignment path is a symbolic link; all local paths were retained"
+        if not product.is_dir() or not learning.is_dir() or not marker.is_file():
+            return False, "The assignment's product tree, learning tree, and registration are incomplete; remaining paths were retained"
+        problem = self.assignment_checkout_problem(bot, config, product)
+        if problem:
+            return False, "The assignment checkout does not match its registration; all local paths were retained"
+        try:
+            record = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False, "The assignment registration cannot be verified; all local paths were retained"
+        if record.get("assignment_id") != assignment_id:
+            return False, "The local registration belongs to another assignment; all local paths were retained"
+
+        env = safe_git.environment()
+
+        def git(path, *args, git_env=None, timeout=15):
+            return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True,
+                                 text=True, stdin=subprocess.DEVNULL,
+                                 env=safe_git.environment(git_env) if git_env is not None else env,
+                                 timeout=timeout)
+
+        def clean(path):
+            result = git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
+            return result.returncode == 0 and not result.stdout.strip()
+
+        # Ignored files count as uncertain work too: removing either checkout must not discard them.
+        if not clean(product) or not clean(learning):
+            return False, "An assignment tree contains changed, untracked, or ignored work; all local paths were retained"
+        source = self.local_path(str(config.get("shared_from") or ""), {"shared": True})
+        if not source.is_dir() or not (source / ".git").exists():
+            return False, "The persistent role's source checkout is unavailable; assignment trees were retained"
+        source_common = self.git_common_dir(source)
+        if (not source_common or record.get("learning_common_dir") != source_common
+                or self.git_common_dir(learning) != source_common):
+            return False, "The learning tree no longer matches the registered source Git directory; all paths were retained"
+
+        source_env, _ = self.github_access(str(config.get("shared_from") or ""))
+        if source_env is None:
+            return False, "The source-scoped repository credential is unavailable; all local paths were retained"
+        origin = git(product, "remote", "get-url", "origin")
+        expected_origin = shared_repository_url(config)
+        if origin.returncode or not expected_origin or origin.stdout.strip() != expected_origin:
+            return False, "The assignment origin differs from its registered source repository; all local paths were retained"
+        fetched = git(product, "fetch", "--quiet", "--no-tags", "origin", git_env=source_env, timeout=45)
+        if fetched.returncode:
+            return False, "The product branch could not be checked against its origin; all local paths were retained"
+        head = git(product, "rev-parse", "--verify", "HEAD")
+        refs = git(product, "for-each-ref", "--format=%(refname)", "refs/remotes/origin")
+        local_refs = git(product, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags")
+        if head.returncode or refs.returncode or local_refs.returncode or not refs.stdout.strip():
+            return False, "The product branch has no verifiable remote preservation point; all local paths were retained"
+        remote_refs = refs.stdout.splitlines()
+        for local_ref in local_refs.stdout.splitlines():
+            if not any(git(product, "merge-base", "--is-ancestor", local_ref, remote_ref).returncode == 0
+                       for remote_ref in remote_refs):
+                return False, "A local product branch or tag contains commits not preserved on origin; all local paths were retained"
+
+        refresh_problem = self.assignment_learning_refresh(bot, config, int(request.get("revision") or 0))
+        if refresh_problem:
+            return False, "The learning branch contains a draft or conflict not published to the source trunk; all paths were retained"
+        if not clean(learning):
+            return False, "The learning tree changed during cleanup verification; all local paths were retained"
+        trunk_ref = str(record.get("learning_trunk_ref") or "")
+        if (trunk_ref != "refs/remotes/origin/" + str(record.get("learning_trunk_branch") or "")
+                or git(learning, "merge-base", "--is-ancestor", "HEAD", trunk_ref).returncode != 0):
+            return False, "The learning branch is not preserved on the explicit source trunk; all paths were retained"
+        active = set(getattr(self, "active_bots", {}).values())
+        if bot in active or str(request.get("source_bot") or "") in active:
+            return False, "The assignment or persistent role still has a local runner process; all paths were retained"
+        return True, ""
+
+    def cleanup_assignment_trees(self, request):
+        """Remove only a manager-requested archived assignment after local proof succeeds."""
+        bot = str(request.get("bot") or "")
+        source = str(request.get("source_bot") or "")
+        if not bot or not source or bot == source:
+            return "blocked", "The cleanup request has an invalid source/assignment identity; all local paths were retained"
+        locks = [self.worktrees.bot_lock(name) for name in sorted({bot, source})]
+        acquired = []
+        try:
+            for lock in locks:
+                if not lock.acquire(timeout=1):
+                    return "blocked", "The assignment or persistent role is in a local runner turn; all paths were retained"
+                acquired.append(lock)
+            return self._cleanup_assignment_trees_locked(request)
+        finally:
+            for lock in reversed(acquired):
+                lock.release()
+
+    def _cleanup_assignment_trees_locked(self, request):
+        safe, detail = self.assignment_cleanup_problem(request)
+        if not safe:
+            return "blocked", detail
+        bot = request["bot"]
+        product = self.local_path(bot, request["config"])
+        learning = self.assignment_learning_path(bot)
+        marker = self.assignment_marker(bot)
+        if product.exists() or learning.exists() or marker.exists():
+            source = self.local_path(str(request["source_bot"]), {"shared": True})
+            with self.push_lock:
+                removed = isolation.run([*safe_git.prefix(source), "-C", str(source), "worktree", "remove", "--", str(learning)],
+                                        capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                        env=safe_git.environment(), timeout=30)
+            if removed.returncode:
+                return "blocked", "Git refused to remove the verified learning worktree; all remaining paths were retained"
+            try:
+                shutil.rmtree(product)
+                marker.unlink()
+            except OSError:
+                return "blocked", "Local cleanup stopped partway; remaining paths and registration were retained"
+        return "complete", "Verified clean local assignment trees and registration were removed; Hub history and receipts remain"
+
+    def process_assignment_cleanups(self):
+        """Handle explicit parent-role requests outside assignment actors and task processes."""
+        try:
+            requests = self.client.get("runners/assignment-cleanups").get("cleanups", [])
+        except APIError as exc:
+            if exc.status != 404:
+                log(f"Tico runner: assignment cleanup queue unavailable ({describe(exc)})")
+            return
+        except Exception as exc:
+            log(f"Tico runner: assignment cleanup queue unavailable ({type(exc).__name__})")
+            return
+        for request in requests:
+            try:
+                result, detail = self.cleanup_assignment_trees(request)
+                self.client.post(f"runners/assignment-cleanups/{request['id']}",
+                                 {"attempt": request["attempt"], "result": result, "detail": detail},
+                                 key=f"assignment-cleanup-{request['id']}-{request['attempt']}-{result}")
+            except Exception as exc:
+                log(f"Tico runner: assignment cleanup report failed ({type(exc).__name__}); local evidence remains governed by its request")
+
     def materialize_assignment(self, bot, config, path):
         """Clone into a new assignment path, verify the branch/tree, then write local proof."""
         marker = self.assignment_marker(bot)
@@ -2926,6 +3083,7 @@ class Runner:
     def maintain(self):
         repository_rows = self.repositories.poll()
         assignments = self.client.get("runners/assignments")
+        self.process_assignment_cleanups()
         self.migrate_credentials(assignments)
         self.bot_credential_names = self.client.get("runner-credential-grants")["bots"]
         self.assignments_seen = assignments
@@ -2961,7 +3119,7 @@ class Runner:
             if self._checkout and checkout.get("behind") and getattr(self, "_update_note", None):
                 self._checkout = {**self._checkout, "blocked": self._update_note}
         body = {"version": RUNNER_VERSION, "platform": sys.platform,
-                "capabilities": ["assignment_instances_v1"],
+                "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1"],
                 "capacity": self.capacity, "readiness": self.readiness(candidates, checks, runtimes),
                 "mail_agent_instructions": self.mail_agent_instructions(assignments),
                 "agent_instructions": agent_instructions,

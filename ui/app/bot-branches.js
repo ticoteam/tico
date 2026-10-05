@@ -120,8 +120,11 @@ async function assignmentBranchesLoad(source) {
         <span class="assignment-phase">${esc(a.phase)}</span>
         ${a.task ? `<a href="#/task/${encodeURIComponent(a.task.id)}">${esc(a.task.title)}</a>` : '<span class="muted">Linked task is not visible</span>'}
         <small class="muted">Parent role: ${esc(botDisplayName(source))} · Generation ${a.generation} · ${esc(a.runner_id)} · checkpoint: ${esc(JSON.stringify(a.checkpoint || {}).slice(0, 240) || 'none')}</small>
+        ${a.cleanup ? `<small class="muted">Local cleanup: ${esc(a.cleanup.state)}${a.cleanup.detail ? ` · ${esc(a.cleanup.detail)}` : ''}</small>` : ''}
         ${manager && !['archived','cancelled'].includes(a.phase) ? `<button class="ghost" type="button" data-assignment-manage="${esc(a.id)}">Checkpoint / lifecycle</button>
           <button class="ghost" type="button" data-assignment-learning="${esc(a.id)}">Review reusable lesson</button>` : ''}
+        ${manager && ['archived','cancelled'].includes(a.phase) && a.cleanup?.state !== 'complete'
+          ? `<button class="ghost" type="button" data-assignment-cleanup="${esc(a.id)}" ${a.cleanup?.state === 'requested' ? 'disabled' : ''}>${a.cleanup?.state === 'blocked' ? 'Retry guarded cleanup' : a.cleanup?.state === 'requested' ? 'Cleanup requested' : 'Request guarded cleanup'}</button>` : ''}
         <details><summary>History</summary><div data-assignment-history="${esc(a.id)}">Loading…</div></details>
       </article>`).join('')}</div>` : '<p class="muted">No temporary assignments yet.</p>'}
     </section>`;
@@ -144,6 +147,10 @@ async function assignmentBranchesLoad(source) {
       const row = (data.assignments || []).find(a => a.id === button.dataset.assignmentLearning);
       if (row) void assignmentBranchReviewLearning(source, row);
     }));
+    host.querySelectorAll('[data-assignment-cleanup]').forEach(button => button.addEventListener('click', () => {
+      const row = (data.assignments || []).find(a => a.id === button.dataset.assignmentCleanup);
+      if (row) void assignmentBranchCleanup(source, row);
+    }));
     for (const row of data.assignments || []) {
       const details = host.querySelector(`[data-assignment-history="${CSS.escape(row.id)}"]`);
       if (!details) continue;
@@ -158,6 +165,15 @@ async function assignmentBranchesLoad(source) {
       host.querySelector('[data-assignment-retry]')?.addEventListener('click', () => void assignmentBranchesLoad(source));
     }
   }
+}
+
+async function assignmentBranchCleanup(source, row) {
+  if (!confirm(`Request separate cleanup for ${row.display_name}? The original runner will remove its local trees only if registration is exact, both trees are clean, and every assignment commit is already preserved on its remote. Hub lifecycle history and receipts remain.`)) return;
+  try {
+    await post(`/v2/assignment-branches/${encodeURIComponent(row.id)}/cleanup`, {expected_revision: row.revision});
+    toast('Guarded cleanup requested from the original computer');
+    await assignmentBranchesLoad(source);
+  } catch (error) { toast(error.message); }
 }
 
 async function assignmentBranchReviewLearning(source, row) {

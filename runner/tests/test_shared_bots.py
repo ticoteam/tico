@@ -212,6 +212,66 @@ class Copy(unittest.TestCase):
             self.assertIn("draft changes", dirty_problem)
             self.assertEqual(draft.read_text(), "keep this uncommitted reviewed lesson draft\n")
             self.assertEqual(git(second_learning, "rev-parse", "HEAD").stdout.strip(), second_draft_head)
+
+            # Cleanup is a separate explicit request. Dirty task work and learning drafts are retained;
+            # an already-published, clean assignment can be removed without touching the source trunk.
+            first_request = {"id": "assignment-id-1", "assignment_id": "assignment-id-1", "bot": bot,
+                             "source_bot": "backend-architect", "task_id": "task-id-1", "generation": 1,
+                             "revision": 4, "config": config}
+            exclude = path / ".git" / "info" / "exclude"
+            exclude_before = exclude.read_text() if exclude.exists() else ""
+            exclude.write_text(exclude_before + "\nignored-task-work.md\n")
+            ignored_draft = path / "ignored-task-work.md"
+            ignored_draft.write_text("keep ignored local task work\n")
+            result, detail = runner.cleanup_assignment_trees(first_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("untracked, or ignored", detail)
+            self.assertEqual(ignored_draft.read_text(), "keep ignored local task work\n")
+            ignored_draft.unlink()
+            exclude.write_text(exclude_before)
+            task_draft = path / "untracked-task-work.md"
+            task_draft.write_text("keep this untracked task work\n")
+            task_head_before = git(path, "rev-parse", "HEAD").stdout.strip()
+            result, detail = runner.cleanup_assignment_trees(first_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("untracked, or ignored", detail)
+            self.assertEqual(task_draft.read_text(), "keep this untracked task work\n")
+            task_draft.unlink()
+            committed_draft = path / "committed-task-work.md"
+            committed_draft.write_text("keep this unpreserved local commit\n")
+            git(path, "add", "committed-task-work.md")
+            git(path, "commit", "-q", "-m", "unpreserved assignment commit")
+            task_head_before = git(path, "rev-parse", "HEAD").stdout.strip()
+            result, detail = runner.cleanup_assignment_trees(first_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("commits not preserved", detail)
+            self.assertTrue(path.is_dir() and learning_path.is_dir() and marker.is_file())
+            self.assertEqual(git(path, "rev-parse", "HEAD").stdout.strip(), task_head_before)
+
+            second_request = {"id": "assignment-id-2", "assignment_id": "assignment-id-2", "bot": second,
+                              "source_bot": "backend-architect", "task_id": "task-id-2", "generation": 1,
+                              "revision": 4, "config": second_config}
+            result, detail = runner.cleanup_assignment_trees(second_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("changed, untracked, or ignored", detail)
+            self.assertTrue(second_learning.is_dir() and second_path.is_dir())
+
+            third_request = {"id": "assignment-id-3", "assignment_id": "assignment-id-3", "bot": third,
+                             "source_bot": "backend-architect", "task_id": "task-id-3", "generation": 1,
+                             "revision": 4, "config": third_config}
+            git(third_path, "remote", "set-url", "origin", (root / "different-origin.git").as_uri())
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("origin differs", detail)
+            self.assertTrue(third_path.is_dir() and third_learning.is_dir())
+            git(third_path, "remote", "set-url", "origin", source.as_uri())
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "complete", detail)
+            self.assertFalse(third_path.exists())
+            self.assertFalse(third_learning.exists())
+            self.assertFalse(runner.assignment_marker(third).exists())
+            self.assertTrue(source.is_dir() and (source / "AGENT.md").is_file())
+
             self.assertTrue(runner.client.post.call_args_list)
             self.assertTrue(all(call.args == ("github/token", {"bot": "backend-architect"})
                                 for call in runner.client.post.call_args_list))
