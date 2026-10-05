@@ -18,7 +18,7 @@ def prepare_source(api, capability=True):
     computer = runner(api, "ana", "Assignment Mac")
     post(api, "bots/cpo/assignment", {"runner_id": computer["runner_id"], "expected_generation": 0})
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": 4,
-        "capabilities": ["assignment_instances_v1"] if capability else [],
+        "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1"] if capability else [],
         "readiness": {"schema_version": 1, "bots": {"cpo": {"ready": True}}}}, computer["token"])
     return computer
 
@@ -174,6 +174,12 @@ def test_cancellation_is_audited_and_reopen_uses_a_new_generation(api):
     cancelled = response.json()
     assert cancelled["phase"] == "cancelled"
     with api.app.state.store.read() as c:
+        with pytest.raises(Problem) as retired:
+            api.app.state.auth.require_bot_contact(
+                c, Identity("human:ana", "human"), "bot:" + first["bot"],
+                task_id=task["id"], kind="comment")
+        assert retired.value.code == "assignment_retired"
+    with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["owner"] == "bot:cpo"
         assert H.task(c, handoff["id"])["owner"] == "bot:cpo"
         assert H.bot(c, first["bot"])["state"] == "archived"
@@ -209,7 +215,7 @@ def test_expired_lease_does_not_release_an_unsettled_assignment(api):
 
 
 def test_pause_resume_review_release_archive_preserves_assignment_history(api):
-    prepare_source(api)
+    computer = prepare_source(api)
     task = delivery_task(api, "Release an accepted feature")
     made = create(api, task, key="release-feature", idem="release-feature-create")
 
@@ -265,6 +271,66 @@ def test_pause_resume_review_release_archive_preserves_assignment_history(api):
         assert c.execute("SELECT 1 FROM assignment_branches WHERE id=?", (made["id"],)).fetchone()
         assert c.execute("SELECT 1 FROM assignments WHERE bot=?", (made["bot"],)).fetchone()
         assert H.task(c, task["id"])["owner"] == "bot:" + made["bot"]
+
+    cleanup_path = "/api/v2/assignment-branches/" + made["id"] + "/cleanup"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capabilities_json='[\"assignment_instances_v1\"]' WHERE id=?",
+                  (computer["runner_id"],))
+    old_runner = api.post(cleanup_path, json={"expected_revision": archived["revision"]},
+                          headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "cleanup-old-runner"})
+    assert old_runner.status_code == 409 and old_runner.json()["error"]["code"] == "assignment_cleanup_runner"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capabilities_json='[\"assignment_instances_v1\",\"assignment_cleanup_v1\"]' WHERE id=?",
+                  (computer["runner_id"],))
+        job = c.execute("SELECT id FROM jobs WHERE bot=?", (made["bot"],)).fetchone()
+        now = H.now()
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started,thread_id) "
+                  "VALUES(?,?,?,?,1,?,'uncertain',?,?,?,?)",
+                  (H.new_id(), job["id"], made["bot"], made["runner_id"], "cleanup-uncertain-token-hash",
+                   H.shift(now, seconds=-60), now, now, "synthetic-cleanup-thread"))
+    leased = api.post(cleanup_path, json={"expected_revision": archived["revision"]},
+                      headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "cleanup-with-uncertain-attempt"})
+    assert leased.status_code == 409 and leased.json()["error"]["code"] == "assignment_cleanup_busy"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE bot=? AND state='uncertain'", (made["bot"],))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='queued' WHERE bot=? AND state='delivered'", (made["bot"],))
+    busy = api.post(cleanup_path, json={"expected_revision": archived["revision"]},
+                    headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "cleanup-with-pending-reply"})
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "assignment_cleanup_busy"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='delivered' WHERE bot=? AND state='queued'", (made["bot"],))
+    requested = api.post(cleanup_path, json={"expected_revision": archived["revision"]},
+                         headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "cleanup-request"})
+    assert requested.status_code == 200, requested.text
+    assert requested.json()["state"] == "requested"
+    queue = get(api, "runners/assignment-cleanups", computer["token"])["cleanups"]
+    assert len(queue) == 1 and queue[0]["assignment_id"] == made["id"] and queue[0]["attempt"] == 1
+    blocked = api.post("/api/v2/runners/assignment-cleanups/" + made["id"],
+                       json={"attempt": 1, "result": "blocked", "detail": "Synthetic dirty-tree refusal"},
+                       headers={"Authorization": "Bearer " + computer["token"], "Idempotency-Key": "cleanup-blocked"})
+    assert blocked.status_code == 200 and blocked.json()["state"] == "blocked"
+    assert get(api, "bots/cpo/assignment-branches")["assignments"][0]["cleanup"]["detail"] == "Synthetic dirty-tree refusal"
+    retried = api.post(cleanup_path, json={"expected_revision": archived["revision"]},
+                       headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "cleanup-retry"})
+    assert retried.status_code == 200 and retried.json()["state"] == "requested" and retried.json()["attempt"] == 2
+    assert get(api, "runners/assignment-cleanups", computer["token"])["cleanups"][0]["attempt"] == 2
+    stale = api.post("/api/v2/runners/assignment-cleanups/" + made["id"],
+                     json={"attempt": 1, "result": "complete", "detail": ""},
+                     headers={"Authorization": "Bearer " + computer["token"], "Idempotency-Key": "cleanup-stale-attempt"})
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "assignment_cleanup_attempt"
+    complete = api.post("/api/v2/runners/assignment-cleanups/" + made["id"],
+                        json={"attempt": 2, "result": "complete", "detail": ""},
+                        headers={"Authorization": "Bearer " + computer["token"], "Idempotency-Key": "cleanup-complete"})
+    assert complete.status_code == 200 and complete.json()["state"] == "complete"
+    assert get(api, "runners/assignment-cleanups", computer["token"])["cleanups"] == []
+    with api.app.state.store.read() as c:
+        assert H.bot(c, made["bot"])["state"] == "archived"
+        assert H.task(c, task["id"])["owner"] == "bot:" + made["bot"]
+        actions = [row[0] for row in c.execute(
+            "SELECT action FROM assignment_branch_events WHERE assignment_id=?", (made["id"],))]
+        assert actions.count("cleanup_requested") == 2
+        assert "cleanup_blocked" in actions and "cleanup_complete" in actions
 
 
 def test_reviewed_learning_reaches_source_without_the_task_transcript_and_dedupes(api):

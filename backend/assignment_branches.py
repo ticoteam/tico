@@ -15,7 +15,9 @@ from .shared_bots import declared, source_of, check_runner, FOLLOWED
 from .store import H, Problem, encode
 
 CAPABILITY = "assignment_instances_v1"
+CLEANUP_CAPABILITY = "assignment_cleanup_v1"
 ACTIVE_PHASES = ("preparing", "working", "paused", "interrupted", "verifying")
+CAPACITY_EXEMPT_PHASES = ("waiting_review", "waiting_release", "archived", "cancelled")
 CAPACITY_LIMIT = 3
 
 
@@ -94,14 +96,131 @@ def _load(c, ident):
     return c.execute("SELECT * FROM assignment_branches WHERE id=? OR bot=?", (ident, ident)).fetchone()
 
 
+def _active_count(c):
+    placeholders = ",".join("?" for _ in CAPACITY_EXEMPT_PHASES)
+    return c.execute(f"SELECT count(*) FROM assignment_branches WHERE phase NOT IN ({placeholders})",
+                     CAPACITY_EXEMPT_PHASES).fetchone()[0]
+
+
+def _reserve_capacity(c, row, phase):
+    needs_slot = row["phase"] in CAPACITY_EXEMPT_PHASES and phase not in CAPACITY_EXEMPT_PHASES
+    if needs_slot and _active_count(c) >= CAPACITY_LIMIT:
+        raise Problem("assignment_capacity", "All three temporary implementation slots are active; move one to review or release", 409)
+
+
 def _visible(c, auth, who, row):
     auth.require_read(c, who, row["source_bot"])
     try:
         task = auth.task(c, who, row["task_id"])
     except Problem:
         task = None
+    cleanup = c.execute("SELECT state,requested,updated,detail,completed FROM assignment_branch_cleanup WHERE assignment_id=?",
+                         (row["id"],)).fetchone()
     return {**_assignment(row), "task": ({"id": task["id"], "title": task["title"],
-                                          "status": task["status"], "owner": task["owner"]} if task else None)}
+                                          "status": task["status"], "owner": task["owner"]} if task else None),
+            "cleanup": dict(cleanup) if cleanup else None}
+
+
+def _cleanup_busy(c, bot):
+    attempt = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running','uncertain') LIMIT 1",
+                        (bot,)).fetchone()
+    job = c.execute("SELECT 1 FROM jobs WHERE bot=? AND state IN ('queued','leased','running','uncertain') LIMIT 1",
+                    (bot,)).fetchone()
+    return bool(attempt or job)
+
+
+def request_cleanup(c, who, ident, body, auth):
+    row = _load(c, ident)
+    if not row:
+        raise Problem("not_found", "Temporary assignment not found", 404)
+    _require_manager(c, auth, who, row["source_bot"])
+    if row["revision"] != body.expected_revision:
+        raise Problem("version_conflict", "Assignment changed; refresh before requesting cleanup", 409)
+    if row["phase"] not in ("archived", "cancelled"):
+        raise Problem("assignment_cleanup_phase", "Archive or cancel the assignment before requesting separate cleanup", 409)
+    if _cleanup_busy(c, row["bot"]):
+        raise Problem("assignment_cleanup_busy", "An assignment still has a lease or pending reply; retain its evidence", 409)
+    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (row["runner_id"],)).fetchone()
+    if not runner or CLEANUP_CAPABILITY not in set(H._json(runner["capabilities_json"], []) or []):
+        raise Problem("assignment_cleanup_runner", "The original runner is unavailable or lacks guarded assignment cleanup support", 409)
+    existing = c.execute("SELECT * FROM assignment_branch_cleanup WHERE assignment_id=?", (row["id"],)).fetchone()
+    if existing and existing["state"] == "complete":
+        return {"assignment_id": row["id"], **dict(existing)}
+    now = H.now()
+    if existing and existing["state"] == "requested":
+        cleanup = dict(existing)
+    else:
+        c.execute("INSERT INTO assignment_branch_cleanup(assignment_id,runner_id,state,requested_by,requested,updated,detail,completed,attempt) "
+                  "VALUES(?,?,'requested',?,?,?,'',NULL,1) ON CONFLICT(assignment_id) DO UPDATE SET "
+                  "runner_id=excluded.runner_id,state='requested',requested_by=excluded.requested_by,"
+                  "requested=excluded.requested,updated=excluded.updated,detail='',completed=NULL,"
+                  "attempt=assignment_branch_cleanup.attempt+1",
+                  (row["id"], row["runner_id"], who.actor, now, now))
+        cleanup = dict(c.execute("SELECT * FROM assignment_branch_cleanup WHERE assignment_id=?", (row["id"],)).fetchone())
+        _event(c, row, who.actor, "cleanup_requested", {"runner_id": row["runner_id"],
+                                                          "archive_phase": row["phase"]})
+        H.event(c, who.actor, "bot.assignment_branch_cleanup_requested", row["id"],
+                {"runner_id": row["runner_id"], "phase": row["phase"]})
+    return {"assignment_id": row["id"], **cleanup}
+
+
+def runner_cleanups(c, who, execution):
+    runner = execution.runner(c, who)
+    capabilities = set(H._json(runner["capabilities_json"], []) or [])
+    if CLEANUP_CAPABILITY not in capabilities:
+        return {"cleanups": []}
+    rows = c.execute("SELECT cl.assignment_id,cl.runner_id,cl.requested,cl.attempt,ab.source_bot,ab.bot,ab.task_id,"
+                     "ab.generation,ab.revision,bc.config_json FROM assignment_branch_cleanup cl "
+                     "JOIN assignment_branches ab ON ab.id=cl.assignment_id "
+                     "JOIN bot_config bc ON bc.bot=ab.bot WHERE cl.runner_id=? AND cl.state='requested' "
+                     "AND ab.phase IN ('archived','cancelled') ORDER BY cl.requested,cl.assignment_id LIMIT 3",
+                     (who.runner_id,)).fetchall()
+    output = []
+    for row in rows:
+        if _cleanup_busy(c, row["bot"]):
+            continue
+        config = H._json(row["config_json"], {}) or {}
+        proof_config = {key: config[key] for key in (
+            "assignment_branch", "assignment_id", "assignment_task_id", "shared_from", "generation", "repo", "repo_url"
+        ) if key in config}
+        output.append({"id": row["assignment_id"], "assignment_id": row["assignment_id"],
+                       "runner_id": row["runner_id"], "requested": row["requested"],
+                       "attempt": row["attempt"],
+                       "source_bot": row["source_bot"], "bot": row["bot"], "task_id": row["task_id"],
+                       "generation": row["generation"], "revision": row["revision"], "config": proof_config})
+    return {"cleanups": output}
+
+
+def runner_cleanup_result(c, who, ident, body, execution):
+    runner = execution.runner(c, who)
+    row = c.execute("SELECT cl.*,ab.source_bot,ab.bot,ab.phase FROM assignment_branch_cleanup cl "
+                     "JOIN assignment_branches ab ON ab.id=cl.assignment_id WHERE cl.assignment_id=?",
+                     (ident,)).fetchone()
+    if not row or row["runner_id"] != who.runner_id or row["phase"] not in ("archived", "cancelled"):
+        raise Problem("not_found", "Cleanup request not found for this runner", 404)
+    if CLEANUP_CAPABILITY not in set(H._json(runner["capabilities_json"], []) or []):
+        raise Problem("runner_capability", "This runner did not advertise guarded assignment cleanup support", 409)
+    if body.attempt != row["attempt"]:
+        raise Problem("assignment_cleanup_attempt", "This cleanup reply belongs to an older request; use the current cleanup attempt", 409)
+    if row["state"] == "complete":
+        return {"assignment_id": ident, "state": "complete", "detail": row["detail"]}
+    if row["state"] != "requested":
+        raise Problem("assignment_cleanup_state", "This cleanup request is no longer pending; request it again after resolving the blocker", 409)
+    if body.result == "complete":
+        if _cleanup_busy(c, row["bot"]):
+            raise Problem("assignment_cleanup_busy", "A lease or pending reply appeared; retain the remaining evidence", 409)
+        state, detail, completed = "complete", "Local assignment trees and registration were removed after runner verification", H.now()
+    else:
+        if not body.detail.strip():
+            raise Problem("assignment_cleanup_detail", "A blocked cleanup must explain what evidence was retained", 422)
+        state, detail, completed = "blocked", body.detail.strip()[:2000], None
+    now = H.now()
+    c.execute("UPDATE assignment_branch_cleanup SET state=?,updated=?,detail=?,completed=? WHERE assignment_id=? AND state='requested'",
+              (state, now, detail, completed, ident))
+    _event(c, {"id": ident}, who.actor, "cleanup_" + state, {"detail": detail, "runner_id": who.runner_id})
+    H.event(c, who.actor, "bot.assignment_branch_cleanup_" + state, ident,
+            {"runner_id": who.runner_id, "detail": detail})
+    return {"assignment_id": ident, "state": state, "detail": detail, "completed": completed}
 
 
 def set_policy(c, who, source, body, auth):
@@ -147,8 +266,7 @@ def create(c, who, source, body, auth, settings_admin, execution):
         raise Problem("assignment_active", "Retire the prior generation before reopening this assignment", 409)
     if previous and previous["task_id"] != task["id"]:
         raise Problem("assignment_identity", "A retired assignment key remains bound to its original task", 409)
-    count = c.execute("SELECT count(*) FROM assignment_branches WHERE phase NOT IN ('waiting_review','waiting_release','archived','cancelled')").fetchone()[0]
-    if count >= CAPACITY_LIMIT:
+    if _active_count(c) >= CAPACITY_LIMIT:
         raise Problem("assignment_capacity", "All three temporary implementation slots are active; move one to review or release", 409)
     slug = _slug(source, body.assignment_key, body.generation)
     if c.execute("SELECT 1 FROM bots WHERE slug=?", (slug,)).fetchone():
@@ -208,7 +326,7 @@ def list_for(c, who, source, auth):
     return {"source": source, "enabled": bool(declared(c, source).get("shared")),
             "allocator_enabled": bool(declared(c, source).get("assignment_allocator_enabled")),
             "capacity": CAPACITY_LIMIT,
-            "active": c.execute("SELECT count(*) FROM assignment_branches WHERE phase NOT IN ('waiting_review','waiting_release','archived','cancelled')").fetchone()[0],
+            "active": _active_count(c),
             "assignments": [_visible(c, auth, who, row) for row in rows]}
 
 
@@ -250,6 +368,9 @@ def update(c, who, ident, body, auth):
     }
     if phase != row["phase"] and phase not in allowed.get(row["phase"], set()):
         raise Problem("assignment_transition", f"Cannot move an assignment from {row['phase']} to {phase}", 409)
+    # Waiting for review or release reserves no execution slot. Resume is a capacity allocation,
+    # so check it under Store.mutate's BEGIN IMMEDIATE transaction just like create().
+    _reserve_capacity(c, row, phase)
     saved_checkpoint = json.loads(row["checkpoint_json"] or "{}")
     checkpoint = body.checkpoint if body.checkpoint else saved_checkpoint
     if phase in ("waiting_review", "waiting_release", "interrupted") and not checkpoint:
@@ -365,7 +486,8 @@ def update(c, who, ident, body, auth):
 
 
 def install(app, store, auth, mutate, settings_admin, execution):
-    from .models import AssignmentBranchCreate, AssignmentBranchPolicy, AssignmentBranchUpdate
+    from .models import (AssignmentBranchCleanupRequest, AssignmentBranchCleanupResult,
+                         AssignmentBranchCreate, AssignmentBranchPolicy, AssignmentBranchUpdate)
 
     @app.put("/api/v2/bots/{source}/assignment-branches/policy")
     def policy(request: Request, source: str, body: AssignmentBranchPolicy):
@@ -388,6 +510,22 @@ def install(app, store, auth, mutate, settings_admin, execution):
     def update_assignment(request: Request, ident: str, body: AssignmentBranchUpdate):
         who = request.state.identity
         return mutate(request, body, lambda c: update(c, who, ident, body, auth))
+
+    @app.post("/api/v2/assignment-branches/{ident}/cleanup")
+    def request_assignment_cleanup(request: Request, ident: str, body: AssignmentBranchCleanupRequest):
+        who = request.state.identity
+        return mutate(request, body, lambda c: request_cleanup(c, who, ident, body, auth))
+
+    @app.get("/api/v2/runners/assignment-cleanups")
+    def assigned_cleanups(request: Request):
+        who = request.state.identity
+        with store.read() as c:
+            return runner_cleanups(c, who, execution)
+
+    @app.post("/api/v2/runners/assignment-cleanups/{ident}")
+    def report_assignment_cleanup(request: Request, ident: str, body: AssignmentBranchCleanupResult):
+        who = request.state.identity
+        return mutate(request, body, lambda c: runner_cleanup_result(c, who, ident, body, execution))
 
     @app.get("/api/v2/assignment-branches/{ident}/events")
     def events(request: Request, ident: str):
