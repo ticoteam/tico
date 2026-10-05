@@ -36,6 +36,7 @@ async function main() {
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}]);
+      if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
@@ -95,10 +96,12 @@ async function main() {
     assert.equal(calls[0][1].cooldown_seconds, 90);
     world.detail.owner_actor = 'human:ben';
     await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-control=pause]').waitFor({state: 'detached'});
     await page.locator('#live-bot-picker').waitFor();
     assert.equal(await page.locator('[data-live-control=pause]').count(), 0, 'joined participant can attach without controlling the meeting');
     world.detail.owner_actor = 'human:ana';
     await page.locator('[data-live-id=live-1]').click();
+    await page.locator('[data-live-control=pause]').waitFor();
     await page.locator('#live-bot-picker select option[value=finance]').waitFor();
     await page.locator('#live-bot-picker select').selectOption('finance');
     const draft = 'Please review this plan';
