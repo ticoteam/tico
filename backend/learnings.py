@@ -474,8 +474,13 @@ def nightly(store, at):
     settings = store.settings
     if settings.rehearsal or settings.test_identities or local(at).hour < HOUR:
         return None
+    night = night_of(at)
+    # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
+    if store.__dict__.get("learnings_night") == night:
+        return None
     with store.transaction() as c:
-        run_id = claim(c, night_of(at))
+        run_id = claim(c, night)
+    store.__dict__["learnings_night"] = night
     if run_id:
         start(store, run_id)
     return run_id
