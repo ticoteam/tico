@@ -256,6 +256,7 @@ async function pageBot(slug, tab) {
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
       <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}</h1><span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
+        <div class="meta" id="bot-assignment-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div>
         <div class="bot-ticker" id="bot-ticker" aria-live="polite" hidden></div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
@@ -381,7 +382,10 @@ async function pageBot(slug, tab) {
     $('#chat-composer').innerHTML = `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
-  if (!limited) void botBranchesLoad(slug);
+  if (!limited) {
+    void botBranchesLoad(slug);
+    void assignmentBranchesLoad(slug);
+  }
   if (!limited) void botGoalLoad(slug);
   if (isKeeper(slug) && !limited) void botTickerLoad(slug);
   $('#btabs').onclick = ev => {

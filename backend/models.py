@@ -775,6 +775,7 @@ class Heartbeat(Contract):
     version: str = Field(max_length=100)
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=32)
+    capabilities: list[Literal["assignment_instances_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -989,6 +990,34 @@ class BotDefinitionCreate(Contract):
 
 class BotBranch(Contract):
     runner_id: ID | None = None
+
+
+class AssignmentBranchCreate(Contract):
+    assignment_key: str = Field(min_length=8, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+    generation: int = Field(ge=1, le=1000)
+    task_id: ID
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+class AssignmentBranchPolicy(Contract):
+    enabled: StrictBool
+    expected_revision: int = Field(ge=1)
+
+
+class AssignmentBranchUpdate(Contract):
+    expected_revision: int = Field(ge=1)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    phase: Literal["working", "waiting_review", "waiting_release", "paused", "interrupted",
+                   "verifying", "archived", "cancelled"] | None = None
+    note: str = Field(default="", max_length=4000)
+    checkpoint: dict = Field(default_factory=dict)
+    deployed_version: str = Field(default="", max_length=200)
+    acceptance_receipt: str = Field(default="", max_length=2000)
+    learning_receipt: str = Field(default="", max_length=2000)
+    evidence_receipt: str = Field(default="", max_length=2000)
+    handoff_task_id: str = Field(default="", max_length=200)
+    reviewed_learning_note: str = Field(default="", max_length=6000)
+    confirm_learning_review: StrictBool = False
 
 
 class BotArchive(Contract):

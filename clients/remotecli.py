@@ -519,6 +519,43 @@ def bots(client, args):
     """
     from clients import catalog
     workspace = Path(os.environ.get("HUB_WORKSPACE") or "")
+    if args.fn == "bot assignment":
+        action = args.assignment_action
+        operation = os.environ.get("HUB_OPERATION_ID")
+        if action == "list":
+            return client.get(f"bots/{args.source}/assignment-branches")
+        if action == "policy":
+            return client.call("PUT", f"bots/{args.source}/assignment-branches/policy",
+                               {"enabled": args.enabled, "expected_revision": args.revision}, key=operation)
+        if action == "create":
+            return client.post(f"bots/{args.source}/assignment-branches",
+                               {"assignment_key": args.assignment_key, "generation": args.generation,
+                                "task_id": args.task, "display_name": args.display_name}, key=operation)
+        if action == "update":
+            try:
+                checkpoint = json.loads(args.checkpoint_json)
+            except json.JSONDecodeError as exc:
+                raise APIError("checkpoint", "--checkpoint-json must be a JSON object") from exc
+            if not isinstance(checkpoint, dict):
+                raise APIError("checkpoint", "--checkpoint-json must be a JSON object")
+            reviewed_learning = ""
+            if args.reviewed_learning_file:
+                try:
+                    reviewed_learning = Path(args.reviewed_learning_file).read_text(encoding="utf-8")
+                except OSError as exc:
+                    raise APIError("learning_note", f"Could not read reviewed learning file: {type(exc).__name__}") from exc
+            if reviewed_learning.strip() and not args.confirm_learning_review:
+                raise APIError("learning_review", "Review the lesson and pass --confirm-learning-review to publish it")
+            if args.confirm_learning_review and not reviewed_learning.strip():
+                raise APIError("learning_note", "--confirm-learning-review needs --reviewed-learning-file with content")
+            body = {"expected_revision": args.revision, "phase": args.phase,
+                    "display_name": args.display_name, "note": args.note, "checkpoint": checkpoint,
+                    "deployed_version": args.deployed_version, "acceptance_receipt": args.acceptance_receipt,
+                    "learning_receipt": args.learning_receipt, "evidence_receipt": args.evidence_receipt,
+                    "handoff_task_id": args.handoff_task,
+                    "reviewed_learning_note": reviewed_learning,
+                    "confirm_learning_review": args.confirm_learning_review}
+            return client.patch(f"assignment-branches/{args.assignment}", body, key=operation)
     if args.fn == "template list":
         try:
             # The server's cards carry the instructions onboarding filled in; a server without

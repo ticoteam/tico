@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -103,6 +104,133 @@ class Copy(unittest.TestCase):
         scrubbed = service.scrub_reply(text, "backend-architect-sam", own="bot-backend-architect")
         self.assertIn("bot-backend-architect/memory/learnings.md", scrubbed)
         self.assertNotIn("emp-legal/", scrubbed)
+
+    def test_assignment_instances_get_registration_bound_local_branches_and_never_repair_missing_work(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            origin, source = root / "origin.git", root / "source"
+            git(root, "init", "--bare", "--initial-branch=main", str(origin))
+            git(root, "clone", str(origin), str(source))
+            git(source, "config", "user.name", "Test bot")
+            git(source, "config", "user.email", "bot@acme.example")
+            (source / "AGENT.md").write_text("rules\n")
+            (source / "memory").mkdir()
+            (source / "memory" / "learnings.md").write_text("Shared trunk lessons\n")
+            git(source, "add", "AGENT.md", "memory/learnings.md")
+            git(source, "commit", "-q", "-m", "rules")
+            git(source, "push", "-q", "-u", "origin", "main")
+            # Assignment learning follows the explicitly advertised role trunk;
+            # do not infer `main` merely because this synthetic repo has it.
+            git(source, "remote", "set-head", "origin", "main")
+            # Assignment learning follows the explicitly advertised role trunk;
+            # do not infer `main` merely because this synthetic repo has it.
+            git(source, "remote", "set-head", "origin", "main")
+            config = {**COPY, "assignment_branch": True, "assignment_id": "assignment-id-1",
+                      "assignment_task_id": "task-id-1", "assignment_key": "feature-1", "generation": 1,
+                      "repo": source.as_uri()}
+            bot = "backend-architect-work-abc123-g1"
+            runner = Runner({"url": "https://runner.acme.example", "token": "m", "projects_dir": str(root / "projects"),
+                            "repos": {"backend-architect": str(source)}},
+                            root / "state", host_factory=lambda a, e: None, client=mock.Mock())
+            # Synthetic fixture uses a local bare remote and no GitHub App installation.
+            runner.client.post.return_value = {"configured": False}
+            path = runner.local_path(bot, config)
+            self.assertEqual(path, root / "projects" / "assignments" / bot)
+            self.assertNotEqual(path, runner.local_path("backend-architect", {"shared": True}))
+            self.assertFalse(service.is_shared(config))
+            entry = {"bot": bot, "config": config, "repository": "", "generation": 1}
+            self.assertEqual(runner.fetch_repository(bot, entry, path), "")
+            self.assertEqual(git(path, "branch", "--show-current").stdout.strip(), "assignment/" + bot)
+            marker = runner.assignment_marker(bot)
+            self.assertTrue(marker.is_file())
+            marker_data = json.loads(marker.read_text())
+            source_common = git(source, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+            assignment_common = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+            self.assertEqual(marker_data["git_common_dir"], str(Path(assignment_common).resolve()))
+            self.assertNotEqual(Path(source_common).resolve(), Path(assignment_common).resolve())
+            learning_path = runner.assignment_learning_path(bot)
+            self.assertEqual(learning_path, root / "projects" / "assignment-learning" / bot)
+            self.assertEqual(git(learning_path, "branch", "--show-current").stdout.strip(), "assignment-learning/" + bot)
+            self.assertEqual(git(learning_path, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip(), source_common)
+            marker_data = json.loads(marker.read_text())
+            self.assertEqual(marker_data["learning_trunk_ref"], "refs/remotes/origin/main")
+
+            # Two assignment drafts stay in separate worktrees. Only the persistent role publishes
+            # reviewed lessons to origin/main; simultaneous checkpoint refreshes serialize fetches,
+            # retain both diverged drafts, and fast-forward a clean learning tree.
+            second = "backend-architect-work-def456-g1"
+            second_config = {**config, "assignment_id": "assignment-id-2", "assignment_task_id": "task-id-2",
+                             "assignment_key": "feature-2"}
+            second_entry = {"bot": second, "config": second_config, "repository": "", "generation": 1}
+            second_path = runner.local_path(second, second_config)
+            self.assertEqual(runner.fetch_repository(second, second_entry, second_path), "")
+            second_learning = runner.assignment_learning_path(second)
+            self.assertNotEqual(learning_path, second_learning)
+            self.assertEqual(git(second_learning, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip(), source_common)
+
+            third = "backend-architect-work-ghi789-g1"
+            third_config = {**config, "assignment_id": "assignment-id-3", "assignment_task_id": "task-id-3",
+                            "assignment_key": "feature-3"}
+            third_entry = {"bot": third, "config": third_config, "repository": "", "generation": 1}
+            third_path = runner.local_path(third, third_config)
+            self.assertEqual(runner.fetch_repository(third, third_entry, third_path), "")
+            third_learning = runner.assignment_learning_path(third)
+            self.assertEqual(git(third_learning, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip(), source_common)
+
+            (learning_path / "memory" / "learnings.md").write_text("Shared trunk lessons\nReviewed lesson A\n")
+            git(learning_path, "add", "memory/learnings.md")
+            git(learning_path, "commit", "-q", "-m", "reviewed lesson A")
+            (second_learning / "memory" / "learnings.md").write_text("Shared trunk lessons\nReviewed lesson B\n")
+            git(second_learning, "add", "memory/learnings.md")
+            git(second_learning, "commit", "-q", "-m", "reviewed lesson B")
+
+            # A human-reviewed handoff is added and published by the persistent source role, never
+            # by either assignment branch. A second reviewed publication extends that same trunk.
+            (source / "memory" / "learnings.md").write_text("Shared trunk lessons\nHuman-reviewed lesson A\n")
+            git(source, "add", "memory/learnings.md")
+            git(source, "commit", "-q", "-m", "publish reviewed lesson A")
+            git(source, "push", "-q", "origin", "main")
+            (source / "memory" / "learnings.md").write_text("Shared trunk lessons\nHuman-reviewed lesson A\nHuman-reviewed lesson B\n")
+            git(source, "add", "memory/learnings.md")
+            git(source, "commit", "-q", "-m", "publish reviewed lesson B")
+            git(source, "push", "-q", "origin", "main")
+            published = git(source, "rev-parse", "HEAD").stdout.strip()
+            first_draft_head = git(learning_path, "rev-parse", "HEAD").stdout.strip()
+            second_draft_head = git(second_learning, "rev-parse", "HEAD").stdout.strip()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                conflicts = list(pool.map(lambda pair: runner.assignment_learning_refresh(*pair),
+                                          ((bot, config, 2), (second, second_config, 2))))
+            self.assertTrue(all("diverged" in conflict for conflict in conflicts))
+            self.assertEqual(git(learning_path, "rev-parse", "HEAD").stdout.strip(), first_draft_head)
+            self.assertEqual(git(second_learning, "rev-parse", "HEAD").stdout.strip(), second_draft_head)
+            self.assertEqual(runner.assignment_learning_refresh(third, third_config, 2), "")
+            self.assertEqual(git(third_learning, "rev-parse", "HEAD").stdout.strip(), published)
+            self.assertEqual(git(source, "rev-parse", "refs/remotes/origin/main").stdout.strip(), published)
+            draft = second_learning / "memory" / "draft.md"
+            draft.write_text("keep this uncommitted reviewed lesson draft\n")
+            dirty_problem = runner.assignment_learning_refresh(second, second_config, 3)
+            self.assertIn("draft changes", dirty_problem)
+            self.assertEqual(draft.read_text(), "keep this uncommitted reviewed lesson draft\n")
+            self.assertEqual(git(second_learning, "rev-parse", "HEAD").stdout.strip(), second_draft_head)
+            self.assertTrue(runner.client.post.call_args_list)
+            self.assertTrue(all(call.args == ("github/token", {"bot": "backend-architect"})
+                                for call in runner.client.post.call_args_list))
+
+            self.assertEqual(runner.assignment_checkout_problem(bot, config, path), "")
+            (path / "work-in-progress.txt").write_text("keep this untracked file\n")
+            self.assertEqual(runner.assignment_checkout_problem(bot, config, path), "")
+            (path / "progress.md").write_text("committed assignment progress\n")
+            git(path, "add", "progress.md")
+            git(path, "commit", "-q", "-m", "save assignment progress")
+            committed_head = git(path, "rev-parse", "HEAD").stdout.strip()
+            (path / "AGENT.md").unlink()
+            problem = runner.fetch_repository(bot, entry, path)
+            self.assertIn("Tracked files are missing", problem)
+            self.assertFalse((path / "AGENT.md").exists())
+            self.assertEqual(git(path, "rev-parse", "HEAD").stdout.strip(), committed_head)
+            self.assertEqual((path / "work-in-progress.txt").read_text(), "keep this untracked file\n")
+            changed = {**config, "assignment_id": "different-registration"}
+            self.assertIn("different registration", runner.assignment_checkout_problem(bot, changed, path))
 
 
 class CleanClaude(unittest.TestCase):

@@ -201,6 +201,129 @@
         ]
       }
     },
+    "/api/v2/assignment-branches/{ident}": {
+      "patch": {
+        "summary": "Checkpoint or advance a temporary assignment lifecycle",
+        "operationId": "updateAssignmentBranch",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentBranchUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
+    "/api/v2/assignment-branches/{ident}/events": {
+      "get": {
+        "summary": "Assignment history",
+        "operationId": "listAssignmentBranchEvents",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranchEvents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/assistant": {
       "get": {
         "summary": "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
@@ -1838,6 +1961,189 @@
         },
         "tags": [
           "Updates"
+        ]
+      }
+    },
+    "/api/v2/bots/{source}/assignment-branches": {
+      "get": {
+        "summary": "Temporary task assignments for a persistent role",
+        "operationId": "listAssignmentBranches",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranchList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      },
+      "post": {
+        "summary": "Allocate one eligible delivery task to an isolated temporary actor",
+        "operationId": "createAssignmentBranch",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentBranchCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
+    "/api/v2/bots/{source}/assignment-branches/policy": {
+      "put": {
+        "summary": "Enable or disable the source role's direct-parent allocator",
+        "operationId": "setAssignmentBranchPolicy",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentBranchPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentBranchPolicyResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
         ]
       }
     },
@@ -11801,6 +12107,346 @@
           "decision"
         ],
         "title": "ApprovalDecision"
+      },
+      "AssignmentBranch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_bot": {
+            "type": "string"
+          },
+          "assignment_key": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "bot": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "allocator": {
+            "type": "string"
+          },
+          "runner_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "request_hash": {
+            "type": "string"
+          },
+          "checkpoint": {
+            "type": "object"
+          },
+          "receipts": {
+            "type": "object"
+          },
+          "created": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "string"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "allocator",
+          "archived_at",
+          "assignment_key",
+          "bot",
+          "checkpoint",
+          "created",
+          "display_name",
+          "generation",
+          "id",
+          "phase",
+          "receipts",
+          "request_hash",
+          "revision",
+          "runner_id",
+          "source_bot",
+          "task",
+          "task_id",
+          "updated"
+        ],
+        "additionalProperties": true
+      },
+      "AssignmentBranchCreate": {
+        "properties": {
+          "assignment_key": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "title": "Assignment Key"
+          },
+          "generation": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Generation"
+          },
+          "task_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Task Id"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Display Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "assignment_key",
+          "generation",
+          "task_id",
+          "display_name"
+        ],
+        "title": "AssignmentBranchCreate"
+      },
+      "AssignmentBranchEvents": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "detail_json": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "actor",
+                "created",
+                "detail_json"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "additionalProperties": true
+      },
+      "AssignmentBranchList": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "allocator_enabled": {
+            "type": "boolean"
+          },
+          "capacity": {
+            "type": "integer"
+          },
+          "active": {
+            "type": "integer"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignmentBranch"
+            }
+          }
+        },
+        "required": [
+          "active",
+          "allocator_enabled",
+          "assignments",
+          "capacity",
+          "enabled",
+          "source"
+        ],
+        "additionalProperties": true
+      },
+      "AssignmentBranchPolicy": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled",
+          "expected_revision"
+        ],
+        "title": "AssignmentBranchPolicy"
+      },
+      "AssignmentBranchPolicyResult": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "allocator": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "allocator",
+          "enabled",
+          "revision",
+          "source"
+        ],
+        "additionalProperties": true
+      },
+      "AssignmentBranchUpdate": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "working",
+                  "waiting_review",
+                  "waiting_release",
+                  "paused",
+                  "interrupted",
+                  "verifying",
+                  "archived",
+                  "cancelled"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Note",
+            "default": ""
+          },
+          "checkpoint": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Checkpoint"
+          },
+          "deployed_version": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Deployed Version",
+            "default": ""
+          },
+          "acceptance_receipt": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Acceptance Receipt",
+            "default": ""
+          },
+          "learning_receipt": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Learning Receipt",
+            "default": ""
+          },
+          "evidence_receipt": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Evidence Receipt",
+            "default": ""
+          },
+          "handoff_task_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Handoff Task Id",
+            "default": ""
+          },
+          "reviewed_learning_note": {
+            "type": "string",
+            "maxLength": 6000,
+            "title": "Reviewed Learning Note",
+            "default": ""
+          },
+          "confirm_learning_review": {
+            "type": "boolean",
+            "title": "Confirm Learning Review",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "AssignmentBranchUpdate"
       },
       "Assistant": {
         "type": "object",

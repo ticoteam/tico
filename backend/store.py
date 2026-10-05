@@ -96,7 +96,8 @@ CREATE TABLE IF NOT EXISTS runners(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, operator TEXT NOT NULL REFERENCES humans(id),
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, last_seen TEXT,
  revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
- readiness_json TEXT NOT NULL DEFAULT '{}', awake_since TEXT, checkout_json TEXT,
+ readiness_json TEXT NOT NULL DEFAULT '{}', capabilities_json TEXT NOT NULL DEFAULT '[]',
+ awake_since TEXT, checkout_json TEXT,
  restart_requested TEXT);
 CREATE TABLE IF NOT EXISTS model_logins(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL,
@@ -135,6 +136,21 @@ CREATE TABLE IF NOT EXISTS oidc_codes(
 CREATE TABLE IF NOT EXISTS assignments(
  bot TEXT PRIMARY KEY REFERENCES bots(slug), runner_id TEXT NOT NULL REFERENCES runners(id),
  generation INTEGER NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS assignment_branches(
+ id TEXT PRIMARY KEY, source_bot TEXT NOT NULL REFERENCES bots(slug), assignment_key TEXT NOT NULL,
+ generation INTEGER NOT NULL CHECK(generation>=1), bot TEXT NOT NULL UNIQUE REFERENCES bots(slug),
+ task_id TEXT NOT NULL REFERENCES tasks(id), allocator TEXT NOT NULL, runner_id TEXT NOT NULL REFERENCES runners(id),
+ display_name TEXT NOT NULL, phase TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+ request_hash TEXT NOT NULL, checkpoint_json TEXT NOT NULL DEFAULT '{}', receipts_json TEXT NOT NULL DEFAULT '{}',
+ created TEXT NOT NULL, updated TEXT NOT NULL, archived_at TEXT,
+ UNIQUE(source_bot,assignment_key,generation));
+CREATE UNIQUE INDEX IF NOT EXISTS assignment_branch_live_task ON assignment_branches(source_bot,task_id)
+ WHERE phase NOT IN ('archived','cancelled');
+CREATE INDEX IF NOT EXISTS assignment_branch_source_phase ON assignment_branches(source_bot,phase,created);
+CREATE TABLE IF NOT EXISTS assignment_branch_events(
+ id TEXT PRIMARY KEY, assignment_id TEXT NOT NULL REFERENCES assignment_branches(id),
+ actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}', created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS assignment_branch_events_by_assignment ON assignment_branch_events(assignment_id,created);
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot TEXT NOT NULL REFERENCES bots(slug), state TEXT NOT NULL DEFAULT 'queued',
@@ -987,6 +1003,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=57").fetchone():
                     H.migrate_task_privacy(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(57,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=58").fetchone():
+                    H.add_column(c, "runners", "capabilities_json", "TEXT NOT NULL DEFAULT '[]'")
+                    c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL

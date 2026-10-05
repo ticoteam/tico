@@ -95,6 +95,11 @@ STABLE = [
      "Who may see, read and write to a bot (its managers only; docs/permissions.md)", "BotAccessView"),
     ("/api/v2/bots/{bot}/access", "put", "Bots", "setBotAccess",
      "Set who may see, read and write to a bot; send the revision you read (409 version_conflict otherwise)", "BotAccessView"),
+    ("/api/v2/bots/{source}/assignment-branches", "get", "Bots", "listAssignmentBranches", "Temporary task assignments for a persistent role", "AssignmentBranchList"),
+    ("/api/v2/bots/{source}/assignment-branches", "post", "Bots", "createAssignmentBranch", "Allocate one eligible delivery task to an isolated temporary actor", "AssignmentBranch"),
+    ("/api/v2/bots/{source}/assignment-branches/policy", "put", "Bots", "setAssignmentBranchPolicy", "Enable or disable the source role's direct-parent allocator", "AssignmentBranchPolicyResult"),
+    ("/api/v2/assignment-branches/{ident}", "patch", "Bots", "updateAssignmentBranch", "Checkpoint or advance a temporary assignment lifecycle", "AssignmentBranch"),
+    ("/api/v2/assignment-branches/{ident}/events", "get", "Bots", "listAssignmentBranchEvents", "Assignment history", "AssignmentBranchEvents"),
     ("/api/v2/bots/{bot}/instructions", "get", "Bots", "getBotInstructions",
      "Latest Instructions snapshot published by the Computer; requires Read, published is false until content arrives",
      "BotInstructions"),
@@ -365,6 +370,14 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
           "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
 
 SCHEMAS = {
+    "AssignmentBranch": obj({"id": "s", "source_bot": "s", "assignment_key": "s", "generation": "i", "bot": "s",
+                              "task_id": "s", "allocator": "s", "runner_id": "s", "display_name": "s", "phase": "s",
+                              "revision": "i", "request_hash": "s", "checkpoint": "o", "receipts": "o", "created": "s",
+                              "updated": "s", "archived_at": "n", "task": {"type": ["object", "null"]}}),
+    "AssignmentBranchList": obj({"source": "s", "enabled": "b", "allocator_enabled": "b", "capacity": "i", "active": "i",
+                                  "assignments": items(ref("AssignmentBranch"))}),
+    "AssignmentBranchPolicyResult": obj({"source": "s", "enabled": "b", "allocator": "s", "revision": "i"}),
+    "AssignmentBranchEvents": obj({"events": items(obj({"actor": "s", "action": "s", "detail_json": "s", "created": "s"}))}),
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))})), "assignments": items(obj({"scope": "s", "target": "s", "profile": "s", "updated": "s", "updated_by": "s"}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),

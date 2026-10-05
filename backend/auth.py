@@ -661,7 +661,26 @@ class Auth:
         audience = f"({me} IN (owner,requester) OR (coalesce(private,1)=0 AND ({clear})))"
         if who.task_actor:
             audience += f" AND (coalesce(private,1)=0 OR {A.q(who.task_actor)} IN (owner,requester))"
+        assignment_task = self.assignment_task_id(c, who)
+        if assignment_task:
+            # A temporary actor is scoped to its linked delivery task at the query layer too;
+            # ordinary read grants on the persistent role must not expose other task rows.
+            audience += f" AND id={A.q(assignment_task)}"
         return audience
+
+    @staticmethod
+    def assignment_task_id(c, who):
+        if who.role != "bot":
+            return ""
+        row = Auth.assignment_task_for_bot(c, who.actor)
+        return str(row["task_id"] or "") if row else ""
+
+    @staticmethod
+    def assignment_task_for_bot(c, actor):
+        if not H._has_table(c, "assignment_branches"):
+            return None
+        return c.execute("SELECT task_id FROM assignment_branches WHERE bot=?",
+                         (H.actor_id(actor),)).fetchone()
 
     def operator(self, c, who, bot):
         row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
@@ -724,12 +743,16 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
+        row = c.execute("SELECT config_json,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        assignment = self.assignment_task_for_bot(c, slug) if row else None
+        if assignment:
+            return (kind in ("task", "comment", "message")
+                    and str(task_id or "") == str(assignment["task_id"]))
         if who.role != "bot":
             return True
         sender = who.actor
         if sender == "bot:" + slug or sender == H.KEEPER:
             return True
-        row = c.execute("SELECT config_json,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not row:
             return True
         declared = json.loads(row["config_json"]) if row["config_json"] else {}
@@ -760,6 +783,11 @@ class Auth:
         if not str(actor).startswith("bot:"):
             return
         slug = H.actor_id(actor)
+        if H._has_table(c, "assignment_branches"):
+            assignment = c.execute("SELECT task_id FROM assignment_branches WHERE bot=?", (slug,)).fetchone()
+            if assignment and (kind not in ("task", "comment", "message")
+                               or str(task_id or "") != str(assignment["task_id"])):
+                raise Problem("assignment_scope", "Temporary assignments accept work only on their linked delivery task", 403)
         if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
@@ -857,6 +885,9 @@ class Auth:
         if not row:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
+            raise Problem("not_found", "Task not found", 404)
+        assignment_task = self.assignment_task_id(c, who)
+        if assignment_task and row["id"] != assignment_task:
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)

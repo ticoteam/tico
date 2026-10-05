@@ -2170,6 +2170,8 @@ def create_app(settings=None):
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
+        if auth.assignment_task_for_bot(c, owner):
+            raise Problem("assignment_scope", "A temporary assignment cannot receive another task; continue on its linked delivery task", 403)
         if privacy.private_execution(c, source):
             privacy.require_destination(c, source, owner, None, {})
             privacy.require_destination(c, source, who.actor, None, {})
@@ -3824,6 +3826,8 @@ def create_app(settings=None):
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
+    from .assignment_branches import install as install_assignment_branches
+    install_assignment_branches(app, store, auth, mutate, settings_admin, execution)
     from .bot_copy import install as install_bot_copy
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
     from .subscriptions import install as install_subscriptions

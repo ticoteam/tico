@@ -4,3 +4,11 @@
 #bot-branches select{min-width:0;max-width:100%;font-size:12px;padding:3px 6px}
 #bot-branches button{font-size:12px;padding:3px 6px}
 #branch-editor label{display:grid;gap:6px;margin-bottom:12px}
+#bot-assignment-branches:empty{display:none}
+.assignment-branches{margin-top:10px;width:min(100%,760px)}
+.assignment-policy{display:inline-flex;align-items:center;gap:6px;font-size:.9em}
+.assignment-list{display:grid;gap:8px;margin-top:8px}
+.assignment-card{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:9px;padding:8px 10px}
+.assignment-card details{flex-basis:100%}
+.assignment-card details p{margin:5px 0}
+.assignment-phase{border-radius:999px;padding:2px 8px;background:var(--subtle);font-size:.85em}

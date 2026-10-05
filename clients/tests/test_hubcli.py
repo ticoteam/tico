@@ -610,3 +610,55 @@ def test_task_rename_cli_keeps_number_and_step_fields(monkeypatch):
     assert sent[0][0] == 'tasks/#42'
     assert {key: sent[0][1][key] for key in ('title', 'step', 'step_rank', 'number', 'version')} == {
         'title': 'Ticket copy', 'step': 'To do', 'step_rank': 2.0, 'number': 42, 'version': 3}
+
+
+def test_temporary_assignment_cli_uses_supported_authenticated_routes(monkeypatch, tmp_path):
+    from clients import remotecli
+    sent = []
+
+    class Api:
+        def __init__(self, *args, **kwargs):
+            pass
+        def get(self, path, **query):
+            sent.append(("GET", path, query)); return {}
+        def post(self, path, body=None, key=None):
+            sent.append(("POST", path, body, key)); return {}
+        def patch(self, path, body=None, key=None):
+            sent.append(("PATCH", path, body, key)); return {}
+        def call(self, method, path, body=None, key=None):
+            sent.append((method, path, body, key)); return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "http://example.test")
+    monkeypatch.setenv("HUB_TOKEN", "test-token")
+    lesson_file = tmp_path / "reviewed-lesson.md"
+    lesson_file.write_text("Use bounded retries and preserve idempotency keys.\n")
+    for argv in (
+        ["bot", "assignment", "list", "software-engineer"],
+        ["bot", "assignment", "policy", "software-engineer", "--enable", "--revision", "4"],
+        ["bot", "assignment", "create", "software-engineer", "--task", "task-id", "--name", "Pro Workflow Engineer",
+         "--key", "feature-123", "--generation", "1"],
+        ["bot", "assignment", "update", "assignment-id", "--revision", "2", "--phase", "paused",
+         "--note", "Checkpointed", "--checkpoint-json", '{"next":"tests"}', "--handoff-task", "follow-up-task"],
+        ["bot", "assignment", "update", "assignment-id", "--revision", "3",
+         "--reviewed-learning-file", str(lesson_file), "--confirm-learning-review"],
+    ):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert sent[0] == ("GET", "bots/software-engineer/assignment-branches", {})
+    assert sent[1][:3] == ("PUT", "bots/software-engineer/assignment-branches/policy",
+                           {"enabled": True, "expected_revision": 4})
+    assert sent[2][0:3] == ("POST", "bots/software-engineer/assignment-branches",
+                            {"assignment_key": "feature-123", "generation": 1,
+                             "task_id": "task-id", "display_name": "Pro Workflow Engineer"})
+    assert sent[3][0:3] == ("PATCH", "assignment-branches/assignment-id",
+                            {"expected_revision": 2, "phase": "paused", "display_name": None,
+                             "note": "Checkpointed", "checkpoint": {"next": "tests"},
+                             "deployed_version": "", "acceptance_receipt": "", "learning_receipt": "",
+                             "evidence_receipt": "", "handoff_task_id": "follow-up-task", "reviewed_learning_note": "",
+                             "confirm_learning_review": False})
+    assert sent[4][0:3] == ("PATCH", "assignment-branches/assignment-id", {
+        "expected_revision": 3, "phase": None, "display_name": None, "note": "", "checkpoint": {},
+        "deployed_version": "", "acceptance_receipt": "", "learning_receipt": "", "evidence_receipt": "",
+        "handoff_task_id": "",
+        "reviewed_learning_note": "Use bounded retries and preserve idempotency keys.\n",
+        "confirm_learning_review": True})
