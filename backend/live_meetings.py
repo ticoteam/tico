@@ -314,7 +314,7 @@ def _dispatch_turn(c, rid, turn_id, slug):
 
 
 def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None, at_ms=None, cap=None):
-    """Persist concurrent bot turns while respecting each bot's company-wide busy state."""
+    """Persist concurrent bot turns while respecting current-meeting and runner busy state."""
     skipped, selected = [], []
     meeting = _meeting(c, rid)
     if at_ms is None:
@@ -327,8 +327,8 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
             skipped.append({"bot": slug, "reason": "not_attached"})
             continue
         busy = c.execute("SELECT 1 FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
-                         "WHERE t.bot=? AND t.status IN ('pending','claimed') AND m.state='live' LIMIT 1",
-                         (slug,)).fetchone()
+                         "WHERE t.meeting_id=? AND t.bot=? AND t.status IN ('pending','claimed') "
+                         "AND m.state='live' LIMIT 1", (rid, slug)).fetchone()
         if not busy:
             busy = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                              "WHERE j.bot=? AND j.state IN ('queued','leased','running','input') "

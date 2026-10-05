@@ -490,7 +490,7 @@ def test_paused_meeting_turn_does_not_block_live_meeting_but_active_current_turn
         {"bot": "ops", "reason": "busy"}]
 
 
-def test_active_live_reply_in_another_meeting_is_busy_until_settled(live):
+def test_active_live_reply_in_another_meeting_does_not_block_current_meeting(live):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider", "ms": 1,
         "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
@@ -502,17 +502,11 @@ def test_active_live_reply_in_another_meeting_is_busy_until_settled(live):
     second = connect(live, title="Meeting B", cooldown_seconds=0)
     attach(live, second["id"], "ops")
     chunk(live, second["id"], 1, 0, 30_000, "Second meeting request")
-    busy = get(live, f"live-meetings/{second['id']}")["router"]["windows"][0]
-    assert busy["trace"]["skipped"] == [{"bot": "ops", "reason": "busy"}]
-    assert not get(live, f"live-meetings/{second['id']}")["router"]["turns"]
-
-    post(live, f"live-meetings/{first['id']}/turns/{first_turn['id']}/claim", {}, token="ops-live")
-    post(live, f"live-meetings/{first['id']}/chat", {"text": "Done", "turn_id": first_turn["id"]},
-         token="ops-live")
-    chunk(live, second["id"], 2, 30_000, 60_000, "Try again after release")
     available = get(live, f"live-meetings/{second['id']}")
-    assert available["router"]["windows"][1]["outcome"] == "route"
+    assert available["router"]["windows"][0]["outcome"] == "route"
     assert len(available["router"]["turns"]) == 1
+    assert available["router"]["turns"][0]["status"] == "pending"
+    assert get(live, f"live-meetings/{first['id']}")["router"]["turns"][0]["id"] == first_turn["id"]
 
 
 def test_running_regular_bot_attempt_is_busy_for_live_routing(live):
