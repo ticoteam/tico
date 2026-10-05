@@ -17,6 +17,7 @@ from .store import H, Problem, encode
 CAPABILITY = "assignment_instances_v1"
 CLEANUP_CAPABILITY = "assignment_cleanup_v1"
 ACTIVE_PHASES = ("preparing", "working", "paused", "interrupted", "verifying")
+CAPACITY_EXEMPT_PHASES = ("waiting_review", "waiting_release", "archived", "cancelled")
 CAPACITY_LIMIT = 3
 
 
@@ -93,6 +94,18 @@ def _event(c, row, actor, action, detail):
 
 def _load(c, ident):
     return c.execute("SELECT * FROM assignment_branches WHERE id=? OR bot=?", (ident, ident)).fetchone()
+
+
+def _active_count(c):
+    placeholders = ",".join("?" for _ in CAPACITY_EXEMPT_PHASES)
+    return c.execute(f"SELECT count(*) FROM assignment_branches WHERE phase NOT IN ({placeholders})",
+                     CAPACITY_EXEMPT_PHASES).fetchone()[0]
+
+
+def _reserve_capacity(c, row, phase):
+    needs_slot = row["phase"] in CAPACITY_EXEMPT_PHASES and phase not in CAPACITY_EXEMPT_PHASES
+    if needs_slot and _active_count(c) >= CAPACITY_LIMIT:
+        raise Problem("assignment_capacity", "All three temporary implementation slots are active; move one to review or release", 409)
 
 
 def _visible(c, auth, who, row):
@@ -253,8 +266,7 @@ def create(c, who, source, body, auth, settings_admin, execution):
         raise Problem("assignment_active", "Retire the prior generation before reopening this assignment", 409)
     if previous and previous["task_id"] != task["id"]:
         raise Problem("assignment_identity", "A retired assignment key remains bound to its original task", 409)
-    count = c.execute("SELECT count(*) FROM assignment_branches WHERE phase NOT IN ('waiting_review','waiting_release','archived','cancelled')").fetchone()[0]
-    if count >= CAPACITY_LIMIT:
+    if _active_count(c) >= CAPACITY_LIMIT:
         raise Problem("assignment_capacity", "All three temporary implementation slots are active; move one to review or release", 409)
     slug = _slug(source, body.assignment_key, body.generation)
     if c.execute("SELECT 1 FROM bots WHERE slug=?", (slug,)).fetchone():
@@ -314,7 +326,7 @@ def list_for(c, who, source, auth):
     return {"source": source, "enabled": bool(declared(c, source).get("shared")),
             "allocator_enabled": bool(declared(c, source).get("assignment_allocator_enabled")),
             "capacity": CAPACITY_LIMIT,
-            "active": c.execute("SELECT count(*) FROM assignment_branches WHERE phase NOT IN ('waiting_review','waiting_release','archived','cancelled')").fetchone()[0],
+            "active": _active_count(c),
             "assignments": [_visible(c, auth, who, row) for row in rows]}
 
 
@@ -356,6 +368,9 @@ def update(c, who, ident, body, auth):
     }
     if phase != row["phase"] and phase not in allowed.get(row["phase"], set()):
         raise Problem("assignment_transition", f"Cannot move an assignment from {row['phase']} to {phase}", 409)
+    # Waiting for review or release reserves no execution slot. Resume is a capacity allocation,
+    # so check it under Store.mutate's BEGIN IMMEDIATE transaction just like create().
+    _reserve_capacity(c, row, phase)
     saved_checkpoint = json.loads(row["checkpoint_json"] or "{}")
     checkpoint = body.checkpoint if body.checkpoint else saved_checkpoint
     if phase in ("waiting_review", "waiting_release", "interrupted") and not checkpoint:
