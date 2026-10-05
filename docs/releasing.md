@@ -4,10 +4,18 @@ A release is a version tag. Pushing `vX.Y.Z` runs `.github/workflows/release.yml
 installer bundle, checks the tag against [CHANGELOG.md](../CHANGELOG.md) and publishes the GitHub
 release. Running installations look for that release to show "New version" in the sidebar.
 
-## Before you tag
+## The fast path
+
+1. **Every PR** runs the full suite against `main` before it merges (`python scripts/release_checks.py`, below).
+2. **Before you tag**, a short whole-product check, about 3 to 5 minutes: `python scripts/release_checks.py --release`.
+3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
+4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
+5. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
+
+## The per-PR suite
 
 Tests run on your computer, not in CI: nothing in GitHub Actions runs the suite on a push or a pull request. Before
-tagging, run the whole thing from the repository root:
+merging a PR, run the whole thing from the repository root, on the PR merged with `main`:
 
 ```
 python scripts/release_checks.py
@@ -17,11 +25,35 @@ That is the full suite (pytest in parallel, then the browser scripts three at a 
 5 minutes; the check records wall time and load and fails if the combined run reaches 300 seconds. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
 builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
-GitHub release. Docker smoke checks also run locally (`docker/smoke.sh` and
-`docker/side-jobs-smoke.sh`); no GitHub Actions workflow runs tests. The manual screenshots workflow
-generates documentation images from the Actions tab (Run workflow).
+GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
+generates documentation images from the Actions tab (Run workflow). A release does not run this suite again: what is on
+`main` already passed it.
 
-Before a deploy, run the journey check on a laptop with Docker (it is not part of CI or of the five-minute suite budget, and takes about ten minutes):
+## Before you tag
+
+```
+python scripts/release_checks.py --release                     # this checkout is the candidate (v9.9.9)
+python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag
+```
+
+This checks only what the per-PR suite cannot: the product as installed, in Docker. It builds the server, runner and
+updater images once (BuildKit cache; a source-only change rebuilds one layer per image) and runs three checks against
+them at the same time, each with its own Docker names, while the journey installs the previous release during the build:
+
+- `docker/smoke.sh`: the server comes up, a runner joins with a one-time code and installs Codex once OpenAI is enabled,
+  the server restarts and the runner reconnects, the data survives down and up, and a runner box updates to the
+  server's release and rolls back one that does not turn healthy;
+- `docker/side-jobs-smoke.sh`: a runner starts and stops the side job the hub assigns to it;
+- `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle, upgrade to the
+  candidate with "Update now", and roll back an update that migrates the database and never turns healthy (the
+  pre-update snapshot is restored, with the server's real entrypoint running Litestream).
+
+It prints each check's time and the total, keeps the logs in a temporary directory and prints the end of any failed
+log. The target is under 5 minutes; a run over 300 seconds still passes but says so. Do not run two at once: the
+journey's candidate tags are fixed.
+
+The full journey stays available on demand (about ten minutes), for a release that changes enrollment, the runner's
+restart behavior, Litestream or backups:
 
 ```
 scripts/journey-test.sh                  # this checkout is the candidate; starts from the newest release tag
@@ -39,9 +71,11 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
+## Tag
+
 1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty
    `## [Unreleased]` above it, and update the link references at the bottom.
-2. Commit that to `main` once the local suite is green.
+2. Commit that to `main` once the release check is green.
 3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 The workflow then:
@@ -50,23 +84,37 @@ The workflow then:
   `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`, `docker/runner.compose.yaml` and the `setup/` wizard) and
   `SHA256SUMS` over both. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
 - waits until `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z` exist (the Docker workflow builds them from the
-  same tag), so no release is published whose installer would fail on `docker compose pull`;
+  same tag, in about 2 minutes), so no release is published whose installer would fail on `docker compose pull`;
 - uses the `[X.Y.Z]` section of the changelog, unchanged, as the release notes, and fails if the
   section is missing or empty. A tag with a suffix such as `v0.2.0-rc.1` is marked a prerelease,
-  which the update check ignores.
+  which the update check ignores;
+- publishes the release with those three files and the notes. That is everything the installer, the server's update
+  check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 
 Docker images are published by a separate workflow (on the same `v*` tag, plus a manual run) and set `TICO_VERSION` in the image, which is how the running app
 knows its version (a source checkout reports `dev`). There is no source archive: the server and the runners run from
-the images, and a Mac runner is a git checkout that moves to the release's tag.
+the images, and a Mac runner is a git checkout that moves to the release's tag. The Dockerfile copies the source tree
+last, after system packages, tools and the Python dependencies, so with the GitHub Actions layer cache a release
+rebuilds and pushes one small layer per image.
 
-The desktop app is built for every tag too (`.github/workflows/app.yml`, called from the Release workflow). If any
-desktop build fails, the GitHub release is not created and the Release run is red: servers only offer a version that
-has a release, so a failed desktop build stops the rollout. The app's version is the release's
+## Desktop apps follow the release
+
+The desktop app never holds up the server release. The Release workflow compares the tag with the previous release
+tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
+two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
+release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
+offered an update, and the download links keep working. When the shell did change, `.github/workflows/app.yml` builds
+it (with a Rust cache, so only the app crate recompiles) and the files are added to the already published release, the
+updater manifest last. A failed desktop build leaves the server release published and the Release run red; rerun the
+workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
+
+Because the files arrive a few minutes after the release, a hub that looks for them in that window finds none and asks
+again a minute later. A hub accepts an app version older than its own release when the files are that release's assets.
 
 All public CI builds are the generic **Tico** app. They do not consume company or legacy
 per-environment repository variables. The three build jobs upload their bundles as `app-<target>` artifacts. After those
-jobs pass, the Release workflow downloads them and attaches these assets to the GitHub release:
+jobs pass, the Release workflow downloads them and adds these assets to the published GitHub release:
 
 - macOS universal `.dmg`, `.app.tar.gz` and `.app.tar.gz.sig`;
 - Windows NSIS `-setup.exe` and `-setup.exe.sig`;
@@ -140,10 +188,13 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-Every version tag builds the generic desktop app first, then `.github/workflows/company-app.yml`
-builds each configured company's macOS universal DMG and signed updater archive, Windows NSIS
+A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
 installer with signature, and Linux AppImage with signature plus Debian package. The app version
-is stamped from the tag. Every build uses the same updater signing key as the generic app,
+is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
+and never save to it, so no branded output reaches a cache a public build could read. A tag whose shell did not change
+leaves each company's bucket manifest as it is; after adding a company, run the Release workflow from the current tag
+with `desktop` checked. Every build uses the same updater signing key as the generic app,
 with `team.tico.env.<stable UUID>` as its bundle ID, its own name and PNG icon, its own server
 address, and `<runner_url or url>/download/latest.json` as the update endpoint.
 
@@ -228,7 +279,7 @@ block publication of already built bundles. Apple signing flags describe only th
 Windows and Linux updater signatures do not imply installer code signing.
 Company jobs use `fail-fast: false`; one build or publish failure fails that company's workflow
 and marks the run red, while other companies and the public release continue independently.
-The public release depends only on the generic desktop build. Entries are validated within
+The public release depends on no desktop build. Entries are validated within
 their own company job; a malformed company does not prevent valid companies from publishing.
 Entries without a slug produce a generic warning and cannot be dispatched. Unparseable JSON
 fails the matrix with a generic error and does not prevent the public release.

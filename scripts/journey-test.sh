@@ -6,6 +6,11 @@
 #   scripts/journey-test.sh --tag v0.3.0        # a published candidate release (its images and bundle must exist)
 #   scripts/journey-test.sh --tag v0.3.0 --previous v0.2.5
 #   scripts/journey-test.sh --keep              # leave the stack running afterwards
+#   scripts/journey-test.sh --release           # only install, upgrade and the migrating rollback (python scripts/release_checks.py --release)
+#
+# --release keeps the stages nothing else covers and drops the ones docker/smoke.sh already proves (enroll, server and
+# runner restarts) or that run on demand (bot turn, replica restore, backup). With TICO_JOURNEY_IMAGES_READY=<file> the
+# candidate images are built by the caller: the upgrade waits for that file to say "ok" instead of building them.
 #
 # What it does, in one throwaway install directory and Docker project (tico-journey), auth none:
 #   1 install     the PREVIOUS release: its checksummed bundle unpacked, a .env, `docker compose up -d`
@@ -30,13 +35,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
-CAND="" PREV="" KEEP=0 LOCAL=1
+CAND="" PREV="" KEEP=0 LOCAL=1 FAST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) CAND="$2"; LOCAL=0; shift 2 ;;
     --previous) PREV="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
-    -h|--help) sed -n 2,32p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --release) FAST=1; shift ;;
+    -h|--help) sed -n 2,37p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -60,7 +66,7 @@ RESULTS=() STATE_ID="" FAILED=0
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
-retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 2; done; }
+retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 0.5; done; }
 api() {  # curl arguments; the owner token never leaves the server container
   dc exec -T server sh -c 'curl -sS --fail-with-body -H "Authorization: Bearer $(cat /data/local-owner.token)" -H "Content-Type: application/json" "$@"' sh "$@"
 }
@@ -124,15 +130,22 @@ services:
   updater:
     environment:
       TICO_UPDATER_PULL: never
-      TICO_HEALTH_SECONDS: "60"
+      TICO_HEALTH_SECONDS: "$([ "$FAST" = 1 ] && echo 30 || echo 60)"
+      TICO_UPDATER_POLL: "0.5"
 EOF
   say "pulling $PREV images"
-  docker pull -q "$SERVER_IMAGE:$PREV" >/dev/null && docker pull -q "$UPDATER_IMAGE:$PREV" >/dev/null && docker pull -q "$RUNNER_IMAGE:$PREV" >/dev/null \
-    || { say "the $PREV images are not available"; return 1; }
+  local image pids=() ok=1
+  for image in "$SERVER_IMAGE" "$UPDATER_IMAGE" "$RUNNER_IMAGE"; do   # a published tag does not change: a cached copy is enough
+    { docker image inspect "$image:$PREV" >/dev/null 2>&1 || docker pull -q "$image:$PREV" >/dev/null; } & pids+=($!)
+  done
+  for pid in "${pids[@]}"; do wait "$pid" || ok=0; done
+  [ "$ok" = 1 ] || { say "the $PREV images are not available"; return 1; }
   dc up -d >/dev/null 2>&1 || { say "docker compose up failed"; return 1; }
   retry 180 healthy || { say "the server did not become healthy"; return 1; }
   STATE_ID="$(environment_id)"
-  [ -n "$STATE_ID" ] && [ "$(server_tag)" = "$PREV" ]
+  [ -n "$STATE_ID" ] && [ "$(server_tag)" = "$PREV" ] || return 1
+  # The release run has no bot turn; a one-time code is the row it follows through upgrade and rollback instead.
+  [ "$FAST" = 0 ] || post enrollments "{\"operator\": \"$(get me | json 'd["actor"].split(":",1)[1]')\"}" >/dev/null
 }
 
 step_enroll() {
@@ -180,7 +193,10 @@ chat_turn() {  # text: a new conversation with BotOps, answered by the fake harn
   cid="$(post chat/botops "{\"text\": \"$1\"}" | json 'd["conversation"]["id"]')" || return 1
   retry 120 replied "$cid"
 }
-conversation_intact() { replied && [ "$(environment_id)" = "$STATE_ID" ]; }
+conversation_intact() {
+  if [ "$FAST" = 1 ]; then [ "$(sql 'SELECT count(*) FROM enrollments')" -ge 1 ] 2>/dev/null; else replied; fi \
+    && [ "$(environment_id)" = "$STATE_ID" ]
+}
 
 step_restart() {
   local before
@@ -196,18 +212,21 @@ update_state() { get system/update | json 'd["state"]'; }
 run_update() {  # version -> waits for a final state; prints it
   local state end=$((SECONDS + 400))
   post system/update "{\"version\": \"$1\"}" >/dev/null || { echo request_failed; return; }
-  sleep 3
   while [ "$SECONDS" -lt "$end" ]; do
     state="$(update_state 2>/dev/null || true)"
     case "$state" in healthy|rolled_back|failed) echo "$state"; return ;; esac
-    sleep 3
+    sleep 1
   done
   echo timeout
 }
 
 step_upgrade() {
   local state
-  if [ "$LOCAL" = 1 ]; then
+  if [ -n "${TICO_JOURNEY_IMAGES_READY:-}" ]; then
+    say "waiting for the candidate images"
+    until [ -s "$TICO_JOURNEY_IMAGES_READY" ]; do sleep 0.5; done
+    [ "$(cat "$TICO_JOURNEY_IMAGES_READY")" = ok ] || { say "the candidate images did not build"; return 1; }
+  elif [ "$LOCAL" = 1 ]; then
     say "building the candidate images from this checkout"
     for target in "server:$SERVER_IMAGE" "runner:$RUNNER_IMAGE" "updater:$UPDATER_IMAGE"; do
       docker build -q --target "${target%%:*}" --build-arg "TICO_VERSION=$CAND" \
@@ -319,15 +338,20 @@ run_step() {  # label function; after a failure the rest are skipped
 
 printf 'journey: previous %s -> candidate %s (%s)\n' "$PREV" "$CAND" "$([ "$LOCAL" = 1 ] && echo "built from this checkout" || echo "published release")"
 run_step "install $PREV (bundle, auth none)" step_install
-run_step "enroll a runner with a one-time code" step_enroll
-run_step "one bot turn through a fake harness" step_turn
-run_step "restart the server" step_restart
-run_step "upgrade $PREV -> $CAND" step_upgrade
-run_step "roll back a bad update (snapshot restored)" step_rollback
-run_step "restore from the replica after that rollback" step_replica
-run_step "runner restarts after a turn took its secrets" step_runner_restart
-FAILED=0   # the backup rehearsal builds its own stack; it does not depend on the steps above
-run_step "backup, wipe and restore (MinIO + file replica)" step_backup
+if [ "$FAST" = 1 ]; then
+  run_step "upgrade $PREV -> $CAND" step_upgrade
+  run_step "roll back a bad update (snapshot restored)" step_rollback
+else
+  run_step "enroll a runner with a one-time code" step_enroll
+  run_step "one bot turn through a fake harness" step_turn
+  run_step "restart the server" step_restart
+  run_step "upgrade $PREV -> $CAND" step_upgrade
+  run_step "roll back a bad update (snapshot restored)" step_rollback
+  run_step "restore from the replica after that rollback" step_replica
+  run_step "runner restarts after a turn took its secrets" step_runner_restart
+  FAILED=0   # the backup rehearsal builds its own stack; it does not depend on the steps above
+  run_step "backup, wipe and restore (MinIO + file replica)" step_backup
+fi
 
 printf '\n%-52s %-6s %s\n' STEP RESULT SECONDS
 status=0

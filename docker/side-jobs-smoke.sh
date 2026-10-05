@@ -8,7 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 server_image="${TICO_IMAGE:-tico}:${TICO_TAG:-local}"
 runner_image="${TICO_RUNNER_IMAGE:-tico-runner}:${TICO_TAG:-local}"
-net=tico-sidejobs server=sidejobs-server runner=sidejobs-runner
+net="${TICO_SIDEJOBS_NAME:-tico-sidejobs}" server=sidejobs-server runner=sidejobs-runner
+[ "$net" = tico-sidejobs ] || { server="$net-server" runner="$net-runner"; }   # a second copy beside a running one
 
 cleanup() {
   status=$?
@@ -22,7 +23,7 @@ trap cleanup EXIT
 
 step() { printf '==> %s\n' "$*"; }
 fail() { printf 'side-jobs-smoke: %s\n' "$*" >&2; exit 1; }
-retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 2; done; }
+retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 0.5; done; }
 
 # The server image has curl; the API is only reachable from inside the network.
 api() {  # curl arguments after the URL are passed through
@@ -49,7 +50,7 @@ docker run -d --name "$server" --network "$net" --network-alias server -v "$net-
 retry 180 healthy || fail "the server did not become healthy"
 code="$(api -X POST -H "Idempotency-Key: side-$RANDOM$RANDOM$SECONDS" -d '{"operator": "owner"}' "$url/enrollments" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["code"])')"
-docker run -d --name "$runner" --network "$net" -v "$net-runner:/home/runner" -e TICO_SIDE_JOBS_POLL=5 \
+docker run -d --name "$runner" --network "$net" -v "$net-runner:/home/runner" -e TICO_SIDE_JOBS_POLL=1 \
   "$runner_image" join --url http://server:8765 --code "$code" --label "Side jobs runner" >/dev/null
 retry 120 runner_id || fail "the runner did not enroll"
 id="$(runner_id)"

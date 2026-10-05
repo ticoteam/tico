@@ -57,6 +57,7 @@ COMPOSE_FILE = os.environ.get("TICO_COMPOSE_FILE", "")   # relative to PROJECT; 
 OVERRIDE_FILE = "runner.override.yaml"   # never part of the bundle, so an update never replaces it
 HEALTH_URL = os.environ.get("TICO_HEALTH_URL", "http://server:8765/healthz")
 HEALTH_SECONDS = int(os.environ.get("TICO_HEALTH_SECONDS", "180"))
+POLL_SECONDS = float(os.environ.get("TICO_UPDATER_POLL", "1"))   # how often a health or switch check is repeated
 PULL = os.environ.get("TICO_UPDATER_PULL", "always")   # "never" only in docker/smoke.sh, whose tags exist only locally
 RELEASES = os.environ.get("TICO_RELEASES_URL", "https://github.com/ticoteam/tico/releases")
 LATEST_API = os.environ.get("TICO_LATEST_URL", "https://api.github.com/repos/ticoteam/tico/releases/latest")
@@ -200,7 +201,7 @@ def check_switched(version, release, seconds=None):
         except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
             if time.time() >= deadline:
                 raise RuntimeError("could not check the new version (%s)" % exc)
-        time.sleep(3)
+        time.sleep(POLL_SECONDS)
 
 
 def container_healthy(seconds):
@@ -213,9 +214,11 @@ def container_healthy(seconds):
                                    capture_output=True, text=True).stdout.strip() if container else ""
             if state == "healthy":
                 return True
+            if state == "unhealthy":   # past its start period and failing: waiting out the window changes nothing
+                return False
         except (RuntimeError, OSError, subprocess.SubprocessError):
             pass
-        time.sleep(3)
+        time.sleep(POLL_SECONDS)
     return False
 
 
@@ -230,7 +233,7 @@ def healthy(seconds):
                     return True
         except OSError:
             pass
-        time.sleep(3)
+        time.sleep(POLL_SECONDS)
     return False
 
 

@@ -6,6 +6,9 @@
 #   updater  ghcr.io/ticoteam/tico-updater  the one-click updater (compose service `updater`).
 # Tool versions and sha256 digests come from docker/versions.env, so the server and runner
 # images pin the same things.
+# Health checks probe every 2 seconds while a container starts (Docker 25+), so an update sees it healthy at once.
+# Layer order is for release speed: system packages, tools and the venv come first, and the source tree is
+# copied last, so a release that changes only source rebuilds one small layer per image.
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 
 FROM ${PYTHON_IMAGE} AS download
@@ -23,20 +26,22 @@ RUN fetch-tool node /opt/node
 FROM download AS gh
 RUN fetch-tool gh /out
 
+# The Python dependencies, kept apart from the source so a source change reuses this layer.
 FROM ${PYTHON_IMAGE} AS venv
 RUN python -m venv /opt/tico/.venv
 COPY backend/requirements.txt /tmp/requirements.txt
-RUN /opt/tico/.venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/requirements.txt
+RUN /opt/tico/.venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/requirements.txt \
+    && chmod -R go-w,go+rX /opt/tico/.venv
 
 FROM docker:cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca AS dockercli
 
 FROM ${PYTHON_IMAGE} AS updater
-ARG TICO_VERSION=dev
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
-COPY docker/updater.py /usr/local/bin/tico-updater
 COPY LICENSE NOTICE /usr/share/doc/tico/
 COPY licenses/Apache-2.0.txt /usr/share/doc/tico/licenses/
+COPY docker/updater.py /usr/local/bin/tico-updater
+ARG TICO_VERSION=dev
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
       org.opencontainers.image.source=https://github.com/ticoteam/tico \
@@ -44,12 +49,12 @@ LABEL org.opencontainers.image.version=${TICO_VERSION} \
 EXPOSE 8080
 CMD ["python", "/usr/local/bin/tico-updater"]
 
-# What both the server and the runner run: this source tree in the shared venv.
-FROM ${PYTHON_IMAGE} AS base
+# What both the server and the runner run: this source tree, checked against the shared venv. The two images
+# copy it after their system packages, so those layers stay cached across releases.
+FROM ${PYTHON_IMAGE} AS source
 ARG TICO_VERSION=dev
 ARG TICO_COMMIT
 ARG TICO_REPOSITORY
-COPY --from=venv /opt/tico/.venv /opt/tico/.venv
 WORKDIR /opt/tico
 COPY . /opt/tico
 # Deployed task completion needs the source commit, not just the version label.
@@ -66,17 +71,13 @@ if os.environ.get("TICO_VERSION", "dev") != "dev" or commit or repository:
         raise SystemExit("Image provenance requires TICO_COMMIT (full SHA) and TICO_REPOSITORY (owner/repo)")
 Path("release-manifest.json").write_text(json.dumps({"commit": commit, "repository": repository}) + "\n")
 PY
-RUN chmod -R go-w,go+rX /opt/tico \
-    && .venv/bin/python -c 'import backend.app, runner.service, clients.environments' \
+RUN chmod -R go-w,go+rX /opt/tico
+# The venv is only mounted here, so this stage's /opt/tico holds the source alone.
+RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
+    .venv/bin/python -c 'import backend.app, runner.service, clients.environments' \
     && .venv/bin/python -m compileall -q backend runner clients
-ENV PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION}
-LABEL org.opencontainers.image.version=${TICO_VERSION} \
-      org.opencontainers.image.source=https://github.com/ticoteam/tico \
-      org.opencontainers.image.licenses=LicenseRef-PolyForm-Perimeter-1.0.1
 
-FROM base AS runner
+FROM ${PYTHON_IMAGE} AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git curl openssh-client build-essential ripgrep jq procps \
     && rm -rf /var/lib/apt/lists/* \
@@ -99,17 +100,25 @@ COPY docker/gitconfig /etc/gitconfig
 # the ownership of the directory it first covers, so a new volume starts single-user and is migrated.
 RUN chmod 0755 /usr/local/bin/tico-runner-entrypoint \
     && install -d -m 0700 -o ticorun -g ticorun /home/runner /home/runner/workspace /home/runner/workspace/secrets
+COPY --from=venv /opt/tico/.venv /opt/tico/.venv
+COPY --from=source /opt/tico /opt/tico
+ARG TICO_VERSION=dev
+WORKDIR /opt/tico
 # The tools directory is in the volume, so installed model CLIs survive a restart or a new image. It is
 # last on PATH, so `docker exec` shells find the CLIs the runner installed.
-ENV GIT_TERMINAL_PROMPT=0 DISABLE_AUTOUPDATER=1 HOME=/home/runner TICO_TOOLS_DIR=/home/runner/tools \
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION} \
+    GIT_TERMINAL_PROMPT=0 DISABLE_AUTOUPDATER=1 HOME=/home/runner TICO_TOOLS_DIR=/home/runner/tools \
     PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/runner/tools/bin
+LABEL org.opencontainers.image.version=${TICO_VERSION} \
+      org.opencontainers.image.source=https://github.com/ticoteam/tico \
+      org.opencontainers.image.licenses=LicenseRef-PolyForm-Perimeter-1.0.1
 USER 10002:10002
 VOLUME /home/runner
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD pgrep -f 'python -m runner .* run$' >/dev/null
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 CMD pgrep -f 'python -m runner .* run$' >/dev/null
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
-FROM base AS server
+FROM ${PYTHON_IMAGE} AS server
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 tico \
@@ -120,8 +129,17 @@ COPY docker/entrypoint.sh /usr/local/bin/tico-entrypoint
 RUN chmod 0755 /usr/local/bin/tico-entrypoint \
     && install -d -m 0700 -o tico -g tico /data /control /backups \
     && install -d -m 0755 -o tico -g tico /tunnel
+COPY --from=venv /opt/tico/.venv /opt/tico/.venv
+COPY --from=source /opt/tico /opt/tico
+ARG TICO_VERSION=dev
+WORKDIR /opt/tico
+ENV PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION}
+LABEL org.opencontainers.image.version=${TICO_VERSION} \
+      org.opencontainers.image.source=https://github.com/ticoteam/tico \
+      org.opencontainers.image.licenses=LicenseRef-PolyForm-Perimeter-1.0.1
 EXPOSE 8765
 USER 10001:10001
-HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=4 CMD curl -fsS --max-time 4 http://127.0.0.1:8765/healthz >/dev/null
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --start-interval=2s --retries=4 CMD curl -fsS --max-time 4 http://127.0.0.1:8765/healthz >/dev/null
 ENTRYPOINT ["tico-entrypoint"]
 CMD ["server"]

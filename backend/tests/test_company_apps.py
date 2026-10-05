@@ -169,5 +169,6 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     upload = next(step for step in workflow["jobs"]["build"]["steps"] if "actions/upload-artifact@" in step.get("uses", ""))
     assert upload["with"]["path"] == "out/bundles.enc"
     release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
-    assert release["jobs"]["release"]["needs"] == "desktop"
+    assert "needs" not in release["jobs"]["release"]   # the server release never waits for desktop builds
+    assert "release" in release["jobs"]["desktop-assets"]["needs"]
     assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False
