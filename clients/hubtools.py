@@ -693,6 +693,17 @@ def task_link(api, args):
     return api.post(f"tasks/{args['id']}/links", {"url": args["url"], "title": args.get("title")}, key=_key(args))
 
 
+@tool("hub_task_relate", "Attach another task to this one so each lists the other as related, the way "
+      "cards are attached on a board. For work that belongs together when neither waits on the other "
+      "(that is blocked_by) nor is a part of it (that is a subtask). `remove` takes it off.",
+      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
+       "remove": {"type": "boolean", "default": False}},
+      required=("id", "task"), writes=True)
+def task_relate(api, args):
+    return api.post(f"tasks/{args['id']}/related", {"task": args["task"], "remove": bool(args.get("remove"))},
+                    key=_key(args))
+
+
 # ----------------------------------------------------------------------------- goals
 @tool("hub_goal_list", "What you are for: your goals in order, the goals they support, and your reports' goals. Read this before you read a task. `all` is every "
       "live goal in the team.",

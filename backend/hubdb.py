@@ -621,6 +621,16 @@ WAITING_ON_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN waiting_on TEXT;
 """
 
+# Related tasks: two tasks attached to each other, read from both ends. One row a pair with the lower
+# id first, so a pair cannot be stored twice. It says "look at this one too" and nothing more;
+# order lives in blocked_by and parts in parent_id.
+TASK_RELATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS task_relations(task_id TEXT NOT NULL REFERENCES tasks(id),
+  related_id TEXT NOT NULL REFERENCES tasks(id), added_by TEXT, created TEXT NOT NULL,
+  PRIMARY KEY(task_id, related_id), CHECK (task_id < related_id));
+CREATE INDEX IF NOT EXISTS task_relations_related ON task_relations(related_id);
+"""
+
 # Immutable primary/fallback usage reports; append to preserve existing installations.
 USAGE_SEGMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS turn_usage_segments (
@@ -639,7 +649,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA,
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA]
+              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA]
 
 
 class Refused(Exception):
@@ -2598,6 +2608,57 @@ def _parent_finished(conn, row, previous, actor=None):
 
 def task_links(conn, task_id):
     return _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created", (task_id,)))
+
+
+def _relation(conn, actor, task_id, other_id, mover):
+    """Both rows, after checking the caller may change each: a relation shows on both tasks."""
+    other_id = str(other_id or "").strip()
+    if other_id == task_id:
+        refuse(conn, actor, "related", "a task cannot be related to itself")
+    rows = []
+    for tid in (task_id, other_id):
+        row = task(conn, tid)
+        if not row:
+            refuse(conn, actor, "not-found", f"no task {tid}")
+        _task_link_allowed(conn, actor, row, mover)
+        rows.append(row)
+    return rows, tuple(sorted((task_id, other_id)))
+
+
+@private_task_write
+def task_relate(conn, actor, task_id, other_id, mover=None):
+    """Attach two tasks to each other. Attaching a pair twice changes nothing."""
+    _writer(conn, actor)
+    (_, other), pair = _relation(conn, actor, task_id, other_id, mover)
+    if _one(conn, "SELECT 1 FROM task_relations WHERE task_id=? AND related_id=?", pair):
+        return False
+    at = now()
+    conn.execute("INSERT INTO task_relations (task_id, related_id, added_by, created) VALUES (?, ?, ?, ?)",
+                 (*pair, actor, at))
+    # The history names the other task by id only: its title may be private to its own parties.
+    for one, two in ((task_id, other["id"]), (other["id"], task_id)):
+        _task_event(conn, one, actor, "related", None, two)
+        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, one))
+    event(conn, actor, "task.relate", task_id, {"related": other["id"]})
+    return True
+
+
+@private_task_write
+def task_unrelate(conn, actor, task_id, other_id, mover=None):
+    _writer(conn, actor)
+    (_, other), pair = _relation(conn, actor, task_id, other_id, mover)
+    if not conn.execute("DELETE FROM task_relations WHERE task_id=? AND related_id=?", pair).rowcount:
+        refuse(conn, actor, "not-found", f"{other['id']} is not related to {task_id}")
+    at = now()
+    for one, two in ((task_id, other["id"]), (other["id"], task_id)):
+        _task_event(conn, one, actor, "related", two, None)
+        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (at, one))
+    event(conn, actor, "task.unrelate", task_id, {"related": other["id"]})
+    return True
+
+
+RELATED_IDS = ("SELECT related_id FROM task_relations WHERE task_id=? "
+               "UNION SELECT task_id FROM task_relations WHERE related_id=?")
 
 
 def task_ask_recipient(conn, actor, row, ask):

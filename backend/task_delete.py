@@ -27,6 +27,9 @@ TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "service_key_tasks")
+# Rows that tie the task to another task, by either end: kept with it, and on restore put back only
+# if the other task is still there (a missing one is a foreign-key refusal the report counts).
+PAIR_ROWS = (("task_relations", "task_id"), ("task_relations", "related_id"))
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "task_assets", "bot_files", "bot_file_activity",
              "bot_tool_requests", "meeting_deliveries", "schedule_occurrences", "watcher_items")
@@ -122,6 +125,8 @@ def _snapshot(c, tid):
                 rows.setdefault(table, []).append(row)
     for table in TASK_ROWS:
         add(table, _rows(c, table, "task_id", [tid]))
+    for table, column in PAIR_ROWS:
+        add(table, _rows(c, table, column, [tid]))
     for table, column in MESSAGE_ROWS:
         add(table, _rows(c, table, column, messages))
     for table, column in CONVERSATION_ROWS:
@@ -188,6 +193,8 @@ def delete_tasks(c, ids, apply=False, actor=None):
             _delete(c, table, column, convs)
         for table in TASK_ROWS:
             _delete(c, table, "task_id", [tid])
+        for table, column in PAIR_ROWS:
+            _delete(c, table, column, [tid])
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
             c.execute("UPDATE bot_status SET task_id=NULL WHERE task_id=?", (tid,))

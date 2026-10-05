@@ -343,6 +343,8 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/restore", {})
         if sub == "link":
             return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title})
+        if sub == "relate":
+            return post(f"tasks/{args.id}/related", {"task": args.task, "remove": args.remove})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]

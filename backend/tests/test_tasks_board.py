@@ -237,6 +237,31 @@ def test_task_labels_and_links_with_an_attachment(api):
     assert task["attachments"][0]["name"] == "notes.md"
 
 
+def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(api):
+    api_half = post(api, "tasks", {"owner": "ops", "title": "Add the refund endpoint", "body": "x"})
+    ui_half = post(api, "tasks", {"owner": "ben", "title": "Show the refund button", "body": "x"})
+    path = "tasks/" + api_half["id"] + "/related"
+    assert [t["id"] for t in post(api, path, {"task": ui_half["id"]}, token="ben-test")["related"]] == [ui_half["id"]]
+    post(api, "tasks/" + ui_half["id"] + "/related", {"task": api_half["id"]})        # the same pair from the other end
+    assert [t["title"] for t in get(api, "tasks/" + ui_half["id"])["related"]] == ["Add the refund endpoint"]
+    post(api, path, {"task": api_half["id"]}, expected=422)
+    # A private task's title never reaches someone who is not one of its two parties.
+    secret = post(api, "tasks", {"owner": "priya", "title": "Secret salary review", "body": "x", "private": True},
+                  token="ben-test")
+    post(api, "tasks/" + secret["id"] + "/related", {"task": api_half["id"]}, token="ben-test")
+    assert [t["title"] for t in get(api, "tasks/" + api_half["id"], token="ana-test")["related"]] == ["Show the refund button"]
+    assert len(get(api, "tasks/" + api_half["id"], token="ben-test")["related"]) == 2
+    # Deleting a task takes its relations into the trash, and restoring it puts them back.
+    post(api, "tasks/" + ui_half["id"] + "/delete", {})
+    assert [t["title"] for t in get(api, "tasks/" + api_half["id"], token="ben-test")["related"]] == ["Secret salary review"]
+    post(api, "tasks/" + ui_half["id"] + "/restore", {})
+    assert len(get(api, "tasks/" + api_half["id"], token="ben-test")["related"]) == 2
+    assert [t["id"] for t in post(api, path, {"task": ui_half["id"], "remove": True}, token="ben-test")["related"]] == [secret["id"]]
+    assert get(api, "tasks/" + ui_half["id"])["related"] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 # ----------------------------------------------------------------------------- tags
 @pytest.mark.parametrize("cloud", [False, True])
 def test_tag_migration_backfills_once_and_preserves_legacy_column(api, cloud):

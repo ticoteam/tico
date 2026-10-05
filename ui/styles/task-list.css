@@ -293,7 +293,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
 .task-layout .tsec{margin:10px 0 0;padding-top:8px;border-top:1px solid var(--line)}
 .task-layout .rail-h .prop-add{margin-left:auto;width:20px;height:20px}
-.task-layout .task-links .tlinks{margin:2px 0 4px}
+.task-layout .task-links .tlinks,.task-layout .task-related .tlinks{margin:2px 0 4px}
 .task-link-add input{width:100%;font-size:12.5px;padding:4px 8px}
 .task-layout>.task-chat>h3{display:flex;align-items:center;min-height:22px;margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .task-layout .tcomment{background:none;padding:6px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);border-radius:0}
@@ -313,7 +313,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tmodal:has(.task-layout) .tmodal-head .peek-pos,.tmodal:has(.task-layout) .tmodal-owner .who{display:none}
   .tmodal-body.task-layout{align-items:stretch}
   .sub-owner{width:40px;height:40px}
-  .task-links .prop-add{width:36px;height:36px}
+  .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tmodal-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;margin-left:2px;padding-left:10px;border-left:1px solid var(--line);color:var(--ink);font-size:12.5px}
 .tmodal-owner .who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}

@@ -169,8 +169,10 @@ async function taskPropCandidates(t, key) {
   return rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
 }
 // What a picker must not offer, because it would make a loop: the task itself, and for Part of everything under it
-// (children, grandchildren…), for Blocked by every task that already waits on it, however far down the chain.
+// (children, grandchildren…), for Blocked by every task that already waits on it, however far down the chain;
+// for Related only the task itself.
 function taskPropLoops(t, key, rows) {
+  if (key === 'related') return new Set([String(t.id)]);   // a relation has no direction, so it cannot loop
   const here = String(t.id), field = key === 'parent' ? 'parent_id' : 'blocked_by';
   const under = new Map();
   for (const x of rows) { const up = String(x[field] || ''); if (up) { if (!under.has(up)) under.set(up, []); under.get(up).push(String(x.id)); } }

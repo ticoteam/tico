@@ -144,6 +144,7 @@ def guarded(c, auth, who, inner, function):
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
         "task_reminders": by_task, "task_assets": by_task, "task_links": by_task,
+        "task_relations": "task_id IN (SELECT id FROM tasks) AND related_id IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
                       ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE to_actor={me})") + ")"),

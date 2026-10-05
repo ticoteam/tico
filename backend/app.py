@@ -2189,6 +2189,8 @@ def create_app(settings=None):
                         for t in H._rows(c.execute("SELECT id,title,status,owner FROM tasks WHERE parent_id=? AND ("
                                                    + auth.task_sql(c, who) + ") ORDER BY (rank IS NULL), rank, created",
                                                    (tid,)))]
+            related = H._rows(c.execute("SELECT id,title,status,owner FROM tasks WHERE id IN (" + H.RELATED_IDS
+                                        + ") AND (" + auth.task_sql(c, who) + ") ORDER BY created", (tid, tid)))
             parent = H.task(c, row["parent_id"]) if row.get("parent_id") else None
             if parent:
                 try:
@@ -2204,7 +2206,7 @@ def create_app(settings=None):
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
                     "events": [e for e in H.task_history(c, tid) if privacy.content_readable(c, privacy.actor(who), e)],
                     "can_comment": can_comment,
-                    "children": children,
+                    "children": children, "related": related,
                     "parent": {"id": parent["id"], "title": parent["title"], "status": parent["status"]} if parent else None,
                     "comments": H.task_comments(c, tid, actor=privacy.actor(request.state.identity)),
                     "mover": mover(c, request.state.identity),
@@ -2584,6 +2586,22 @@ def create_app(settings=None):
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
             return {"links": H.task_links(c, task_id)}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/related")
+    def task_related(request: Request, tid: str, body: M.TaskRelated):
+        """Attach another task to this one, or take it off with `remove`; each then lists the other."""
+        who = request.state.identity
+        def work(c):
+            task_id = auth.resolve_task(c, who, tid)
+            other_id = auth.resolve_task(c, who, body.task)
+            auth.task(c, who, task_id)
+            auth.task(c, who, other_id)
+            change = H.task_unrelate if body.remove else H.task_relate
+            change(c, who.actor, task_id, other_id, mover=mover(c, who))
+            return {"related": H._rows(c.execute(
+                "SELECT id,title,status,owner FROM tasks WHERE id IN (" + H.RELATED_IDS + ") AND ("
+                + auth.task_sql(c, who) + ") ORDER BY created", (task_id, task_id)))}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")

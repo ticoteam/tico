@@ -6,6 +6,7 @@
 .tlabel .x,.tlink .x{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;font-size:12px;line-height:1}
 .tlink{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .tlink a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
+.tlink.task .linkish{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;font-size:inherit}
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
 .tlink.pr.closed{color:var(--muted);border-color:var(--line)}

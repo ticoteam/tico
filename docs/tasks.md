@@ -269,6 +269,26 @@ changes always wake the owner, including requests from those identities.
 Automatic shipping waits until every merged PR is included in the configured release;
 PRs in another repository remain Ready for their release or a human's completion.
 
+## Related tasks
+
+Two tasks that belong together, when neither waits on the other (that is Blocked by) nor is a
+part of it (that is a subtask), can be attached to each other the way cards are attached on a
+board: the same bug reported twice, the front-end and back-end halves of one change. Each task
+then lists the other under Related, and the history of both records who attached it. A relation
+has no direction and changes nothing else: no status moves, nobody is woken.
+
+```sh
+hub task relate <task-id> <other-task-id>
+hub task relate <task-id> <other-task-id> --remove
+```
+
+The MCP tool is `hub_task_relate`. `POST /api/v2/tasks/{id}/related` with `{"task": "<other id>"}`
+attaches, and with `"remove": true` takes it off; either task's id, prefix or number works. The caller
+must be able to change both tasks, as for links. Task detail includes `related`: `id`, `title`,
+`status` and `owner` of each related task the caller may read, so a private task never shows on a
+task its parties do not share. Deleting a task keeps its relations in the trash; restoring it puts
+back each one whose other task still exists.
+
 ## Files, versions and questions
 
 Attach a file to the task so anyone who can read the task can open it. Uploading the same name

@@ -132,7 +132,7 @@ async function taskModalShow(task, d = taskModal()) {
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
-  const full = {...detail.task, children: detail.children || [], parent: detail.parent || null};
+  const full = {...detail.task, children: detail.children || [], parent: detail.parent || null, related: detail.related || []};
   // the redraw keeps the focus where it was (a header button, the title, a property)
   const a = d.contains(document.activeElement) ? document.activeElement : null;
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
@@ -192,6 +192,24 @@ function taskModalBind(d, task, full = false) {
       if (linkCurrent() && data.task) taskModalShow(data.task, d);
     } catch (e) { toast(e.message, true); }
   });
+  // Related tasks: attached from a picker of open tasks, each one opens, × takes it off (on both tasks).
+  const relate = async body => {
+    try {
+      await post(`/v2/tasks/${encodeURIComponent(task.id)}/related`, body);
+      const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
+      if (linkCurrent() && data.task) taskModalShow(data.task, d);
+    } catch (e) { toast(e.message, true); }
+  };
+  const addRelated = $('[data-related-add]', d);
+  if (addRelated) addRelated.onclick = async () => {
+    const have = new Set((task.related || []).map(k => String(k.id)));
+    const rows = (await taskPropCandidates(task, 'related')).filter(x => !have.has(String(x.id)));
+    if (!addRelated.isConnected) return;
+    propMenu(d, addRelated, {label: 'Attach a related task', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
+      html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`})),
+      onPick: it => relate({task: it.value})});
+  };
+  d.querySelectorAll('[data-drop-related]').forEach(b => b.onclick = () => relate({task: b.dataset.dropRelated, remove: true}));
   d.querySelectorAll('[data-open-task]').forEach(b => b.onclick = ev => { ev.preventDefault(); void taskModalOpen(b.dataset.openTask, d); });
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
@@ -267,7 +285,7 @@ const commentAuthor = (a, via) => {
 const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}` : 'cleared the step', type: id => `set the type to ${TASK_TYPES.find(type => type.id === id)?.name || id}`, status: s => `moved it to ${STATUS_WORD[s] || s}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
   blocked_by: v => v ? 'marked it blocked' : 'cleared the block', parent_id: v => v ? 'filed it under a parent task' : 'took it out of its parent',
-  link: v => v ? `linked ${v}` : 'removed a link', due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
+  link: v => v ? `linked ${v}` : 'removed a link', related: v => v ? 'attached a related task' : 'removed a related task', due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
   lint: v => `noted: ${v}`, note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.js), for the files a comment carried.
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
@@ -448,6 +466,8 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="tsec task-links"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
+      ${t.related ? `<section class="tsec task-related"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Attach a related task" title="Attach a related task">${TL_ICON.plus}</button></h3>
+        ${t.related.length ? `<div class="tlinks">${t.related.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-related="${esc(k.id)}" aria-label="Remove related task">×</button></span>`).join('')}</div>` : ''}</section>` : ''}
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       <aside class="task-side" aria-label="Details">

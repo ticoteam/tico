@@ -36,6 +36,9 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
   `hub task link <task-id> <pr url>`; the merge and the deploy move it the rest of the way.
   Everything else is the **Team** lane.
 - A project is a label: `hub task label <task-id> --add pricing-page`. So is a kind (`bug`).
+- Another task that belongs with yours but neither waits on it nor is part of it (the same bug
+  seen twice, the front-end half of a back-end change): `hub task relate <task-id> <other-id>`.
+  Both tasks then list the other under Related.
 - What you are waiting on, when it is another task: link it as a child and mark the parent
   `waiting` with the child ID in its note. If your role can change `blocked_by`, set it too;
   specialist bots must not retry that restricted field after a refusal. Tico wakes the parent
