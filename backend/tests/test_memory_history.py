@@ -1,5 +1,6 @@
 """Learnings history: a computer reports memory commits; readers see them, a source only when they may read it."""
 
+import json
 import subprocess
 
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -92,8 +93,33 @@ def test_the_runner_reads_memory_commits_and_sends_a_diff_only_once_shared(tmp_p
     rows = {r["subject"]: r for r in Fake.sent[0]["commits"]}
     assert rows["Learn to check the live PR"]["attempt"] == "run-1" and rows["Learn to check the live PR"]["diff"]
     assert not rows["Decide on Fridays"]["shared"] and rows["Decide on Fridays"]["diff"] == ""
-    assert set(Fake.sent[0]["documents"]) == {"memory/learnings.md", "memory/decisions.md"}
+    # Documents come from the shared repository: the unpushed decision and an uncommitted secret stay here.
+    (root / "memory/learnings.md").write_text("- Check the live PR\n- token sk-live-123\n")
+    assert Fake.sent[0]["documents"] == {"memory/learnings.md": "- Check the live PR\n"}
     assert memory_history.report(Fake, "ops", root) == 0            # nothing new
+    git("checkout", "--", "memory/learnings.md")
     git("push", "-q")
     assert memory_history.report(Fake, "ops", root) == 1            # now shared, with its diff
     assert Fake.sent[-1]["commits"][0]["diff"] and Fake.sent[-1]["commits"][0]["shared"]
+    assert Fake.sent[-1]["documents"] == {"memory/decisions.md": "- Ship on Fridays\n"}
+    assert "sk-live" not in json.dumps(Fake.sent)
+
+
+def test_a_bot_with_no_shared_repository_sends_subjects_only(tmp_path):
+    root = tmp_path / "bot"
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    git("config", "user.email", "ops@acme.example"); git("config", "user.name", "ops")
+    (root / "memory").mkdir(); (root / "memory/learnings.md").write_text("- key sk-live-456\n")
+    git("add", "."); git("commit", "-qm", "Learn something")
+
+    class Fake:
+        sent = []
+        state = State(tmp_path / "state")
+        class client:
+            @staticmethod
+            def post(path, body, key=None):
+                Fake.sent.append(body)
+    assert memory_history.report(Fake, "ops", root) == 1
+    assert Fake.sent[0]["documents"] == {} and Fake.sent[0]["commits"][0]["diff"] == ""
+    assert "sk-live" not in json.dumps(Fake.sent)

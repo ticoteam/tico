@@ -21,6 +21,9 @@ Only the computer the bot is assigned to may report for it.
 - **Not pushed** marks a commit that is only on the bot's computer. Its diff is not sent until it
   reaches the repository, and a commit held back because it contains a secret never leaves the
   computer.
+- **Learnings and Decisions** show `memory/learnings.md` and `memory/decisions.md` as the shared repository
+  has them. Uncommitted or unpushed changes are not sent, and a bot with no shared repository sends commit
+  subjects only.
 - **Source.** The prompt asks the bot to end a memory commit's message with `Tico-Run: <run id>`. For
   a bot that is not shared, a commit made during a run is that run's even without the line. A run
   must belong to the bot or its family (an original and its branches share one repository);

@@ -11,8 +11,10 @@ not shared, a commit made during a run this computer executed is that run's even
 nothing else writes the checkout while the run holds the bot. A shared checkout also takes in other
 branches' commits mid-run, so there only the trailer counts.
 
-A diff is sent only once the commit is in the shared repository. A commit the runner held back
-because it contains a secret never leaves this computer, and neither does anything not yet pushed.
+A diff is sent only once the commit is in the shared repository, and `learnings.md` and
+`decisions.md` are sent as the shared repository has them, never from the working tree. A commit
+the runner held back because it contains a secret never leaves this computer, and neither does
+anything not yet pushed. A bot with no shared repository sends subjects only.
 """
 
 import hashlib
@@ -94,9 +96,12 @@ def report(runner, bot, root, attempt="", before="", own_turn=False):
         ours = made_between(root, before) if own_turn else set()
         rows = []
         for commit in commits(root):
-            shared = upstream and _git(root, "merge-base", "--is-ancestor", commit["sha"], "@{u}", check=True)
             run = commit["run"] or (attempt if commit["sha"] in ours else "")
             old = known.get(commit["sha"])
+            # A commit already reported as shared can only gain its run: skip the git call for the rest.
+            if old and old["shared"] and (old["attempt"] or not run):
+                continue
+            shared = upstream and _git(root, "merge-base", "--is-ancestor", commit["sha"], "@{u}", check=True)
             if old and (old["shared"] or not shared) and (old["attempt"] or not run):
                 continue
             files, diff, truncated = details(root, commit["sha"], shared)
@@ -106,11 +111,12 @@ def report(runner, bot, root, attempt="", before="", own_turn=False):
                          "committed": commit["committed"], "files": files[:200], "diff": diff,
                          "truncated": truncated, "shared": bool(shared), "attempt": run})
         documents = {}
-        for rel in DOCUMENTS:
-            path = root / rel
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 100_000:
+        for rel in DOCUMENTS if upstream else ():
+            # The shared repository's copy: what is only on this computer (uncommitted, unpushed, or held
+            # back for a secret) stays here.
+            text = _git(root, "show", f"@{{u}}:{rel}")
+            if text is None or len(text.encode()) > 100_000:
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
             if sent_docs.get(rel) != hashlib.sha256(text.encode()).hexdigest():
                 documents[rel] = text
         if not rows and not documents:
