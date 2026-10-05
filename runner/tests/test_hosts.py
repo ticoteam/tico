@@ -123,6 +123,11 @@ class AuthRetryClassification(unittest.TestCase):
         self.assertNotIn("sk-proj", base.rejection_reason(text))
         self.assertIn("Incorrect API key", base.rejection_reason(text))
 
+    def test_a_model_at_capacity_is_a_limit_not_a_failure(self):
+        # Codex, 2026-10-05 12:42-13:05 UTC: nine runs ended "failed" and two were dismissed as stopped.
+        self.assertTrue(base.is_limit("Selected model is at capacity. Please try a different model."))
+        self.assertFalse(base.is_limit("The capacity planning doc is at docs/capacity.md"))
+
 # ----------------------------------------------------------------------------- Grok (ACP)
 def grok_responder(proc, msg):
     method, rid = msg.get("method"), msg.get("id")
