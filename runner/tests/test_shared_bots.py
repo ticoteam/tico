@@ -262,9 +262,43 @@ class Copy(unittest.TestCase):
             git(third_path, "remote", "set-url", "origin", (root / "different-origin.git").as_uri())
             result, detail = runner.cleanup_assignment_trees(third_request)
             self.assertEqual(result, "blocked")
-            self.assertIn("origin differs", detail)
+            self.assertIn("origin is ambiguous or differs", detail)
             self.assertTrue(third_path.is_dir() and third_learning.is_dir())
             git(third_path, "remote", "set-url", "origin", source.as_uri())
+
+            # Cleanup must not treat preservation refs as complete when origin has
+            # alternate fetch destinations or a separate push destination.
+            git(third_path, "config", "--add", "remote.origin.fetch",
+                "refs/heads/main:refs/remotes/other/main")
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("fetch refspec is ambiguous", detail)
+            self.assertTrue(third_path.is_dir() and third_learning.is_dir())
+            git(third_path, "config", "--unset-all", "remote.origin.fetch")
+            git(third_path, "config", "--add", "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*")
+
+            git(third_path, "config", "--add", "remote.origin.pushurl", "")
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("separate or ambiguous push URL", detail)
+            self.assertTrue(third_path.is_dir() and third_learning.is_dir())
+            git(third_path, "config", "--unset-all", "remote.origin.pushurl")
+
+            git(third_path, "config", "--add", "remote.origin.pushurl", (root / "push-only.git").as_uri())
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("separate or ambiguous push URL", detail)
+            self.assertTrue(third_path.is_dir() and third_learning.is_dir())
+            git(third_path, "config", "--unset-all", "remote.origin.pushurl")
+
+            git(third_path, "remote", "set-url", "--add", "origin", (root / "other-origin.git").as_uri())
+            result, detail = runner.cleanup_assignment_trees(third_request)
+            self.assertEqual(result, "blocked")
+            self.assertIn("origin is ambiguous or differs", detail)
+            self.assertTrue(third_path.is_dir() and third_learning.is_dir())
+            git(third_path, "remote", "set-url", "--delete", "origin", (root / "other-origin.git").as_uri())
+
             result, detail = runner.cleanup_assignment_trees(third_request)
             self.assertEqual(result, "complete", detail)
             self.assertFalse(third_path.exists())
