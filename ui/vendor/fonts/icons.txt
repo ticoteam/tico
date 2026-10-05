@@ -37,6 +37,7 @@ credit_card
 crisis_alert
 dashboard_customize
 date_range
+delete
 deployed_code
 description
 developer_board

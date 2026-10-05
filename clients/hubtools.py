@@ -2721,8 +2721,9 @@ def docs_fetch(api, args):
 # has neither the credential nor any business connecting to a team database. A person makes and
 # revokes service keys in their own shell: a new key is shown to them, never to an agent's context.
 # `hub_team_icon` streams a local image file; the JSON tool transport cannot open that path.
+# Product repository creation asks a person to type the exact name at a terminal, so it has no tool.
 SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_db", "hub_service_key_create",
-              "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon"}
+              "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon", "hub_repo_product_create"}
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
