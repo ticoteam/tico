@@ -15,7 +15,7 @@ class Fake:
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
-        monkeypatch.setattr(module, "check_switched", lambda version, release: None)
+        monkeypatch.setattr(module, "check_switched", lambda version, release, seconds=None: None)
 
     def verbs(self):
         return [next(x for x in a[a.index("--project-directory") + 2:] if not x.startswith("-")) for a, _ in self.calls
@@ -331,3 +331,20 @@ def fail(*args, **kwargs):
         assert (tmp_path / ("hub.sqlite" + suffix)).read_bytes() == data
     if failure != "raw-copy":
         assert read_values(db) == ["before", "after snapshot"]
+
+
+def test_a_slow_first_answer_after_the_switch_is_tried_again_not_rolled_back(monkeypatch, tmp_path):
+    import io
+    updater, docker = switch(monkeypatch, tmp_path, "v0.2.0")
+    answers = iter([OSError("connection refused"), json.dumps({"ok": True, "release": "v0.2.0"})])
+    def urlopen(url, timeout=0):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return io.BytesIO(answer.encode())
+    monkeypatch.setattr(updater.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    images = iter([("sha256:old", "v0.1.0"), ("sha256:new", "v0.2.0"), ("sha256:new", "v0.2.0")])
+    monkeypatch.setattr(updater, "running_image", lambda: next(images))
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy", updater.status["message"]

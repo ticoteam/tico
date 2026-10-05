@@ -175,19 +175,32 @@ def pinned_services(version):
     return [n for n in names if (rendered.get(n) or {}).get("image") != IMAGE + ":" + version]
 
 
-def check_switched(version, release):
+class Mismatch(Exception):
+    """The switch ran the wrong image or release: roll back at once."""
+
+
+def check_switched(version, release, seconds=None):
     """After the switch: the service runs the image just pulled, and the server reports the release asked for.
-    A build that reports no release (a local or edge image) is not held to one."""
-    try:
-        if running_image()[0] != inspect(IMAGE + ":" + version)["Id"]:
-            raise RuntimeError("the %s container is not running the %s image" % (SERVICE, version))
-        if MODE == "server" and release:
-            with urllib.request.urlopen(HEALTH_URL, timeout=5) as reply:
-                reported = release_name(json.loads(reply.read()).get("release", ""))
-            if reported and reported != release:
-                raise RuntimeError("the server reports %s, not %s" % (reported, release))
-    except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
-        raise RuntimeError("could not check the new version (%s)" % exc)
+    A build that reports no release (a local or edge image) is not held to one. A check that cannot be made
+    (a slow first request, a quick restart) is tried again until the health window ends; only a real
+    mismatch, or no answer in the whole window, rolls back."""
+    deadline = time.time() + (HEALTH_SECONDS if seconds is None else seconds)
+    while True:
+        try:
+            if running_image()[0] != inspect(IMAGE + ":" + version)["Id"]:
+                raise Mismatch("the %s container is not running the %s image" % (SERVICE, version))
+            if MODE == "server" and release:
+                with urllib.request.urlopen(HEALTH_URL, timeout=5) as reply:
+                    reported = release_name(json.loads(reply.read()).get("release", ""))
+                if reported and reported != release:
+                    raise Mismatch("the server reports %s, not %s" % (reported, release))
+            return
+        except Mismatch as exc:
+            raise RuntimeError(str(exc))
+        except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
+            if time.time() >= deadline:
+                raise RuntimeError("could not check the new version (%s)" % exc)
+        time.sleep(3)
 
 
 def container_healthy(seconds):
