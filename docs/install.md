@@ -311,8 +311,8 @@ Attachment storage settings also go in `.env` next to `compose.yaml`:
 | `TICO_UPLOAD_MAX_BYTES` | Upload limit in bytes; default `2147483648` (2 GiB). |
 | `TICO_BLOB_ACCESS_KEY_ID`, `TICO_BLOB_SECRET_ACCESS_KEY` | Optional separate keys for attachments and desktop downloads; set both. Otherwise AWS credentials, profiles or role settings inside the container use boto3's default chain; without those settings, the backup `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` pair is reused. Grant it the attachment bucket permissions too. Without backup keys, the default chain applies, including IAM roles. |
 
-Docker does not forward AWS credentials or regions from the operator's shell. Empty storage
-settings are treated as unset.
+Docker does not forward AWS credentials from the operator's shell; `AWS_REGION` and `AWS_DEFAULT_REGION`
+pass through when set. Empty storage settings are treated as unset.
 
 See [File storage](files.md#storage) for bucket permissions and Health warnings.
 

@@ -77,6 +77,8 @@ class Docker:
         monkeypatch.setattr(module.subprocess, "run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
+        monkeypatch.setattr(module, "pinned_services", lambda version: [])
+        monkeypatch.setattr(module, "check_switched", lambda version, release: None)
         self.module = module
 
     def run(self, argv, env=None, **kw):

@@ -141,7 +141,7 @@ def running_image():
     container = compose("ps", "-q", SERVICE).split()[0]
     out = subprocess.run(["docker", "inspect", "--format", "{{.Image}} {{.Config.Image}}", container],
                          capture_output=True, text=True, check=True).stdout.split()
-    return out[0], out[1].rsplit(":", 1)[-1]
+    return out[0], image_tag(out[1])
 
 
 def release_name(value):
@@ -165,6 +165,29 @@ def older_than_running(version, running=""):
         return False
     wanted = core(version)
     return bool(running and wanted and wanted < running)
+
+
+def pinned_services(version):
+    """Services that would not run the target image: an override that sets `image:` keeps them where they are.
+    Renders the compose files with the target tag, the way the switch will."""
+    rendered = json.loads(compose("config", "--format", "json", tag=version, timeout=60)).get("services", {})
+    names = [SERVICE] + (["slack"] if MODE == "server" and "slack" in rendered else [])
+    return [n for n in names if (rendered.get(n) or {}).get("image") != IMAGE + ":" + version]
+
+
+def check_switched(version, release):
+    """After the switch: the service runs the image just pulled, and the server reports the release asked for.
+    A build that reports no release (a local or edge image) is not held to one."""
+    try:
+        if running_image()[0] != inspect(IMAGE + ":" + version)["Id"]:
+            raise RuntimeError("the %s container is not running the %s image" % (SERVICE, version))
+        if MODE == "server" and release:
+            with urllib.request.urlopen(HEALTH_URL, timeout=5) as reply:
+                reported = release_name(json.loads(reply.read()).get("release", ""))
+            if reported and reported != release:
+                raise RuntimeError("the server reports %s, not %s" % (reported, release))
+    except (OSError, ValueError, KeyError, IndexError, AttributeError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("could not check the new version (%s)" % exc)
 
 
 def container_healthy(seconds):
@@ -608,9 +631,21 @@ def update(version, running=""):
     snapshot, switched = "", False
     try:
         image_id, previous = running_image()
+        if not release_name(previous) and release_name(running):
+            previous = release_name(running)   # an untagged or `latest` image: the server knows which release it is
         set_status(state="pulling", **{"from": release_name(running) or previous, "to": version}, message="", snapshot="", restored=False)
+        target = release_name(version)
+        # Everything that can refuse the update happens here, before any file or container changes.
+        try:
+            pinned = pinned_services(version)
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            set_status(state="failed", message="Not updated: could not read the compose files (%s)." % exc)
+            return
+        if pinned:
+            set_status(state="failed", message="Not updated: %s pins the image for %s; remove `image:` so updates can change it."
+                                               % ("compose.override.yaml" if MODE == "server" else OVERRIDE_FILE, ", ".join(pinned)))
+            return
         if BUNDLE != "never":
-            # Everything that can refuse the update happens here, before any file or container changes.
             try:
                 staging = tempfile.mkdtemp(prefix="tico-bundle-")
                 release = release_of(version)
@@ -618,6 +653,7 @@ def update(version, running=""):
             except BundleError as exc:
                 set_status(state="failed", message="Not updated: %s." % exc)
                 return
+            target = release_name(release)
         if BUNDLE != "never":
             apply_bundle(files, release)
             bundled = True
@@ -637,6 +673,7 @@ def update(version, running=""):
             compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=version)
             if not healthy(HEALTH_SECONDS):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
+            check_switched(version, target)
         except RuntimeError as exc:
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
             subprocess.run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False)

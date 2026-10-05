@@ -7,13 +7,15 @@ from backend.tests.test_updater_runner import load
 
 
 class Fake:
-    """`docker`: records argv, and answers inspect/ps from tables. `fail` names a compose verb that exits 1."""
+    """`docker`: records argv, and answers inspect/ps/config from tables. `fail` names a compose verb that exits 1."""
 
-    def __init__(self, module, monkeypatch, healthy=(True,), fail=(), container=None):
-        self.calls, self.answers, self.fail, self.container = [], list(healthy), set(fail), container
+    def __init__(self, module, monkeypatch, healthy=(True,), fail=(), container=None, config=None):
+        self.calls, self.answers, self.fail, self.container, self.config = [], list(healthy), set(fail), container, config
         monkeypatch.setattr(module.subprocess, "run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
+        monkeypatch.setattr(module, "pinned_services", lambda version: [])
+        monkeypatch.setattr(module, "check_switched", lambda version, release: None)
 
     def verbs(self):
         return [next(x for x in a[a.index("--project-directory") + 2:] if not x.startswith("-")) for a, _ in self.calls
@@ -25,7 +27,7 @@ class Fake:
         if argv[:2] == ["docker", "compose"]:
             verb = next(x for x in argv[argv.index("--project-directory") + 2:] if not x.startswith("-"))
             code = 1 if verb in self.fail else 0
-            out = "updater-1\n" if "ps" in argv else ""
+            out = "updater-1\n" if "ps" in argv else json.dumps(self.config) if verb == "config" else ""
         elif argv[:2] == ["docker", "inspect"]:
             out = json.dumps([self.container(argv[2])])
         return type("R", (), {"returncode": code, "stdout": out, "stderr": "boom" if code else ""})()
@@ -79,6 +81,62 @@ def test_a_pull_failure_or_snapshot_failure_does_not_touch_the_database(monkeypa
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back" and "could not snapshot" in updater.status["message"]
     assert "stop" not in docker.verbs() and updater.status["restored"] is False
+
+
+def rendered(updater, server, slack=None):
+    """What `docker compose config --format json` prints for the server (and Slack) images."""
+    services = {"server": {"image": server}, "updater": {"image": "ghcr.io/ticoteam/tico-updater:v0.1.0"}}
+    return {"services": {**services, **({"slack": {"image": slack}} if slack else {})}}
+
+
+@pytest.mark.parametrize("server, slack, pinned", [("ghcr.io/acme/tico:v0.1.0", None, "server"),
+                                                   ("ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/acme/tico:v0.1.0", "slack")])
+def test_an_override_that_pins_the_image_is_refused_before_anything_changes(monkeypatch, tmp_path, server, slack, pinned):
+    updater = load(monkeypatch, "", tmp_path)
+    check = updater.pinned_services
+    docker = Fake(updater, monkeypatch, config=rendered(updater, server, slack))
+    monkeypatch.setattr(updater, "pinned_services", check)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "failed"
+    assert "compose.override.yaml pins the image for %s; remove `image:`" % pinned in updater.status["message"]
+    assert docker.verbs() == ["config"] and docker.calls[0][1]["TICO_TAG"] == "v0.2.0"   # rendered with the target tag
+
+
+def switch(monkeypatch, tmp_path, release, after="sha256:new", tag="v0.1.0"):
+    """An update to v0.2.0 with the real preflight and post-switch checks; the new server reports `release`."""
+    import io
+    updater = load(monkeypatch, "", tmp_path)
+    (tmp_path / ".env").write_text("TICO_TEAM_NAME=Acme\n")
+    checks = updater.pinned_services, updater.check_switched
+    docker = Fake(updater, monkeypatch, [True, True], container=lambda ref: {"Id": "sha256:new"},
+                  config=rendered(updater, "ghcr.io/ticoteam/tico:v0.2.0", "ghcr.io/ticoteam/tico:v0.2.0"))
+    monkeypatch.setattr(updater, "pinned_services", checks[0])
+    monkeypatch.setattr(updater, "check_switched", checks[1])
+    images = iter([("sha256:old", tag), (after, "v0.2.0")])
+    monkeypatch.setattr(updater, "running_image", lambda: next(images))
+    monkeypatch.setattr(updater.urllib.request, "urlopen",
+                        lambda url, timeout=0: io.BytesIO(json.dumps({"ok": True, "release": release}).encode()))
+    return updater, docker
+
+
+def test_a_correct_render_and_the_new_release_pass(monkeypatch, tmp_path):
+    updater, docker = switch(monkeypatch, tmp_path, "v0.2.0")
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy", updater.status["message"]
+    assert docker.verbs()[0] == "config" and "TICO_TAG=v0.2.0" in (tmp_path / ".env").read_text()
+
+
+@pytest.mark.parametrize("release, after, reason", [("v0.1.0", "sha256:new", "the server reports v0.1.0, not v0.2.0"),
+                                                    ("v0.2.0", "sha256:old", "not running the v0.2.0 image")])
+def test_the_wrong_version_after_the_switch_is_rolled_back(monkeypatch, tmp_path, release, after, reason):
+    # An untagged image: the release to go back to is the one the server reported.
+    updater, docker = switch(monkeypatch, tmp_path, release, after=after, tag="latest")
+    updater.update("v0.2.0", running="0.1.0")
+    status = updater.status
+    assert status["state"] == "rolled_back" and reason in status["message"] and "Went back to v0.1.0" in status["message"]
+    assert ["docker", "tag", "sha256:old", updater.IMAGE + ":v0.1.0"] in [a for a, _ in docker.calls]
+    assert docker.verbs()[-3:] == ["stop", "run", "up"] and docker.calls[-1][1]["TICO_TAG"] == "v0.1.0"
+    assert "TICO_TAG" not in (tmp_path / ".env").read_text()
 
 
 def container(updater, mode_dir, tag="v0.1.0"):
