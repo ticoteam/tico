@@ -3,8 +3,8 @@
 Docker can answer `docker info` while every `docker run` hangs (a stalled disk under Docker Desktop's VM),
 and then a bot's container work waits forever with nothing in Health. So, where a `docker` CLI is on PATH
 and its daemon answers, the runner starts a throwaway container from an image already on the computer,
-in the background, with a time limit. It never pulls: it only starts an image the local listing shows, so
-it needs no `--pull` flag, which Docker before 20.10 does not know.
+in the background, with a time limit. It never pulls: it starts a listed local image by its full ID, which
+fails at once if the image has gone since, so it needs no `--pull` flag (Docker before 20.10 does not know it).
 
 Probes are rare (Docker Desktop's Resource Saver lets its VM sleep between them). A failure is checked
 again at once, and only a second failure in a row is reported, so one slow start on a waking VM is not
@@ -41,15 +41,20 @@ def _remove(docker, *names):
 
 
 def _image(docker):
-    """A local image to start, or None when there is none. Raises TimeoutExpired when the daemon hangs."""
-    listed = _run([docker, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], ANSWER_S)
+    """The full ID of a local image to start, or None when there is none. Raises TimeoutExpired when the
+    daemon hangs. A name could be pulled if the image went away before the run; an ID cannot."""
+    listed = _run([docker, "images", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}}"], ANSWER_S)
     if listed.returncode != 0:
         return None       # no daemon running: not a stall
-    images = [line for line in listed.stdout.split() if "<none>" not in line]
+    images = {}
+    for line in listed.stdout.splitlines():
+        ident, _, name = line.strip().partition(" ")
+        if ident and name and "<none>" not in name:
+            images.setdefault(name, ident)
     if os.environ.get(IMAGE_ENV):
-        return os.environ[IMAGE_ENV] if os.environ[IMAGE_ENV] in images else None
-    return next((image for prefix in PREFERRED for image in images if image.startswith(prefix)),
-                images[0] if images else None)
+        return images.get(os.environ[IMAGE_ENV])
+    name = next((name for prefix in PREFERRED for name in images if name.startswith(prefix)), next(iter(images), None))
+    return images.get(name)
 
 
 def probe():
@@ -69,8 +74,8 @@ def probe():
             return None
         # A wedged daemon leaves earlier probes in Created; clear them before adding another.
         _remove(docker, *_run([docker, "ps", "-aq", "--filter", "label=" + LABEL], ANSWER_S).stdout.split())
-    except subprocess.TimeoutExpired:
-        return result(False, f"docker did not answer within {ANSWER_S} s")
+    except subprocess.TimeoutExpired as exc:
+        return result(False, f"docker did not answer within {exc.timeout:g} s")
     except OSError as exc:
         return result(False, str(exc))
     try:
@@ -85,6 +90,8 @@ def probe():
     # 126/127: the image has no `true`. The daemon still created and started the container, which is what this checks.
     if ran.returncode in (0, 126, 127):
         return result(True)
+    if "no such image" in (ran.stderr or "").lower():
+        return None       # removed since it was listed: nothing was checked, and nothing was pulled
     lines = (ran.stderr or ran.stdout).strip().splitlines()
     return result(False, lines[-1] if lines else f"docker run exited {ran.returncode}")
 

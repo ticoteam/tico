@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from backend.models import StructuredReadiness
 from runner import container_probe
 
+IMAGES = ("sha256:" + "b" * 64 + " node:20\n" + "sha256:" + "c" * 64 + " <none>:<none>\n"
+          + "sha256:" + "a" * 64 + " ghcr.io/ticoteam/tico:latest\n")
 FAIL = {"ok": False, "seconds": 20.0, "error": "a container did not start within 20 s", "checked_at": "t"}
 PASS = {"ok": True, "seconds": 1.0, "error": "", "checked_at": "t"}
 
@@ -25,19 +27,19 @@ class SyncThread:
 
 
 class Probe(unittest.TestCase):
-    def probe(self, images="ghcr.io/ticoteam/tico:latest\nnode:20\n", run=0, hang=None, listing=0, leftovers=""):
+    def probe(self, images=IMAGES, run=0, hang=None, listing=0, leftovers="", stderr="docker: Error response from daemon: no space left"):
         calls = []
 
         def run_(args, **kwargs):
             calls.append(args)
             if args[1] in (hang or ()):
                 raise subprocess.TimeoutExpired(args, kwargs["timeout"])
-            if args[1:3] == ["image", "ls"]:
+            if args[1] == "images":
                 return subprocess.CompletedProcess(args, listing, images, "Cannot connect to the Docker daemon")
             if args[1] == "ps":
                 return subprocess.CompletedProcess(args, 0, leftovers, "")
             if args[1] == "run":
-                return subprocess.CompletedProcess(args, run, "", "docker: Error response from daemon: no space left")
+                return subprocess.CompletedProcess(args, run, "", stderr)
             return subprocess.CompletedProcess(args, 0, "", "")
         with mock.patch.object(container_probe.shutil, "which", return_value="/usr/bin/docker"), \
                 mock.patch.object(container_probe.subprocess, "run", side_effect=run_), \
@@ -52,7 +54,7 @@ class Probe(unittest.TestCase):
         result, calls = self.probe()
         self.assertTrue(result["ok"])
         run = self.call(calls, "run")
-        self.assertEqual(run[-1], "ghcr.io/ticoteam/tico:latest")
+        self.assertEqual(run[-1], "sha256:" + "a" * 64)    # by ID: a name could be pulled
         self.assertIn("--rm", run)
         self.assertNotIn("--pull", run)          # Docker before 20.10 refuses it; a listed image is never pulled
         for flag in (["--network", "none"], ["--label", "tico.probe=1"]):
@@ -60,6 +62,12 @@ class Probe(unittest.TestCase):
         StructuredReadiness.model_validate({"container_exec": result})     # the server takes the report
         with mock.patch.dict(container_probe.os.environ, {container_probe.IMAGE_ENV: "busybox:latest"}):
             self.assertIsNone(self.probe()[0])   # a named image that is not here would be pulled: skip
+
+    def test_an_image_removed_after_it_was_listed_is_not_pulled_and_not_a_failure(self):
+        result, calls = self.probe(run=125, stderr="Unable to find image 'sha256:aaa' locally\n"
+                                                    "docker: Error response from daemon: No such image: sha256:aaa.")
+        self.assertIsNone(result)
+        self.assertEqual(sum(args[1] == "run" for args in calls), 1)
 
     def test_an_image_without_true_still_counts_as_a_start(self):
         for code in (126, 127):
@@ -72,6 +80,11 @@ class Probe(unittest.TestCase):
         self.assertEqual(self.call(calls, "rm")[2:], ["-fv", "abc", "def"])
         self.assertLess(verbs.index("rm"), verbs.index("run"))
 
+    def test_a_hung_leftover_removal_names_its_own_limit(self):
+        result, calls = self.probe(leftovers="abc\n", hang=("rm",))
+        self.assertEqual((result["ok"], result["error"]), (False, "docker did not answer within 20 s"))
+        self.assertNotIn("run", [args[1] for args in calls])
+
     def test_a_hung_start_is_reported_and_its_container_removed(self):
         result, calls = self.probe(hang=("run",))
         self.assertEqual((result["ok"], result["error"]), (False, "a container did not start within 20 s"))
@@ -79,7 +92,7 @@ class Probe(unittest.TestCase):
         self.assertEqual([args[2:] for args in calls if args[1] == "rm"], [["-fv", name]])
 
     def test_a_hung_listing_or_a_failed_start_is_reported(self):
-        result, calls = self.probe(hang=("image",))
+        result, calls = self.probe(hang=("images",))
         self.assertEqual((result["ok"], result["error"]), (False, "docker did not answer within 10 s"))
         self.assertNotIn("run", [args[1] for args in calls])
         result, _ = self.probe(run=125)
