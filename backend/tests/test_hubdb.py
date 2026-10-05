@@ -465,7 +465,7 @@ class WaitingWithDependency(HubCase):
         key = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
         H.task_update(self.conn, CMO, key['id'], status='waiting', waiting_on='ana', note='Approve the purchase')
         H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
-        self.assertEqual((H.status(self.conn, 'cmo')['needs_human'], stored('cmo')), (1, 1))
+        self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (1, 1))
         # A plain reply answers a question; deleting the reply reopens it.
         other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
         H.task_ask(self.conn, SEO, other['id'], 'Which date?')

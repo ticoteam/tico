@@ -786,24 +786,19 @@ async function views(browser) {
 }
 
 async function waitingOnYou(browser) {
-  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it. Its Done and Reply go back
-  // on the task as a comment that wakes the bot; nothing offers to set the bot's status.
+  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
+  // and no buttons other rows lack.
   const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner: 'bot:engineer',
     requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated: at(5)};
-  const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host]});
-  assert.equal(await page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]').count(), 1);
-  const comments = [];
-  await page.route('**/api/v2/tasks/t-host/comments', route => { comments.push(route.request().postDataJSON()); return route.fulfill({contentType: 'application/json', body: '{}'}); });
-  await page.evaluate(it => { const box = document.createElement('div'); box.id = 'waiting-item'; box.style.cssText = 'position:fixed;top:0;right:0;width:600px;z-index:9999'; box.innerHTML = needsV2Item(it, false); document.body.append(box); },
-    {...host, kind: 'waiting', conversation_id: 'c-host'});
-  const item = page.locator('#waiting-item');
-  assert.equal(await item.locator('[data-v2-status], [data-v2-close], [data-v2-reply]').count(), 0, 'no status change on the bot\'s task');
-  assert.equal(await item.locator('.req-from').innerText(), 'Engineer:', 'named for the bot that owns it');
-  assert.equal(await item.locator('.pill').innerText(), 'Waiting');
-  await item.locator('summary').click();
-  await item.locator('[data-v2-done]').click();
-  await page.waitForFunction(() => !document.querySelector('#waiting-item .req'));
-  assert.deepEqual(comments, [{text: 'Done.'}]);
+  const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
+  const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host, sams]});
+  const row = page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]');
+  assert.equal(await row.count(), 1);
+  assert.equal(await row.locator('.tl-waiting').innerText(), 'Waiting');
+  assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
+  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
+  const buttons = r => page.locator(`[data-task-key="${r}"] button`).evaluateAll(b => b.map(x => x.className));
+  assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
   console.log('Waiting on you: ok');
   await page.close();

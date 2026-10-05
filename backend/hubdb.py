@@ -4511,8 +4511,14 @@ def approvals(conn, requested_by=None, decision=None, pending=False):
 
 
 def status(conn, bot_slug):
-    """A bot's status row, its counts as they are now rather than as last stored."""
-    row = _one(conn, "SELECT * FROM bot_status WHERE bot=?", (actor_id(bot_slug),))
+    """A bot's status row as stored. Its counts are recounted on every change that moves them
+    (`_recount`); `status_live` counts them afresh for a display."""
+    return _one(conn, "SELECT * FROM bot_status WHERE bot=?", (actor_id(bot_slug),))
+
+
+def status_live(conn, bot_slug):
+    """`status`, with `open_tasks` and `needs_human` counted now: for what a person is shown."""
+    row = status(conn, bot_slug)
     if row:
         row["open_tasks"], row["needs_human"] = status_counts(conn, bot_actor(row["bot"]))
     return row

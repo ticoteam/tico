@@ -5,8 +5,7 @@
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
 function needsV2Item(it, folded, showName = true) {
   const kind = String(it.kind || 'task');
-  // A task waiting on you is the owner bot's ask, whoever filed it.
-  const from = (kind === 'waiting' ? it.owner : taskRequester(it)) || it.requested_by || '';
+  const from = taskRequester(it) || it.requested_by || '';
   const slug = actorSlug(from);
   const line = it.first_line || v2Firstline(it.body);
   const title = it.title || line || V2_KIND[kind] || 'Item';
@@ -14,23 +13,19 @@ function needsV2Item(it, folded, showName = true) {
   if (kind === 'approval') {
     acts.push(`<button class="primary" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="approved">Approve</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="declined">Decline</button>`);
-  } else if (kind === 'waiting') {
-    // The task is the bot's: Done and Reply go back on it as a comment that wakes the bot, never a status change.
-    acts.push(`<button class="primary" type="button" data-v2-waiting="${esc(it.id)}" data-v2-done="1">Done</button>`);
-    acts.push(`<button class="ghost" type="button" data-v2-waiting="${esc(it.id)}">Reply</button>`);
   } else {
     if (it.status !== 'done') acts.push(`<button class="primary" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
     if (['done', 'declined'].includes(String(it.status))) acts.push(`<button class="ghost" type="button" data-v2-task="${esc(it.id)}" data-v2-status="open">Reopen</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-task="${esc(it.id)}" data-v2-close="1">Close</button>`);
   }
-  if (it.conversation_id && kind !== 'waiting') acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
+  if (it.conversation_id) acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
   const payload = it.payload && typeof it.payload === 'object'
     ? `<div class="req-next"><span>Exactly this</span><div class="md"><pre>${esc(JSON.stringify(it.payload, null, 2))}</pre></div></div>` : '';
   return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${folded ? ' hidden data-folded' : ''}>
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
-      <span class="req-meta"><span class="pill ${['approval', 'question', 'waiting'].includes(kind) ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
+      <span class="req-meta"><span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
       <span class="req-arrow" aria-hidden="true">›</span>
     </summary>
     <div class="req-body">
@@ -119,18 +114,7 @@ function taskOutcomeNote(task, action) {
     dialog.querySelector('textarea').focus();
   });
 }
-// "Done" on a task waiting on you: one comment on it, which wakes its bot and takes it off your list.
-async function v2WaitingDone(button, id) {
-  const label = button.textContent;
-  button.disabled = true; button.textContent = '…';
-  try {
-    await post(`/v2/tasks/${encodeURIComponent(id)}/comments`, {text: 'Done.'});
-    toast('Sent');
-    button.closest('.req')?.remove();
-    await v2Refresh();
-  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
-}
-function v2ReplyBox(button, conversation, taskId = '') {
+function v2ReplyBox(button, conversation) {
   const host = button.closest('.req-body')?.querySelector('.issue-compose');
   if (!host) return;
   if (!host.hidden) { host.hidden = true; host.innerHTML = ''; return; }
@@ -148,8 +132,7 @@ function v2ReplyBox(button, conversation, taskId = '') {
     if (!text) { box.focus(); return; }
     [...form.elements].forEach(el => el.disabled = true); msg.textContent = 'Sending…';
     try {
-      if (taskId) await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text});
-      else await post(`/v2/conversations/${encodeURIComponent(conversation)}/messages`, {text});
+      await post(`/v2/conversations/${encodeURIComponent(conversation)}/messages`, {text});
       host.hidden = true; host.innerHTML = '';
       toast('Sent');
       await v2Refresh();
@@ -163,13 +146,6 @@ function v2ReplyBox(button, conversation, taskId = '') {
 document.addEventListener('click', ev => {
   const ap = ev.target.closest('[data-v2-approval]');
   if (ap) { ev.preventDefault(); void v2Decide(ap, ap.dataset.v2Approval, ap.dataset.v2Decision); return; }
-  const wt = ev.target.closest('[data-v2-waiting]');
-  if (wt) {
-    ev.preventDefault();
-    if (wt.dataset.v2Done) void v2WaitingDone(wt, wt.dataset.v2Waiting);
-    else v2ReplyBox(wt, '', wt.dataset.v2Waiting);
-    return;
-  }
   const tk = ev.target.closest('[data-v2-task]');
   if (tk) {
     ev.preventDefault();

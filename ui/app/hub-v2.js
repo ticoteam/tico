@@ -15,7 +15,7 @@ const statusWord = status => status === 'planned' ? 'Setting up' : String(status
 const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
-                 question: 'Question', waiting: 'Waiting', task: 'Task', notice: 'Message'};
+                 question: 'Question', task: 'Task', notice: 'Message'};
 const hostOf = slug => String(S.emps.find(e => e.name === slug)?.host || 'dispatcher');
 const isKeeper = slug => hostOf(slug) === 'keeper';
 const v2StatusOf = slug => S.v2.status[slug] || null;
