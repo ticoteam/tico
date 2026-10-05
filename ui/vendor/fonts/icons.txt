@@ -70,7 +70,6 @@ help
 history
 history_edu
 inbox
-insights
 integration_instructions
 inventory_2
 key_vertical
