@@ -131,46 +131,84 @@ def test_acknowledged_input_requeued_by_a_finished_run_is_delivered_once_to_the_
 
 
 
-def test_deferred_private_input_moves_to_the_next_run_and_the_first_run_stays_private(api):
-    from backend import task_privacy
-    from backend.store import H
-    from backend.tests.test_task_privacy_reads import sql
+
+def two_bots(api):
     r = runner(api)
     for bot in ("ops", "finance"):
         assign(api, r, bot)
     ready(api, r, ["ops", "finance"])
+    return r
+
+
+def ask_ops(api, r, task_id, text):
+    post(api, "chat/finance", {"text": "Ask ops about the packet"})
+    finance = claim(api, r, "finance")
+    return post(api, "messages", {"to": "ops", "kind": "ask", "text": text, "wait_s": 60,
+                                  "refs": {"task": task_id}}, finance["token"])
+
+
+def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(api):
+    from backend import task_privacy
+    from backend.store import H
+    from backend.tests.test_task_privacy_reads import sql
+    r = two_bots(api)
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "bot:finance", "Private packet", "Confidential figures.", "bot:ops",
-                                private=True, lint=False)
+        packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
     post(api, "chat/ops", {"text": "Check the public numbers"})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
-    post(api, "chat/finance", {"text": "Ask ops about the packet"})
-    finance = claim(api, r, "finance")
-    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Are the packet figures final?", "wait_s": 60,
-                                 "refs": {"task": private["id"]}}, finance["token"])
+    ask = ask_ops(api, r, packet["id"], "Are the packet figures final?")
     assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
     post(api, f"attempts/{first['id']}/inputs/{ask['id']}/ack", {}, r["token"])
-    # The run ends without answering or touching the private task, so its question waits for a later run.
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0},
-         r["token"])
+    # The run ends without answering or touching the packet task, so its question waits for a later run.
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, r["token"])
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (ask["id"],)).fetchone()[:] == ("queued", None)
-    get(api, f"turns/{first['id']}/steps", expected=404)
     post(api, "chat/ops", {"text": "One more check"})
     second = claim(api, r, "ops")
     post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
     assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
     post(api, f"attempts/{second['id']}/inputs/{ask['id']}/ack", {}, r["token"])
     assert post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"] == []
-    # The first run read the private question; moving the row must not open that run to others.
+    get(api, f"turns/{first['id']}/steps")
+    # The first run read the packet question. If the packet later turns private, that run must
+    # close to people outside it even though the input row now belongs to the second run.
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (ask["id"],)).fetchone()[0] == second["id"]
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (packet["id"],))
     get(api, f"turns/{first['id']}/steps", expected=404)
     assert not sql(api, f"SELECT id FROM attempts WHERE id='{first['id']}'")
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (ask["id"],)).fetchone()[0] == second["id"]
-        assert private["id"] in task_privacy.attempt_tasks(c, first["id"])
-        assert not task_privacy.attempt_readable(c, "human:ana", first["id"])
+        assert packet["id"] in task_privacy.attempt_tasks(c, first["id"])
         assert task_privacy.attempt_readable(c, "bot:ops", first["id"])
         event = c.execute("SELECT * FROM events WHERE action='attempt.input.moved' AND target=?", (first["id"],)).fetchone()
         assert not task_privacy.event_readable(c, "human:ana", event)
+
+
+def test_private_task_input_is_not_folded_into_another_tasks_run_and_runs_on_its_own(api):
+    from backend.store import H
+    r = two_bots(api)
+    with api.app.state.store.transaction() as c:
+        private = H.task_create(c, "bot:finance", "Private packet", "Confidential figures.", "bot:ops",
+                                private=True, lint=False)
+        public = H.task_create(c, "human:ana", "Public review", "Review the public numbers.", "bot:ops",
+                               private=False, lint=False)
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id NOT IN "
+                  "(SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.task_id=?)",
+                  (public["id"],))
+    first = claim(api, r, "ops")
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    with api.app.state.store.read() as c:
+        origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0])
+        assert H.message_task_id(origin, H.conversation(c, origin["conversation_id"])) == public["id"]
+    ask = ask_ops(api, r, private["id"], "Are the private figures final?")
+    assert post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (ask["id"],)).fetchone()[0] == "queued"
+        assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id=?", (ask["id"],)).fetchone()
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Reviewed", "last_seq": 0}, r["token"])
+    get(api, f"turns/{first['id']}/steps")        # the person who started the public run keeps it
+    second = claim(api, r, "ops")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (second["job_id"],)).fetchone()[0] == ask["id"]

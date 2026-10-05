@@ -970,6 +970,11 @@ class Execution:
             incoming_task = H.message_task_id(H.message(c, row["id"]), H.conversation(c, row["conversation_id"]))
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue                    # a new task gets its own run, even in the same bot room
+            if any(tid != origin_task and H.task_private(c, H.task(c, tid))
+                   for tid in privacy.message_tasks(c, row, include_run=False)):
+                # Folding another task's private message into this run would make the run private
+                # too, shutting out whoever started it. It waits queued and gets its own run.
+                continue
             if attempt["bot"] == H.FLEET_MAINTAINER:
                 refs = json.loads(row["refs_json"] or "{}")
                 origin = c.execute("SELECT j.message_id,m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
