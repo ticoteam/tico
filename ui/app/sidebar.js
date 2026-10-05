@@ -143,7 +143,7 @@ function renderLibrarians() {
     el.href = href;
     el.hidden = !(S.emps || []).some(e => e.name === slug);
   }
-  for (const [id, slug] of [['nav-docs-librarian', 'librarian'], ['nav-market-librarian', 'market-analyst']]) {
+  for (const [id, slug] of [['nav-docs-librarian', 'librarian'], ['nav-market-librarian', 'librarian']]) {
     const el = document.getElementById(id);
     if (!el) continue;
     const bot = (S.emps || []).find(e => e.name === slug && e.status !== 'archived' && e.status !== 'retired');

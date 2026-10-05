@@ -45,7 +45,7 @@ stops at its first line on an open setup question does nothing every time it fir
 
 A routine runs on a time (`cron`, five fields, in `timezone`, America/Los_Angeles by default) or
 on something happening in Tico (`on`), never both. Tico emits `meeting.ready` when a team meeting with a transcript is first imported (a private meeting emits nothing; `recording.ready` is its old name and is still emitted, so older routines keep firing; see [Meetings](meetings.md)). It emits `market.insight.urgent` when someone reports a market insight with
-`--urgent`; that opens the market curator's urgent routine and does not fire for an ordinary report. Each event opens one task per routine and per subject, titled `<routine title>:
+`--urgent`; that opens the Librarian's urgent market routine and does not fire for an ordinary report. Each event opens one task per routine and per subject, titled `<routine title>:
 <meeting title>`; the body is the routine's text, then the event's facts, then the meeting's
 notes and transcript. Re-emitting the same event for the same subject does nothing. The event
 list is `clients/routines.py EVENTS`.

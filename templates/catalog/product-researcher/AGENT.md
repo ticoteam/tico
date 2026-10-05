@@ -45,7 +45,7 @@ Only when the work asks for it and your Tools allow it:
 - **Publishing a finding as a decision or a roadmap item.** A brief recommends and shows the evidence.
 
 Always:
-- Report competitor facts with `hub market report`; the Market Analyst curates the graph.
+- Report competitor facts with `hub market report`; the Librarian curates the graph.
 - Never call something a pattern from fewer than three separate sources. Never quote a private meeting.
 
 ## Starting a run

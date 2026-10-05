@@ -726,23 +726,6 @@
    "template": "logistics"
   },
   {
-   "business_only": true,
-   "department": "marketing",
-   "icon": "insights",
-   "lead": false,
-   "name": "Market Research Analyst",
-   "suggest": "niche",
-   "summary": "Keeps one evidence-backed map of the team's market: who competes, who partners and where customers talk, and writes a weekly delta page of what changed.",
-   "tags": [
-    "competitive",
-    "market-research",
-    "positioning",
-    "b2b",
-    "saas"
-   ],
-   "template": "market"
-  },
-  {
    "business_only": false,
    "department": "marketing",
    "icon": "campaign",
@@ -1823,5 +1806,5 @@
    "software_only": true
   }
  ],
- "version": "d3f8d35b3c6c"
+ "version": "6248fe98b813"
 }

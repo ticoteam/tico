@@ -16,13 +16,12 @@ PEOPLE = [
     {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of support",
      "team": "leadership", "primary_for": ["support", "inbox"], "reports_to": "ana"},
     {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Marketing lead",
-     "team": "leadership", "primary_for": ["content", "market-analyst"], "reports_to": "ana"},
+     "team": "leadership", "primary_for": ["content"], "reports_to": "ana"},
 ]
 
 # slug, catalog template, reports to
 BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"), ("support", "support", "coo"),
-        ("sales", "sales", "coo"), ("inbox", "inbox", "coo"), ("content", "content", "coo"),
-        ("market-analyst", "market", "coo")]
+        ("sales", "sales", "coo"), ("inbox", "inbox", "coo"), ("content", "content", "coo")]
 
 # Six daily updates per bot and one for Friday's week in review. Each bullet is one plain line.
 UPDATES = {
@@ -32,7 +31,7 @@ UPDATES = {
             "- Filed the Northwind pricing research for Sales and the launch post outline for Content.\n- Reminded Ben that the vendor invoice question is still open.",
             "- Merged two duplicate tasks about the welcome email.\n- Checked every bot's open work; nothing has sat untouched for a day.\n- Still waiting on Ana for the refund limit.",
             "- Sent Ana this week's priorities to look over.\n- Moved the Brightline renewal brief up because the call is Thursday.",
-            "- Routed the partner enquiry from Harborly to Sales.\n- Asked BotOps to add a Market Analyst; it is running now.",
+            "- Routed the partner enquiry from Harborly to Sales.\n- Asked the Librarian to map the market from Ana's answers; it is running now.",
             "- Cleared stale reminders from the shared inbox.\n- Two items wait on people: the refund limit and the pricing page review.",
         ],
         "weekly": [
@@ -42,13 +41,13 @@ UPDATES = {
         "daily": [
             "- Set up Content from the catalog: repository, instructions and a weekly routine.\n- Checked that all six bots report ready on both computers.",
             "- Fixed Sales failing to start: its repository was one commit behind on the office Mac.\n- Added a note to the set-up playbook so the next bot avoids it.",
-            "- Added the Market Analyst from the catalog and gave it the market questions Ana answered.\n- Both computers are signed in to the model.",
+            "- Turned on the Librarian's market curation and gave it the market questions Ana answered.\n- Both computers are signed in to the model.",
             "- Started updating Support's instructions with the refund policy.\n- Reviewed last week's failed runs; there were none.",
             "- Trimmed Inbox's instructions from 900 lines to 300 so it starts faster.\n- Waiting on Support's review of the new refund wording.",
             "- Confirmed every bot has a computer and a routine that matches its job.\n- No bot is paused or quarantined.",
         ],
         "weekly": [
-            "- Built two bots this week (Content and Market Analyst) and repaired one start-up failure.\n- All seven bots are ready and no run failed after Wednesday.\n- Next week I will finish the refund policy in Support's instructions and add a Listening bot if Ana wants one.",
+            "- Built one bot this week (Content) and repaired one start-up failure.\n- All six bots are ready and no run failed after Wednesday.\n- Next week I will finish the refund policy in Support's instructions and add a Listening bot if Ana wants one.",
         ]},
     "support": {
         "daily": [
@@ -98,18 +97,6 @@ UPDATES = {
         "weekly": [
             "- Drafted the launch post, revised the pricing page and outlined three how-to posts.\n- Two drafts wait for a person to review; nothing has been published.\n- Next week I will finish the how-to posts and send the newsletter to Cara for approval.",
         ]},
-    "market-analyst": {
-        "daily": [
-            "- Added Northwind, Brightline, Pricewise, Harborly, Fernwood and Doorlark to the market graph.\n- Cited each one from its own website.",
-            "- Wrote the market overview page from what Ana said about customers.\n- Marked Northwind and Brightline as core competitors.",
-            "- Recorded that Northwind cut its starter plan price; the source is its pricing page.\n- Two reports from Sales are waiting for me to check.",
-            "- Added r/projectmanagement as a channel where studios ask for advice.\n- Applied the Fernwood report from Support.",
-            "- Refreshed the weekly changes page: three changes this week.\n- Nothing in the graph is older than 30 days.",
-            "- Answered Cara's question about which competitor changed pricing most recently.\n- Added the source to the graph.",
-        ],
-        "weekly": [
-            "- The graph now covers seven companies, one segment and one channel, all cited.\n- Northwind's price cut and Brightline's new mobile app are the two changes worth a look.\n- Next week I will add the partner Harborly mentioned and check every core competitor again.",
-        ]},
 }
 
 # (slug, title, body, owner, requester, final status, days ago created, days ago last change, note)
@@ -128,7 +115,7 @@ TASKS = [
      "Nine refund requests: five for a duplicate charge, three for an unused plan, one for a lost invoice. Two are over $200."),
     ("market-graph", "Add the six competitors to the market graph",
      "Add each competitor we listed, with its website as the source.",
-     "bot:market-analyst", "human:ana", "done", 4.0, 3.2,
+     "bot:librarian", "human:ana", "done", 4.0, 3.2,
      "Added Northwind, Brightline, Pricewise, Harborly, Fernwood and Doorlark, each cited from its own site."),
     ("harborly", "Route the Harborly partner enquiry", "A partner enquiry came in by email. Send it to whoever should answer.",
      "bot:coo", "human:ana", "done", 2.2, 1.9,
@@ -234,7 +221,7 @@ TURNS = [
     ("inbox", 51, "routine", "Sorted the inbox: 26 filed, 6 flagged.", 37900, 2200),
     ("botops", 100, "task", "Added Content from the catalog.", 91000, 8800),
     ("coo", 78, "task", "Routed four requests.", 21400, 1400),
-    ("market-analyst", 125, "task", "Summarised two competitor pages.", 58300, 4700),
+    ("librarian", 125, "task", "Summarised two competitor pages.", 58300, 4700),
     ("support", 1.5, "message", "Drafted replies for three tickets.", 41200, 3100),
     ("support", 5, "routine", "Morning triage: 11 drafts ready.", 88400, 7200),
     ("sales", 9, "task", "Drafted trial follow-ups; one waits for approval.", 61000, 4800),
@@ -242,7 +229,7 @@ TURNS = [
     ("botops", 3, "task", "Drafted the refund policy wording.", 47100, 3900),
     ("inbox", 2, "routine", "Sorted the morning inbox: 28 filed, 5 flagged.", 36400, 2100),
     ("coo", 6, "task", "Routed six requests.", 22800, 1500),
-    ("market-analyst", 20, "task", "Applied the Fernwood report.", 30900, 2300),
+    ("librarian", 20, "task", "Applied the Fernwood report.", 30900, 2300),
 ]
 
 # What model each demo bot runs on and how it is billed, for the usage the demo turns carry: about two thirds
@@ -250,11 +237,11 @@ TURNS = [
 USAGE = {"coo": ("claude-opus-5", "anthropic", "subscription"), "botops": ("claude-opus-5", "anthropic", "subscription"),
          "support": ("claude-opus-5-5", "anthropic", "api"), "sales": ("gpt-6-sol", "openai", "api"),
          "inbox": ("gpt-6-luna", "openai", "api"), "content": ("claude-fable-5-1", "anthropic", "api"),
-         "market-analyst": ("gpt-6-sol", "openai", "subscription")}
+         "librarian": ("gpt-6-sol", "openai", "subscription")}
 
 FOCUS = {"support": "Drafting ticket replies", "sales": "Waiting on an approval", "content": "Launch post review",
          "botops": "Refund policy wording", "inbox": "Sorting today's mail", "coo": "Routing requests",
-         "market-analyst": "Watching Northwind"}
+         "librarian": "Watching Northwind"}
 
 DOCS = [
     {"id": "support-refund-policy", "title": "Refund policy", "category": "Internal / Support",

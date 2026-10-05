@@ -9,12 +9,12 @@ from backend import listening as L
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
-RECEIVERS = ("listening", "market-analyst", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
+RECEIVERS = ("listening", "librarian", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
 
 # The destinations a company writes in registry/listening.yaml; the hub ships none.
 DESTINATIONS = """
 destinations:
-  market:   {category: market, threshold: 0.70, receiver: bot:market-analyst, what: a concrete fact about a company in the market}
+  market:   {category: market, threshold: 0.70, receiver: bot:librarian, what: a concrete fact about a company in the market}
   content:  {category: content, threshold: 0.75, receiver: content-social, readers: [bot:doc-updater], what: a question a post could answer}
   creators: {category: creator, threshold: 0.75, receiver: bot:influencer, what: a creator the company may want to reach}
   partners: {category: partner, threshold: 0.75, receiver: bot:recruiting, what: a consultancy or trainer, a partner lead}

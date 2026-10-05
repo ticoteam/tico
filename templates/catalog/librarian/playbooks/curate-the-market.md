@@ -1,6 +1,8 @@
 # Curate the market
 
-Hourly. Read new insights oldest first, write the graph, then sweep what you could not verify.
+Daily, and on an urgent insight (`playbooks/urgent-market-insight.md`). Read new insights oldest first,
+write the graph, then sweep what you could not verify. With no new insight and no listening item, and on a
+day that is not Monday, stop at once.
 
 0. Drain the Social Media Manager's inbox first. `hub listening item list --destination market` lists posts the Social Media Manager saved
    and the decision model scored as market facts. For each one, file it as an insight with its listening item id, so a
@@ -21,4 +23,5 @@ Hourly. Read new insights oldest first, write the graph, then sweep what you cou
 8. On Mondays the sweep's date is a Monday and the weekly delta page is refreshed from `market_events`.
 9. Staleness: an entity past `last_verified` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
 
-The sixteen relations, the evidence standard and the page templates are in `knowledge/`. Reporters do not carry a copy.
+The sixteen relations, the evidence standard, entity resolution and the page templates are in `knowledge/market/`.
+Reporters do not carry a copy.

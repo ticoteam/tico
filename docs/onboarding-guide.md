@@ -1,7 +1,7 @@
 # Setup guide: your first bots
 
 A practical guide to getting real work out of your first bots. The screens themselves are in [Finish setup](onboarding.md); what each of
-the 94 templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
+the 93 templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
 
 ## Pick your first bots
 

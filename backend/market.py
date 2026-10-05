@@ -1,8 +1,8 @@
 """The shared market model: one graph, one curator, everyone else reports.
 
 Six tables in the hub database. A reporter files prose.
-`bot:market-analyst` and the company owner are the only actors who change an entity, an edge,
-a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
+The Librarian (`bot:librarian`) curates: it and the company owner are the only actors who change an
+entity, an edge, a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
 retired or merged, and every changed field is a `market_events` row.
 """
 
@@ -20,9 +20,11 @@ from . import hubdb as H
 from . import models as M
 from .store import Problem, digest, encode
 
-CURATOR = "bot:market-analyst"
-LIBRARIAN = "bot:librarian"          # builds the first map from what the owner gave (playbooks/market-setup.md)
-WRITERS = (CURATOR, LIBRARIAN)
+# The Librarian builds the first map from what the owner gave (playbooks/market-setup.md) and keeps it
+# current from the insights everyone else reports (playbooks/curate-the-market.md).
+CURATOR = "bot:librarian"
+WRITERS = (CURATOR,)
+RETIRED_CURATOR = "market-analyst"   # the old separate curator bot, archived once at boot (`ensure_curator`)
 SEED_ACTOR = "seed"
 RELATIONS = (
     "competes_with", "partners_with", "integrates_with", "distributes_through", "sells_to",
@@ -111,7 +113,7 @@ def _writer_actor(actor):
 def require_writer(who):
     if who.role == "owner" or who.actor in WRITERS:
         return
-    raise Problem("forbidden", "Only the market analyst, the librarian and the company owner can change the market graph", 403)
+    raise Problem("forbidden", "Only the Librarian and the company owner can change the market graph", 403)
 
 
 def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""):
@@ -1316,61 +1318,52 @@ def load_snapshot(registry_dir):
         return {}
 
 
-# ----------------------------------------------------------------------------- the curator employee
-CURATE_TEXT = """Read market_insights with status new, oldest first.
+# ----------------------------------------------------------------------------- the curator's routines
+CURATE_TEXT = """Curate the market: playbooks/curate-the-market.md.
+Read market_insights with status new, oldest first.
 Resolve each name against the market graph before you invent an entity.
 Write the evidence row first, then the entity or edge that cites it.
 Close the insight as applied, merged, rejected with one sentence, or needs-human.
 All needs-human items from this run go into one task on the company owner.
 On Mondays the sweep refreshes the weekly delta page from market events. hub market refresh does the same.
 Mark unverified only the entities you tried to check and could not. Do not file a listening task just because a date is old.
+If there are no new insights and it is not Monday, stop.
 """
 
-URGENT_TEXT = """An urgent market insight just arrived. Read that insight and curate it now, ahead of the hourly pass.
+URGENT_TEXT = """An urgent market insight just arrived: playbooks/urgent-market-insight.md.
+Read that insight and curate it now, ahead of the daily pass.
 Write evidence before you change the graph. One needs-human task for the owner if you cannot decide.
 """
 
+CURATOR_ROUTINES = (
+    ("curate-the-market", {"title": "Curate the market", "cron": "0 4 * * *", "on": "",
+                           "timezone": "America/Los_Angeles", "text": CURATE_TEXT}),
+    ("urgent-market-insight", {"title": "Urgent market insight", "cron": "", "on": "market.insight.urgent",
+                               "timezone": "America/Los_Angeles", "text": URGENT_TEXT}),
+)
 
-def ensure_analyst(conn, *, force=False):
-    """The curator, on a database that already has a roster. A first import takes the employee
-    from registry/employees.yaml; inserting a bot_config row before that would make the import refuse.
 
-    `force` is the test path: install the bot even when this database has no CMO row.
+def ensure_curator(conn):
+    """At boot: the Librarian's market routines, and the old Market Analyst retired. Idempotent.
+
+    A routine is created only when the Librarian has never had one with that key, so a routine
+    someone deleted stays deleted. A `market-analyst` bot left from before is archived once, with
+    its open tasks handed to the Librarian; its rows, tasks and repository stay.
     """
-    if not force and not conn.execute("SELECT 1 FROM bot_config LIMIT 1").fetchone():
-        return None
-    # A database that already has the marketing org gets the curator on the next boot.
-    # A seed that listed its own employees, and has no CMO, is left alone.
-    if not H.bot(conn, "market-analyst"):
-        if not force and not H.bot(conn, "cmo"):
-            return None
-        # The curator runs on whatever the company chose; with no choice yet it stays
-        # unresolved and follows the company default once there is one.
-        from . import providers
-        analyst = providers.fill(providers.load(conn), {})
-        conn.execute("INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created) "
-                     "VALUES (?,?,?,?,?,?,?,?,?)",
-                     ("market-analyst", "Market Analyst", analyst.get("runtime", ""), analyst.get("model", ""), "high",
-                      str(H.ROOT / "emp-market-analyst"), "keeper", "active", H.now()))
-    if not conn.execute("SELECT 1 FROM bot_config WHERE bot='market-analyst'").fetchone():
-        operator = conn.execute("SELECT id FROM humans ORDER BY rowid LIMIT 1").fetchone()
-        conn.execute("INSERT INTO bot_config (bot, config_json, team, operator, description, reports_to, repo, "
-                     "thread_mode, definition_updated, definition_updated_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                     ("market-analyst", encode({"name": "market-analyst", **analyst,
-                                                "reasoning_effort": "high", "reports_to": "cmo", "status": "active"}),
-                      "marketing", operator["id"] if operator else "owner",
-                      "Curates the shared market graph. Every other bot reports what it finds; this one writes.",
-                      "cmo", "emp-market-analyst", "personal", H.now(), H.KEEPER))
     from . import routines
-    if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", ("market-analyst", "curate")).fetchone():
-        routines.create(conn, H.KEEPER, "market-analyst",
-                        {"title": "Curate the market", "cron": "0 * * * *", "on": "",
-                         "timezone": "America/Los_Angeles", "text": CURATE_TEXT}, key="curate")
-    if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", ("market-analyst", "urgent")).fetchone():
-        routines.create(conn, H.KEEPER, "market-analyst",
-                        {"title": "Urgent market insight", "cron": "", "on": "market.insight.urgent",
-                         "timezone": "America/Los_Angeles", "text": URGENT_TEXT}, key="urgent")
-    return H.bot(conn, "market-analyst")
+    librarian = H.bot(conn, CURATOR.split(":", 1)[1])
+    if librarian and librarian.get("state") != "archived":
+        for key, fields in CURATOR_ROUTINES:
+            if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["slug"], key)).fetchone():
+                routines.create(conn, H.KEEPER, librarian["slug"], dict(fields), key=key)
+    old = H.bot(conn, RETIRED_CURATOR)
+    if old and old.get("state") != "archived" \
+            and conn.execute("SELECT 1 FROM bot_config WHERE bot=?", (RETIRED_CURATOR,)).fetchone():
+        from . import settings_admin
+        successor = librarian["slug"] if librarian and librarian.get("state") != "archived" else ""
+        settings_admin.archive_bot(conn, H.KEEPER, RETIRED_CURATOR, successor=successor)
+        H.event(conn, H.KEEPER, "market.curator_retired", RETIRED_CURATOR, {"successor": successor})
+    return librarian
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -1429,7 +1422,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         if who.role != "owner" and who.actor != CURATOR:
-            raise Problem("forbidden", "The insight queue is for the market analyst and the owner", 403)
+            raise Problem("forbidden", "The insight queue is for the Librarian and the owner", 403)
         with store.read() as c:
             if status:
                 rows = H._rows(c.execute("SELECT * FROM market_insights WHERE status=? ORDER BY reported_at", (status,)))

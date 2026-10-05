@@ -372,7 +372,7 @@ class GoalProposalDecision(Contract):
     note: str = Field(default="", max_length=1000)
 
 
-# Market (backend/market.py). Reporters send prose. The curator and the owner write the graph.
+# Market (backend/market.py). Reporters send prose. The Librarian (the curator) and the owner write the graph.
 class MarketReport(Contract):
     kind: Literal["new-entity", "edge", "property-change", "correction", "question", "other"]
     about: str = Field(default="", max_length=300)
@@ -492,7 +492,7 @@ class MarketRefresh(Contract):
 
 
 class MarketPage(Contract):
-    """A market page rewritten by the curator (backend/market.py `PAGES`), whole, in Markdown."""
+    """A market page rewritten by the Librarian, the curator (backend/market.py `PAGES`), whole, in Markdown."""
     body: str = Field(min_length=1, max_length=100_000)
 
 

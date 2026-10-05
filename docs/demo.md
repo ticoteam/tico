@@ -1,7 +1,7 @@
 # Try Tico in a minute
 
 Demo mode runs Tico on your own computer with a made-up team, Acme, already in it: a team chart
-with BotOps and the example bots (Support, Sales, a message bot, Content, Market Analyst), a week of daily
+with BotOps and the example bots (Support, Sales, a message bot, Content) plus the Librarian, which keeps the market map, a week of daily
 and weekly Updates, tasks in every state, a decision that needs you, chats, meetings with
 transcripts, docs, market notes, readable past runs, sample email and Slack threads, files with versions, a routine and
 two connected computers. No domain, no DNS, no

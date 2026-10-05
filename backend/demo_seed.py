@@ -263,17 +263,17 @@ class Builder:
 
         def work(c):
             market.seed(c, document=document)
-            market.ensure_analyst(c)
+            market.ensure_curator(c)
             for index, (key, kind, url, quote, read) in enumerate(D.EVIDENCE):
                 self.at(days=4 - index)
-                ev, _ = market.create_evidence(c, "bot:market-analyst", evidence_key="ev-" + key, source_url=url, source_kind=kind,
+                ev, _ = market.create_evidence(c, market.CURATOR, evidence_key="ev-" + key, source_url=url, source_kind=kind,
                                                captured_at=H.now(), quote=quote, our_read=read)
             self.at(days=3.8)
-            market.update_entity(c, "bot:market-analyst", "company/northwind",
+            market.update_entity(c, market.CURATOR, "company/northwind",
                                  summary="A large suite vendor with a self-serve tool. Cheapest starter plan: $29, down from $39.",
                                  evidence_ids=["ev-northwind-pricing"], last_verified=self.ago(days=3.8).date().isoformat())
             self.at(days=3.0)
-            market.update_entity(c, "bot:market-analyst", "company/brightline",
+            market.update_entity(c, market.CURATOR, "company/brightline",
                                  summary="A venture-backed competitor. Launched a mobile app for studios last month.",
                                  evidence_ids=["ev-brightline-app"], last_verified=self.ago(days=3.0).date().isoformat())
             for index, (actor, kind, about, claim, url, quote, confidence) in enumerate(D.INSIGHTS):
@@ -283,8 +283,8 @@ class Builder:
             self.at(days=0.2)
             market.seed_pages(c)
             for doc_id, title, category, body in D.MARKET_PAGES:
-                market.write_page(c, "bot:market-analyst", doc_id, title, body, category, replace=True)
-            market.write_page(c, "bot:market-analyst", "market/weekly-delta", "Weekly delta",
+                market.write_page(c, market.CURATOR, doc_id, title, body, category, replace=True)
+            market.write_page(c, market.CURATOR, "market/weekly-delta", "Weekly delta",
                               market.delta_body(c, self.now.date()), "Market / Delta", replace=True, record=False)
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('market-context',?)", (encode({
                 "sells": D.ANSWERS["what_we_do"], "customers": "Small studios with a few client projects",
@@ -299,7 +299,7 @@ class Builder:
             for bot, key, title, cron, text in D.ROUTINES:
                 routines.create(c, "human:ana", bot, {"title": title, "cron": cron, "text": text,
                                                        "timezone": "America/Los_Angeles"}, key=key, at=self.ago(days=6))
-            # The market curator's routines were made with the wall clock; every routine is next due after `now`.
+            # The Librarian's market routines were made with the wall clock; every routine is next due after `now`.
             for row in c.execute("SELECT s.id,s.cron,coalesce(sc.timezone,'America/Los_Angeles') zone FROM schedules s "
                                  "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.event_name IS NULL AND s.cron<>''").fetchall():
                 c.execute("UPDATE schedules SET next_due=?,updated_at=? WHERE id=?",

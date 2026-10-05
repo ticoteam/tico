@@ -1,4 +1,4 @@
-"""The shared market graph: seed, read, report, curator writes."""
+"""The shared market graph: seed, read, report, the Librarian curates."""
 
 import json
 from datetime import datetime, timezone
@@ -19,7 +19,6 @@ def _seed(api, tmp_path):
     store = api.app.state.store
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
-        M.ensure_analyst(c, force=True)
         if not H.bot(c, "listening"):
             c.execute("INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created) "
                       "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -71,6 +70,37 @@ def test_show_find_edges_delta_and_a_report_does_not_write_the_graph(api, tmp_pa
     assert "company/northwind" in {row["id"] for row in grouped}
 
 
+def _librarian(api):
+    with api.app.state.store.transaction() as c:
+        if not H.bot(c, "librarian"):
+            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                      "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
+            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+
+
+def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
+    """At boot the Librarian gets its daily curate pass and the urgent-insight routine, once; a deleted one stays
+    deleted. A Market Analyst left from before is archived and its open tasks go to the Librarian."""
+    _librarian(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES('market-analyst','Market Analyst','fake','','','','keeper','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('market-analyst','{}',NULL,'ana')")
+        task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
+        M.ensure_curator(c)
+        keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}
+        assert set(keys) >= {"curate-the-market", "urgent-market-insight"}
+        assert keys["urgent-market-insight"]["cron"] in ("", None)
+        assert H.bot(c, "market-analyst")["state"] == "archived"
+        assert c.execute("SELECT owner FROM tasks WHERE id=?", (task["id"],)).fetchone()["owner"] == "bot:librarian"
+        c.execute("UPDATE schedules SET deleted_at=? WHERE bot='librarian' AND routine_key='curate-the-market'", (H.now(),))
+        M.ensure_curator(c)
+        again = c.execute("SELECT COUNT(*) FROM schedules WHERE bot='librarian' AND routine_key='curate-the-market'").fetchone()[0]
+        assert again == 1 and c.execute("SELECT deleted_at FROM schedules WHERE bot='librarian' "
+                                        "AND routine_key='curate-the-market'").fetchone()[0]
+
+
 def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_path):
     _seed(api, tmp_path)
     body = {"type": "company", "name": "Newco", "summary": "A company."}
@@ -96,10 +126,14 @@ def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_
     denied = api.delete("/api/v2/market/entities/company/northwind", headers=headers())
     assert denied.status_code == 405
     assert get(api, "market/entities/company/northwind")["entity"]["name"] == "Northwind"
-    _, _, analyst = setup_attempt(api, "market-analyst")
-    created = post(api, "market/entities", {"type": "company", "name": "Analyst Co", "evidence_ids": [evidence["id"]]},
-                   token=analyst["token"])["entity"]
-    assert created["created_by"] == "bot:market-analyst"
+    _librarian(api)
+    _, _, librarian = setup_attempt(api, "librarian")
+    created = post(api, "market/entities", {"type": "company", "name": "Curated Co", "evidence_ids": [evidence["id"]]},
+                   token=librarian["token"])["entity"]
+    assert created["created_by"] == "bot:librarian"
+    assert get(api, "market/insights", token=librarian["token"])["insights"] is not None   # the queue is the Librarian's
+    _, _, listening = setup_attempt(api, "listening")
+    get(api, "market/insights", token=listening["token"], expected=403)
 
 
 
@@ -108,10 +142,7 @@ def test_the_librarian_writes_the_first_map_and_another_bot_still_cannot(api, tm
     report, then an apply that writes the company itself with an explicit id and a competitor with its
     tier and edge, then a page. A bot that is not a curator is still refused."""
     _seed(api, tmp_path)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+    _librarian(api)
     _, _, librarian = setup_attempt(api, "librarian")
     token = librarian["token"]
     insight = post(api, "market/insights", {"kind": "new-entity", "about": "Acme Cleaning",

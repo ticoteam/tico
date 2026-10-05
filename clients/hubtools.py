@@ -989,7 +989,7 @@ def market_ask(api, args):
 
 
 @tool("hub_market_report", "Report a market finding in prose. This does not change an entity or an edge. "
-      "urgent wakes the market analyst now.",
+      "urgent wakes the Librarian now.",
       {"kind": {"type": "string", "enum": ["new-entity", "edge", "property-change", "correction", "question", "other"]},
        "about": _s("The name you used"), "claim": _s("What you found, in a sentence"),
        "source_url": _s("Where you read it", default=""), "quote": _s("What the source said", default=""),
@@ -1016,7 +1016,7 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
-@tool("hub_market_apply", "Curator: write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
+@tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
        "quote": _s("What the source said", default=""), "our_read": _s("The curator's sentence", default=""),
@@ -1045,7 +1045,7 @@ def market_apply(api, args):
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
 
 
-@tool("hub_market_sweep", "Curator: one task on the team owner for every needs-human insight in this run, and a "
+@tool("hub_market_sweep", "Librarian (the market curator): one task on the team owner for every needs-human insight in this run, and a "
       "Listening task only for an entity you mark unverified that is past its verification window.",
       {"today": _s("YYYY-MM-DD; default today"),
        "unverified": {"type": "array", "items": {"type": "object"},
@@ -1063,7 +1063,7 @@ def market_refresh(api, args):
     return api.post("market/delta/refresh", {"today": args.get("today")}, key=_key(args))
 
 
-@tool("hub_market_page", "Curator: rewrite one market page from the graph, whole, in Markdown. `name` is "
+@tool("hub_market_page", "Librarian (the market curator): rewrite one market page from the graph, whole, in Markdown. `name` is "
       "overview, structure-and-size, coverage-universe, people-who-matter, channels, regulation-and-catalysts, "
       "theses or open-questions; the weekly delta is hub_market_refresh's.",
       {"name": _s("The page, e.g. overview"), "body": _s("The whole page in Markdown")},

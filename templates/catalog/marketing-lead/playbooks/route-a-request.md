@@ -18,7 +18,7 @@ the requester once with `hub task ask <id>` and stop.
 Use `knowledge/routing.md`, then the team's lines in `AGENT.md`: a post or article (`content`), a
 search or AI-visibility question (`seo-visibility`), a social post or what people say publicly
 (`listening`), a campaign email (`email-marketing`), a launch or positioning (`product-marketing`),
-competitor facts (`market-analyst`), reviews (`reputation`), ads (`paid-media`), an event (`events`),
+competitor facts (`hub market report`, which the Librarian curates), reviews (`reputation`), ads (`paid-media`), an event (`events`),
 press (`pr`), the community (`community`), brand and voice (`brand`), tracking and lead handoff
 (`marketing-ops`). If two owners could take it, say why one fits better. If none fits and the same
 kind of request keeps coming, propose a hire (`AGENT.md`, Hiring) instead of routing it to a human

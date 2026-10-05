@@ -1034,7 +1034,7 @@ class Store:
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
                     from .blobs import Blobs
-                    Market.ensure_analyst(c)
+                    Market.ensure_curator(c)
                     document = Market.load_snapshot(self.settings.registry_dir)
                     sources = Market.locate_sources(self.settings.registry_dir.parent)
                     Market.seed(c, sources, Blobs(self.settings), document=document)
@@ -1106,7 +1106,7 @@ class Store:
             return []
         added = G.seed(c, document, lambda owner: H.resolve_actor(c, owner))
         from . import market as Market
-        Market.ensure_analyst(c)
+        Market.ensure_curator(c)
         return added
 
     def seed(self, entries=None, roster=None):

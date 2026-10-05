@@ -20,7 +20,6 @@ const BOT_AVATARS = {
   influencer: {icon: 'record_voice_over', color: '#a63d65'},
   'email-marketing': {icon: 'stacked_email', color: '#a63d65'},
   analytics: {icon: 'analytics', color: '#a63d65'},
-  'market-analyst': {icon: 'schema', color: '#a63d65'},
   listening: {icon: 'radar', color: '#a63d65'},
   reputation: {icon: 'reviews', color: '#a63d65'},
   cro: {icon: 'conversion_path', color: '#a63d65'},
