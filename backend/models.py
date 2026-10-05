@@ -760,7 +760,7 @@ class WorktreeStatus(Contract):
     link_id: str = Field(max_length=100)
     state: Literal["pending", "present", "missing", "removed", "unknown"]
     branch: str | None = Field(default=None, max_length=200)
-    checkout_state: Literal["queued", "attached_pending", "initializing", "checkout_ready", "setup_running", "setup_failed", "ready", "unverified"] | None = None
+    checkout_state: Literal["queued", "attached_pending", "initializing", "checkout_ready", "setup_running", "setup_failed", "ready", "legacy_present", "unverified"] | None = None
     expected_head: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     checkout_target: str | None = Field(default=None, max_length=300)
     expected_base: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")

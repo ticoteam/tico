@@ -18,6 +18,19 @@ from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed', 'declined')
 PR_FINISHED = ('merged', 'closed', 'shipped')
+RESTORE_PROGRESS = ('attached_pending', 'initializing', 'checkout_ready', 'setup_running',
+                    'setup_failed', 'ready', 'legacy_present', 'unverified')
+
+
+def restore_requested(row, detail):
+    if (row['state'] == 'removed' and detail.get('removed_by') == 'cleanup'
+            and detail.get('restore_on_reopen')):
+        return True
+    checkout_state = detail.get('checkout_state')
+    progress_recorded = (checkout_state in RESTORE_PROGRESS
+                         or detail.get('setup_pending') and checkout_state != 'queued')
+    return (row['state'] == 'pending' and row['added_by'].startswith('human:')
+            and not progress_recorded)
 
 
 class Create(Contract):
@@ -37,7 +50,7 @@ class Update(Contract):
     branch: str | None = Field(default=None, max_length=200)
     cleanup: bool = False
     setup_pending: bool | None = None
-    checkout_state: Literal['queued', 'attached_pending', 'initializing', 'checkout_ready', 'setup_running', 'setup_failed', 'ready', 'unverified'] | None = None
+    checkout_state: Literal['queued', 'attached_pending', 'initializing', 'checkout_ready', 'setup_running', 'setup_failed', 'ready', 'legacy_present', 'unverified'] | None = None
     expected_head: str | None = Field(default=None, pattern=r'^(?:[0-9a-f]{40}|[0-9a-f]{64})$')
     checkout_target: str | None = Field(default=None, max_length=300)
     expected_base: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
@@ -99,11 +112,16 @@ def heartbeat(c, who, reports, capable, default_org=""):
         if changed or 'activity_at' not in detail:
             detail['activity_at'] = now
             detail.pop('stalled_woke', None)
-        initialization_pending = (detail.get('checkout_state') != 'ready'
-                                  or not detail.get('expected_head')
-                                  or not detail.get('checkout_target')
-                                  or not detail.get('expected_base')
-                                  or detail.get('setup_pending'))
+        if detail.get('checkout_state') == 'legacy_present' and row['state'] not in ('present', 'unknown'):
+            detail['checkout_state'] = 'unverified'
+        legacy_complete = (detail.get('checkout_state') == 'legacy_present'
+                           and row['state'] in ('present', 'unknown') and not detail.get('setup_pending'))
+        initialization_pending = (not legacy_complete and
+                                  (detail.get('checkout_state') != 'ready'
+                                   or not detail.get('expected_head')
+                                   or not detail.get('checkout_target')
+                                   or not detail.get('expected_base')
+                                   or detail.get('setup_pending')))
         if report.state == 'missing' and not initialization_pending:
             detail.setdefault('missing_since', now)
         else:
@@ -122,15 +140,21 @@ def heartbeat(c, who, reports, capable, default_org=""):
         reported = report.model_dump(exclude_none=True,
                                      exclude={'link_id', 'state', 'branch', 'checkout_state'})
         detail.update(reported)
-        if report.checkout_state is not None:
+        legacy_present = (report.state == 'present' and report.checkout_state == 'legacy_present'
+                          and not detail.get('setup_pending')
+                          and (row['state'] == 'present' and detail.get('checkout_state') in (None, 'legacy_present')
+                               or row['state'] == 'unknown' and detail.get('checkout_state') == 'legacy_present'))
+        if report.checkout_state is not None and (report.checkout_state != 'legacy_present' or legacy_present):
             detail['checkout_state'] = report.checkout_state
         checkout_state = detail.get('checkout_state')
-        completion_proven = (checkout_state == 'ready' and bool(detail.get('expected_head'))
-                             and bool(detail.get('checkout_target')) and bool(detail.get('expected_base'))
-                             and not detail.get('setup_pending'))
+        completion_proven = ((checkout_state == 'ready' and bool(detail.get('expected_head'))
+                              and bool(detail.get('checkout_target')) and bool(detail.get('expected_base'))
+                              and not detail.get('setup_pending')) or legacy_present
+                             or (checkout_state == 'legacy_present' and not detail.get('setup_pending')
+                                 and row['state'] in ('present', 'unknown')))
         state = ('removed' if report.state == 'removed' else
                  'pending' if not completion_proven else
-                 'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state != 'ready' else
+                 'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state not in ('ready', 'legacy_present') else
                  'pending' if row['state'] == 'pending' and row['repo'] and report.state == 'missing' else report.state)
         detail['current_branch'] = report.branch
         branch = report.branch if report.state == 'present' and row['branch'] is None else None
@@ -152,9 +176,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # Only worktrees that actually existed when closed are eligible on reopening.
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True
-        restore = (row['state'] == 'removed' and detail.get('removed_by') == 'cleanup' and detail.get('restore_on_reopen')
-                   or row['state'] == 'pending' and row['added_by'].startswith('human:'))
-        action = 'remove' if closed and (finished or detail.get('delete_requested')) and row['state'] != 'removed' else 'restore' if not closed and restore else None
+        action = ('remove' if closed and (finished or detail.get('delete_requested')) and row['state'] != 'removed'
+                  else 'restore' if not closed and restore_requested(row, detail) else None)
         if detail.get('delete_requested') and row['state'] == 'removed':
             c.execute('DELETE FROM task_links WHERE id=?', (row['id'],))
             continue
@@ -353,8 +376,7 @@ def install(app, store, auth, mutate):
             closed = link['task_status'] in CLOSED or link['bot_state'] == 'archived' or detail.get('delete_requested')
             prs = [r[0] for r in c.execute("SELECT state FROM task_links WHERE task_id=? AND kind='pr'", (link['task_id'],))]
             removing = closed and link['state'] != 'removed' and (all(state in PR_FINISHED for state in prs) or detail.get('delete_requested'))
-            restoring = not closed and (link['state'] == 'removed' and detail.get('removed_by') == 'cleanup' and detail.get('restore_on_reopen')
-                                       or link['state'] == 'pending' and link['added_by'].startswith('human:'))
+            restoring = not closed and restore_requested(link, detail)
             if not assigned and not (removing or restoring):
                 raise Problem('forbidden', 'No worktree action on this computer', 403)
             service = app.state.github_app

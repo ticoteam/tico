@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import threading
+from urllib.parse import quote
 import uuid
 import weakref
 
@@ -492,9 +493,19 @@ def _record_attached_checkout(workspace, link, repo, env):
 
 def command(client, operation, value, task=None):
     workspace = os.environ.get('HUB_WORKSPACE')
+    explicit_task = task is not None
     task = task or os.environ.get('HUB_TASK_ID')
     if not workspace or not os.environ.get('HUB_BOT') or not task:
         raise ValueError('Task worktrees need a bot run and a task; use --task when this run has no current task')
+    if explicit_task:
+        if re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', task):
+            task = task.lower()
+        else:
+            resolved = client.get('tasks/' + quote(task, safe='')).get('task')
+            canonical = resolved.get('id') if isinstance(resolved, dict) else None
+            if not isinstance(canonical, str) or not canonical:
+                raise ValueError('The task id could not be resolved to its canonical id')
+            task = canonical
     env = safe_git.environment()
     try:
         if operation == 'setup':
@@ -502,7 +513,8 @@ def command(client, operation, value, task=None):
             rows = client.get(f'tasks/{task}/links')
             rows = rows.get('links', []) if isinstance(rows, dict) else rows
             candidates = [r for r in rows if r['kind'] == 'worktree' and (r.get('repo') or '').lower() == value.lower()
-                          and r.get('state') in ('present', 'pending')]
+                          and r.get('state') in ('present', 'pending')
+                          and _detail(r).get('checkout_state') != 'legacy_present']
             candidates.sort(key=lambda r: not (_detail(r).get('setup_pending') or _detail(r).get('checkout_state') in
                                                 ('checkout_ready', 'setup_failed', 'setup_running', 'initializing')))
             row = candidates[0] if candidates else None
@@ -577,6 +589,12 @@ def command(client, operation, value, task=None):
                         _verify_worktree(path, workspace, repo, link['branch'], env, expected_base)
                         _verify_ready_registration(workspace, link, repo, task)
                         return {**link, 'state': 'present', 'checkout_state': 'ready',
+                                'workspace_path': str(path)}
+                    elif state == 'legacy_present':
+                        _verify_worktree(path, workspace, repo, link['branch'], env)
+                        if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
+                            raise ValueError('Legacy worktree has missing tracked files; kept unchanged and unverified')
+                        return {**link, 'state': 'present', 'checkout_state': 'legacy_present',
                                 'workspace_path': str(path)}
                     else:
                         raise ValueError('Worktree initialization is not verified; kept it unchanged')
@@ -686,7 +704,10 @@ def inspect(workspace, row, env=None, cache=None):
         path = safe_path(workspace, row['path'])
         detail = _detail(row)
         checkout_state = detail.get('checkout_state')
-        not_ready = checkout_state != 'ready' or bool(detail.get('setup_pending'))
+        legacy_recorded = checkout_state == 'legacy_present' and row.get('state') in ('present', 'unknown')
+        legacy_candidate = checkout_state is None and row.get('state') == 'present' and not detail.get('setup_pending')
+        legacy = legacy_recorded or legacy_candidate
+        not_ready = (checkout_state != 'ready' and not legacy_recorded) or bool(detail.get('setup_pending'))
         result['checkout_state'] = checkout_state or 'unverified'
         expected_base = detail.get('expected_base')
         expected_head = detail.get('expected_head')
@@ -698,6 +719,8 @@ def inspect(workspace, row, env=None, cache=None):
         if expected_base is not None:
             result['expected_base'] = expected_base
         if not path.exists():
+            if legacy_recorded:
+                result['checkout_state'] = 'legacy_present'
             result['state'] = 'removed' if row['state'] == 'removed' else ('pending' if not_ready else 'missing')
             return result
         if not (path / '.git').is_file():
@@ -718,6 +741,18 @@ def inspect(workspace, row, env=None, cache=None):
         common = _common_dir(path, env)
         if expected_base and _base_identity(common) != expected_base:
             raise ValueError('Worktree is attached to a different managed base clone')
+        if legacy:
+            if not row.get('repo') or not row.get('branch'):
+                raise ValueError('Legacy worktree has no registered repository or branch; kept unverified')
+            _verify_worktree(path, workspace, {'full_name': row['repo'],
+                                               'machine_git': not git_credentials._same_repository(origin, row['repo'])},
+                             row['branch'], env)
+            if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
+                result.update(state='pending', checkout_state='unverified',
+                              error='Legacy worktree has missing tracked files; kept unchanged and unverified')
+                return result
+            result['checkout_state'] = 'legacy_present'
+            not_ready = False
         if checkout_state == 'ready' and (not expected_base or not expected_head or not checkout_target):
             not_ready = True
             result['checkout_state'] = 'unverified'

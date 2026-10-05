@@ -101,6 +101,15 @@ def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='open' WHERE id=?", (tid,))
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['action'] == 'restore'
+    route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+    progress = api.patch(route, json={'state': 'pending', 'checkout_state': 'checkout_ready',
+                                      'setup_pending': True, 'expected_head': 'a' * 40,
+                                      'checkout_target': 'refs/heads/tico/test', 'expected_base': 'b' * 64},
+                         headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+    assert progress.status_code == 200, progress.text
+    body['worktrees'] = [{'link_id': link['link_id'], 'state': 'pending', 'checkout_state': 'checkout_ready',
+                          'branch': link['branch']}]
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
     body.pop('worktrees')
     body['readiness'].pop('worktrees')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
@@ -394,3 +403,67 @@ def test_legacy_pending_link_is_not_promoted_by_git_directory_alone(prepared):
     with api.app_state.store.read() as c:
         saved = c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
         assert saved['state'] == 'pending'
+
+
+def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_pending(prepared):
+    api, tid, _ = prepared
+    present = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    pending = post(api, f'tasks/{tid}/worktrees/attach',
+                   {'path': f'tasks/{tid[:8]}/legacy-pending', 'repo': 'Acme/product'}, 'bot-test').json()
+    pending_stale = post(api, f'tasks/{tid}/worktrees/attach',
+                         {'path': f'tasks/{tid[:8]}/legacy-stale', 'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='present',detail_json=? WHERE id=?",
+                  (json.dumps({'owner': 'bot:cmo'}), present['link_id']))
+        c.execute("UPDATE task_links SET detail_json=? WHERE id=?",
+                  (json.dumps({'owner': 'bot:cmo'}), pending['link_id']))
+        c.execute("UPDATE task_links SET detail_json=? WHERE id=?",
+                  (json.dumps({'owner': 'bot:cmo', 'checkout_state': 'legacy_present'}), pending_stale['link_id']))
+    beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': [
+                {'link_id': present['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
+                 'branch': present['branch'], 'repo': 'Acme/product', 'dirty_files': 2},
+                {'link_id': pending['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
+                 'branch': pending['branch'], 'repo': 'Acme/product'},
+                {'link_id': pending_stale['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
+                 'branch': pending_stale['branch'], 'repo': 'Acme/product'}]}
+    response = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        rows = {r['id']: r for r in c.execute(
+            'SELECT id,state,detail_json FROM task_links WHERE id IN (?,?,?)',
+            (present['link_id'], pending['link_id'], pending_stale['link_id']))}
+    assert rows[present['link_id']]['state'] == 'present'
+    present_detail = json.loads(rows[present['link_id']]['detail_json'])
+    assert present_detail['checkout_state'] == 'legacy_present' and present_detail['dirty_files'] == 2
+    assert not any(key in present_detail for key in ('expected_head', 'checkout_target', 'expected_base'))
+    assert rows[pending['link_id']]['state'] == 'pending'
+    pending_detail = json.loads(rows[pending['link_id']]['detail_json'])
+    assert pending_detail.get('checkout_state') is None
+    assert rows[pending_stale['link_id']]['state'] == 'pending'
+    stale_detail = json.loads(rows[pending_stale['link_id']]['detail_json'])
+    assert stale_detail['checkout_state'] == 'unverified'
+
+
+def test_human_pending_link_stops_repeating_restore_after_checkout_progress(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET added_by='human:ana',state='pending',detail_json=? WHERE id=?",
+                  (json.dumps({'owner': 'bot:cmo'}), link['link_id']))
+    beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': []}
+    first = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert first.status_code == 200, first.text
+    assert len(first.json()['worktree_actions']) == 1
+    assert first.json()['worktree_actions'][0]['action'] == 'restore'
+
+    route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
+    patched = api.patch(route, json={'state': 'pending', 'checkout_state': 'checkout_ready',
+                                     'setup_pending': True, 'expected_head': 'a' * 40,
+                                     'checkout_target': 'refs/heads/tico/test', 'expected_base': 'b' * 64},
+                        headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
+    assert patched.status_code == 200, patched.text
+    second = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert second.status_code == 200, second.text
+    assert second.json()['worktree_actions'] == []

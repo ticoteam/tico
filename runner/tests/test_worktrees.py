@@ -269,6 +269,58 @@ def test_setup_and_heartbeat_keep_legacy_partial_checkout_unverified(trees, setu
     assert W._porcelain_records(path, W.safe_git.environment())
 
 
+def test_legacy_present_checkout_remains_usable_without_new_marker(trees):
+    workspace, base, remote, row, client = trees
+    row['kind'] = 'worktree'
+    path = workspace / row['path']
+    path.parent.mkdir(parents=True)
+    git(base, 'worktree', 'add', '--no-track', '-b', row['branch'], str(path), 'origin/main')
+    (path / 'file').write_text('legacy user edit')
+    (path / 'notes.txt').write_text('legacy untracked note')
+    row.update(state='present', detail_json='{}')
+
+    report = W.inspect(workspace, row)
+    assert report['state'] == 'present' and report['checkout_state'] == 'legacy_present'
+    assert report['dirty_files'] == 2
+    marker = W._marker_path(workspace, row['id'])
+    assert marker is None or not marker.exists()
+
+    link = client.post.return_value
+    link.update(state='present', checkout_state='legacy_present', setup_pending=False)
+    result = W.command(client, 'add', 'org/product')
+    assert result['state'] == 'present' and result['checkout_state'] == 'legacy_present'
+    assert (path / 'file').read_text() == 'legacy user edit'
+    assert (path / 'notes.txt').read_text() == 'legacy untracked note'
+    marker = W._marker_path(workspace, row['id'])
+    assert marker is None or not marker.exists()
+    client.patch.assert_not_called()
+
+
+def test_short_task_option_is_resolved_before_worktree_registration(trees, monkeypatch):
+    from clients import hubcli, remotecli
+
+    workspace, base, remote, row, client = trees
+    canonical = row['task_id']
+
+    def get(route):
+        if route == 'tasks/' + canonical[:8]:
+            return {'task': {'id': canonical}}
+        if route == 'runners/me/repositories':
+            return {'repositories': [{**row, 'access': 'write'}]}
+        raise AssertionError('unexpected API route: ' + route)
+
+    client.get.side_effect = get
+    monkeypatch.setenv('HUB_API_URL', 'https://tico.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *args, **kwargs: client)
+    args = hubcli.parser().parse_args(['task', 'worktree', 'add', 'org/product', '--task', canonical[:8]])
+    remotecli.run(args)
+
+    assert client.post.call_args.args[0] == f'tasks/{canonical}/worktrees'
+    assert any(call.args[0] == f'tasks/{canonical}/links/link1' for call in client.patch.call_args_list)
+    marker = W._read_marker(workspace, row['id'])
+    assert marker['task_id'] == canonical
+
+
 def test_ready_registration_without_local_completion_marker_is_not_reported_present(trees):
     workspace, base, remote, row, client = trees
     result = W.command(client, 'add', 'org/product')
@@ -742,6 +794,10 @@ def test_add_using_task_prefix_waits_for_the_same_link_restore_lock(trees):
     W.command(client, 'add', 'org/product')
     posted = threading.Event()
     response = client.post.return_value
+    original_get = client.get.return_value
+    client.get.side_effect = lambda route: ({'task': {'id': row['task_id']}}
+                                            if route == 'tasks/' + row['task_id'][:8]
+                                            else original_get)
     def posted_link(*args, **kwargs):
         posted.set()
         return response
