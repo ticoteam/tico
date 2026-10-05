@@ -258,7 +258,7 @@ async function deleteGroups(browser) {
     const {page, errors, calls, people, groups, bots, deletion} = await open(browser, me);
     const reporting = [...people, ...bots].map(p => [p.id || p.name, p.reports_to]);
     assert.equal(await row(page, 'Message bots').locator('[data-group-delete]').count(), 0);
-    page.once('dialog', async dialog => { assert.match(dialog.message(), /Delete group "Sales"/); await dialog.dismiss(); });
+    page.once('dialog', async dialog => { assert.match(dialog.message(), /^Delete Sales\? Its teammates and groups move to .+; its subscriptions are unassigned\.$/); await dialog.dismiss(); });
     await clickDelete(page, 'sales');
     assert.deepEqual(calls, [], 'cancellation never sends a delete');
 
@@ -275,9 +275,7 @@ async function deleteGroups(browser) {
     let release;
     deletion.hold = new Promise(resolve => { release = resolve; });
     page.once('dialog', async dialog => {
-      assert.match(dialog.message(), /parent group "Marketing"/);
-      assert.match(dialog.message(), /histories and reporting lines stay/);
-      assert.match(dialog.message(), /Subscriptions.*unassigned/);
+      assert.equal(dialog.message(), 'Delete SEO? Its teammates and groups move to Marketing; its subscriptions are unassigned.');
       await dialog.accept();
     });
     await clickDelete(page, 'seo');

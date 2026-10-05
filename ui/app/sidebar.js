@@ -294,15 +294,15 @@ async function orgGroupDelete(id) {
   const group = (S.orgGroups || []).find(g => g.id === id);
   if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
   const parent = (S.orgGroups || []).find(g => g.id === group.parent);
-  const destination = parent ? `the parent group "${parent.name}"` : 'No group';
-  if (!confirm(`Delete group "${group.name}"?\n\nIts people, bots and child groups move to ${destination}. Teammates, their histories and reporting lines stay. Subscriptions assigned to this group will be unassigned.`)) return;
+  const destination = parent ? parent.name : 'No group';
+  if (!confirm(`Delete ${group.name}? Its teammates and groups move to ${destination}; its subscriptions are unassigned.`)) return;
   ORG_DELETING.add(id);
   renderTree();
   try {
     await writeRequest('DELETE', `/v2/groups/${encodeURIComponent(id)}`);
     collapsed.delete('g:' + id); saveCollapsed();
     await refresh(true);
-    toast(S.overviewRosterFresh ? 'Group deleted' : 'Group deleted. Refresh the chart to see the updated team.');
+    toast('Group deleted');
   } catch (e) {
     await refresh(true);                         // a stale group or changed permission needs fresh chart state
     toast(e.message, true);
