@@ -13,7 +13,7 @@ const {html, uiFile} = require('./support/page.cjs');
     page.on('pageerror', error => errors.push(error.message));
     const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true,
       my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-    const original = {...base, name: 'architect', slug: 'architect', display_name: 'Architect', operator: 'sam', shared: true, repo: 'bot-architect'};
+    const original = {...base, name: 'architect', slug: 'architect', display_name: 'Architect', operator: 'sam', shared: true, repo: 'bot-architect', reports_to: 'bot:lead'};
     const bots = [original];
     const people = [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}];
     let computers = [
@@ -100,9 +100,12 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.locator('[data-assignment-policy]').check();
     assert.deepEqual(writes.find(([path]) => path.endsWith('/assignment-branches/policy'))[1],
       {enabled: true, expected_revision: 1});
-    page.once('dialog', dialog => dialog.accept('waiting_review'));
+    const checkpointDialog = dialog => dialog.accept(dialog.message().includes('Choose:')
+      ? 'waiting_review' : JSON.stringify(assignment.checkpoint));
+    page.on('dialog', checkpointDialog);
     await page.locator('[data-assignment-manage="assignment-1"]').click();
     await page.waitForFunction(() => document.querySelector('#bot-assignment-branches .assignment-phase')?.textContent === 'waiting_review');
+    page.off('dialog', checkpointDialog);
     assert.equal(writes.filter(([path]) => path.endsWith('/assignment-branches/assignment-1')).at(-1)[1].phase, 'waiting_review');
     assert.equal(await page.locator('[data-branch-picker]').count(), 0);
     await page.locator('[data-branch-make]').click();
@@ -119,7 +122,7 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await page.locator('[data-branch-picker]').inputValue(), 'architect-ana');
     assert.equal(await page.locator('[data-branch-make]').count(), 0);
     assert.equal(await page.locator('#bot-branches a').getAttribute('href'), '#/bot/architect');
-    assert.deepEqual(writes[0][1], {runner_id: 'ana-mac'});
+    assert.deepEqual(writes.find(([path]) => path.endsWith('/copies'))[1], {runner_id: 'ana-mac'});
     original.shared = false;
     await page.evaluate(() => botBranchesLoad('architect-ana'));
     assert.match(await page.locator('#bot-branches').innerText(), /branches off/);
@@ -128,14 +131,6 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await dialog.locator('[name=model_effort]').count(), 0);
     await dialog.locator('[name=status]').selectOption('paused');
     await dialog.locator('[type=submit]').click();
-    assignment = {...assignment, phase: 'archived', revision: 5, cleanup: null,
-      task: {...assignment.task, status: 'done'}};
-    await page.evaluate(() => assignmentBranchesLoad('architect'));
-    await page.locator('[data-assignment-cleanup="assignment-1"]').waitFor();
-    page.once('dialog', dialog => dialog.accept());
-    await page.locator('[data-assignment-cleanup="assignment-1"]').click();
-    await page.locator('[data-assignment-cleanup="assignment-1"][disabled]').waitFor();
-    assert.deepEqual(writes.find(([path]) => path.endsWith('/assignment-1/cleanup'))[1], {expected_revision: 5});
     await dialog.locator('[data-branch-status]').filter({hasText: 'configuration changed'}).waitFor();
     await page.waitForFunction(() => !document.querySelector('#branch-editor [type=submit]').disabled);
     await dialog.locator('[type=submit]').click();
@@ -187,6 +182,18 @@ const {html, uiFile} = require('./support/page.cjs');
     await dialog.locator('[data-branch-close]').click();
     await page.evaluate(() => { location.hash = '#/bot/architect'; });
     await page.waitForFunction(() => BOT?.slug === 'architect');
+    assignment = {...assignment, phase: 'archived', revision: 5, cleanup: null,
+      task: {...assignment.task, status: 'done'}};
+    await page.evaluate(() => assignmentBranchesLoad('architect'));
+    await page.locator('[data-assignment-cleanup="assignment-1"]').waitFor();
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('[data-assignment-cleanup="assignment-1"]').click();
+    await page.locator('[data-assignment-cleanup="assignment-1"][disabled]').waitFor();
+    assert.deepEqual(writes.find(([path]) => path.endsWith('/assignment-1/cleanup'))[1], {expected_revision: 5});
+    // Reset the mocked lifecycle case before exercising reviewed learning and allocation.
+    assignment = {...assignment, phase: 'waiting_review', revision: 6, cleanup: null,
+      task: {...assignment.task, status: 'review'}};
+    await page.evaluate(() => assignmentBranchesLoad('architect'));
     page.on('dialog', async dialog => {
       if (dialog.type === 'prompt') await dialog.accept('Use bounded retries for transient reads.');
       else await dialog.accept();
