@@ -287,8 +287,18 @@ async function taskSave(d, id, body, then, field) {
 let TASK_CHAT = null;
 const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {
-  if (TASK_CHAT) clearInterval(TASK_CHAT.poll);
+  if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
   TASK_CHAT = null;
+}
+// The open task changed, or a comment landed in its conversation (live events, ui/app/live.js): read it again, with
+// its files (a new file or version, or an answer on one), once per burst.
+function taskChatLive(state) {
+  if (!taskChatCurrent(state) || state.stopped) { if (TASK_CHAT === state && !state.dialog.open) taskChatStop(); return; }
+  liveSoon('task:' + state.id, () => {
+    if (!taskChatCurrent(state) || state.stopped) return;
+    void taskChatRead(state);
+    tfLoad(state.dialog, state.id).catch(() => {});
+  }, 200);
 }
 function taskChatCurrent(state) { return TASK_CHAT === state && state.dialog.open; }
 const commentAuthor = (a, via) => {
@@ -383,17 +393,18 @@ async function taskChatRead(state) {
   state.reading = true;
   try {
     const data = await get(state.path);
+    if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
     if (taskChatCurrent(state) && !state.sending) taskCommentsRender(state, data);
   } catch (e) {
     if (!taskChatCurrent(state)) return;
     if ([403, 404].includes(e.status)) {
-      state.stopped = true; clearInterval(state.poll);
+      state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       state.dialog.close(); state.dialog.innerHTML = '';
       if (TASKS_ST) void tasksLoad(TASKS_ST);
       return;
     }
-    if (e.status === 400) {state.stopped = true; clearInterval(state.poll);}
+    if (e.status === 400) {state.stopped = true; clearInterval(state.poll); state.liveOff?.();}
     const status = $('[data-task-chat-status]', state.host);
     if (status) status.textContent = `Unable to refresh: ${e.message}`;
     else state.host.innerHTML = `<p class="err" role="status">Comments unavailable: ${esc(e.message)}</p>`;
@@ -402,12 +413,21 @@ async function taskChatRead(state) {
 async function taskChatLoad(id, dialog, data = null) {
   const state = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, poll: 0, sending: false, reading: false};
+  if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
   if (data) taskCommentsRender(state, data); else await taskChatRead(state);
-  if (taskChatCurrent(state) && !state.stopped) state.poll = setInterval(() => {
+  if (!taskChatCurrent(state) || state.stopped) return;
+  // Without live events, the poll they replaced.
+  state.poll = liveFallback(() => {
     if (document.hidden || !taskChatCurrent(state)) return;
     void taskChatRead(state);
     tfLoad(state.dialog, state.id).catch(() => {});     // a new file or version, or an answer on one, without reopening
   }, 8000);
+  if (state.poll) return;
+  // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.js); its comments
+  // are messages in its conversation.
+  const cid = state.cid;
+  const offs = cid ? [liveFollow(cid), liveOn('messages', d => { if (d.conversation_id === cid) taskChatLive(state); })] : [];
+  state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }
 async function taskCommentSend(state) {
   if (!taskChatCurrent(state) || state.sending) return;

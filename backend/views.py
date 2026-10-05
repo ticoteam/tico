@@ -1,13 +1,12 @@
 """Existing frontend read models over cloud records. Never import the local hub server."""
 
-import asyncio
 import json
 import re
 from datetime import timezone
 
 import yaml
 from fastapi import Request
-from fastapi.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 
 from . import access as Access
 from . import bot_access as A
@@ -420,18 +419,6 @@ def operation_issues(c, who, auth):
             add("settings", "A prepared settings change failed", row["error"] or "Review or cancel the change.",
                 bot=row["bot"], action="Review or cancel the failed change in Settings → Bots.")
     return issues
-
-
-def snapshot_mark(c, cid):
-    """What changes when a conversation's snapshot does, in one cheap read: its newest message and
-    count, and its latest job with that job's attempt (state, lease, steps written)."""
-    return tuple(c.execute(
-        "SELECT (SELECT coalesce(updated_at,'')||status FROM chat_goals WHERE conversation_id=?),"
-        " (SELECT max(rowid) FROM messages WHERE conversation_id=?),"
-        " (SELECT count(*) FROM messages WHERE conversation_id=?),"
-        " (SELECT j.id||'|'||j.state||'|'||coalesce(a.state,'')||'|'||coalesce(a.last_seq,0)||'|'||coalesce(a.lease_until,'')"
-        "  FROM jobs j JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id"
-        "  WHERE m.conversation_id=? ORDER BY m.rowid DESC LIMIT 1)", (cid, cid, cid, cid)).fetchone())
 
 
 def conversation_snapshot(c, cid, who=None):
@@ -1332,51 +1319,3 @@ def install_views(app, store, auth, mutate, task_view):
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             return snap
 
-    @app.get("/api/v2/conversations/{cid}/watch")
-    async def watch(request: Request, cid: str):
-        who = request.state.identity
-        def read_snapshot():
-            auth.authenticate(request.headers)
-            with store.read() as c:
-                auth.conversation(c, who, cid)
-                snap = conversation_snapshot(c, cid, who)
-                turns.annotate(c, auth, who, snap["messages"])
-                return encode(snap)
-        def read_mark():
-            with store.read() as c:
-                return snapshot_mark(c, cid)
-        initial = await asyncio.to_thread(read_snapshot)
-        async def generate():
-            previous, mark = initial, await asyncio.to_thread(read_mark)
-            previous_goal = json.loads(initial).get("goal")
-            yield f"event: snapshot\ndata: {initial}\n\n"
-            yield f"event: goal\ndata: {encode({'type': 'goal', 'goal': previous_goal})}\n\n"
-            for tick in range(55):
-                await asyncio.sleep(1)
-                if await request.is_disconnected():
-                    return
-                # The full snapshot (the newest 200 messages, the run and its steps) is rebuilt
-                # only when the conversation's mark moves, and every fifth second in any case for
-                # what the mark does not see (a computer going offline, a card's refs changing).
-                try:
-                    now_mark = await asyncio.to_thread(read_mark)
-                    if now_mark == mark and tick % 5 != 4:
-                        yield ': keepalive\n\n'
-                        continue
-                    mark = now_mark
-                    current = await asyncio.to_thread(read_snapshot)
-                except Problem:
-                    yield 'event: expired\ndata: {}\n\n'
-                    return
-                if current != previous:
-                    yield f"event: snapshot\ndata: {current}\n\n"
-                    goal = json.loads(current).get("goal")
-                    if goal != previous_goal:
-                        yield f"event: goal\ndata: {encode({'type': 'goal', 'goal': goal})}\n\n"
-                        previous_goal = goal
-                    previous = current
-                else:
-                    yield ': keepalive\n\n'
-            # EventSource reconnects and receives a complete snapshot, not duplicate deltas.
-        return StreamingResponse(generate(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

@@ -1026,9 +1026,9 @@ class Store:
                 # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
                 # the trash: an older release reads the table as before and never sees the column.
                 H.add_column(c, "service_keys", "scope", "TEXT NOT NULL DEFAULT 'tasks'")
-                # The task change feed boards follow (backend/task_changes.py); idempotent.
-                from .task_changes import ensure as ensure_task_changes
-                ensure_task_changes(c)
+                # The change log live events are read from (backend/events.py); idempotent.
+                from .events import ensure as ensure_changes
+                ensure_changes(c)
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL
@@ -1185,7 +1185,7 @@ class Store:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = identity.actor + (":" + identity.attempt_id if identity.role == "bot" else "")
-        refusal = None
+        refusal = logged = None
         with self.transaction() as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
@@ -1240,21 +1240,23 @@ class Store:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
                 return result
-            # Who made the task changes this write makes (backend/task_changes.py).
-            from . import task_changes as changes
+            # Who made the changes this write logs (backend/events.py).
+            from . import events as changes
             c.execute("SAVEPOINT domain_write")
             since = changes.mark(c)
             try:
                 result = fn(c)
-                changes.claim(c, since, identity.actor)
+                logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
+                logged = None                   # rolled back with the write
                 refusal = refused(c, identity, exc)
                 result = {"_refusal": {"code": refusal.code, "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
                                        "status": refusal.status}}
             if not is_poll(operation, result):
                 c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                           (principal, operation, key, hashed, encode(result), H.now()))
+        self.ring(logged)
         if refusal:
             raise refusal
         return result
@@ -1262,23 +1264,31 @@ class Store:
     def write(self, identity, fn):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
         identity check under the write lock, and the same all-or-nothing refusal."""
-        refusal = None
+        refusal = logged = None
         with self.transaction() as c:
             from .auth import validate_identity
             validate_identity(c, identity)
-            # Who made the task changes this write makes (backend/task_changes.py).
-            from . import task_changes as changes
+            # Who made the changes this write logs (backend/events.py).
+            from . import events as changes
             c.execute("SAVEPOINT domain_write")
             since = changes.mark(c)
             try:
                 result = fn(c)
-                changes.claim(c, since, identity.actor)
+                logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
+                logged = None                   # rolled back with the write
                 refusal = refused(c, identity, exc)
+        self.ring(logged)
         if refusal:
             raise refusal
         return result
+
+    def ring(self, seq):
+        """After a commit that logged changes: wake the open event streams (backend/events.py)."""
+        if seq:
+            from .events import bell
+            bell(self).ring(seq)
 
     def enqueue_existing(self):
         with self.transaction() as c:

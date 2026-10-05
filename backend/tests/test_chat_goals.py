@@ -164,32 +164,25 @@ def test_mcp_and_cli_use_the_goal_contract(api, live):
     assert code == 0 and result['refs']['command'] is True, result
 
 
-def test_watch_carries_initial_and_changed_goal_events(api, monkeypatch):
-    import asyncio
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+def test_a_goal_set_or_paused_is_a_live_event_for_its_room(api):
+    from backend import events
     from backend.auth import Identity
-    from backend import views
     _, cid = setup(api)
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        start = events.latest(c)
     goal = action(api, cid, objective='Acme summary')['goal']
-    endpoint = next(route.endpoint for route in api.app.routes if getattr(route, 'path', '') == '/api/v2/conversations/{cid}/watch')
-    request = SimpleNamespace(state=SimpleNamespace(identity=Identity('human:ana', 'owner', 'ana@acme.example')),
-        headers={'authorization': 'Bearer ana-test'}, is_disconnected=AsyncMock(return_value=False))
-    async def run():
-        response = await endpoint(request, cid)
-        stream = response.body_iterator
-        assert (await anext(stream)).startswith('event: snapshot\n')
-        initial = await anext(stream)
-        assert initial.startswith('event: goal\n') and goal['id'] in initial
-        action(api, cid, 'pause')
-        monkeypatch.setattr(views.asyncio, 'sleep', AsyncMock())
-        assert (await anext(stream)).startswith('event: snapshot\n')
-        event = await anext(stream)
-        import json
-        data = json.loads(event.split('data: ', 1)[1])
-        assert event.startswith('event: goal\n') and data['type'] == 'goal' and data['goal']['status'] == 'paused'
-        await stream.aclose()
-    asyncio.run(run())
+    action(api, cid, 'pause')
+
+    def goals(who, conversations=(cid,)):
+        with store.read() as c:
+            sent, *_ = events.read(c, auth, who, start, topics=('messages',), conversations=conversations)
+        return [data for _, _, data in sent if data.get('goal_id')]
+    ana = goals(Identity('human:ana', 'owner', 'ana@acme.example'))
+    # One event per goal per read, as it stands now: paused.
+    assert [(g['goal_id'], g['conversation_id'], g['goal']['status']) for g in ana] == [(goal['id'], cid, 'paused')]
+    assert goals(Identity('human:cara', 'human', 'cara@acme.example')) == []
+    assert goals(Identity('human:ana', 'owner', 'ana@acme.example'), ('elsewhere',)) == []
 
 
 def test_codex_native_continuation_keeps_the_lease_and_counts_all_turns(api, live, tmp_path):

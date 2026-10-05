@@ -3,7 +3,7 @@
 
    On Docs, type a question and matching docs, internal and linked, show at once from the search that comes
    back with POST /api/v2/docs/ask; the Librarian's answer then streams in from the conversation it
-   went to (GET /api/v2/conversations/{id}/watch), with clickable citations. Only the person who asked
+   went to (its snapshot, read again as live events say it changed), with clickable citations. Only the person who asked
    can read that conversation. On Market, the question is answered from the market graph as it is now
    (POST /api/v2/market/ask): the answer and the organizations, people and pages it drew on, which open the
    note and light up on the graph. Each page keeps its own thread.
@@ -283,7 +283,7 @@ html.demo .dask{top:var(--demo-h)}
   }
 
   function stop() {
-    try { es?.close(); } catch { /* already closed */ }
+    try { es?.(); } catch { /* already released */ }
     es = null;
     clearInterval(poll); poll = null;
   }
@@ -304,17 +304,26 @@ html.demo .dask{top:var(--demo-h)}
       }
       draw();
     };
-    const url = `${API}/v2/conversations/${encodeURIComponent(turn.conversationId)}/`;
-    const fallback = () => {
-      if (poll) return;
-      poll = setInterval(async () => { try { apply(await get('/v2/conversations/' + encodeURIComponent(turn.conversationId) + '/snapshot')); } catch { /* try again */ } }, 2500);
+    const cid = turn.conversationId;
+    let reading = false, again = false;
+    const read = async () => {
+      if (reading) { again = true; return; }
+      reading = true;
+      try { apply(await get('/v2/conversations/' + encodeURIComponent(cid) + '/snapshot')); } catch { /* the next change reads again */ }
+      reading = false;
+      if (again) { again = false; void read(); }
     };
-    if (typeof EventSource === 'undefined') return fallback();
-    es = new EventSource(url + 'watch');
-    es.addEventListener('snapshot', ev => { let d; try { d = JSON.parse(ev.data); } catch { return; } apply(d); });
-    es.addEventListener('expired', () => { stop(); fallback(); });
-    // The browser reconnects by itself and gets a whole snapshot; if it cannot, poll for it.
-    es.addEventListener('error', () => { if (es && es.readyState === 2) { stop(); fallback(); } });
+    // The page's live events (ui/app/live.js): a change to this conversation reads its snapshot again. Without
+    // them, a poll.
+    const live = window.liveEvents;
+    if (!live || !live.available()) { if (!poll) poll = setInterval(read, 2500); return; }
+    const mine = d => d.conversation_id === cid;
+    let timer = 0;
+    const soon = () => { clearTimeout(timer); timer = setTimeout(read, 150); };
+    const offs = [live.follow(cid), live.on('messages', d => { if (mine(d)) soon(); }),
+                  live.on('runs', d => { if (mine(d)) soon(); }), live.on('reset', soon)];
+    es = () => { clearTimeout(timer); offs.forEach(off => off()); };
+    void read();                       // what happened before the stream followed it
   }
 
   // Market: the graph as it is now answers, and what it drew on lights up on the graph (ui/market-page.js).

@@ -56,7 +56,7 @@ from .store import H, P, Problem, Store, bot_readiness, encode, message_page, re
 
 # The stable v2 routes whose answers carry display names (backend/names.py); streams are left alone.
 STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
-                                  for path, *_ in STABLE_ROUTES if not path.endswith(("/stream", "/watch"))
+                                  for path, *_ in STABLE_ROUTES if path != "/api/v2/events"
                                   for spelling in (path, *old_route_paths(path))))
 
 
@@ -2651,20 +2651,15 @@ def create_app(settings=None):
             from . import usage_limits
             default = usage_limits.company(c)
 
-            def with_bot_state(row):
-                if row:
-                    row = privacy.status(c, who, row)
-                    row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
-                    row = usage_limits.overlay(c, row, default)      # over a spend limit: paused, and why
-                return row
+            from .events import status_line            # the same line live events send
             if bot:
                 auth.target(c, who, bot, need="read")
                 from .views import since_time
-                return {"bot": bot, "status": with_bot_state(H.status(c, bot)),
+                return {"bot": bot, "status": status_line(c, who, bot, default),
                         "history": [privacy.status(c, who, r) for r in H.status_history(c, bot, since=since_time(since))]}
             from .views import updating
             readable = auth.bot_accesses(c, who)
-            return {"bots": [with_bot_state(s) for s in H.status_all(c)
+            return {"bots": [status_line(c, who, s["bot"], default) for s in H.status_all(c)
                              if readable.get(s["bot"], auth.FULL)["read"]],
                     # Tico updating itself, shown beside the status line
                     "updating": updating(c)}
@@ -3783,52 +3778,11 @@ def create_app(settings=None):
     def retry(request: Request, jid: str, body: M.Retry):
         return mutate(request, body, lambda c: execution.retry(c, request.state.identity, jid, body))
 
-    @app.get("/api/v2/conversations/{cid}/stream")
-    async def stream(request: Request, cid: str, after: int = 0):
-        who = request.state.identity
-        def allowed():
-            with store.read() as c:
-                auth.conversation(c, who, cid)
-        await asyncio.to_thread(allowed)
-        # The reads run on a worker thread: on the event loop, every open stream held up every
-        # other request for its query once a second.
-        def poll(cursor):
-            auth.authenticate(request.headers)
-            with store.read() as c:
-                conv = auth.conversation(c, who, cid)
-                # The run's output is the bot's activity (Read); the messages are the conversation.
-                bot = rooms.room_bot(conv)
-                if bot and not auth.bot_access(c, who, bot)["read"]:
-                    return [], privacy.page(c, who, cid)["messages"]
-                rows = c.execute("SELECT e.* FROM attempt_events e JOIN attempts a ON a.id=e.attempt_id "
-                                 "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                                 "WHERE m.conversation_id=? AND e.id>? ORDER BY e.id LIMIT 200",
-                                 (cid, cursor)).fetchall()
-                return [dict(r) for r in rows if privacy.attempt_readable(c, privacy.actor(who), r["attempt_id"])
-                        and privacy.content_readable(c, privacy.actor(who), dict(r))], privacy.page(c, who, cid)["messages"]
-        async def generate():
-            cursor = max(after, 0)
-            # Bounded connection lifetime ensures periodic reauthentication.
-            for _ in range(55):
-                if await request.is_disconnected():
-                    return
-                try:
-                    rows, messages_now = await asyncio.to_thread(poll, cursor)
-                except Problem:
-                    yield 'event: expired\ndata: {}\n\n'
-                    return
-                for row in rows:
-                    cursor = row["id"]
-                    yield f"id: {cursor}\nevent: output\ndata: {encode(row)}\n\n"
-                yield f"event: messages\ndata: {encode(messages_now)}\n\n"
-                await asyncio.sleep(1)
-        return StreamingResponse(generate(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
-
     from .tags import install as install_tags
     install_tags(app, store, auth, mutate, task_views)
-    from .task_changes import install as install_task_changes
-    install_task_changes(app, store, auth, task_views)
+    # One stream of live events for people's pages (backend/events.py).
+    from .events import install as install_events
+    install_events(app, store, auth, task_views, task_view)
 
     from .views import install_views
     from .task_types import install_task_types

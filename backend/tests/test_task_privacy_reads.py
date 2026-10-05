@@ -128,20 +128,26 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     assert not sql(api, "SELECT id FROM tasks WHERE id='" + row["id"] + "'")
 
 
-def test_stream_closes_when_private_owner_loses_access(api, monkeypatch):
+def test_live_events_stop_when_private_owner_loses_access(api):
+    from backend import events
     row = task(api, requester="human:ana")
-    calls = []
-    real_sleep = asyncio.sleep
-    async def revoke(_):
-        if not calls:
-            with api.app.state.store.transaction() as c:
-                c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
-        calls.append(True)
-        await real_sleep(0)
-    monkeypatch.setattr("backend.app.asyncio.sleep", revoke)
-    response = api.get(f"/api/v2/conversations/{row['conversation_id']}/stream", headers=headers("ben-test"))
-    assert response.status_code == 200 and "event: expired" in response.text
-    assert response.text.count("event: messages") == 1
+    store, auth, ben = api.app.state.store, api.app.state.auth, Identity("human:ben", "human", "ben@acme.example")
+
+    def seen(after):
+        with store.read() as c:
+            sent, cursor, *_ = events.read(c, auth, ben, after, topics=("tasks", "messages"),
+                                           task_views=lambda rows, *a: rows, task_view=lambda r, *a, **k: r)
+        return json.dumps([data for *_, data in sent]), cursor
+    with store.read() as c:
+        start = events.latest(c)
+    post(api, "tasks/" + row["id"] + "/comments", {"text": "First packet note"})
+    before, cursor = seen(start)
+    assert "First packet note" in before and row["id"] in before
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
+    post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
+    after, _ = seen(cursor)
+    assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
 
 
 def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):

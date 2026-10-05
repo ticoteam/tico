@@ -79,6 +79,10 @@
       "description": "Whether the installation is working."
     },
     {
+      "name": "Live events",
+      "description": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, messages, runs, bots and Needs you as they change, resumable from a change number."
+    },
+    {
       "name": "Tags",
       "description": "Tags, metadata, markdown checklists and reusable templates."
     }
@@ -2991,120 +2995,6 @@
         ]
       }
     },
-    "/api/v2/conversations/{cid}/stream": {
-      "get": {
-        "summary": "Server-sent events: bot output deltas with a resumable cursor (after=<id>) and message lists",
-        "operationId": "streamConversation",
-        "parameters": [
-          {
-            "name": "cid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Cid"
-            }
-          },
-          {
-            "name": "after",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 0,
-              "title": "After"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "text/event-stream: `event: output` (id = cursor) and `event: messages`. Ends after about a minute; reconnect.",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Conversations"
-        ]
-      }
-    },
-    "/api/v2/conversations/{cid}/watch": {
-      "get": {
-        "summary": "Server-sent events: whole-conversation snapshots while a bot works (reconnect for a fresh one)",
-        "operationId": "watchConversation",
-        "parameters": [
-          {
-            "name": "cid",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Cid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "text/event-stream: `event: snapshot`, `event: expired`, and `: keepalive` comments. Ends after about a minute; reconnect.",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Conversations"
-        ]
-      }
-    },
     "/api/v2/deleted-tasks": {
       "get": {
         "summary": "Deleted tasks this person may restore, newest first",
@@ -3293,7 +3183,7 @@
     },
     "/api/v2/docs/ask": {
       "post": {
-        "summary": "Ask the Librarian a question about the team's docs. It goes to the caller's own private docs conversation; `results` is the instant search (same shape as docs/search) and the answer streams on GET /api/v2/conversations/{cid}/watch",
+        "summary": "Ask the Librarian a question about the team's docs. It goes to the caller's own private docs conversation; `results` is the instant search (same shape as docs/search) and the answer streams on GET /api/v2/events?topics=messages,runs&conversation={cid}",
         "operationId": "askDocs",
         "requestBody": {
           "content": {
@@ -3812,6 +3702,113 @@
         },
         "tags": [
           "Docs"
+        ]
+      }
+    },
+    "/api/v2/events": {
+      "get": {
+        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots",
+        "operationId": "streamEvents",
+        "parameters": [
+          {
+            "name": "topics",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Topics"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "name": "conversation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation"
+            }
+          },
+          {
+            "name": "bot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's or attempt's state).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about five minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Live events"
         ]
       }
     },
@@ -9855,122 +9852,6 @@
         },
         "tags": [
           "Tags"
-        ]
-      }
-    },
-    "/api/v2/task-changes": {
-      "get": {
-        "summary": "Tasks changed after `after` (a change number), each with its latest state, who changed it, or gone",
-        "operationId": "listTaskChanges",
-        "parameters": [
-          {
-            "name": "after",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "After"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
-        ]
-      }
-    },
-    "/api/v2/task-changes/watch": {
-      "get": {
-        "summary": "Each changed task as it changes, from `after` on",
-        "operationId": "watchTaskChanges",
-        "parameters": [
-          {
-            "name": "after",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "After"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "text/event-stream: `event: ready`, `event: task` (id = change number), `event: seq`, `event: reset`, `event: expired`, and `: keepalive` comments. Ends after about five minutes; reconnect with `after`.",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Tasks"
         ]
       }
     },

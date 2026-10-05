@@ -11,6 +11,7 @@ const CHAT_CACHE = new Map(), BOT_TASKS_CACHE = new Map();
 function v2ChatStop() {
   if (!V2C) return;
   try { V2C.es?.close(); } catch {}
+  V2C.liveOff?.();
   clearInterval(V2C.poll);
   clearTimeout(V2C.waitTimer);
   V2C.resize?.disconnect();
@@ -58,7 +59,7 @@ async function v2ChatLoad(slug, room = null) {
   if (V2C !== state) return;
   v2ChatRender(state);
   void chatJumpPending(state);
-  if (S.me?.cloud && state.conv) v2ChatStream(state);
+  if (S.me?.cloud && state.conv) v2ChatStream(state, true);
   void chatGoalLoad(state);
   v2BotsLoad(state);
   state.poll = setInterval(async () => {
@@ -68,7 +69,7 @@ async function v2ChatLoad(slug, room = null) {
       await v2ChatFind(state);
       if (V2C !== state) return;
       v2ChatRender(state);
-      if (state.loaded && S.me?.cloud && state.conv) v2ChatStream(state);
+      if (state.loaded && S.me?.cloud && state.conv) v2ChatStream(state, true);
       void chatGoalLoad(state);
       return;
     }
@@ -77,11 +78,11 @@ async function v2ChatLoad(slug, room = null) {
       state.listed = false;
       await v2ChatFind(state);
       if (V2C !== state) return;
-      if (state.conv) { v2ChatRender(state); if (S.me?.cloud) v2ChatStream(state); void chatGoalLoad(state); } else state.failed = false;
+      if (state.conv) { v2ChatRender(state); if (S.me?.cloud) v2ChatStream(state, true); void chatGoalLoad(state); } else state.failed = false;
       return;
     }
-    // The live stream already pushes every change; the poll is the fallback when it is down.
-    if (S.me?.cloud && state.es && state.es.readyState === 1) return;
+    // Live events carry every change to this chat (ui/app/live.js); the poll reads it only without them.
+    if (S.me?.cloud && state.liveOff && liveAvailable()) return;
     v2ChatMessages(state).then(() => v2ChatRender(state));
     void chatGoalLoad(state);
   }, 15000);
@@ -505,50 +506,87 @@ function chatRetryLater(P, text, slug, extraRefs, extra) {
   window.addEventListener('online', again);
   P.retryTimer = setTimeout(again, Math.min(60000, 5000 * 2 ** (tries - 1)));
 }
-// One stream per sent message: the keeper's deltas while the turn runs, then the reply itself.
-function v2ChatStream(state) {
-  if (!state.conv || typeof EventSource === 'undefined') return;
-  try { state.es?.close(); } catch {}
+// A snapshot read (the newest messages, the run and its text, the goal) put on the page: from the first load, and
+// again whenever live events say this conversation changed.
+function v2ChatApply(state, d) {
+  state.latestIds = new Set((d.messages || []).map(m => m.id));
+  // A snapshot the server built just before a message of mine landed does not list it yet. What I sent stays on
+  // the page, and the run the send started stays live; the next snapshot lists it and this copy drops away.
+  const newest = String((d.messages || []).at(-1)?.created || '');
+  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created || '') >= newest);
+  state.messages = [...(state.older || []).filter(m => !state.latestIds.has(m.id)), ...(d.messages || []), ...late];
+  if (!state.older?.length) state.nextBefore = d.next_before;
+  const wasRunning = !!state.live;
+  if (!late.length) {
+    state.execution = d.execution;
+    state.live = d.execution && d.execution.state !== 'completed' ? {text: d.execution.text} : null;
+  }
+  if (d.goal !== undefined) chatGoalApply(state, d.goal, {quiet: true});
+  CHAT_CACHE.set(state.slug, {mode: state.mode, conv: state.conv, messages: state.messages, nextBefore: state.nextBefore,
+                              execution: state.execution, live: state.live});
+  v2ChatRender(state);
+  // A finished turn may have closed or created tasks: show them now.
+  if (wasRunning && !state.live && BOT?.slug === state.slug) {
+    if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    void loadBotChatTasks(BOT.slug);
+  }
+}
+// Read the snapshot again: one read at a time, and one more after it when changes arrived meanwhile, so a run
+// streaming its reply costs a read per burst rather than one per word.
+async function v2ChatSnapshot(state) {
+  if (V2C !== state || !state.conv) return;
+  if (state.reading) { state.readAgain = true; return; }
+  state.reading = true;
+  try {
+    const d = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/snapshot`);
+    if (V2C === state && d) v2ChatApply(state, d);
+  } finally {
+    state.reading = false;
+    if (state.readAgain && V2C === state) { state.readAgain = false; liveSoon('chat:' + state.conv?.id, () => v2ChatSnapshot(state), 150); }
+  }
+}
+// A goal set, paused, met or stopped: read it as the goal route shows it.
+async function v2ChatGoalChanged(state) {
+  if (V2C !== state || !state.conv) return;
+  const d = await v2Get(goalPath(state.conv.id));
+  if (V2C === state && d) chatGoalApply(state, d.goal || null);
+}
+// This chat's messages and runs, from the page's one live stream (ui/app/live.js). `loaded` when the snapshot was
+// just read; otherwise (a send, a new room) it is read once now, for what happened before the stream followed it.
+function v2ChatStream(state, loaded = false) {
+  if (!state.conv) return;
   if (S.me?.cloud) {
-    const es = state.es = new EventSource(`${API}/v2/conversations/${encodeURIComponent(state.conv.id)}/watch`);
-    es.addEventListener('snapshot', ev => {
-      if (V2C !== state) return es.close();
-      let d; try {d = JSON.parse(ev.data);} catch {return;}
-      state.latestIds = new Set((d.messages || []).map(m => m.id));
-      // A snapshot the server built just before a message of mine landed does not list it yet (it can arrive
-      // after the send, from a stream that was connecting). What I sent stays on the page, and the run the
-      // send started stays live; the next snapshot lists it and this copy drops away.
-      const newest = String((d.messages || []).at(-1)?.created || '');
-      const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created || '') >= newest);
-      state.messages = [...(state.older || []).filter(m => !state.latestIds.has(m.id)), ...(d.messages || []), ...late];
-      if (!state.older?.length) state.nextBefore = d.next_before;
-      const wasRunning = !!state.live;
-      if (!late.length) {
-        state.execution = d.execution;
-        state.live = d.execution && d.execution.state !== 'completed' ? {text: d.execution.text} : null;
-      }
-      if (d.goal !== undefined) chatGoalApply(state, d.goal, {quiet: true});
-      v2ChatRender(state);
-      // A finished turn may have closed or created tasks: show them now, not at the next poll.
-      if (wasRunning && !state.live && BOT?.slug === state.slug) {
-        if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-        void loadBotChatTasks(BOT.slug);
-      }
-    });
-    // A goal set, paused, met or stopped: {type: "goal", goal}.
-    es.addEventListener('goal', ev => {
-      if (V2C !== state) return es.close();
-      let d; try {d = JSON.parse(ev.data);} catch {return;}
-      chatGoalApply(state, d.goal || null);
-    });
-    es.addEventListener('expired', () => {es.close(); toast('Sign in again to continue receiving updates.', true);});
-    es.addEventListener('error', () => {
-      if (V2C !== state) return es.close();
-      // The browser reconnects. Persisted messages remain visible during the interruption.
-      if (state.live) {state.live.interrupted = true; v2ChatRender(state);}
-    });
+    if (!liveAvailable()) return;                   // the 15 s poll reads it instead
+    const cid = state.conv.id;
+    if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
+    if (state.liveOff && state.liveCid === cid) return;
+    state.liveOff?.();
+    state.liveCid = cid;
+    const mine = d => d.conversation_id === cid && V2C === state;
+    let down = 0;
+    const offs = [
+      liveFollow(cid),
+      liveOn('messages', d => {
+        if (!mine(d)) return;
+        if (d.goal_id) void v2ChatGoalChanged(state);
+        liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
+      }),
+      liveOn('runs', d => { if (mine(d)) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120); }),
+      liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
+      // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
+      // persisted messages stay on the page meanwhile.
+      liveOn('status', st => {
+        if (V2C !== state) return;
+        clearTimeout(down);
+        if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
+        else if (state.live?.interrupted) void v2ChatSnapshot(state);
+      }),
+    ];
+    state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
     return;
   }
+  if (typeof EventSource === 'undefined') return;
+  try { state.es?.close(); } catch {}
   const es = state.es = new EventSource(`${API}/v2/stream?conversation=${encodeURIComponent(state.conv.id)}`);
   const stop = () => { try { es.close(); } catch {} if (state.es === es) state.es = null; };
   es.addEventListener('delta', ev => {

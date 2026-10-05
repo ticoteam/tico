@@ -173,20 +173,23 @@ async function sendMessage(text) {
   if (!chat.cid) { chat.cid = sent.conversation.id; watch(); }
 }
 
-// Live replies: GET /api/v2/conversations/{cid}/watch is Server-Sent Events. The browser's EventSource
-// cannot send an Authorization header, so read the stream with fetch. Each `snapshot` holds the newest
-// messages and `execution.text`, the reply so far. A stream ends after about a minute; reconnecting
-// sends a fresh snapshot, so nothing is lost and there is no cursor to keep.
+// Live replies: GET /api/v2/events is Server-Sent Events, narrowed here to this chat's messages and runs. The
+// browser's EventSource cannot send an Authorization header, so read the stream with fetch. Each change to the chat
+// reads its snapshot again: the newest messages and `execution.text`, the reply so far. A stream ends after about
+// five minutes; reconnecting with `after` (the last change number seen) misses nothing.
 function stopWatching() { if (chat.abort) chat.abort.abort(); chat.abort = null; }
 
 function watch() {
   stopWatching();
   const mine = chat, abort = (chat.abort = new AbortController());
+  let after = "";
+  void snapshot(mine);
   (async () => {
     let delay = 500;
     while (!abort.signal.aborted && chat === mine) {
       try {
-        const res = await fetch(TICO + "/api/v2/conversations/" + encodeURIComponent(mine.cid) + "/watch", {
+        const query = "?topics=messages,runs&conversation=" + encodeURIComponent(mine.cid) + (after ? "&after=" + after : "");
+        const res = await fetch(TICO + "/api/v2/events" + query, {
           headers: { Authorization: "Bearer " + session.token, Accept: "text/event-stream" }, signal: abort.signal,
         });
         if (res.status === 401) { session.token = ""; return showSignIn(); }
@@ -201,6 +204,8 @@ function watch() {
           let end;
           while ((end = buffer.indexOf("\n\n")) >= 0) {
             const block = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+            const id = (/^id: (.*)$/m.exec(block) || [])[1];
+            if (id) after = id;
             onEvent(mine, block);
           }
         }
@@ -216,14 +221,26 @@ function watch() {
 function onEvent(mine, block) {
   if (chat !== mine) return;
   const name = (/^event: (.*)$/m.exec(block) || [])[1];
-  const data = (/^data: (.*)$/m.exec(block) || [])[1];
   if (name === "expired") { session.token = ""; return showSignIn(); }
-  if (name !== "snapshot" || !data) return;                                     // ": keepalive" comments carry no data
-  const snap = JSON.parse(data);
-  chat.messages = snap.messages;
-  const run = snap.execution;
-  chat.live = run && ["leased", "running"].includes(run.state) ? run.text || run.label || "" : "";
-  renderChat();
+  if (name === "messages" || name === "runs" || name === "reset") void snapshot(mine);  // ": keepalive" carries nothing
+}
+
+// One snapshot read at a time; changes that arrive meanwhile are read once after it.
+async function snapshot(mine) {
+  if (mine.reading) { mine.again = true; return; }
+  mine.reading = true;
+  try {
+    const snap = await api("/api/v2/conversations/" + encodeURIComponent(mine.cid) + "/snapshot");
+    if (chat !== mine) return;
+    chat.messages = snap.messages;
+    const run = snap.execution;
+    chat.live = run && ["leased", "running"].includes(run.state) ? run.text || run.label || "" : "";
+    renderChat();
+  } catch (err) { /* the next change reads it again */ }
+  finally {
+    mine.reading = false;
+    if (mine.again && chat === mine) { mine.again = false; void snapshot(mine); }
+  }
 }
 
 async function loadTasks() {

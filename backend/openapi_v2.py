@@ -39,7 +39,26 @@ TAGS = {
             "evidence and a quality, never edited; a correction supersedes the old one.",
     "Usage": "Estimated model spend per bot (docs/usage.md): tokens counted by each run's computer, priced at list price.",
     "Health": "Whether the installation is working.",
+    "Live events": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, "
+                   "messages, runs, bots and Needs you as they change, resumable from a change number.",
 }
+
+EVENTS_DESCRIPTION = (
+    "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
+    "(who made it, when the viewer may know) and `at`:\n"
+    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
+    "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
+    "- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
+    "`state` (`job_id`, and the job's or attempt's state).\n"
+    "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved.\n"
+    "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), "
+    "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
+    "Only what the viewer may read is sent. A stream ends after about five minutes; reconnect with `after` (or the "
+    "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
+)
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
@@ -136,10 +155,6 @@ STABLE = [
      "Send a message in a conversation", "MessageResult"),
     ("/api/v2/conversations/{cid}/snapshot", "get", "Conversations", "getConversationSnapshot",
      "The newest messages and the bot's current run, in one read", "Snapshot"),
-    ("/api/v2/conversations/{cid}/watch", "get", "Conversations", "watchConversation",
-     "Server-sent events: whole-conversation snapshots while a bot works (reconnect for a fresh one)", None),
-    ("/api/v2/conversations/{cid}/stream", "get", "Conversations", "streamConversation",
-     "Server-sent events: bot output deltas with a resumable cursor (after=<id>) and message lists", None),
     ("/api/v2/chat/{bot}", "post", "Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", "ChatResult"),
     ("/api/v2/chat/{bot}/new", "post", "Conversations", "startNewChat", "Archive the current personal chat and start fresh", None),
     ("/api/v2/conversations/{cid}/goal", "get", "Conversations", "getChatGoal", "Read the pinned goal and commands", "ChatGoalResult"),
@@ -157,10 +172,6 @@ STABLE = [
      "brief=true leaves out bodies", "TaskList"),
     ("/api/v2/tasks", "post", "Tasks", "createTask", "Create a task", "TaskResult"),
     ("/api/v2/tasks/dry-run", "post", "Tasks", "checkTask", "The checks a create would fail; writes nothing", None),
-    ("/api/v2/task-changes", "get", "Tasks", "listTaskChanges",
-     "Tasks changed after `after` (a change number), each with its latest state, who changed it, or gone", None),
-    ("/api/v2/task-changes/watch", "get", "Tasks", "watchTaskChanges",
-     "Each changed task as it changes, from `after` on", None),
     ("/api/v2/tasks/labels", "get", "Tasks", "listTaskLabels", "Labels in use", None),
     ("/api/v2/tasks/{tid}", "get", "Tasks", "getTask", "A task with its history, comments and messages", "TaskDetail"),
     ("/api/v2/tasks/{tid}", "post", "Tasks", "updateTask",
@@ -197,6 +208,9 @@ STABLE = [
     ("/api/v2/updates/{uid}/reply", "post", "Updates", "replyToUpdate", "Reply to an update (goes to the bot)", None),
     ("/api/v2/updates/redo", "post", "Updates", "redoUpdates",
      "Ask the bots again for a past day's update in the current shape: the owner", None),
+    ("/api/v2/events", "get", "Live events", "streamEvents",
+     "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
+     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller; count=true for the number alone", "NeedsYou"),
     ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
@@ -262,7 +276,7 @@ STABLE = [
     ("/api/v2/docs/ask", "post", "Docs", "askDocs",
      "Ask the Librarian a question about the team's docs. It goes to the caller's own private docs conversation; "
      "`results` is the instant search (same shape as docs/search) and the answer streams on "
-     "GET /api/v2/conversations/{cid}/watch", "DocsAsked"),
+     "GET /api/v2/events?topics=messages,runs&conversation={cid}", "DocsAsked"),
     ("/api/v2/librarian", "get", "Docs", "getLibrarian", "Whether the Librarian is on, and whether the caller can turn it on",
      "Librarian"),
     ("/api/v2/librarian/conversations", "get", "Docs", "listDocsConversations",
@@ -876,14 +890,8 @@ def spec(app):
         responses = {code: r for code, r in op.get("responses", {}).items() if code != "422"}
         if answer:
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
-        if path.endswith(("/stream", "/watch")):
-            events = ("`event: output` (id = cursor) and `event: messages`" if path.endswith("/stream")
-                      else "`event: ready`, `event: task` (id = change number), `event: seq`, `event: reset`, "
-                      "`event: expired`, and `: keepalive` comments" if path == "/api/v2/task-changes/watch"
-                      else "`event: snapshot`, `event: expired`, and `: keepalive` comments")
-            ends = "Ends after about five minutes; reconnect with `after`." if path == "/api/v2/task-changes/watch" \
-                else "Ends after about a minute; reconnect."
-            responses["200"] = {"description": "text/event-stream: " + events + ". " + ends,
+        if path == "/api/v2/events":
+            responses["200"] = {"description": EVENTS_DESCRIPTION,
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",

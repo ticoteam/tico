@@ -39,10 +39,13 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   route(); renderHeartbeat(); renderAccount();
   if (S.me?.cloud) void updUnreadRefresh();
   nativeHandler('windowMode')?.postMessage('state');
-  // A tab in the background does not poll (each poll is the status, the issues, Needs you and
-  // the open bot's tasks); coming back to a stale tab refreshes it at once.
+  // Tasks, bot status and Needs you arrive as they change (ui/app/live.js). The issues, the roster, computers and
+  // Updates are not on that stream: they still refresh, every 30 s while the stream is down and every 2 minutes
+  // while it is up. A tab in the background does not poll; coming back to a stale tab refreshes it at once.
+  liveWire();
   let refreshedAt = Date.now();
+  const every = () => liveConnected() ? 120000 : 30000;
   const poll = () => { refreshedAt = Date.now(); return refresh(false); };
-  setInterval(() => { if (!document.hidden) void poll(); }, 30000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - refreshedAt > 30000) void poll(); });
+  setInterval(() => { if (!document.hidden && Date.now() - refreshedAt >= every() - 1000) void poll(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - refreshedAt > every()) void poll(); });
 })();
