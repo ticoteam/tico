@@ -66,6 +66,17 @@ CREATE TABLE IF NOT EXISTS github_app(
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
  created REAL NOT NULL);
+-- Unlike the short-lived generic idempotency cache, these operation bindings are retained so an
+-- ambiguous external create can never be retried as a fresh repository write after a timeout/restart.
+CREATE TABLE IF NOT EXISTS github_product_repo_operations(
+ actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
+ request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
+ response_json TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
+ created TEXT NOT NULL, updated TEXT NOT NULL,
+ PRIMARY KEY(actor,operation,key),
+ CHECK(state!='completed' OR response_json IS NOT NULL),
+ CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
 """
 
 
@@ -111,8 +122,8 @@ class GitHubApp:
         self.cache = {}
         self.live = {}
         self.lock = threading.Lock()
-        # Serialize confirmed product creates in this API process. This keeps the
-        # idempotency precheck and external create from racing on one key.
+        # Serialize confirmed product creates in this process so same-process retries see the
+        # completed receipt. The committed operation row is the cross-process/crash fence.
         self.product_repo_create_lock = threading.Lock()
         self.repository_sync_attempt = 0
         self.repository_sync_failures = 0
@@ -479,8 +490,8 @@ class GitHubApp:
             return {"status": "missing", "detail": "The GitHub App installation is missing Administration: write. An Owner must update and accept that permission in GitHub."}
         return {"status": "available", "detail": "The connected installation currently has Administration: write."}
 
-    def create_product_repo(self, org, name):
-        """Create one exact, empty private product repository. Never changes bot grants or repo selection."""
+    def prepare_product_repo(self, org):
+        """Verify creation capability and mint its token before an operation is durably bound."""
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "Connect the GitHub App first", 409)
@@ -496,18 +507,31 @@ class GitHubApp:
         except (Problem, ValueError):
             # GitHub error bodies are not an appropriate place to echo an installation or connection secret.
             raise Problem("github_token_unavailable", "Could not obtain the narrowly scoped GitHub App token. Check the current Administration permission and installation; no repository was created.", 409) from None
-        response = self._call("POST", f"/orgs/{row['org']}/repos",
-                              headers={"Authorization": "Bearer " + token},
-                              json={"name": name, "private": True, "auto_init": False,
-                                    "description": "Tico product repository"})
+        return row["org"], token
+
+    def create_product_repo(self, org, name, token):
+        """Create one exact, empty private repository. Never changes bot grants or repo selection."""
+        try:
+            response = self._call("POST", f"/orgs/{org}/repos",
+                                  headers={"Authorization": "Bearer " + token},
+                                  json={"name": name, "private": True, "auto_init": False,
+                                        "description": "Tico product repository"})
+        except Problem as problem:
+            if problem.code == "github_unreachable":
+                raise Problem("github_create_outcome_unknown",
+                              f"GitHub's create response for {org}/{name} was not received. Tico will not repeat this operation automatically; check the organization before taking another action.", 409) from None
+            raise
+        if response.status_code in (408, 429) or response.status_code >= 500:
+            raise Problem("github_create_outcome_unknown",
+                          f"GitHub returned HTTP {response.status_code} for the create request for {org}/{name}. The result may be unknown; Tico will not repeat this operation automatically.", 409)
         if response.status_code == 422:
-            raise Problem("github_repo_exists", f"{row['org']}/{name} already exists or GitHub rejected that name; nothing was changed", 409)
+            raise Problem("github_repo_exists", f"{org}/{name} already exists or GitHub rejected that name; nothing was changed", 409)
         if response.status_code == 403:
             raise Problem("github_create_forbidden", "GitHub refused repository creation. Check the app's current Administration: write permission and organization installation access; no repository was changed by Tico.", 403)
         if response.status_code >= 300:
-            raise Problem("github_create_failed", f"GitHub would not create {row['org']}/{name} (HTTP {response.status_code}); no credentials or response body were exposed", 502)
+            raise Problem("github_create_failed", f"GitHub would not create {org}/{name} (HTTP {response.status_code}); no credentials or response body were exposed", 502)
 
-        repository = f"{row['org']}/{name}"
+        repository = f"{org}/{name}"
         try:
             self.mint([repository], {"metadata": "read"}, diagnose=False)
             installation_access = "available"
@@ -847,11 +871,6 @@ def install_github_app(app, settings, store):
     def create_product_repo(request: Request, body: ProductRepoCreate):
         who = owner(request)
         name = validate_product_repo_name(body.name)
-        row = service.row()
-        if not row:
-            raise Problem("github_not_connected", "Connect the GitHub App before creating a product repository", 409)
-        if body.org.lower() != row["org"].lower():
-            raise Problem("github_repo", "The confirmed organization does not match the currently connected organization", 409)
         if body.visibility != "private" or body.auto_init is not False or body.confirmed is not True:
             raise Problem("github_repo_confirmation", "Confirm the reviewed private, empty repository preview before creating it", 422)
         key = request.headers.get("idempotency-key")
@@ -860,27 +879,120 @@ def install_github_app(app, settings, store):
         operation = "/api/v2/github/product-repos"
         request_body = body.model_dump()
         request_hash = digest(encode(request_body))
-        with service.product_repo_create_lock:
-            # Return the saved receipt before contacting GitHub on a retry. Different request bodies
-            # cannot reuse the same key, and a different key is still protected by GitHub's unique name.
-            with store.read() as c:
-                validate_identity(c, who)
-                previous = c.execute("SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
-                                     (who.actor, operation, key)).fetchone()
-                if previous:
-                    if previous["request_hash"] != request_hash:
-                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                    return json.loads(previous["response_json"])
 
-            result = service.create_product_repo(row["org"], name)
+        def existing_operation(c, *, bind=False):
+            """Replay a durable result, reject a reused key, or bind it before the GitHub POST."""
+            previous = c.execute("SELECT * FROM github_product_repo_operations "
+                                 "WHERE actor=? AND operation=? AND key=?",
+                                 (who.actor, operation, key)).fetchone()
+            if previous:
+                if previous["request_hash"] != request_hash:
+                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                if previous["state"] == "pending":
+                    raise Problem("github_create_outcome_unknown",
+                                  f"The result for {previous['target_org']}/{previous['target_name']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
+                if previous["state"] == "rejected":
+                    raise Problem(previous["error_code"], previous["error_detail"], previous["error_status"])
+                return json.loads(previous["response_json"])
 
-            def record(c):
-                H.event(c, who.actor, "github.product_repo_created", result["repository"],
-                        {"visibility": "private", "auto_init": False,
-                         "installation_access": result["installation_access"]})
+            # Migrate an unexpired receipt from the earlier implementation. It was written only
+            # after the external create returned, so it is complete proof and can be retained here.
+            legacy = c.execute("SELECT request_hash,response_json FROM idempotency "
+                               "WHERE actor=? AND operation=? AND key=?",
+                               (who.actor, operation, key)).fetchone()
+            if legacy:
+                if legacy["request_hash"] != request_hash:
+                    raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                result = json.loads(legacy["response_json"])
+                c.execute("INSERT INTO github_product_repo_operations "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,response_json,created,updated) "
+                          "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
+                          (who.actor, operation, key, request_hash, body.org, name,
+                           encode(result), H.now(), H.now()))
                 return result
 
-            return store.mutate(who, operation, key, request_body, record)
+            if bind:
+                stamp = H.now()
+                c.execute("INSERT INTO github_product_repo_operations "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,created,updated) "
+                          "VALUES(?,?,?,?,?,?,'pending',?,?)",
+                          (who.actor, operation, key, request_hash, body.org, name, stamp, stamp))
+            return None
+
+        with service.product_repo_create_lock:
+            # Authenticate and replay completed/uncertain operations before consulting the current
+            # GitHub connection, so disconnecting the App cannot erase a durable receipt or binding.
+            with store.transaction() as c:
+                validate_identity(c, who)
+                previous = existing_operation(c)
+                if previous is not None:
+                    return previous
+
+            row = service.row()
+            if not row:
+                raise Problem("github_not_connected", "Connect the GitHub App before creating a product repository", 409)
+            if body.org.lower() != row["org"].lower():
+                raise Problem("github_repo", "The confirmed organization does not match the currently connected organization", 409)
+
+            # Capability checks and token minting are safe to retry. Bind the exact Owner operation
+            # only after those succeed, and commit that binding before the side-effecting GitHub POST.
+            org, token = service.prepare_product_repo(row["org"])
+            with store.transaction() as c:
+                validate_identity(c, who)
+                previous = existing_operation(c, bind=True)
+                if previous is not None:
+                    return previous
+
+            try:
+                result = service.create_product_repo(org, name, token)
+            except Problem as problem:
+                if problem.code != "github_create_outcome_unknown":
+                    # A definite GitHub rejection is replayable. If this write fails, the operation
+                    # remains pending and future requests fail closed instead of issuing another POST.
+                    with store.transaction() as c:
+                        c.execute("UPDATE github_product_repo_operations "
+                                  "SET state='rejected',error_code=?,error_detail=?,error_status=?,updated=? "
+                                  "WHERE actor=? AND operation=? AND key=? AND request_hash=? AND state='pending'",
+                                  (problem.code, problem.detail, problem.status, H.now(),
+                                   who.actor, operation, key, request_hash))
+                raise
+
+            # The external result and durable receipt share one transaction. A crash or database
+            # error here leaves the pre-call pending binding; a retry reports unknown and never
+            # creates another repository or adopts an existing one.
+            try:
+                with store.transaction() as c:
+                    validate_identity(c, who)
+                    current = c.execute("SELECT state,request_hash,response_json FROM github_product_repo_operations "
+                                        "WHERE actor=? AND operation=? AND key=?",
+                                        (who.actor, operation, key)).fetchone()
+                    if not current or current["request_hash"] != request_hash:
+                        raise Problem("idempotency_conflict", "The product-repository operation binding changed", 409)
+                    if current["state"] == "completed":
+                        return json.loads(current["response_json"])
+                    if current["state"] != "pending":
+                        raise Problem("github_create_outcome_unknown", "The product-repository operation is no longer pending; no second create was attempted", 409)
+                    previous = c.execute("SELECT request_hash FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                         (who.actor, operation, key)).fetchone()
+                    if previous and previous["request_hash"] != request_hash:
+                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                    H.event(c, who.actor, "github.product_repo_created", result["repository"],
+                            {"visibility": "private", "auto_init": False,
+                             "installation_access": result["installation_access"]})
+                    if not previous:
+                        c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
+                                  (who.actor, operation, key, request_hash, encode(result), H.now()))
+                    c.execute("UPDATE github_product_repo_operations "
+                              "SET state='completed',response_json=?,updated=? "
+                              "WHERE actor=? AND operation=? AND key=? AND state='pending'",
+                              (encode(result), H.now(), who.actor, operation, key))
+            except Problem:
+                raise
+            except Exception:
+                log.error("Product repository was created, but Tico could not save its receipt; its operation remains unresolved")
+                raise Problem("github_create_outcome_unknown",
+                              f"GitHub created or may have created {org}/{name}, but Tico could not save the receipt. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409) from None
+            return result
 
     @app.delete("/api/v2/github/repos/{org}/{repo}")
     def delete_repo(request: Request, org: str, repo: str):

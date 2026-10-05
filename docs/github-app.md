@@ -78,6 +78,14 @@ history can be published separately. The write is audited as `github.product_rep
 the same request key replay the saved receipt. This path is Owner-only; it does not alter the bot-prefixed
 creator or grant repository access to any bot.
 
+Before sending the create request, Tico durably binds the Owner, operation key, request digest, and exact
+organization/name. If GitHub's response is lost, times out, or returns a server error, the API returns
+`409 github_create_outcome_unknown`; a retry with different content gets `409 idempotency_conflict`, and a
+retry with the same content reports the unresolved outcome without issuing another create. Check the
+connected organization directly before taking another action. Tico does not infer that an existing
+repository belongs to the unresolved operation, adopt it, or retry that external write automatically.
+The operation binding and completed receipt outlive the generic idempotency cache.
+
 Creating the empty repository does not publish source. Publishing a preserved source bundle is a separate,
 Owner-authorized step: restore or use the preserved checkout, verify its expected branch and history, and
 push normally to the exact new `org/name` using a credential authorized for that repository. Do not reset
