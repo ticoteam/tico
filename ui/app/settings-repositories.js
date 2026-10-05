@@ -67,7 +67,7 @@ async function renderSettingsRepos(fresh) {
       ${repoSegHTML('repos_new_bot', 'New bots get', [['own', 'Own repo only'], ['all', 'All ticked repos']], REPOS.new_bot_default || 'own', !admin)}
       <input type="search" class="repos-filter" data-repos-filter placeholder="Filter" aria-label="Filter repositories" autocomplete="off" hidden></div>
     ${S.me?.role === 'owner' ? `<section class="card" data-product-repo>
-      <h3>Product repository</h3><p class="repos-line">Create an exact empty private repository in ${esc(REPOS.github_org || 'the connected organization')}. This does not grant it to any bot.</p>
+      <h3>Product repository</h3><p class="repos-line">Create an empty, private repository.</p>
       <label for="product-repo-name">Repository name</label><div class="repos-bar"><input id="product-repo-name" data-product-repo-name maxlength="100" autocomplete="off" placeholder="tico-recorder">
       <button class="ghost" type="button" data-product-repo-preview>Preview</button></div>
       <div data-product-repo-result role="status" aria-live="polite" hidden></div>
@@ -187,7 +187,7 @@ document.addEventListener('click', async event => {
       resultHost.hidden = false;
       resultHost.innerHTML = `Created <a href="${esc(created.html_url)}" target="_blank" rel="noopener noreferrer">${esc(created.repository)}</a>. ${esc(created.note)}`;
       createButton.hidden = true;
-      toast(`Created ${created.repository}. ${created.note}`);
+      toast(`Created ${created.repository}`);
     } catch (error) {
       resultHost.hidden = false; resultHost.textContent = error.message;
       createButton.disabled = false; createButton.textContent = 'Create private empty repository';

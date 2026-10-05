@@ -672,6 +672,23 @@ def test_product_create_revalidates_org_and_reports_selected_installation_access
         assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("status", [400, 401])
+def test_product_create_definite_refusal_is_not_retried(api, gh, status):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    gh.generate_status = status
+    gh.create_response_message = "ghs_SYNTHETIC_DO_NOT_EXPOSE"
+    body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
+            "auto_init": False, "confirmed": True}
+    refused = product_repo_request(api, body, key="definite-refusal")
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "github_create_failed"
+    assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in refused.text
+    replay = product_repo_request(api, body, key="definite-refusal")
+    assert replay.status_code == 409 and replay.json() == refused.json()
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
+
+
 def test_product_create_does_not_expose_github_error_bodies(api, gh):
     connect(api, administration="true")
     gh.permissions = {"administration": "write", "metadata": "read"}

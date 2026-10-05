@@ -529,7 +529,7 @@ class GitHubApp:
         if response.status_code == 403:
             raise Problem("github_create_forbidden", "GitHub refused repository creation. Check the app's current Administration: write permission and organization installation access; no repository was changed by Tico.", 403)
         if response.status_code >= 300:
-            raise Problem("github_create_failed", f"GitHub would not create {org}/{name} (HTTP {response.status_code}); no credentials or response body were exposed", 502)
+            raise Problem("github_create_failed", f"GitHub would not create {org}/{name} (HTTP {response.status_code}); no credentials or response body were exposed", 409)
 
         repository = f"{org}/{name}"
         try:
