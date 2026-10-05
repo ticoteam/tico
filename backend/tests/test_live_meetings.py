@@ -10,7 +10,7 @@ from starlette.requests import Request
 from backend import live_meetings as live_meetings_module
 from backend.auth import Identity
 from backend.store import H, digest, encode
-from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_api import api, assign, expire, get, headers, post, ready, restrict, runner  # noqa: F401
 
 
 @pytest.fixture
@@ -388,6 +388,11 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
                                      "AND type='meeting.finalized'", (mid,)).fetchone()[0]
     assert refs == 1
     assert finalized_events == 1
+    with live.app.state.store.read() as c:
+        imported = c.execute("SELECT review_state FROM meetings WHERE id=?", (one["meeting_id"],)).fetchone()
+    assert imported["review_state"] == "pending"
+    pending = get(live, "meetings?review=pending")
+    assert one["meeting_id"] in {row["id"] for row in pending["meetings"]}
     assert json.loads(finalized_event["payload_json"]) == {
         "id": mid, "meeting_id": one["meeting_id"], "source": "tico-live", "external_id": mid,
     }
@@ -687,6 +692,78 @@ def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     hidden_bot = live.post("/api/v2/live-meetings/" + private_meeting["id"] + "/bots",
                            json={"bots": ["ops"]}, headers=headers("cara-test"))
     assert hidden_bot.status_code == 403
+
+
+def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_policy(live):
+    with live.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
+                 write={"people": ["ana"], "bots": ["finance"]})
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config["bot_contact"] = "tasks"
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+
+    meeting = connect(live, title="Write-authorized contact")
+    mid = meeting["id"]
+    post(live, f"live-meetings/{mid}/join", {}, token="cara-test")
+    candidates = get(live, "live-meetings/bot-candidates", token="cara-test")
+    assert "ops" not in {bot["slug"] for bot in candidates["bots"]}
+    denied = live.post("/api/v2/live-meetings/" + mid + "/bots", json={"bots": ["ops"]},
+                       headers=headers("cara-test"))
+    assert denied.status_code == 403
+    assert "Write access" in denied.json()["error"]["detail"]
+
+    # The meeting turn is authorized by the recorded human's Write grant. That contact does not
+    # let another bot bypass the target's tasks-only contact setting.
+    bot_chat = live.post("/api/v2/chat/ops", json={"text": "Can you check this?"},
+                         headers=headers("finance-live"))
+    assert bot_chat.status_code == 403
+    assert bot_chat.json()["error"]["code"] == "bot_contact"
+
+    with live.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
+                 write={"people": ["cara"]})
+    candidates = get(live, "live-meetings/bot-candidates", token="cara-test")
+    assert "ops" in {bot["slug"] for bot in candidates["bots"]}
+    attach(live, mid, "ops", token="cara-test")
+    with live.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
+                 write={"people": ["ana"]})
+    chunk(live, mid, 1, 0, 1000, "Ops, please check the total")
+    detail = get(live, f"live-meetings/{mid}")
+    assert detail["router"]["turns"][0]["bot"] == "ops"
+    turn_id = detail["router"]["turns"][0]["id"]
+    claim = post(live, f"live-meetings/{mid}/turns/{turn_id}/claim", {}, token="ops-live")
+    assert claim["status"] == "skipped" and claim["reason"] == "bot_write_access_revoked"
+    with live.app.state.store.read() as c:
+        job = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                        "WHERE json_extract(m.refs_json,'$.live_meeting.turn_id')=?", (turn_id,)).fetchone()
+    assert job["state"] == "cancelled"
+
+
+def test_expired_requeued_turn_detached_while_leased_is_cancelled_not_poisoned(live):
+    meeting = connect(live, title="Detached after lease")
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+    chunk(live, mid, 1, 0, 1000, "Ops, please review this")
+    turn = get(live, f"live-meetings/{mid}")["router"]["turns"][0]
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    first = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert first["job_id"]
+
+    detached = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={},
+                            headers=headers("ana-test"))
+    assert detached.status_code == 200, detached.text
+    expire(live, first["id"])
+    retry = live.post("/api/v2/jobs/claim", json={"bot": "ops"}, headers=headers(machine["token"]))
+    assert retry.status_code == 200, retry.text
+    assert retry.json() == {"attempt": None}
+    with live.app.state.store.read() as c:
+        job = c.execute("SELECT j.state FROM jobs j WHERE j.id=?", (first["job_id"],)).fetchone()
+        skipped = c.execute("SELECT status,skip_reason FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()
+    assert job["state"] == "cancelled"
+    assert skipped["status"] == "skipped" and skipped["skip_reason"] == "bot_detached"
 
 
 def test_pause_keeps_chat_but_suppresses_named_bot_routing(live):

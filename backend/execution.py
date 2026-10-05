@@ -662,7 +662,10 @@ class Execution:
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
                 and msg.get("to_actor") == "bot:" + row["bot"]):
             from .live_meetings import claim_runner_turn
-            claim_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"])
+            meeting_claim = claim_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"),
+                                              row["bot"], auth=self.auth)
+            if meeting_claim["status"] != "claimed":
+                return {"attempt": None}
         conv = H.conversation(c, msg["conversation_id"])
         task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
         token = secrets.token_urlsafe(32)

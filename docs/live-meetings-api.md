@@ -1,6 +1,6 @@
 # Live Meetings API and Recorder event contract
 
-This is Recorder wire contract revision 6 for the Tico Live Meetings API v2 server path in PR #92.
+This is Recorder wire contract revision 7 for the Tico Live Meetings API v2 server path in PR #92.
 It handles transcript text only. Raw audio is never sent to or stored by Tico. Request and response
 shapes below are part of the contract; change them only with a reviewed contract update.
 
@@ -10,10 +10,12 @@ shapes below are part of the contract; change them only with a reviewed contract
 - After connect, signed-in company humans can read the meeting's live state, transcript, chat, and
   router trace. Only the connector can write transcript chunks, pause/resume, disconnect, end, or
   finalize; another human explicitly joins before chatting or attaching a bot.
-- A joined human may attach active org-chart bots they are allowed to see. Attachment creates a
-  meeting-scoped read grant; it does not change the bot's standing access or grant access to other
-  meetings. Any joined human can remove an attached bot from this meeting; removal revokes that
-  meeting-only grant and settles outstanding turns without changing ordinary bot permissions.
+- A joined human may attach active org-chart bots they are allowed to see and have Write access to.
+  Attachment creates a meeting-scoped read grant; it does not change the bot's standing access or
+  grant access to other meetings. Runner delivery is checked against the attaching human's current
+  Write access and contact policy, so keeper transport does not create bot-to-bot contact. Any joined
+  human can remove an attached bot from this meeting; removal revokes that meeting-only grant and
+  settles outstanding turns without changing ordinary bot permissions.
 - An attached bot can read this meeting's transcript and chat, and can post a reply attributed to
   itself. It cannot control the meeting or change its membership.
 
@@ -25,7 +27,7 @@ credential in `Authorization: Bearer <credential>` just as for the other API cal
 credential in the URL. The Tico instance is the tenant boundary: a Recorder connected to one
 instance uses that user's credential for this instance only. The connector identity is stored as
 `owner_actor` and owns transcript input, lifecycle control and finalization. Joined humans can attach
-only bots visible to them under the existing org-chart permissions.
+only bots they can see and contact under the existing org-chart Write permission.
 
 Every write, including `DELETE` bot removal, uses the normal Tico `Idempotency-Key` header (1–200 characters). Repeating the same
 operation, key, and body returns the saved response; reusing a key for different content returns
@@ -37,19 +39,19 @@ fields are listed below.
 | --- | --- | --- |
 | `POST /api/v2/live-meetings` | Human | Explicitly connect; body `{title,client_id?,fallback_window_seconds?,threshold?,reply_cap?,cooldown_seconds?}`. `reply_cap` is 1–20 (default 3); `cooldown_seconds` is 0–3600 (default 60). Returns the meeting view described below. Fallback window is 30–45 seconds; repeating a `client_id` for that person returns the same meeting. |
 | `GET /api/v2/live-meetings` | Human | List live and paused meetings newest first; ended meetings are excluded. |
-| `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots visible to this human are included; `bots` may be empty. |
+| `GET /api/v2/live-meetings/bot-candidates` | Human | Return `{"bots":[{"slug":"ops","name":"Operations","description":"...","team":"..."}]}`. `team` may be null. Only active bots this human can see and contact with Write access are included; `bots` may be empty. |
 | `GET /api/v2/live-meetings/{id}` | Company human, or attached bot | Read state, transcript chunks, chat, attached bots, transcript-window traces, chat-route traces, named-bypass traces, and turn outcomes. |
 | `POST /api/v2/live-meetings/{id}/chunks` | Connector | Append `{chunks:[{seq,speaker,start_ms,end_ms,text}]}` (1–500 chunks). Seq starts at 1 and is contiguous. HTTP 200 body is exactly `{"id":"<live-id>","state":"live|paused|ended","seq":<highest-seq>,"accepted":[<seq>,...],"event_id":<meeting-event-id>}`. Identical duplicate seq is acknowledged without a new event; a different payload for an existing seq returns `409` with `error.code = "sequence_conflict"`; a gap returns `409` with `error.code = "sequence_gap"` and `error.expected_seq`. New chunks are accepted only in `live`; an already-stored identical retry may still be acknowledged while paused or ended. |
 | `POST /api/v2/live-meetings/{id}/chunks/{seq}/corrections` | Connector | Append `{revision,speaker,start_ms,end_ms,text}`. Revision 2 follows initial revision 1. HTTP 200 body is exactly `{"id":"<live-id>","seq":<seq>,"revision":<revision>,"replayed":<bool>,"event_id":<meeting-event-id>}`. Repeating the same revision and content returns `replayed:true` without a new event; changed content at an existing revision returns `409` with `error.code = "revision_conflict"`; a gap returns `409` with `error.code = "revision_gap"` and `error.expected_revision`. Corrections are accepted while live or paused. The latest revision becomes the transcript used for display and finalization; older versions remain replayable. |
 | `POST /api/v2/live-meetings/{id}/join` | Human | Join the connected meeting. Joined people can chat; all company humans can read after connect. |
 | `POST /api/v2/live-meetings/{id}/chat` | Joined human or attached bot | Append `{text,at_ms?,transcript_seq?,turn_id?}`. The response is `{"message":<saved chat object> or null,"event_id":<latest meeting-event-id>}` and includes `"outcome":"pass"` for a bot PASS. A live unnamed human message receives one multi-bot decision using the existing decisions service; a named-bot mention bypasses that decision and directly targets named attachments. Chat sent while paused is saved but not dispatched. A bot using this API must claim its turn first and name it on reply. For bot text exactly `PASS`, optionally followed by `.` or `!`, HTTP 200 is exactly `{"message":null,"event_id":<meeting-event-id>,"outcome":"pass"}`; it settles the claimed turn without chat text. Assigned bots using the normal Tico runner receive a private, meeting-scoped job; the runner lease claims the turn and its completed response settles it. A transcript reference links chat/replies to the captured words. |
-| `POST /api/v2/live-meetings/{id}/bots` | Joined human | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
+| `POST /api/v2/live-meetings/{id}/bots` | Joined human with Write access to each bot | Attach `{bots:[org_chart_slug,...]}`. Each bot receives meeting-only read/reply access. |
 | `DELETE /api/v2/live-meetings/{id}/bots/{bot}` | Joined human | Send `{}` with an `Idempotency-Key` to remove one attached bot. HTTP 200 is `{"id":"<live-id>","bot":"<slug>","removed":<bool>,"cancelled_turns":[<turn-id>,...],"event_id":<meeting-event-id>}`. Repeating the same key/body returns the saved result. Unclaimed/claimed turns are marked skipped as `bot_detached`; queued jobs are cancelled; late replies cannot post. Removal is meeting-local and idempotent when the bot is already absent. |
 | `POST /api/v2/live-meetings/{id}/control` | Connector | `{action:"pause"|"disconnect"|"resume"|"end"}`. Pause and disconnect are server-side live-sharing controls: both set Tico state to `paused`, preserve text/chat, suppress new routing, and reject new chunk writes. They do not stop Recorder's local device capture, local recording, or review. Recorder must stop uploading chunks while paused/disconnected; local capture/review behavior remains under Recorder and the person. Reconnect with the same `client_id`; only an explicit `resume` re-enables live chunk writes. End is terminal. |
-| `POST /api/v2/live-meetings/{id}/finalize` | Connector | Finalize an ended meeting with transcript text through the existing meeting import path, using stable source `tico-live` and external id equal to the live meeting id. HTTP 200 body is exactly `{"id":"<live-id>","meeting_id":"<imported-meeting-id>","existing":<bool>,"changed":<bool>,"event_id":<meeting-event-id>}`. `meeting_id` is the imported Tico meeting id to use when linking reviewed meeting items. Finalization uses latest corrected text. A later finalize call with a fresh idempotency key returns the same `meeting_id` with `existing:true` and `changed:false`; retrying with the same key/body replays the original saved response. |
+| `POST /api/v2/live-meetings/{id}/finalize` | Connector | Finalize an ended meeting with transcript text through the existing meeting import path, using stable source `tico-live` and external id equal to the live meeting id. The transcript enters the connector's `review=pending` person queue and is not automatically shared. HTTP 200 body is exactly `{"id":"<live-id>","meeting_id":"<imported-meeting-id>","existing":<bool>,"changed":<bool>,"event_id":<meeting-event-id>}`. `meeting_id` is the imported Tico meeting id to use when linking reviewed meeting items. Finalization uses latest corrected text. A later finalize call with a fresh idempotency key returns the same `meeting_id` with `existing:true` and `changed:false`; retrying with the same key/body replays the original saved response. |
 | `GET /api/v2/live-meetings/{id}/events?after={event_id}` | Company human, or attached bot | Authenticated SSE replay of persisted meeting events after a monotonically increasing meeting-local id. Recorder's main process must attach its existing Bearer credential. Use `after` or the `Last-Event-ID` header; when a positive `after` is supplied it takes precedence, otherwise `Last-Event-ID` is used. Resume from the last fully processed event id. The server sends keepalives and closes the stream after at most 55 one-second polling cycles; reconnect from the cursor. |
 | `GET /api/v2/live-meetings/{id}/turns` | Attached bot | Pull pending turns and their meeting-scoped transcript/chat context for clients that execute meeting turns directly. |
-| `POST /api/v2/live-meetings/{id}/turns/{turn_id}/claim` | Attached bot | Claim a pending turn before composing a reply through the meeting API. |
+| `POST /api/v2/live-meetings/{id}/turns/{turn_id}/claim` | Turn's bot | Claim a pending turn before composing a reply through the meeting API. HTTP 200 is `{"id":"<turn-id>","status":"claimed"}`; if the turn was detached, ended, or lost its attaching human's Write authority before claim, it is durably skipped and returns `{"id":"<turn-id>","status":"skipped","reason":"<reason>"}`. |
 
 Initial Recorder setup calls connect once with a stable client id, then sends initial transcript
 and later transcript segments through the same ordered chunk route. A retry reuses the same client

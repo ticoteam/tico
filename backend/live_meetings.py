@@ -387,17 +387,48 @@ def _finish_pass(c, rid, turn, reason):
     return True
 
 
-def claim_runner_turn(c, rid, turn_id, bot):
+def _attachment_authority(c, auth, rid, bot):
+    """Check a scoped keeper delivery against the human who attached the bot."""
+    attachment = c.execute("SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
+                           (rid, bot)).fetchone()
+    if not attachment:
+        return "bot_detached"
+    try:
+        initiator = auth.identity_for_actor(c, attachment["joined_by"])
+    except Problem:
+        return "meeting_contact_unavailable"
+    if initiator.role not in ("human", "owner"):
+        return "meeting_requires_human_contact"
+    if not auth.bot_access(c, initiator, bot)["write"]:
+        return "bot_write_access_revoked"
+    # The runner message is keeper-delivered, but contact policy belongs to the human who
+    # attached the bot. This prevents that transport from silently creating bot contact.
+    if not auth.bot_contact(c, initiator, bot, kind="message"):
+        return "bot_contact_policy"
+    return None
+
+
+def claim_runner_turn(c, rid, turn_id, bot, *, auth=None):
     """Mark a turn claimed when its normal durable Hub runner job is leased."""
     turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=? AND meeting_id=? AND bot=?",
                      (turn_id, rid, bot)).fetchone()
     if not turn:
         raise Problem("not_found", "Live meeting turn not found", 404)
-    if not c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)).fetchone():
-        raise Problem("forbidden", "This bot is not attached to the live meeting", 403)
+    if turn["status"] in ("replied", "skipped"):
+        reason = turn["skip_reason"] or "meeting_turn_already_" + turn["status"]
+        _cancel_queued_turn_job(c, turn_id, reason)
+        return {"id": turn_id, "status": turn["status"], "reason": reason}
     if _meeting(c, rid)["state"] == "ended":
         _finish_pass(c, rid, turn, "meeting_ended_before_claim")
-        raise Problem("meeting_state", "The meeting ended before this turn could start", 409)
+        return {"id": turn_id, "status": "skipped", "reason": "meeting_ended_before_claim"}
+    if auth:
+        reason = _attachment_authority(c, auth, rid, bot)
+        if reason:
+            _finish_pass(c, rid, turn, reason)
+            return {"id": turn_id, "status": "skipped", "reason": reason}
+    elif not c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)).fetchone():
+        _finish_pass(c, rid, turn, "bot_detached")
+        return {"id": turn_id, "status": "skipped", "reason": "bot_detached"}
     if turn["status"] == "claimed":
         return {"id": turn_id, "status": "claimed"}
     if turn["status"] != "pending":
@@ -825,7 +856,8 @@ def install_live_meetings(app, store, auth, mutate):
             rows = []
             for bot in H.bots(c, state="active"):
                 slug = bot["slug"]
-                if not visible.get(slug, auth.FULL)["see"]:
+                access = visible.get(slug, auth.FULL)
+                if not access["see"] or not access["write"]:
                     continue
                 config = c.execute("SELECT team,description FROM bot_config WHERE bot=?", (slug,)).fetchone()
                 rows.append({"slug": slug, "name": bot.get("name") or slug,
@@ -959,8 +991,11 @@ def install_live_meetings(app, store, auth, mutate):
             attached, added = [], []
             for slug in body.bots:
                 _active_bot(c, slug)
-                if not auth.bot_access(c, who, slug)["see"]:
+                access = auth.bot_access(c, who, slug)
+                if not access["see"]:
                     raise Problem("forbidden", f"You cannot see org-chart bot {slug}", 403)
+                if not access["write"]:
+                    raise Problem("forbidden", f"You can see {slug} but do not have Write access to contact it", 403)
                 stamp = H.now()
                 cursor = c.execute("INSERT OR IGNORE INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,?,?,?)",
                                    (rid, slug, who.actor, stamp))
@@ -1102,11 +1137,11 @@ def install_live_meetings(app, store, auth, mutate):
     def claim_turn(request: Request, rid: str, turn_id: str, body: ClaimTurn):
         who = request.state.identity
         if who.role != "bot":
-            raise Problem("identity", "Only attached bots claim meeting turns", 403)
+            raise Problem("identity", "Only bots claim meeting turns", 403)
         def work(c):
-            _require_read(c, auth, who, rid)
-            result = claim_runner_turn(c, rid, turn_id, H.actor_id(who.actor))
-            _cancel_queued_turn_job(c, turn_id, "Live meeting turn was claimed through the bot API")
+            result = claim_runner_turn(c, rid, turn_id, H.actor_id(who.actor), auth=auth)
+            if result["status"] == "claimed":
+                _cancel_queued_turn_job(c, turn_id, "Live meeting turn was claimed through the bot API")
             return result
         return mutate(request, body, work)
 
@@ -1127,7 +1162,7 @@ def install_live_meetings(app, store, auth, mutate):
                                         duration_seconds=duration_ms / 1000, source="tico-live", external_id=rid,
                                         transcript=[{"speaker": chunk["speaker"], "start_ms": chunk["start_ms"],
                                                      "end_ms": chunk["end_ms"], "text": chunk["text"]}
-                                                    for chunk in chunks], review="live")
+                                                    for chunk in chunks], review="pending")
             result = app.state.import_meeting(c, who, body_import, [])
             imported_id = result["id"]
             c.execute("UPDATE live_meetings SET imported_meeting_id=?,updated=? WHERE id=?",
