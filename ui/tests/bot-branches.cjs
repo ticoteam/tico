@@ -195,10 +195,13 @@ const {html, uiFile} = require('./support/page.cjs');
       task: {...assignment.task, status: 'review'}};
     await page.evaluate(() => assignmentBranchesLoad('architect'));
     page.on('dialog', async dialog => {
-      if (dialog.type === 'prompt') await dialog.accept('Use bounded retries for transient reads.');
+      if (dialog.type() === 'prompt') await dialog.accept('Use bounded retries for transient reads.');
       else await dialog.accept();
     });
+    const reviewedLesson = page.waitForResponse(response => response.url().endsWith('/api/v2/assignment-branches/assignment-1')
+      && response.request().method() === 'PATCH');
     await page.locator('[data-assignment-learning="assignment-1"]').click();
+    await reviewedLesson;
     await page.waitForFunction(() => document.querySelector('#bot-assignment-branches .assignment-phase')?.textContent === 'waiting_review');
     const lessonWrite = writes.filter(([path]) => path.endsWith('/assignment-branches/assignment-1')).at(-1)[1];
     assert.equal(lessonWrite.confirm_learning_review, true);
