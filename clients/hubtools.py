@@ -1844,6 +1844,86 @@ def bot_branch(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/copies", body, key=_key(args))
 
 
+@tool("hub_bot_assignment_list", "List temporary task-scoped branches for a source role, including their lifecycle and checkpoint history. "
+      "The source role's normal read permissions apply.",
+      {"source": _s("The persistent source bot role")}, required=("source",))
+def bot_assignment_list(api, args):
+    return api.get(f"bots/{quote(str(args['source']), safe='')}/assignment-branches")
+
+
+@tool("hub_bot_assignment_policy", "Enable or disable the source role's direct-parent bot as an assignment allocator. "
+      "Only a human manager may change this policy; normal source-role and revision checks still apply.",
+      {"source": _s("The persistent source bot role"),
+       "enabled": {"type": "boolean", "description": "Whether its direct-parent bot may allocate eligible tasks"},
+       "revision": {"type": "integer", "minimum": 1}},
+      required=("source", "enabled", "revision"), writes=True)
+def bot_assignment_policy(api, args):
+    source = quote(str(args["source"]), safe="")
+    return api.call("PUT", f"bots/{source}/assignment-branches/policy",
+                    {"enabled": args["enabled"], "expected_revision": args["revision"]},
+                    key=_key(args))
+
+
+@tool("hub_bot_assignment_create", "Allocate one eligible delivery task to an isolated temporary actor for a persistent source role. "
+      "The stable assignment key and generation identify the branch; the display name is editable metadata. "
+      "Server-side task, source-role, repository, runner-capability, allocator and capacity rules remain authoritative.",
+      {"source": _s("The persistent source bot role"),
+       "task": TASK_ID,
+       "name": _s("The assignment's visible name", minLength=1, maxLength=100),
+       "key": _s("Stable identity key; never reuse it for a different task", minLength=8, maxLength=80,
+                  pattern="^[A-Za-z0-9._-]+$"),
+       "generation": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1}},
+      required=("source", "task", "name", "key"), writes=True)
+def bot_assignment_create(api, args):
+    source = quote(str(args["source"]), safe="")
+    return api.post(f"bots/{source}/assignment-branches",
+                    {"task_id": args["task"], "display_name": args["name"],
+                     "assignment_key": args["key"], "generation": args.get("generation", 1)},
+                    key=_key(args))
+
+
+@tool("hub_bot_assignment_update", "Record a temporary assignment checkpoint or lifecycle transition. "
+      "The server enforces safe transitions, delivery-task state, leases, acceptance and reviewed-learning receipts.",
+      {"assignment": _s("The assignment ID"),
+       "revision": {"type": "integer", "minimum": 1},
+       "phase": _s("The lifecycle phase", enum=["working", "waiting_review", "waiting_release", "paused",
+                                                   "interrupted", "verifying", "archived", "cancelled"]),
+       "name": _s("Updated visible name", minLength=1, maxLength=100),
+       "note": _s("Checkpoint or lifecycle note", maxLength=4000),
+       "checkpoint": {"type": "object", "description": "Safe commit and next-step checkpoint"},
+       "deployed_version": _s("Deployed version receipt", maxLength=200),
+       "acceptance_receipt": _s("Acceptance receipt", maxLength=2000),
+       "learning_receipt": _s("Reviewed learning receipt", maxLength=2000),
+       "evidence_receipt": _s("Preserved evidence receipt", maxLength=2000),
+       "handoff_task": _s("Existing source-role task to record as cancellation handoff", maxLength=200),
+       "reviewed_learning_note": _s("Generalized lesson submitted for human review and source-role learning", maxLength=6000),
+       "confirm_learning_review": {"type": "boolean", "default": False,
+                                   "description": "Confirm the lesson contains no task/customer details, private conversation content or credentials"}},
+      required=("assignment", "revision"), writes=True)
+def bot_assignment_update(api, args):
+    body = {"expected_revision": args["revision"]}
+    fields = ("phase", "note", "checkpoint", "deployed_version", "acceptance_receipt",
+              "learning_receipt", "evidence_receipt", "reviewed_learning_note",
+              "confirm_learning_review")
+    body.update({name: args[name] for name in fields if name in args})
+    if "name" in args:
+        body["display_name"] = args["name"]
+    if "handoff_task" in args:
+        body["handoff_task_id"] = args["handoff_task"]
+    assignment = quote(str(args["assignment"]), safe="")
+    return api.patch(f"assignment-branches/{assignment}", body, key=_key(args))
+
+
+@tool("hub_bot_assignment_cleanup", "Request separate guarded cleanup of an archived or cancelled assignment's local trees. "
+      "Cleanup is refused while a lease, pending reply, uncertain dirty work or unsupported runner remains.",
+      {"assignment": _s("The assignment ID"), "revision": {"type": "integer", "minimum": 1}},
+      required=("assignment", "revision"), writes=True)
+def bot_assignment_cleanup(api, args):
+    assignment = quote(str(args["assignment"]), safe="")
+    return api.post(f"assignment-branches/{assignment}/cleanup",
+                    {"expected_revision": args["revision"]}, key=_key(args))
+
+
 # Copying a bot or a skill moves files in the workspace on this computer, so these run here, never on the server
 # (docs/creating-bots.md, "Copy a bot"); the server checks the requester's rights on each bot they name.
 @tool("hub_bot_copy", "Copy a bot into a new one, as the person who asked you (they need read on the original and room in their limit of bots): an "
@@ -2756,6 +2836,11 @@ AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
     "hub_bot_branch": REQUESTER,
+    # Assignment tools go straight through the existing assignment routes. The API still decides which
+    # humans or direct-parent actors may manage a source role; only the allocator policy is human-only.
+    **{name: NOT_ASSISTANT for name in ("hub_bot_assignment_list", "hub_bot_assignment_create",
+                                        "hub_bot_assignment_update", "hub_bot_assignment_cleanup")},
+    "hub_bot_assignment_policy": PEOPLE,
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),

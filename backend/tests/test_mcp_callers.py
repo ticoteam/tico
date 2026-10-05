@@ -11,6 +11,8 @@ BOTOPS_ONLY = {"hub_credential_request", "hub_credential_set", "hub_message_reda
 HUMANS_ONLY = {"hub_brief", "hub_bot_recent", "hub_needs_you_start", "hub_needs_you_commit", "hub_proposal_decide",
                "hub_update_reply", "hub_assistant_read", "hub_assistant_send"}
 BOTS_ONLY = {"hub_update_create", "hub_file_publish", "hub_file_link"}
+ASSIGNMENT_TOOLS = {"hub_bot_assignment_list", "hub_bot_assignment_policy", "hub_bot_assignment_create",
+                    "hub_bot_assignment_update", "hub_bot_assignment_cleanup"}
 
 
 def offered(api, token):
@@ -36,12 +38,17 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
         assert {"hub_whoami", "hub_task_list", "hub_message_send", "hub_doc_search", "hub_sql"} <= names, who
     for who in ("owner", "admin", "member"):
         assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
+        assert ASSIGNMENT_TOOLS <= lists[who], who
     for who in ("bot", "agent"):
         assert BOTS_ONLY <= lists[who] and not HUMANS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
+        assert (ASSIGNMENT_TOOLS - {"hub_bot_assignment_policy"}) <= lists[who], who
+        assert "hub_bot_assignment_policy" not in lists[who], who
     assert "hub_grokbot_sync" in lists["owner"] and "hub_grokbot_sync" in lists["admin"]
     assert "hub_grokbot_sync" not in lists["member"]
     assert {"hub_api", "hub_bot_update"} <= lists["member"]
     assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
+    assert (ASSIGNMENT_TOOLS - {"hub_bot_assignment_policy"}) <= lists["botops"]
+    assert "hub_bot_assignment_policy" not in lists["botops"]
     assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
 
 
@@ -64,4 +71,5 @@ def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
     names = {t["name"] for t in hubtools.listing(kind="assistant")}
     assert "hub_assistant_propose" in names and "hub_task_create" in names and "hub_health_check" in names
     assert not {"hub_sql", "hub_api", "hub_message_send", "hub_update_create", "hub_bot_update"} & names
+    assert not ASSIGNMENT_TOOLS & names
     assert {t["name"] for t in hubtools.listing()} >= names                # no kind: everything, the server decides

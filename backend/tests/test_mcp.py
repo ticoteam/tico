@@ -71,6 +71,93 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
     assert hubtools.SHELL_ONLY <= names
 
 
+def test_assignment_cli_tools_expose_the_existing_api_contract(api):
+    names = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    expected = {"hub_bot_assignment_list", "hub_bot_assignment_policy", "hub_bot_assignment_create",
+                "hub_bot_assignment_update", "hub_bot_assignment_cleanup"}
+    assert expected <= names.keys()
+    create_schema = names["hub_bot_assignment_create"]["inputSchema"]
+    assert set(create_schema["required"]) == {"source", "task", "name", "key"}
+    assert create_schema["properties"]["generation"]["default"] == 1
+    update_schema = names["hub_bot_assignment_update"]["inputSchema"]
+    assert update_schema["properties"]["phase"]["enum"] == [
+        "working", "waiting_review", "waiting_release", "paused", "interrupted", "verifying", "archived", "cancelled"
+    ]
+    assert "operation_id" in update_schema["properties"]
+
+    def leaves(parser, prefix):
+        groups = [a for a in parser._actions if getattr(a, "choices", None) and not isinstance(a.choices, (list, tuple))]
+        if not groups:
+            return {prefix}
+        return {leaf for word, sub in groups[0].choices.items()
+                for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))}
+    cli_names = set()
+    for action in hubcli.parser()._subparsers._group_actions:
+        for word, sub in action.choices.items():
+            cli_names |= leaves(sub, "hub_" + word.replace("-", "_"))
+    assert expected <= cli_names
+    # The HTTP contracts remain present alongside the MCP/CLI adapters.
+    openapi = api.get("/api/v2/openapi.json", headers=headers()).json()
+    assert "/api/v2/bots/{source}/assignment-branches" in openapi["paths"]
+    assert "/api/v2/assignment-branches/{ident}" in openapi["paths"]
+    assert "/api/v2/assignment-branches/{ident}/cleanup" in openapi["paths"]
+
+
+def test_assignment_mcp_tools_reuse_api_authority_and_idempotency(api):
+    from backend.tests.test_assignment_branches import delivery_task, prepare_source
+
+    prepare_source(api)
+    source = get(api, "bots/cpo")
+    err, no_parent = call(api, "hub_bot_assignment_policy", {
+        "source": "cpo", "enabled": True, "revision": source["revision"],
+        "operation_id": "mcp-assignment-policy-1",
+    })
+    assert err and no_parent["error"] == "assignment_allocator"
+
+    task = delivery_task(api, "MCP allocation remains task-scoped")
+    arguments = {"source": "cpo", "task": task["id"], "name": "MCP Workflow Engineer",
+                 "key": "mcp-workflow-1", "generation": 1,
+                 "operation_id": "mcp-assignment-create-1"}
+
+    # A member can see the same tool contract, but its ordinary API rights still decide the request.
+    denied, refusal = call(api, "hub_bot_assignment_create", arguments, token="cara-test")
+    assert denied and refusal["error"] in ("forbidden", "not_found")
+    assert get(api, "bots/cpo/assignment-branches")["active"] == 0
+
+    err, created = call(api, "hub_bot_assignment_create", arguments)
+    assert not err and created["source_bot"] == "cpo" and created["task_id"] == task["id"]
+    err, replay = call(api, "hub_bot_assignment_create", arguments)
+    assert not err and replay["id"] == created["id"]
+
+    err, listed = call(api, "hub_bot_assignment_list", {"source": "cpo"})
+    assert not err and listed["active"] == 1
+    assert [row["id"] for row in listed["assignments"]] == [created["id"]]
+
+    err, paused = call(api, "hub_bot_assignment_update", {
+        "assignment": created["id"], "revision": created["revision"], "phase": "paused",
+        "note": "Record a safe synthetic checkpoint", "checkpoint": {"commit": "synthetic-head", "next": "resume"},
+        "operation_id": "mcp-assignment-pause-1",
+    })
+    assert not err and paused["phase"] == "paused" and paused["checkpoint"]["commit"] == "synthetic-head"
+
+    err, blocked = call(api, "hub_bot_assignment_cleanup", {
+        "assignment": created["id"], "revision": paused["revision"],
+        "operation_id": "mcp-assignment-cleanup-1",
+    })
+    assert err and blocked["error"] == "assignment_cleanup_phase"
+
+    # The human-only policy remains protected both by the audience filter and by the API route.
+    err, refused_human_policy = call(api, "hub_bot_assignment_policy", {
+        "source": "cpo", "enabled": False, "revision": get(api, "bots/cpo")["revision"],
+    }, token="cara-test")
+    assert err and refused_human_policy["error"] == "forbidden"
+    bot_token = setup_attempt(api, "ops")[2]["token"]
+    err, refused_policy = call(api, "hub_bot_assignment_policy", {
+        "source": "cpo", "enabled": True, "revision": get(api, "bots/cpo")["revision"],
+    }, token=bot_token)
+    assert err and refused_policy["error"] == "forbidden"
+
+
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]
