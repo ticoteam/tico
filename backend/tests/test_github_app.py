@@ -40,6 +40,7 @@ class FakeGitHub:
         self.selected_repositories = set()
         self.created_repositories = set()
         self.create_response_message = ""
+        self.lose_next_product_create_response = False
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
@@ -85,6 +86,9 @@ class FakeGitHub:
             if body.get("description") == "Tico product repository" and repository in self.created_repositories:
                 return httpx.Response(422, json={"message": "name already exists"})
             self.created_repositories.add(repository)
+            if body.get("description") == "Tico product repository" and self.lose_next_product_create_response:
+                self.lose_next_product_create_response = False
+                raise httpx.ReadTimeout("synthetic response timeout", request=request)
             return httpx.Response(self.generate_status, json={"full_name": repository,
                                                               "html_url": "https://github.com/" + repository})
         if path.endswith("/generate"):
@@ -528,6 +532,78 @@ def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_rec
         assert event and event["target"] == "Acme/tico-recorder"
         assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM idempotency WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()[0] == 1
+        operation = c.execute("SELECT state,target_org,target_name FROM github_product_repo_operations "
+                              "WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
+        assert tuple(operation) == ("completed", "Acme", "tico-recorder")
+    calls_before_durable_replay = len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"])
+    with api.app_state.store.transaction() as c:
+        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
+                  ("/api/v2/github/product-repos", "product-create-same"))
+    durable_replay = product_repo_request(api, body, key="product-create-same")
+    assert durable_replay.status_code == 200 and durable_replay.json() == created.json()
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == calls_before_durable_replay
+
+
+def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries_create(api, gh):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    gh.lose_next_product_create_response = True
+
+    lost = product_repo_request(api, body, key="lost-create-response")
+    assert lost.status_code == 409 and lost.json()["error"]["code"] == "github_create_outcome_unknown"
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+
+    changed = product_repo_request(api, {**body, "name": "another-product"}, key="lost-create-response")
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict"
+    same = product_repo_request(api, body, key="lost-create-response")
+    assert same.status_code == 409 and same.json()["error"]["code"] == "github_create_outcome_unknown"
+
+    create_calls = [call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]
+    assert len(create_calls) == 1
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+    with api.app_state.store.read() as c:
+        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response_json "
+                              "FROM github_product_repo_operations WHERE actor='human:ana' AND key=?",
+                              ("lost-create-response",)).fetchone()
+        assert operation["actor"] == "human:ana"
+        assert operation["operation"] == "/api/v2/github/product-repos"
+        assert operation["key"] == "lost-create-response"
+        assert operation["request_hash"] == G.digest(encode(body))
+        assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
+        assert operation["state"] == "pending" and operation["response_json"] is None
+
+
+def test_receipt_write_failure_leaves_pending_binding_and_retry_does_not_create_again(api, gh, monkeypatch):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    original_event = G.H.event
+
+    def fail_receipt(*args, **kwargs):
+        if len(args) > 2 and args[2] == "github.product_repo_created":
+            raise RuntimeError("synthetic receipt write failure")
+        return original_event(*args, **kwargs)
+
+    monkeypatch.setattr(G.H, "event", fail_receipt)
+    failed = product_repo_request(api, body, key="receipt-write-failure")
+    assert failed.status_code == 409 and failed.json()["error"]["code"] == "github_create_outcome_unknown"
+
+    with api.app_state.store.read() as c:
+        operation = c.execute("SELECT state,response_json FROM github_product_repo_operations "
+                              "WHERE actor='human:ana' AND key=?", ("receipt-write-failure",)).fetchone()
+        assert tuple(operation) == ("pending", None)
+        assert c.execute("SELECT 1 FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
+                         ("/api/v2/github/product-repos", "receipt-write-failure")).fetchone() is None
+
+    retry = product_repo_request(api, body, key="receipt-write-failure")
+    assert retry.status_code == 409 and retry.json()["error"]["code"] == "github_create_outcome_unknown"
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
 
 
 def test_concurrent_product_requests_cannot_reuse_one_key_for_two_names(api, gh):
@@ -612,7 +688,7 @@ def test_product_create_does_not_expose_github_error_bodies(api, gh):
     gh.generate_status = 500
     gh.create_response_message = "ghs_SYNTHETIC_DO_NOT_EXPOSE"
     failed = product_repo_request(api, body, key="safe-create-error")
-    assert failed.status_code == 502
+    assert failed.status_code == 409 and failed.json()["error"]["code"] == "github_create_outcome_unknown"
     assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in failed.text
 
 
