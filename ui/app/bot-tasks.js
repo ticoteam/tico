@@ -54,7 +54,7 @@ const BOT_CHAT_ACTIVE = new Set(['open', 'doing', 'waiting', 'declined']);
 let BOT_CHAT_TASKS = new Map(), BOT_CHAT_TASK_LOAD = 0;
 function taskNeedsMe(task) {
   const me = myActor();
-  return !!me && (task?.owner === me || task?.ask?.to_actor === me);
+  return !!me && (task?.owner === me || task?.ask?.to_actor === me || taskWaitingOn(task) === me);
 }
 function botChatTasksRender(slug, rows) {
   const host = $('#bot-chat-tasks');

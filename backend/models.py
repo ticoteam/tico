@@ -138,6 +138,7 @@ class TaskUpdate(Contract):
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
     blocked_by: str | None = Field(default=None, max_length=64)     # "" clears
+    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
     parent_id: str | None = Field(default=None, max_length=64)      # "" clears
     rank: float | None = None
     type: ID | None = None

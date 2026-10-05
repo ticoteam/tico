@@ -548,6 +548,8 @@ def task_ask(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "blocked_by": _s("The id (or 8-character short id) of the task this one waits on; an empty string clears it"),
+       "waiting_on": _s("With status waiting: the person it waits on (their id), so it shows in their Needs you; "
+                        "put exactly what they must do in the note. An empty string clears it"),
        "goal_id": _s("The goal this task serves; an empty string takes it off")},
       required=("id",), writes=True)
 def task_update(api, args):
@@ -565,6 +567,8 @@ def task_update(api, args):
         body["private"] = args["private"]
     if args.get("blocked_by") is not None:
         body["blocked_by"] = args["blocked_by"]
+    if args.get("waiting_on") is not None:
+        body["waiting_on"] = args["waiting_on"]
     return api.post("tasks/" + args["id"], body, key=_key(args))
 
 

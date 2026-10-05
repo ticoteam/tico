@@ -370,6 +370,8 @@ def run(args, who=None):
                         body[field] = getattr(args, field)
                 if args.blocked_by is not None:
                     body["blocked_by"] = args.blocked_by
+                if getattr(args, "waiting_on", None) is not None:
+                    body["waiting_on"] = args.waiting_on
             return post("tasks/" + args.id, body)
     if cmd == "goal":
         if sub == "create":

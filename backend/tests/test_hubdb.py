@@ -339,8 +339,8 @@ class APersonsReplyAnswersWhatWasAsked(HubCase):
         reply = H.task_comment(self.conn, ANA, first["id"], "Markdown")
         self.assertEqual(H.answers_to(self.conn, [question["id"]])[question["id"]]["id"], reply["id"])
         self.assertIsNone(H.unanswered_ask(self.conn, first))
-        self.assertIsNone(H.waiting_on(self.conn, first))
-        self.assertEqual(H.waiting_on(self.conn, second), "an unanswered question")
+        self.assertIsNone(H.waiting_for(self.conn, first))
+        self.assertEqual(H.waiting_for(self.conn, second), "an unanswered question")
         self.assertEqual([row["id"] for row in H.tasks_asked_of(self.conn, ANA)], [second["id"]])
         self.assertTrue(H.task_ask(self.conn, CMO, first["id"], "Which date?"))
         self.refused("one-question", H.task_ask, self.conn, CMO, second["id"], "Another question?")
@@ -385,7 +385,7 @@ class WaitingWithDependency(HubCase):
         after = H.task_update(self.conn, CMO, task['id'], status='waiting',
                               blocked_by=blocker['id'], note='Needs the build environment')
         self.assertEqual((after['status'], after['blocked_by']), ('waiting', blocker['id']))
-        self.assertEqual(H.waiting_on(self.conn, after), 'an open blocker')
+        self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
         future = H.shift(H.now(), hours=48)
         self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
         self.assertEqual(H.sweep_stranded(self.conn, at=future), [])
@@ -417,3 +417,24 @@ class WaitingWithDependency(HubCase):
                      status='waiting', blocked_by=blocker['id'])
         self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
         self.assertIsNone(H.task(self.conn, task['id'])['blocked_by'])
+
+    def test_a_task_waiting_on_a_person_stays_waiting_and_counts_until_they_answer(self):
+        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
+        needs = lambda: H.status(self.conn, "cmo")["needs_human"]
+        task = H.task_create(self.conn, CMO, 'Fix the build host', '', CMO, private=False)
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                              note='Restart the build host; it refuses SSH')
+        self.assertEqual((after['waiting_on'], needs()), (ANA, 1))
+        self.assertEqual(H.waiting_for(self.conn, after), 'ana to act')
+        self.assertEqual(H.sweep_stranded(self.conn, at=H.shift(H.now(), hours=48)), [])
+        self.assertEqual([t['id'] for t in H.needs_you(self.conn, 'ana')['waiting']], [task['id']])
+        H.task_comment(self.conn, ANA, task['id'], 'Restarted it')
+        self.assertEqual((H.task(self.conn, task['id'])['waiting_on'], needs()), (None, 0))
+        # A question to a person counts too, once per task, until it is answered.
+        other = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO)
+        ask = H.task_ask(self.conn, CMO, other['id'], 'Which date?')
+        self.assertEqual(needs(), 1)
+        H.answer(self.conn, ANA, ask['id'], 'Friday')
+        self.assertEqual(needs(), 0)
+        secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
+        self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')

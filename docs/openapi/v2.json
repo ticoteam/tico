@@ -19427,6 +19427,13 @@
             ],
             "description": "Its place within its step, lower first"
           },
+          "waiting_on": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person a waiting task waits on; the task is in their Needs you"
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -20484,6 +20491,18 @@
               }
             ],
             "title": "Blocked By"
+          },
+          "waiting_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting On"
           },
           "parent_id": {
             "anyOf": [

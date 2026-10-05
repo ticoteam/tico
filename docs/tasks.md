@@ -60,9 +60,22 @@ and attach that blocker together:
 hub task update <task> --status waiting --blocked-by <blocker> --note "Needs the build environment"
 ```
 
+When the task waits on a person to act instead (a decision, access, a host only they can fix),
+name them with `--on` and say exactly what they need to do in the note:
+
+```sh
+hub task update <task> --status waiting --on ana --note "Restart the build host; it refuses SSH"
+```
+
+The task is then in that person's **Needs you** and their batch as one item, its title and that
+note, and the bot counts toward `needs_human` on its status. When the person comments on the task
+(or says done or answers in a batch) the bot wakes and the task leaves their list; the bot sets it
+waiting on them again if it still needs something. Any other status change clears `--on`, and
+`--on ""` clears it by hand. A private task can only wait on a person who can read it.
+
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
-child task or a pending approval can also justify waiting. Finishing a blocker clears the dependency
+child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency
 and wakes the waiting bot. **Waiting** does not mean a person must review the code.
 
 For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
