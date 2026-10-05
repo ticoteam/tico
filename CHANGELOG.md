@@ -16,6 +16,8 @@ All notable changes to Tico are recorded here. The format follows
 - License current Tico development under PolyForm Perimeter 1.0.1: internal use and modification remain permitted; providing competing products to others is restricted. Earlier Apache 2.0 versions and third-party licenses retain their terms. New contributions are licensed under both PolyForm Perimeter 1.0.1 and Apache 2.0 so they can be included in a future Apache release.
 
 ### Fixed
+- A bot's Send never does nothing silently. A send the server did not confirm with a message says "Not sent" and keeps the draft; Return while a message is still sending sends the next one after it; text filled in without typing still sends on a click.
+- A bot with a stopped run saved for later shows idle, not crashed, after each later run that finishes cleanly; the saved run stays in Health until reviewed.
 - The server updater refuses an update when `compose.override.yaml` pins the `server` or `slack` image, and rolls back when the switched server does not run the pulled image or report the target release. A rollback from an untagged image returns to the release the server reported ([Updates](docs/updates.md#moving-a-hand-managed-install-onto-the-updater)).
 - Docker installs pass `TICO_APP_NAME`, `TICO_ASSISTANT_NAME`, `TICO_INTEGRATIONS_DIR`, `AWS_REGION` and `AWS_DEFAULT_REGION` to the server and Slack, and `TICO_SLACK_SECRET_ARN` to Slack, when set; an empty AWS region is treated as unset.
 

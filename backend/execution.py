@@ -1147,8 +1147,10 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.sign_in_retry", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         else:
-            uncertain = c.execute("SELECT 1 FROM jobs WHERE bot=? AND state='uncertain'", (row["bot"],)).fetchone()
-            healthy = body.outcome == "completed" and not uncertain
+            # Only this run's outcome decides. A run held from earlier keeps its own "saved for
+            # later" item in Health until reviewed; counting it here turned every clean run after
+            # it into a crash, so a working bot looked broken.
+            healthy = body.outcome == "completed"
             H.status_set(c, H.KEEPER, row["bot"], state="idle" if healthy else "crashed",
                          focus="" if healthy else "One run stopped; saved for later")
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}

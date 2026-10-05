@@ -21,8 +21,8 @@
 /* the composer: a small arrow for Send */
 .p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
 .p-send-icon svg{width:18px;height:18px}
-.p-send-icon:hover:not(:disabled){filter:brightness(1.06)}
-.p-send-icon:disabled{opacity:.45;cursor:default}
+.p-send-icon:hover:not(:disabled,.p-off){filter:brightness(1.06)}
+.p-send-icon:disabled,.p-send-icon.p-off{opacity:.45;cursor:default}
 /* a phone gives the bot page the whole screen: no bottom bar, the composer on the bottom edge */
 @media (max-width:760px){
   body.bot-page #mobile-nav{display:none}

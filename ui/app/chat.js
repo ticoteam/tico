@@ -454,24 +454,33 @@ function v2ChatAdopt(slug, j) {
 }
 // `extra` adds fields to the message itself: {command: true} hands the text to the harness as its own slash command.
 async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
-  if (P.sending) return false;
+  // Return during a send that is still out waits for it, then sends what the box still holds; returning
+  // here without a word was a message lost.
+  while (P.sending) {
+    if (!P.sent) return false;                       // a task being created, not a chat send
+    await P.sent;
+    if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim() || !text && !P.files.length) return false;
+  }
   P.sending = true;
+  let sent; P.sent = new Promise(done => sent = done);
   const files = P.files.slice();
   const btn = pq(P, '.p-send'), label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; pillBtnSay(btn, 'Sending…'); }
   try {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files);
+    // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
+    if (!j?.message?.id) throw new Error('the server did not confirm it');
     pillAcknowledge(P, text, files);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;
     return true;
   } catch (e) {
-    if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(e.message, true);
+    if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
   }
-  finally { P.sending = false; if (btn) { btn.disabled = false; pillBtnSay(btn, label); } pillLabel(P); pillButtons(P); }
+  finally { P.sending = false; P.sent = null; sent(); if (btn) { btn.disabled = false; pillBtnSay(btn, label); } pillLabel(P); pillButtons(P); }
 }
 // "see if anything was disconnected ... and trigger retries automatically". A
 // message that never reached the hub (the network dropped) sends itself when the connection is

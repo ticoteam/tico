@@ -359,3 +359,33 @@ def test_expiry_notice_tolerates_missing_names_and_rows(api, monkeypatch, missin
         assert c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[:] == (
             "failed", f"Your ops couldn't start on {label}; check that Computer")
         assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "failed"
+
+
+def test_a_clean_run_after_a_held_one_leaves_the_bot_idle_not_crashed(api):
+    """A run held for review stays in Health on its own; it must not turn every later clean run
+    into a crash, while a run that really stops still reports one."""
+    from backend.store import H
+    machine, message, held = interrupted(api)
+    assert claim(api, machine) is None
+    with api.app.state.store.read() as c:
+        assert H.status(c, 'ops')['state'] == 'crashed'
+    ready(api, machine, ['ops'])
+    post(api, 'chat/ops', {'text': 'Next thing please.'})
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'next'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Done.'},
+         machine['token'])
+    with api.app.state.store.read() as c:
+        status = H.status(c, 'ops')
+        assert status['state'] == 'idle' and status['focus'] == ''
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (held['job_id'],)).fetchone()[0] == 'uncertain'
+    issues = api.get('/api/status', headers=headers()).json()['health_issues']
+    assert any(i['kind'] == 'uncertain_work' and i['bot'] == 'ops' for i in issues)
+    assert not any(i['kind'] == 'bot' and i['bot'] == 'ops' for i in issues)
+    post(api, 'chat/ops', {'text': 'And another.'})
+    failed = claim(api, machine)
+    post(api, f"attempts/{failed['id']}/started", {'thread_id': 'next'}, machine['token'])
+    post(api, f"attempts/{failed['id']}/complete", {'outcome': 'interrupted', 'last_seq': 0, 'text': ''},
+         machine['token'])
+    with api.app.state.store.read() as c:
+        assert H.status(c, 'ops')['state'] == 'crashed'

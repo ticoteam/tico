@@ -151,11 +151,14 @@ function makePill(cfg) {
   return P;
 }
 const pq = (P, sel) => P.el?.querySelector(sel);
+// An empty box only dims Send: text that arrived without an input event (autofill, dictation, a tool) must still
+// send on a click, and pillSend puts the cursor back in an empty box.
 function pillButtons(P) {
   const box = pq(P, '.p-text'); if (!box) return;
   const fileChat = P.files.length && P.action === 'chat';
-  const off = !box.value.trim() && !fileChat;
-  pq(P, '.p-send').disabled = off || !!P.sending;
+  const btn = pq(P, '.p-send');
+  btn.classList.toggle('p-off', !box.value.trim() && !fileChat);
+  btn.disabled = !!P.sending;
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"
 // An image waiting to be sent shows as a small thumbnail; a tap opens it full size.
