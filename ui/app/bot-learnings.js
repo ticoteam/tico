@@ -26,11 +26,13 @@ function learnBadge(button, unseen) {
   button.setAttribute('aria-label', unseen ? `Learnings, ${unseen} new` : 'Learnings');
 }
 
+// A diff as lines: added and removed ones tinted with their marker dropped, each hunk header a small gap.
 function learnDiff(text) {
-  return text.split('\n').filter(l => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).map(l => {
-    const kind = l.startsWith('@@') ? 'hunk' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : '';
-    return `<span class="${kind}">${esc(l) || ' '}</span>`;
-  }).join('\n');
+  return text.split('\n').filter(l => !/^(diff --git|index |--- |\+\+\+ |\\ No newline)/.test(l)).map(l => {
+    if (l.startsWith('@@')) return '<span class="hunk">⋯</span>';
+    const kind = l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : '';
+    return `<span class="${kind}">${esc(l.slice(1)) || ' '}</span>`;
+  }).join('').replace(/^<span class="hunk">⋯<\/span>/, '');
 }
 
 function learnSource(u) {
@@ -46,7 +48,7 @@ function learnRow(u) {
     <div class="lr-subject">${esc(u.subject)}</div>
     <div class="lr-meta">${esc(u.author)} · <time datetime="${esc(u.when)}" title="${esc(new Date(u.when).toLocaleString())}">${esc(ago(u.when))}</time> · <code>${esc(u.sha.slice(0, 7))}</code>${u.shared ? '' : ' · <span class="lr-local">Not pushed</span>'}</div>
     ${u.source ? `<div class="lr-source">From ${learnSource(u)}</div>` : ''}
-    ${u.diff ? `<details class="lr-diff"><summary>${esc(files)}</summary><pre>${learnDiff(u.diff)}${u.truncated ? '\n<span class="hunk">…</span>' : ''}</pre></details>`
+    ${u.diff ? `<details class="lr-diff"><summary>${esc(files)}</summary><pre>${learnDiff(u.diff)}${u.truncated ? '<span class="hunk">…</span>' : ''}</pre></details>`
       : `<div class="lr-files">${esc(files)}</div>`}
   </li>`;
 }
