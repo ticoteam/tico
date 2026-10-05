@@ -35,6 +35,9 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
     mine = history(api, "ben-test")["updates"][0]
     assert mine["source"]["conversation"] and "live PR" in mine["source"]["excerpt"]
     assert mine["when"] == "2026-10-05T08:00:00.000000Z" and mine["shared"] and mine["diff"]
+    with api.app.state.store.transaction() as c:       # a repository on GitHub gives each pushed commit a link
+        c.execute("UPDATE bot_config SET repo='acme/bot-ops' WHERE bot='ops'")
+    assert history(api, "ben-test")["updates"][0]["url"] == "https://github.com/acme/bot-ops/commit/" + SHA
     for other in ("ana-test", "cara-test"):      # the owner included: a direct chat is not theirs
         theirs = history(api, other)
         assert theirs["updates"][0]["source"] is None and "live PR" not in str(theirs["updates"][0]["source"])

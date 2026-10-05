@@ -5,7 +5,7 @@ A bot keeps what it learns in its repository: `memory/` (including `memory/learn
 button beside the bot's name shows those commits as a history, newest first. A small number on the
 button counts the updates since you last opened it.
 
-Each update shows its commit subject, who made it and when, the short commit SHA, the files it
+Each update shows its commit subject, who made it and when, a link to the commit on GitHub, the files it
 changed and, once the commit has been pushed, its diff. When the run that made it is known, the
 update links to its source: the task, or the message in the chat, that the bot was working on. Two
 more views show the current `learnings.md` and `decisions.md`.

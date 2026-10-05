@@ -22,7 +22,7 @@ from pydantic import Field
 from . import models as M
 from . import task_privacy as privacy
 from .shared_bots import copies, declared, source_of
-from .store import H, Problem
+from .store import H, Problem, repo_url
 from .views import human_only
 
 SCHEMA = """
@@ -114,6 +114,15 @@ def record(c, who, bot, report):
     return changed
 
 
+def commit_base(c, bot, github_owner=""):
+    """The GitHub address commits of this bot's repository live under, or "" when it is not on GitHub.
+    A branch writes its original's repository, so the original's is the one."""
+    root = source_of(declared(c, bot)) or bot
+    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (root,)).fetchone()
+    base = repo_url((row["repo"] if row else "") or "emp-" + root, github_owner)
+    return base.removesuffix(".git") if base.startswith("https://github.com/") else ""
+
+
 def documents(c, bot):
     return {row["path"]: row["content"] for row in
             c.execute("SELECT path,content FROM bot_memory_documents WHERE bot=?", (bot,))}
@@ -170,9 +179,12 @@ def install_memory_history(app, store, auth, mutate):
             seen, column = (row["seen"], "reported") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed")
             unseen = c.execute(f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>?",
                                (bot, seen)).fetchone()[0]
+            base = commit_base(c, bot, store.settings.github_owner)
+            # Only a commit that reached the shared repository has an address to open.
             updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed"],
                         "files": json.loads(r["files_json"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
                         "shared": bool(r["shared"]), "new": r[column] > seen,
+                        "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]
             return {"updates": updates, "unseen": unseen, "documents": documents(c, bot),
                     "next_before": rows[limit - 1]["committed"] if len(rows) > limit else None}

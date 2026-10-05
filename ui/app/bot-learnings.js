@@ -46,7 +46,7 @@ function learnRow(u) {
   const files = u.files.map(f => f.replace(/^(memory|knowledge)\//, '')).join(', ');
   return `<li class="learn-row${u.new ? ' new' : ''}">
     <div class="lr-subject">${esc(u.subject)}</div>
-    <div class="lr-meta">${esc(u.author)} · <time datetime="${esc(u.when)}" title="${esc(new Date(u.when).toLocaleString())}">${esc(ago(u.when))}</time> · <code>${esc(u.sha.slice(0, 7))}</code>${u.shared ? '' : ' · <span class="lr-local">Not pushed</span>'}</div>
+    <div class="lr-meta">${esc(u.author)} · <time datetime="${esc(u.when)}" title="${esc(new Date(u.when).toLocaleString())}">${esc(ago(u.when))}</time> ${u.url ? ` · <a href="${esc(u.url)}" target="_blank" rel="noopener">GitHub</a>` : ''}${u.shared ? '' : ' · <span class="lr-local">Not pushed</span>'}</div>
     ${u.source ? `<div class="lr-source">From ${learnSource(u)}</div>` : ''}
     ${u.diff ? `<details class="lr-diff"><summary>${esc(files)}</summary><pre>${learnDiff(u.diff)}${u.truncated ? '<span class="hunk">…</span>' : ''}</pre></details>`
       : `<div class="lr-files">${esc(files)}</div>`}
