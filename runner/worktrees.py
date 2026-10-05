@@ -440,10 +440,52 @@ def _record_attached_checkout(workspace, link, repo, env):
     common = _common_dir(path, env)
     expected_base = _base_identity(common)
     _verify_worktree(path, workspace, repo, branch, env, expected_base)
-    expected = git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()
     target = 'refs/heads/' + branch
-    identity = _marker_identity(link['link_id'], _canonical_task_id(link['task_id']), link['path'], repo,
-                                branch, expected, target, expected_base)
+    link_id = link.get('link_id') or link.get('id')
+    task_id = link.get('task_id') or _canonical_task_id(None)
+    if not link_id or not task_id:
+        raise ValueError('Attached worktree has no task registration identity; kept unchanged')
+    if link.get('setup_pending') or _detail(link).get('setup_pending'):
+        raise ValueError('Attached worktree setup is still pending; kept unchanged')
+    repo_name = repo.get('full_name') or repo.get('repo')
+    if not repo_name:
+        raise ValueError('Attached worktree repository is not identified; kept unchanged')
+    if not _worktree_registered(common.parent, path, env):
+        raise ValueError('Attached path is not registered in its managed base; kept unchanged')
+
+    marker = _read_marker(workspace, link_id)
+    if marker is not None:
+        # A prior local proof may outlive a lost cloud heartbeat. Match its registration and
+        # base, then replay that proof; a later commit or edit must not rewrite the marker.
+        stable = {'schema': 1, 'link_id': link_id, 'task_id': task_id,
+                  'path': link['path'], 'repo': repo_name, 'branch': branch,
+                  'expected_base': expected_base}
+        _check_marker(marker, stable)
+        expected = marker.get('expected_head')
+        recorded_target = marker.get('checkout_target')
+        target_valid = recorded_target == target
+        if (not target_valid and isinstance(recorded_target, str)
+                and recorded_target.startswith('refs/remotes/origin/')):
+            remote_branch = recorded_target.removeprefix('refs/remotes/origin/')
+            try:
+                target_valid = checked_branch(remote_branch) == remote_branch
+            except ValueError:
+                target_valid = False
+        if (marker.get('phase') != 'ready'
+                or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected or '')
+                or not target_valid):
+            raise ValueError('Attached worktree has no matching completed local proof; kept unchanged')
+        return expected, recorded_target, expected_base
+
+    # An explicit attachment is not enough to distinguish an unfinished materialization
+    # from a user deletion. Refuse to certify it, but never restore or modify the path.
+    if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
+        raise ValueError('Attached worktree has missing tracked files; kept unchanged and unverified')
+    expected = git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()
+    if git(path, 'rev-parse', '--verify', target, env=env).stdout.strip() != expected:
+        raise ValueError('Attached worktree branch does not point at its current commit; kept unchanged')
+    identity = _marker_identity(link_id, task_id, link['path'], repo, branch,
+                                expected, target, expected_base)
     _write_marker(workspace, {**identity, 'phase': 'ready'})
     return expected, target, expected_base
 
@@ -694,10 +736,13 @@ def inspect(workspace, row, env=None, cache=None):
                 raise ValueError('Attached worktree metadata is invalid; left as it is')
             if row.get('branch') and row['branch'] != result['branch']:
                 raise ValueError('Attached worktree branch does not match its task link')
+            expected_head, checkout_target, expected_base = _record_attached_checkout(
+                workspace, {**row, 'link_id': row['id'], 'branch': result['branch']},
+                {'full_name': result['repo'], 'machine_git': row.get('machine_git')}, env)
             result.update(checkout_state='ready',
-                          expected_head=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip(),
-                          checkout_target='refs/heads/' + result['branch'],
-                          expected_base=_base_identity(common))
+                          expected_head=expected_head,
+                          checkout_target=checkout_target,
+                          expected_base=expected_base)
             checkout_state = 'ready'
             not_ready = False
             result['state'] = 'present'
