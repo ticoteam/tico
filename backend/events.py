@@ -74,8 +74,7 @@ _RUN_CONVERSATION = ("(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j
                      "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})")
 _PARTIES = ("owner", "requester", "waiting_on")
 
-# (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line
-# (task_relations, when it lands, is a `tasks` row per end). A table that does not exist is
+# (trigger name, event, table, WHEN or None, body). One list, so a new source is one more line. A table that does not exist is
 # skipped, and a trigger whose definition changed is replaced at the next start.
 TRIGGERS = [
     ("changes_tasks_insert", "INSERT", "tasks", None,
@@ -87,6 +86,13 @@ TRIGGERS = [
     ("changes_task_links_insert", "INSERT", "task_links", None, _row("tasks", "link", "NEW.task_id")),
     ("changes_task_links_update", "UPDATE", "task_links", None, _row("tasks", "link", "NEW.task_id")),
     ("changes_task_links_delete", "DELETE", "task_links", None, _row("tasks", "link", "OLD.task_id")),
+    # A relation (parent, blocks, related, duplicate, follow-up) changes how both ends show.
+    ("changes_task_relations_insert", "INSERT", "task_relations", None,
+     _row("tasks", "relation", "NEW.from_task") + _row("tasks", "relation", "NEW.to_task")),
+    ("changes_task_relations_update", "UPDATE", "task_relations", None,
+     _row("tasks", "relation", "NEW.from_task") + _row("tasks", "relation", "NEW.to_task")),
+    ("changes_task_relations_delete", "DELETE", "task_relations", None,
+     _row("tasks", "relation", "OLD.from_task") + _row("tasks", "relation", "OLD.to_task")),
     ("changes_messages_insert", "INSERT", "messages", None,
      _row("messages", "insert", "NEW.id", conversation="NEW.conversation_id")
      + _needs("ask", "NEW.to_actor", "NEW.from_actor", where="NEW.kind IN ('ask','answer')")),
