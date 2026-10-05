@@ -1,0 +1,14 @@
+{
+  "id": "learnings-route",
+  "version": 1,
+  "owner": "ana",
+  "summary": "One item of a day's activity (a chat or task message, a finished task's note, a Slack message, a sent email, a meeting summary): is it durable enough to learn from. The nightly learning run adds one noul per recipient ('This item is relevant to: <profile>') from the roster at run time (backend/learnings.py). An item goes to every recipient at `relevant` or over unless `learnable` is under `noise`; at most `per_recipient` items each.",
+  "state": ["item", "roster"],
+  "questions": {
+    "learnable": {
+      "type": "noul",
+      "instructions": "This item teaches something durable a teammate should remember beyond today: a rule, preference, fact, decision or change (a changed date, price or owner counts). Chit-chat, praise, or a one-off answer already in existing docs is not learnable."
+    }
+  },
+  "thresholds": {"relevant": 0.6, "noise": 0.2, "per_recipient": 40}
+}

@@ -39,3 +39,46 @@ branch's history and reaches their next run after the repository syncs.
 
 - `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`, `next_before`.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
+
+## Nightly learning run
+
+Once a night, at or after 3:00 (Pacific, the same clock as daily updates), Tico reads the day's
+activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
+Slack or mail for this itself.
+
+**What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
+
+- **Chats**: what people wrote in chats with bots. Personal rooms (your Assistant, your Librarian
+  room) are not read. An item from a chat with bots may go only to those bots.
+- **Tasks**: people's comments on tasks, and the note of a task that was finished. A private task's
+  items may go only to the bots that are its owner or requester.
+- **Slack**: people's messages in channels Tico is in (direct messages already arrive as chats).
+- **Mail**: only mail a teammate **sent from their own mailbox** (the sender's address is a person's
+  and is the mailbox's own). Inbound mail and shared mailboxes are never read. The quoted reply is
+  dropped.
+- **Meetings**: live company meetings (not private, not pending review): the title and summary,
+  never the transcript.
+
+**Routing.** The decision model (TypeSafe when the server has its key, else the team's own AI
+provider; with neither the night shows "needs a decision model") answers, per item, whether it is
+learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
+to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
+highest first. Recipients are the active bots other than BotOps, the Assistant and the Goal Manager,
+plus the Librarian for how the company works and the market.
+
+**Packets are tasks.** Each recipient gets one private task, "Nightly learnings: <date>", with the
+instructions and its packet: each item's source, link, the quoted text, its score and who else got it.
+A bot changes only its own repository and commits with `Tico-Run:`; a change to its instructions or
+settings goes to BotOps as a task. The Librarian edits docs directly (every edit is a version) and
+reports market facts with `hub market report`.
+
+**The page.** **Learnings** in the account menu lists the nights. A night shows Bots (memory commits
+made by the runs that worked its packet task), Docs (the Librarian's doc versions while its task was
+open) and Market (its market changes then), each change with its source and diff. A bot's changes show
+only to readers who may read that bot. A packet's text shows only when the reader may read the source
+today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
+
+- `POST /api/v2/learnings/run` (owner): tonight's run now; 409 when it is running or already ran.
+- `GET /api/v2/learnings?before=&limit=`: nights, newest first.
+- `GET /api/v2/learnings/{id}`: one night's sections.
+- `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.

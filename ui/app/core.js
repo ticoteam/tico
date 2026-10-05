@@ -25,6 +25,7 @@ const SQL_PAGE = '#/sql';              // the owner's and admins' read-only quer
 const DOCS = '#/docs';              // team-wide documentation, separate from bot Docs tabs
 const INTEGRATIONS = '#/integrations'; // integrations/*.md: how a bot uses each outside system, its queries, shared learnings
 const MAIL = '#/mail';                // server-stored mail copies; #/inbox redirects here
+const LEARNINGS = '#/learnings';     // the nightly learning run: what each night changed (ui/app/learnings.js)
 const MESSAGING = '#/messaging';       // selected Message bot: setup, schedules, and example messages
 // Bot notices still flow through /api/v2/messages?unread=1. People read mail on #/mail, not live Gmail.
 const $ = (s, r=document) => r.querySelector(s);

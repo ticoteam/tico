@@ -561,6 +561,8 @@ class Store:
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
             c.executescript(_memory_history.SCHEMA)
+            from . import learnings as _learnings
+            c.executescript(_learnings.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import bot_tools as _bot_tools

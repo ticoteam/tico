@@ -136,6 +136,13 @@ class Scheduler:
                 updates.dispatch(c, at)
         except Exception as exc:
             failures.append({"updates": type(exc).__name__})
+        # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
+        # in a background thread, so the decision model's calls never hold the write lock.
+        try:
+            from . import learnings
+            learnings.nightly(self.store, at)
+        except Exception as exc:
+            failures.append({"learnings": type(exc).__name__})
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.

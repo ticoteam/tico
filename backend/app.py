@@ -3846,6 +3846,8 @@ def create_app(settings=None):
     install_integrations(app, store, auth, mutate)
     from .memory_history import install_memory_history
     install_memory_history(app, store, auth, mutate)
+    from .learnings import install as install_learnings
+    install_learnings(app, store, auth, mutate)
     from .mcp import install_mcp
     install_mcp(app, settings)
     from .github import install_github

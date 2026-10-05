@@ -559,6 +559,7 @@ function renderTree() {
       (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
       (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
       (a.dataset.nav === 'runs' && S.route === '#/runs') ||
+      (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||
       (a.dataset.nav === 'usage' && S.route === '#/usage') ||
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
       (a.dataset.nav === 'assistant' && S.route === $('#nav-assistant')?.getAttribute('href')) ||
