@@ -1026,6 +1026,9 @@ class Store:
                 # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
                 # the trash: an older release reads the table as before and never sees the column.
                 H.add_column(c, "service_keys", "scope", "TEXT NOT NULL DEFAULT 'tasks'")
+                # The task change feed boards follow (backend/task_changes.py); idempotent.
+                from .task_changes import ensure as ensure_task_changes
+                ensure_task_changes(c)
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL
@@ -1237,9 +1240,13 @@ class Store:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
                 return result
+            # Who made the task changes this write makes (backend/task_changes.py).
+            from . import task_changes as changes
             c.execute("SAVEPOINT domain_write")
+            since = changes.mark(c)
             try:
                 result = fn(c)
+                changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
                 refusal = refused(c, identity, exc)
@@ -1259,9 +1266,13 @@ class Store:
         with self.transaction() as c:
             from .auth import validate_identity
             validate_identity(c, identity)
+            # Who made the task changes this write makes (backend/task_changes.py).
+            from . import task_changes as changes
             c.execute("SAVEPOINT domain_write")
+            since = changes.mark(c)
             try:
                 result = fn(c)
+                changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
                 refusal = refused(c, identity, exc)

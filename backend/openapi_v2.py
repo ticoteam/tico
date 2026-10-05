@@ -157,6 +157,10 @@ STABLE = [
      "brief=true leaves out bodies", "TaskList"),
     ("/api/v2/tasks", "post", "Tasks", "createTask", "Create a task", "TaskResult"),
     ("/api/v2/tasks/dry-run", "post", "Tasks", "checkTask", "The checks a create would fail; writes nothing", None),
+    ("/api/v2/task-changes", "get", "Tasks", "listTaskChanges",
+     "Tasks changed after `after` (a change number), each with its latest state, who changed it, or gone", None),
+    ("/api/v2/task-changes/watch", "get", "Tasks", "watchTaskChanges",
+     "Each changed task as it changes, from `after` on", None),
     ("/api/v2/tasks/labels", "get", "Tasks", "listTaskLabels", "Labels in use", None),
     ("/api/v2/tasks/{tid}", "get", "Tasks", "getTask", "A task with its history, comments and messages", "TaskDetail"),
     ("/api/v2/tasks/{tid}", "post", "Tasks", "updateTask",
@@ -874,8 +878,12 @@ def spec(app):
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
         if path.endswith(("/stream", "/watch")):
             events = ("`event: output` (id = cursor) and `event: messages`" if path.endswith("/stream")
+                      else "`event: ready`, `event: task` (id = change number), `event: seq`, `event: reset`, "
+                      "`event: expired`, and `: keepalive` comments" if path == "/api/v2/task-changes/watch"
                       else "`event: snapshot`, `event: expired`, and `: keepalive` comments")
-            responses["200"] = {"description": "text/event-stream: " + events + ". Ends after about a minute; reconnect.",
+            ends = "Ends after about five minutes; reconnect with `after`." if path == "/api/v2/task-changes/watch" \
+                else "Ends after about a minute; reconnect."
+            responses["200"] = {"description": "text/event-stream: " + events + ". " + ends,
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",

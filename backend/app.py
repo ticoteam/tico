@@ -3827,6 +3827,8 @@ def create_app(settings=None):
 
     from .tags import install as install_tags
     install_tags(app, store, auth, mutate, task_views)
+    from .task_changes import install as install_task_changes
+    install_task_changes(app, store, auth, task_views)
 
     from .views import install_views
     from .task_types import install_task_types

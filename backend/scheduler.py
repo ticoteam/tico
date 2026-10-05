@@ -144,6 +144,8 @@ class Scheduler:
                 c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
             sweep_idempotency(self.store, stamp(at))
             sweep_mail(self.store, stamp(at))
+            from . import task_changes
+            task_changes.sweep(self.store, stamp(at))
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).
