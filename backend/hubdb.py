@@ -2158,6 +2158,9 @@ def _number_free(conn, actor, number):
     taken = _one(conn, "SELECT id FROM tasks WHERE number=?", (number,))
     if taken:
         refuse(conn, actor, "duplicate", f"#{number} is already another task's number; a number belongs to one task")
+    # A deleted task keeps its number in the trash (backend/task_delete.py), restored or purged.
+    if _one(conn, "SELECT 1 FROM task_trash WHERE number=?", (number,)):
+        refuse(conn, actor, "duplicate", f"#{number} belongs to a deleted task; a number belongs to one task")
     return number
 
 
