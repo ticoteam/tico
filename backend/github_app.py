@@ -17,6 +17,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -29,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import hubdb as H
 from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
-from .store import Problem
+from .store import Problem, digest, encode
 
 log = logging.getLogger("tico.github_app")
 
@@ -40,9 +41,11 @@ REFRESH_MARGIN = 300          # a cached token is dropped this long before GitHu
 # What a bot's turn needs in its own repository, and nothing else.
 TURN_PERMISSIONS = {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
 CREATE_PERMISSIONS = {"administration": "write", "contents": "read"}
+PRODUCT_CREATE_PERMISSIONS = {"administration": "write", "metadata": "read"}
 ORG = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 REPO_PART = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+PRODUCT_REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 DEFAULT_TEMPLATE = "ticoteam/botops"
 BOTOPS = "botops"
 EXTRA_KEY = "github-extra-repos"   # registry_metadata: {bot: ["owner/name", ...]}
@@ -93,6 +96,13 @@ def repo_of(repo, default_owner):
     return repo
 
 
+def validate_product_repo_name(name):
+    """A single exact GitHub repository name, never an owner/name or URL."""
+    if not isinstance(name, str) or not PRODUCT_REPO_NAME.fullmatch(name) or name in (".", ".."):
+        raise Problem("github_repo", "Use one repository name (letters, digits, dots, underscores or hyphens); do not include an organization or URL", 422)
+    return name
+
+
 class GitHubApp:
     """The stored app, its at-rest encryption, and installation-token minting."""
 
@@ -101,6 +111,9 @@ class GitHubApp:
         self.cache = {}
         self.live = {}
         self.lock = threading.Lock()
+        # Serialize confirmed product creates in this API process. This keeps the
+        # idempotency precheck and external create from racing on one key.
+        self.product_repo_create_lock = threading.Lock()
         self.repository_sync_attempt = 0
         self.repository_sync_failures = 0
         self.repository_queue_lock = threading.Lock()
@@ -448,12 +461,89 @@ class GitHubApp:
         return {"repository": data.get("full_name") or f"{row['org']}/{name}", "html_url": data.get("html_url", ""),
                 "note": "If the app is installed on selected repositories only, add this repository to the installation."}
 
+    def product_repo_capability(self):
+        """Report the live installation capability; a saved setup choice is not proof of permission."""
+        row = self.row()
+        if not row:
+            return {"status": "not_connected", "detail": "Connect the GitHub App before creating a product repository."}
+        try:
+            installation = self.installation()
+        except (Problem, ValueError):
+            return {"status": "unknown", "detail": "Could not verify the GitHub App installation. No repository has been created."}
+        if not installation:
+            return {"status": "not_installed", "detail": "Install the GitHub App on the connected organization first."}
+        permissions = self.live_permissions(refresh=True)
+        if permissions is None:
+            return {"status": "unknown", "detail": "Could not verify the installation's current Administration permission. No repository has been created."}
+        if permissions.get("administration") != "write":
+            return {"status": "missing", "detail": "The GitHub App installation is missing Administration: write. An Owner must update and accept that permission in GitHub."}
+        return {"status": "available", "detail": "The connected installation currently has Administration: write."}
+
+    def create_product_repo(self, org, name):
+        """Create one exact, empty private product repository. Never changes bot grants or repo selection."""
+        row = self.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App first", 409)
+        if org.lower() != row["org"].lower():
+            raise Problem("github_repo", "The preview organization no longer matches the connected organization", 409)
+        capability = self.product_repo_capability()
+        if capability["status"] != "available":
+            code = {"missing": "github_permission_missing", "not_connected": "github_not_connected",
+                    "not_installed": "github_not_installed"}.get(capability["status"], "github_capability_unknown")
+            raise Problem(code, capability["detail"], 409)
+        try:
+            token, _ = self.mint(None, PRODUCT_CREATE_PERMISSIONS)
+        except (Problem, ValueError):
+            # GitHub error bodies are not an appropriate place to echo an installation or connection secret.
+            raise Problem("github_token_unavailable", "Could not obtain the narrowly scoped GitHub App token. Check the current Administration permission and installation; no repository was created.", 409) from None
+        response = self._call("POST", f"/orgs/{row['org']}/repos",
+                              headers={"Authorization": "Bearer " + token},
+                              json={"name": name, "private": True, "auto_init": False,
+                                    "description": "Tico product repository"})
+        if response.status_code == 422:
+            raise Problem("github_repo_exists", f"{row['org']}/{name} already exists or GitHub rejected that name; nothing was changed", 409)
+        if response.status_code == 403:
+            raise Problem("github_create_forbidden", "GitHub refused repository creation. Check the app's current Administration: write permission and organization installation access; no repository was changed by Tico.", 403)
+        if response.status_code >= 300:
+            raise Problem("github_create_failed", f"GitHub would not create {row['org']}/{name} (HTTP {response.status_code}); no credentials or response body were exposed", 502)
+
+        repository = f"{row['org']}/{name}"
+        try:
+            self.mint([repository], {"metadata": "read"}, diagnose=False)
+            installation_access = "available"
+            note = "Created as a private empty repository. Tico will refresh its repository inventory; no bot access was granted."
+            try:
+                from .repositories import queue_sync
+                queue_sync(self, refresh=True)
+            except Exception:
+                log.warning("Product repository was created; repository inventory refresh could not be queued")
+                note = "Created as a private empty repository. Refresh repository inventory in Settings; no bot access was granted."
+        except (Problem, ValueError) as problem:
+            if isinstance(problem, Problem) and problem.code == "github_repo_not_accessible":
+                installation_access = "owner_action_required"
+                note = "Created as a private empty repository, but the selected GitHub App installation cannot access it yet. An Owner must add it in GitHub App installation settings; Tico did not change repository access."
+            else:
+                installation_access = "unverified"
+                note = "Created as a private empty repository. Tico could not verify installation access; an Owner can check the app installation and refresh repository inventory. No bot access was granted."
+        return {"repository": repository, "html_url": f"https://github.com/{repository}",
+                "visibility": "private", "auto_init": False,
+                "installation_access": installation_access, "note": note}
+
 
 class Repo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     slug: str = Field(min_length=1, max_length=64)
     template: str | None = Field(default=None, max_length=140)
     empty: bool = False
+
+
+class ProductRepoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    org: str = Field(min_length=1, max_length=39)
+    name: str = Field(min_length=1, max_length=100)
+    visibility: Literal["private"]
+    auto_init: Literal[False]
+    confirmed: Literal[True]
 
 
 class ExtraRepos(BaseModel):
@@ -738,6 +828,59 @@ def install_github_app(app, settings, store):
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})
         return result
+
+    @app.get("/api/v2/github/product-repos/preview")
+    def product_repo_preview(request: Request, name: str):
+        who = owner(request)
+        name = validate_product_repo_name(name)
+        with store.read() as c:
+            validate_identity(c, who)
+        row = service.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App before creating a product repository", 409)
+        capability = service.product_repo_capability()
+        return {"org": row["org"], "name": name, "repository": f"{row['org']}/{name}",
+                "visibility": "private", "auto_init": False,
+                "capability": capability["status"], "capability_detail": capability["detail"]}
+
+    @app.post("/api/v2/github/product-repos")
+    def create_product_repo(request: Request, body: ProductRepoCreate):
+        who = owner(request)
+        name = validate_product_repo_name(body.name)
+        row = service.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App before creating a product repository", 409)
+        if body.org.lower() != row["org"].lower():
+            raise Problem("github_repo", "The confirmed organization does not match the currently connected organization", 409)
+        if body.visibility != "private" or body.auto_init is not False or body.confirmed is not True:
+            raise Problem("github_repo_confirmation", "Confirm the reviewed private, empty repository preview before creating it", 422)
+        key = request.headers.get("idempotency-key")
+        if not key or len(key) > 200:
+            raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
+        operation = "/api/v2/github/product-repos"
+        request_body = body.model_dump()
+        request_hash = digest(encode(request_body))
+        with service.product_repo_create_lock:
+            # Return the saved receipt before contacting GitHub on a retry. Different request bodies
+            # cannot reuse the same key, and a different key is still protected by GitHub's unique name.
+            with store.read() as c:
+                validate_identity(c, who)
+                previous = c.execute("SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                     (who.actor, operation, key)).fetchone()
+                if previous:
+                    if previous["request_hash"] != request_hash:
+                        raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                    return json.loads(previous["response_json"])
+
+            result = service.create_product_repo(row["org"], name)
+
+            def record(c):
+                H.event(c, who.actor, "github.product_repo_created", result["repository"],
+                        {"visibility": "private", "auto_init": False,
+                         "installation_access": result["installation_access"]})
+                return result
+
+            return store.mutate(who, operation, key, request_body, record)
 
     @app.delete("/api/v2/github/repos/{org}/{repo}")
     def delete_repo(request: Request, org: str, repo: str):
