@@ -1223,6 +1223,12 @@ class Runner:
         # Ignored files count as uncertain work too: removing either checkout must not discard them.
         if not clean(product) or not clean(learning):
             return False, "An assignment tree contains changed, untracked, or ignored work; all local paths were retained"
+        # A clean checkout may still have unpublished work saved in Git's stash.
+        # Check both repositories, including the learning tree's shared refs, before removal.
+        for tree in (product, learning):
+            stashes = git(tree, "for-each-ref", "--format=%(refname)", "refs/stash")
+            if stashes.returncode or stashes.stdout.strip():
+                return False, "An assignment tree has stashed work or its stash refs could not be verified; all local paths were retained"
         source = self.local_path(str(config.get("shared_from") or ""), {"shared": True})
         if not source.is_dir() or not (source / ".git").exists():
             return False, "The persistent role's source checkout is unavailable; assignment trees were retained"
