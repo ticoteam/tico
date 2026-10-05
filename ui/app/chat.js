@@ -57,6 +57,7 @@ async function v2ChatLoad(slug, room = null) {
   await v2ChatFind(state);
   if (V2C !== state) return;
   v2ChatRender(state);
+  void chatJumpPending(state);
   if (S.me?.cloud && state.conv) v2ChatStream(state);
   void chatGoalLoad(state);
   v2BotsLoad(state);
@@ -297,7 +298,7 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
   const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
-  return `<div class="conv-run chat${me ? ' from-me' : ''}">
+  return `<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
@@ -411,20 +412,15 @@ function v2ChatRender(state) {
     older.innerHTML = state.nextBefore ? '<button class="ghost" type="button" data-cloud-older>Load older messages</button>' : '';
     older.querySelector('[data-cloud-older]')?.addEventListener('click', async ev => {
       ev.target.disabled = true;
-      try {
-        const d = await get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/messages?before=${encodeURIComponent(state.nextBefore)}`);
-        if (V2C !== state) return;
-        state.messages = [...d.messages, ...state.messages]; state.nextBefore = d.next_before;
-        state.older = state.messages.filter(m => !state.latestIds?.has(m.id));
-        state.followLatest = false; state.prepending = true;
-        v2ChatRender(state);
-      } catch (error) {toast(error.message, true); ev.target.disabled = false;}
+      try { if (await v2ChatOlder(state)) v2ChatRender(state); }
+      catch (error) {toast(error.message, true); ev.target.disabled = false;}
     });
   }
   const st = $('#conv-state');
   if (st) st.innerHTML = state.live ? (t => `<span class="pill in-progress" title="${esc(t.tip)}">${esc(t.word || 'Working')}</span>`)(v2PendingText(state)) : v2StatePill(state.slug);
   pausedRender();
   chatGoalRender(state);
+  chatOutlineSync(state);
   const access = $('#conv-access');
   if (access) {
     if (state.mode === 'shared') {
@@ -436,6 +432,15 @@ function v2ChatRender(state) {
   }
   // Header updates above can resize the thread after its content renders.
   requestAnimationFrame(() => { if (V2C === state && state.followLatest) thread.scrollTop = thread.scrollHeight; });
+}
+// One page further back; the outline's jump reuses it. False when the chat changed meanwhile.
+async function v2ChatOlder(state) {
+  const d = await get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/messages?before=${encodeURIComponent(state.nextBefore)}`);
+  if (V2C !== state) return false;
+  state.messages = [...d.messages, ...state.messages.filter(m => !d.messages.some(x => x.id === m.id))]; state.nextBefore = d.next_before;
+  state.older = state.messages.filter(m => !state.latestIds?.has(m.id));
+  state.followLatest = false; state.prepending = true;
+  return true;
 }
 // A message sent to a bot (the composer, Start setup) lands in the chat that is open on that bot, in the conversation the
 // server put it in; a chat that was empty when it loaded is not "Nothing yet" any more.

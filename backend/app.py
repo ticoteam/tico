@@ -1700,6 +1700,30 @@ def create_app(settings=None):
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             return {"conversation": H.conversation(c, cid), **page}
 
+    @app.get("/api/v2/conversations/{cid}/outline")
+    def outline(request: Request, cid: str):
+        """The humans' prompts in a chat, oldest first, for the Outline list: id, time, a short excerpt and the task
+        it names. It reaches past the loaded pages, so each row passes the same message and task checks a page does."""
+        who = request.state.identity
+        with store.read() as c:
+            auth.conversation(c, who, cid)
+            prompts = []
+            for row in c.execute("SELECT * FROM messages WHERE conversation_id=? AND from_actor LIKE 'human:%' "
+                                 "AND deleted_at IS NULL ORDER BY rowid DESC", (cid,)):
+                refs = H._json(row["refs_json"], {}) or {}
+                if refs.get("goal_action") or refs.get("maintenance") or not privacy.message_readable(c, privacy.actor(who), row):
+                    continue
+                task, tid = None, refs.get("task") or refs.get("task_id")
+                tid = tid[0] if isinstance(tid, list) and tid else tid
+                if isinstance(tid, str) and (t := H.task(c, tid)) and privacy.task_readable(c, who, t):
+                    task = {"id": tid, "title": t["title"]}
+                text = " ".join(str(row["body"] or "").split())
+                prompts.append({"id": row["id"], "created": row["created"], "task": task,
+                                "text": text if len(text) <= 140 else text[:139].rstrip() + "…"})
+                if len(prompts) >= 500:
+                    break
+            return {"prompts": prompts[::-1]}
+
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
         return mutate(request, body, lambda c: send(c, request.state.identity, body))
