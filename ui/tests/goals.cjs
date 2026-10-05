@@ -53,7 +53,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
     const archivedKpi = kpi('k-retired', 'Retired conversion', {owner: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
     let archivedMayEdit = true;
-    const requests = [];
+    const requests = [], liveStreams = [];
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname, post = req.method() === 'POST';
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -62,6 +62,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
+      if (p === '/api/v2/events') { liveStreams.push(route); return; }   // held until the test sends a change
       if (p.startsWith('/api/')) requests.push(req.method() + ' ' + p);
       const body = post ? req.postDataJSON() : null;
       if (post) posted.push({path: p, body});
@@ -145,6 +146,9 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await thread.evaluate(el=>el.scrollHeight>el.clientHeight),true,'long conversations scroll inside the rail');
     await thread.evaluate(el=>{el.scrollTop=0;});
     gmExtra.push({id:'new-update',from_actor:'bot:goal-manager',body:'Incoming update'});
+    while (!liveStreams.length) await page.waitForTimeout(50);
+    await liveStreams.splice(0).at(-1).fulfill({contentType: 'text/event-stream',
+      body: 'id: 7\nevent: messages\ndata: ' + JSON.stringify({seq: 7, id: 'new-update', conversation_id: 'gm-chat'}) + '\n\n'});
     await page.locator('[data-gm-thread]', {hasText:'Incoming update'}).waitFor({timeout:12000});
     assert.equal(await thread.evaluate(el=>el.scrollTop),0,'an incoming reply does not move older messages being read');
     gmExtra = [];

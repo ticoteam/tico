@@ -33,14 +33,10 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [], requested = [];
     page.on('pageerror', e => errors.push(e.message));
-    // The modal polls every 8s; with window.fastPoll set, that poll runs every 200ms.
+    // The open task reads again when live events say it changed (taskChatLive); with window.fastPoll set, a change
+    // arrives every 200ms.
     await page.addInitScript(() => {
-      const every = window.setInterval.bind(window);
-      window.setInterval = (fn, ms, ...args) => {
-        if (ms !== 8000) return every(fn, ms, ...args);
-        let last = Date.now();
-        return every(() => { if (window.fastPoll || Date.now() - last >= ms) { last = Date.now(); fn(...args); } }, 200);
-      };
+      setInterval(() => { if (window.fastPoll && typeof taskChatLive === 'function' && TASK_CHAT) taskChatLive(TASK_CHAT); }, 200);
     });
     const now = Date.now(), at = mins => new Date(now - mins * 60000).toISOString();
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
