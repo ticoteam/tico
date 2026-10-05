@@ -390,7 +390,7 @@ def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(p
         assert json.loads(saved['detail_json'])['checkout_state'] == 'ready'
 
 
-def test_legacy_pending_link_is_not_promoted_by_git_directory_alone(prepared):
+def test_old_runner_without_checkout_state_preserves_existing_legacy_present_link(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     with api.app_state.store.transaction() as c:
@@ -401,8 +401,27 @@ def test_legacy_pending_link_is_not_promoted_by_git_directory_alone(prepared):
     response = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert response.status_code == 200, response.text
     with api.app_state.store.read() as c:
-        saved = c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
-        assert saved['state'] == 'pending'
+        saved = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        assert saved['state'] == 'present'
+        detail = json.loads(saved['detail_json'])
+        assert 'checkout_state' not in detail
+        assert not any(key in detail for key in ('expected_head', 'checkout_target', 'expected_base'))
+
+
+def test_old_runner_without_checkout_state_does_not_promote_queued_pending_link(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert link['state'] == 'pending' and link['checkout_state'] == 'queued'
+    beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'],
+                           'repo': 'Acme/product'}]}
+    response = post(api, 'runners/heartbeat', beat, 'runner-test')
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        saved = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        detail = json.loads(saved['detail_json'])
+    assert saved['state'] == 'pending'
+    assert detail['checkout_state'] == 'queued' and detail['setup_pending'] is True
 
 
 def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_pending(prepared):
@@ -412,6 +431,9 @@ def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_
                    {'path': f'tasks/{tid[:8]}/legacy-pending', 'repo': 'Acme/product'}, 'bot-test').json()
     pending_stale = post(api, f'tasks/{tid}/worktrees/attach',
                          {'path': f'tasks/{tid[:8]}/legacy-stale', 'repo': 'Acme/product'}, 'bot-test').json()
+    demoted = post(api, f'tasks/{tid}/worktrees/attach',
+                   {'path': f'tasks/{tid[:8]}/legacy-demoted', 'repo': 'Acme/product'}, 'bot-test').json()
+    demoted_branch = f'tico/{tid[:8]}-legacy-demoted'
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE task_links SET state='present',detail_json=? WHERE id=?",
                   (json.dumps({'owner': 'bot:cmo'}), present['link_id']))
@@ -419,6 +441,9 @@ def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_
                   (json.dumps({'owner': 'bot:cmo'}), pending['link_id']))
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?",
                   (json.dumps({'owner': 'bot:cmo', 'checkout_state': 'legacy_present'}), pending_stale['link_id']))
+        c.execute("UPDATE task_links SET state='pending',branch=?,detail_json=? WHERE id=?",
+                  (demoted_branch, json.dumps({'owner': 'bot:cmo', 'current_branch': demoted_branch,
+                               'last_commit': 'a' * 40, 'dirty_files': 2}), demoted['link_id']))
     beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
             'worktrees': [
                 {'link_id': present['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
@@ -426,13 +451,15 @@ def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_
                 {'link_id': pending['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
                  'branch': pending['branch'], 'repo': 'Acme/product'},
                 {'link_id': pending_stale['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
-                 'branch': pending_stale['branch'], 'repo': 'Acme/product'}]}
+                 'branch': pending_stale['branch'], 'repo': 'Acme/product'},
+                {'link_id': demoted['link_id'], 'state': 'present', 'checkout_state': 'legacy_present',
+                 'branch': demoted_branch, 'repo': 'Acme/product', 'dirty_files': 2}]}
     response = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert response.status_code == 200, response.text
     with api.app_state.store.read() as c:
         rows = {r['id']: r for r in c.execute(
-            'SELECT id,state,detail_json FROM task_links WHERE id IN (?,?,?)',
-            (present['link_id'], pending['link_id'], pending_stale['link_id']))}
+            'SELECT id,state,detail_json FROM task_links WHERE id IN (?,?,?,?)',
+            (present['link_id'], pending['link_id'], pending_stale['link_id'], demoted['link_id']))}
     assert rows[present['link_id']]['state'] == 'present'
     present_detail = json.loads(rows[present['link_id']]['detail_json'])
     assert present_detail['checkout_state'] == 'legacy_present' and present_detail['dirty_files'] == 2
@@ -443,6 +470,10 @@ def test_verified_legacy_present_heartbeat_preserves_present_but_never_promotes_
     assert rows[pending_stale['link_id']]['state'] == 'pending'
     stale_detail = json.loads(rows[pending_stale['link_id']]['detail_json'])
     assert stale_detail['checkout_state'] == 'unverified'
+    assert rows[demoted['link_id']]['state'] == 'present'
+    demoted_detail = json.loads(rows[demoted['link_id']]['detail_json'])
+    assert demoted_detail['checkout_state'] == 'legacy_present'
+    assert not any(key in demoted_detail for key in ('expected_head', 'checkout_target', 'expected_base'))
 
 
 def test_human_pending_link_stops_repeating_restore_after_checkout_progress(prepared):

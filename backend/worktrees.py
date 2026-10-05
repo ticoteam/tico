@@ -33,6 +33,24 @@ def restore_requested(row, detail):
             and not progress_recorded)
 
 
+def _demoted_legacy_report(row, detail):
+    """Recognize a legacy present row demoted by a heartbeat without checkout fields.
+
+    The old backend persisted these report fields before changing present to pending. They are
+    history for the upgraded runner to re-verify, not checkout completion proof by themselves.
+    """
+    last_commit = detail.get('last_commit')
+    dirty_files = detail.get('dirty_files')
+    return (row['state'] == 'pending'
+            and detail.get('checkout_state') in (None, 'unverified')
+            and not detail.get('setup_pending')
+            and not any(detail.get(key) for key in ('expected_head', 'checkout_target', 'expected_base'))
+            and bool(row['branch'])
+            and detail.get('current_branch') == row['branch']
+            and isinstance(last_commit, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', last_commit)
+            and type(dirty_files) is int and dirty_files >= 0)
+
+
 class Create(Contract):
     repo: str = Field(max_length=200)
 
@@ -106,6 +124,9 @@ def heartbeat(c, who, reports, capable, default_org=""):
             row['repo'] = grant['full_name'] if connection else report.repo
             c.execute('UPDATE task_links SET repo=? WHERE id=?', (row['repo'], row['id']))
         detail = json.loads(row['detail_json'] or '{}')
+        legacy_passthrough = (row['state'] == 'present' and report.state == 'present'
+                              and detail.get('checkout_state') is None and report.checkout_state is None
+                              and not detail.get('setup_pending'))
         now = H.now()
         changed = (detail.get('last_commit') != report.last_commit or detail.get('dirty_files') != report.dirty_files
                    or detail.get('last_activity') != report.last_activity)
@@ -143,7 +164,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
         legacy_present = (report.state == 'present' and report.checkout_state == 'legacy_present'
                           and not detail.get('setup_pending')
                           and (row['state'] == 'present' and detail.get('checkout_state') in (None, 'legacy_present')
-                               or row['state'] == 'unknown' and detail.get('checkout_state') == 'legacy_present'))
+                               or row['state'] == 'unknown' and detail.get('checkout_state') == 'legacy_present'
+                               or _demoted_legacy_report(row, detail)))
         if report.checkout_state is not None and (report.checkout_state != 'legacy_present' or legacy_present):
             detail['checkout_state'] = report.checkout_state
         checkout_state = detail.get('checkout_state')
@@ -153,6 +175,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                              or (checkout_state == 'legacy_present' and not detail.get('setup_pending')
                                  and row['state'] in ('present', 'unknown')))
         state = ('removed' if report.state == 'removed' else
+                 'present' if legacy_passthrough else
                  'pending' if not completion_proven else
                  'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state not in ('ready', 'legacy_present') else
                  'pending' if row['state'] == 'pending' and row['repo'] and report.state == 'missing' else report.state)

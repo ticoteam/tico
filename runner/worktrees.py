@@ -124,6 +124,20 @@ def _detail(link):
     return json.loads(value) if isinstance(value, str) else dict(value)
 
 
+def _demoted_legacy_history(link, detail):
+    """Recognize a formerly-present link for verification after an old heartbeat demoted it."""
+    last_commit = detail.get('last_commit')
+    dirty_files = detail.get('dirty_files')
+    return (link.get('state') == 'pending'
+            and detail.get('checkout_state') in (None, 'unverified')
+            and not detail.get('setup_pending')
+            and not any(detail.get(key) for key in ('expected_head', 'checkout_target', 'expected_base'))
+            and bool(link.get('branch'))
+            and detail.get('current_branch') == link.get('branch')
+            and isinstance(last_commit, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', last_commit)
+            and type(dirty_files) is int and dirty_files >= 0)
+
+
 def _patch_link(client, task, link_id, **fields):
     return client.patch(f'tasks/{task}/links/{link_id}', fields)
 
@@ -714,7 +728,9 @@ def inspect(workspace, row, env=None, cache=None):
         detail = _detail(row)
         checkout_state = detail.get('checkout_state')
         legacy_recorded = checkout_state == 'legacy_present' and row.get('state') in ('present', 'unknown')
-        legacy_candidate = checkout_state is None and row.get('state') == 'present' and not detail.get('setup_pending')
+        legacy_candidate = ((checkout_state is None and row.get('state') == 'present'
+                             or _demoted_legacy_history(row, detail))
+                            and not detail.get('setup_pending'))
         legacy = legacy_recorded or legacy_candidate
         not_ready = (checkout_state != 'ready' and not legacy_recorded) or bool(detail.get('setup_pending'))
         result['checkout_state'] = checkout_state or 'unverified'
