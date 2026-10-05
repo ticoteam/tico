@@ -25,8 +25,7 @@ def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_r
         assert STORAGE_KEYS <= set(environment)
         assert all(environment[key] is None for key in STORAGE_KEYS)
         assert {"LITESTREAM_ACCESS_KEY_ID", "LITESTREAM_SECRET_ACCESS_KEY"} <= set(environment)
-        assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-                    "AWS_REGION", "AWS_DEFAULT_REGION"}.intersection(environment)
+        assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}.intersection(environment)
         assert "CLOUDFLARE_TUNNEL_TOKEN" not in environment
         for name, service in services.items():
             if name != "server":
@@ -49,6 +48,8 @@ def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch
     monkeypatch.setattr(updater, "compose", lambda *a, tag=None, **k: calls.append(a) or "")
     monkeypatch.setattr(updater, "running_image", lambda: ("sha256:old", "v0.1.0"))
     monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "pinned_services", lambda version: [])
+    monkeypatch.setattr(updater, "check_switched", lambda version, release: None)
     (tmp_path / ".env").write_text("TICO_URL=x\n")
     updater.update("v0.2.0")
     assert updater.status["state"] == "healthy"
@@ -77,3 +78,12 @@ def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_ot
     for name in ("server", "slack"):
         env = set(services[name]["environment"])
         assert keys <= env and "CLOUDFLARE_TUNNEL_TOKEN" not in env
+
+
+def test_naming_integrations_and_the_aws_region_pass_through_only_when_set():
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    shared = {"AWS_REGION", "AWS_DEFAULT_REGION", "TICO_APP_NAME", "TICO_ASSISTANT_NAME", "TICO_INTEGRATIONS_DIR"}
+    for name, keys in (("server", shared), ("slack", shared | {"TICO_SLACK_SECRET_ARN"})):
+        environment = services[name]["environment"]
+        assert all(key in environment and environment[key] is None for key in keys), name   # bare: unset stays unset

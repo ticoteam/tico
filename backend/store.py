@@ -1012,6 +1012,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=58").fetchone():
                     H.add_column(c, "runners", "capabilities_json", "TEXT NOT NULL DEFAULT '[]'")
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
+                    H._apply(c, H.WAITING_ON_SCHEMA)
+                    c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash

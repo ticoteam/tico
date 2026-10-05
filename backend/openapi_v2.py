@@ -21,7 +21,7 @@ COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
     "Team": "This installation's names and settings.",
-    "Repositories": "Team repositories and bot repository access.",
+    "Repositories": "Team repositories, Owner product-repository creation, and bot repository access.",
     "Subscriptions": "Named provider logins on Computers and defaults for groups and bots.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
@@ -51,6 +51,8 @@ STABLE = [
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "Effective bot subscription", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
+    ("/api/v2/github/product-repos/preview", "get", "Repositories", "previewProductRepository", "Preview an empty private product repository", "ProductRepositoryPreview"),
+    ("/api/v2/github/product-repos", "post", "Repositories", "createProductRepository", "Create the confirmed product repository", "ProductRepositoryResult"),
     ("/api/v2/repositories/settings", "put", "Repositories", "setRepositoryDefaults", "New bot repository default", None),
     ("/api/v2/repositories/{owner}/{repo}", "put", "Repositories", "updateRepository", "Tick or edit a repository", None),
     ("/api/v2/bots/{bot}/repositories", "get", "Repositories", "getBotRepositories", "Bot repository access", "BotRepositories"),
@@ -457,7 +459,9 @@ SCHEMAS = {
                       "as is acceptance_criteria"},
                 number={"type": ["integer", "null"], "description": "The task's number, unique across the team "
                         "(#18945); given once on a numbered type and never changed"},
-                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"}),
+                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
+                waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
+                            "the task is in their Needs you"}),
     "Person": obj({"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
                   required=["id", "name", "org_parent"]),
     "Access": obj({"see": "b", "read": "b", "write": "b"},
@@ -795,6 +799,12 @@ SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
 SCHEMAS.update({
     "Repository": obj({"full_name": "s", "enabled": "b", "bot_repo": "b", "default_branch": "n",
                        "setup_command": "n", "setup_source": "n", "reachable": "b", "last_seen": "n"}),
+    "ProductRepositoryPreview": obj({"org": "s", "name": "s", "repository": "s", "visibility": {"enum": ["private"]},
+                                      "auto_init": "b", "capability": {"enum": ["available", "missing", "unknown", "not_installed"]},
+                                      "capability_detail": "s"}),
+    "ProductRepositoryResult": obj({"repository": "s", "html_url": "s", "visibility": {"enum": ["private"]},
+                                     "auto_init": "b", "installation_access": {"enum": ["available", "owner_action_required", "unverified"]},
+                                     "note": "s"}),
     "RepositoryList": obj({"repositories": items(ref("Repository")), "new_bot_default": {"enum": ["own", "all"]},
                            "github_connected": "b"}),
     "RepositoryGrant": obj({"full_name": "s", "access": {"enum": ["read", "write"]}}),

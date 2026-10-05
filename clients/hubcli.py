@@ -33,6 +33,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
                     [--title "..."]        rename it: checked as a new task's title would be
+                    [--on PERSON]          with --status waiting: the person it waits on (their Needs you)
     hub task close <id> [--note "..."]
     hub task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
@@ -688,6 +689,8 @@ def parser():
     s.add_argument("--owner")
     s.add_argument("--due")
     s.add_argument("--blocked-by", dest="blocked_by", help="the task this one waits on; '' clears it")
+    s.add_argument("--on", dest="waiting_on",
+                   help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")
@@ -1399,6 +1402,9 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
+    s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository (Owner only)")
+    s.add_argument("name", help="exact GitHub repository name, without an organization")
+    s.set_defaults(fn="repo product-create")
     s = bot.add_parser("repo-create", help="owner or BotOps: create <org>/bot-<slug> from a template, or empty")
     s.add_argument("slug")
     s.add_argument("--template", default="ticoteam/botops", metavar="OWNER/REPO")

@@ -613,6 +613,12 @@ TASK_PRIVACY_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1));
 """
 
+# The person a bot's `waiting` task waits on (`hub task update --status waiting --on <person>`):
+# it puts the task in that person's Needs you and counts toward the bot's `needs_human`.
+WAITING_ON_SCHEMA = """
+ALTER TABLE tasks ADD COLUMN waiting_on TEXT;
+"""
+
 # Immutable primary/fallback usage reports; append to preserve existing installations.
 USAGE_SEGMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS turn_usage_segments (
@@ -629,7 +635,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               REPLY_ANSWERS_ASKS, LISTENING_SCHEMA, KPIS_SCHEMA, USAGE_SCHEMA,
               USAGE_LIMITS_SCHEMA, TAGS_SCHEMA, PIPELINES_SCHEMA, CHAT_GOALS_SCHEMA, REPOSITORIES_SCHEMA, TASK_LINKS_V2_SCHEMA, SUBSCRIPTIONS_SCHEMA,
               STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA,
-              USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA]
+              USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA]
 
 
 class Refused(Exception):
@@ -1654,6 +1660,7 @@ def _close_open_asks(conn, actor, target, kind, msg):
         return
     conn.executemany("UPDATE messages SET answered_by=? WHERE id=?",
                      [(msg["id"], mid) for mid in open_asks])
+    _recount(conn, target)                  # its questions to this person are answered
     # Named in the log, because a question closing without anyone typing an answer to it is
     # exactly the thing you want to be able to look up later.
     event(conn, actor, "message.answered_by_reply", msg["id"],
@@ -1792,6 +1799,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     about = message_task_id(asked, conv)
     if about:                               # an answered question on a task changes the task
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), about))
+    _recount(conn, asked["from_actor"])     # it no longer waits on whoever answered
     return msg
 
 
@@ -2158,6 +2166,9 @@ def _number_free(conn, actor, number):
     taken = _one(conn, "SELECT id FROM tasks WHERE number=?", (number,))
     if taken:
         refuse(conn, actor, "duplicate", f"#{number} is already another task's number; a number belongs to one task")
+    # A deleted task keeps its number in the trash (backend/task_delete.py), restored or purged.
+    if _one(conn, "SELECT 1 FROM task_trash WHERE number=?", (number,)):
+        refuse(conn, actor, "duplicate", f"#{number} belongs to a deleted task; a number belongs to one task")
     return number
 
 
@@ -2629,6 +2640,13 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     else:
         msg = say(conn, actor, target, text, conversation_id=conv["id"], refs=refs)
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
+    if row["status"] == "waiting" and row.get("waiting_on") == actor:
+        # The person it waited on has spoken: the next move is the bot's, and it leaves their
+        # Needs you. The bot sets it waiting on them again if it still needs something.
+        conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
+        _task_event(conn, task_id, actor, "waiting_on", actor, None, "")
+    if ask or row.get("waiting_on") == actor:
+        _recount(conn, row["owner"])
     if wake and is_bot(target) and is_human(actor):
         conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
                      (task_id, target, actor, msg["id"], shift(now(), hours=24)))
@@ -2797,6 +2815,8 @@ def task_comment_delete(conn, actor, task_id, message_id):
         "UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'", (message_id,)).rowcount > 0
     _task_event(conn, task_id, actor, "comment", message_id, None)
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (ts, task_id))
+    row = task(conn, task_id)
+    recount(conn, [row["owner"], row["requester"]])     # a question taken back, or reopened by it
     event(conn, actor, "message.deleted", message_id,
           {"task": task_id, "reopened": reopened, "cancelled_run": cancelled})
     deleted = message(conn, message_id, include_deleted=True)
@@ -2972,7 +2992,7 @@ def _retitle(conn, actor, row, title, owner, type_id, parent_id=None):
 @private_task_write
 def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=None, body=None,
                 lane=None, labels=None, blocked_by=None, rank=None, parent_id=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
-                step_rank=None, number=None, title=None, private=None):
+                step_rank=None, number=None, title=None, private=None, waiting_on=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane`, `labels` and `blocked_by` are a mover's to change (`mover` says whether
@@ -2983,6 +3003,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     `goal_id` names the goal the task serves; "" takes it off (backend/goals.py).
     `number` gives a task that has none its number (a mover's, as on create); it never changes.
     `title` renames it, checked as a new task's title would be (`_retitle`).
+    `waiting_on` names the person a `waiting` task waits on ("" clears it); only its owner bot names
+    one (`_waiting_person`). Any other update to the status, the note or the owner clears it unless
+    it names the person again, as does anything that leaves the task unreadable to them.
     """
     _writer(conn, actor)
     row = task(conn, task_id)
@@ -3018,6 +3041,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     closing_step = status == "closed" and step is not None
     if closing_step:
         _task_close_allowed(conn, actor, row, note)
+    if waiting_on is not None:
+        waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
@@ -3037,12 +3062,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # something to wait on first. Several stranded tasks were this.
         # Validate the requested dependency, not the old one: callers can park work and
         # attach its blocker atomically. Normal dependency/access checks still run below.
-        waiting_row = {**row, "blocked_by": str(blocked_by or "").strip() or None} if blocked_by is not None else row
+        waiting_row = dict(row)
+        if blocked_by is not None:
+            waiting_row["blocked_by"] = str(blocked_by or "").strip() or None
+        # A move to waiting starts with nobody waited on unless this update names someone.
+        waiting_row["waiting_on"] = (waiting_on or None) if waiting_on is not None else None
         if (status == "waiting" and row["status"] != "waiting" and is_bot(row["owner"])
-                and row["owner"] == row["requester"] and not waiting_on(conn, waiting_row)):
+                and row["owner"] == row["requester"] and not waiting_for(conn, waiting_row)):
             refuse(conn, actor, "lint",
                    "You asked for this task yourself, so nobody will answer it: file the child task, "
-                   "blocker or approval you are waiting on first, or keep working")
+                   "blocker or approval you are waiting on first, name the person with --on, or keep working")
     # The owner says what its own task waits on: the waiting rule above tells a bot to "file the
     # blocker you are waiting on first", and a bot was refused for doing exactly
     # that. Lane, labels and the parent stay with the movers.
@@ -3081,10 +3110,17 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("private=:private")
         args["private"] = int(private)
         _task_event(conn, task_id, actor, "private", int(task_private(conn, row)), int(private), "")
+    # Who it waits on goes with the wait as said: a new status, note or owner starts with nobody
+    # waited on unless this update names the person again.
+    changed = (status is not None and status != row["status"] or note is not None and note != row.get("note")
+               or owner is not None and resolve_actor(conn, owner) != row["owner"])
+    person = (waiting_on or None) if waiting_on is not None else (None if changed else row.get("waiting_on"))
+    # A note that waits on a person is put in front of them, so it is checked like a title or body.
+    checked = ("title", "body", "note") if person else ("title", "body")
     for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
         if value is None:
             continue
-        severity = classify(str(value), actor=actor, conn=conn) if field in ("title", "body") and is_bot(actor) else "normal"
+        severity = classify(str(value), actor=actor, conn=conn) if field in checked and is_bot(actor) else "normal"
         if severity == "escape":
             refuse(conn, actor, "escape", f"the task {field} reaches outside the hub: {_clip(value, 80)}", severity)
         sets.append(f"{field}=:{field}")
@@ -3144,6 +3180,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if rank is not None:
         sets.append("rank=:rank")
         args["rank"] = float(rank)
+    if person != row.get("waiting_on"):
+        sets.append("waiting_on=:waiting_on")
+        args["waiting_on"] = person
+        _task_event(conn, task_id, actor, "waiting_on", row.get("waiting_on"), person, note or "")
     if goal_id is not None and (goal_id or None) != row.get("goal_id"):
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
@@ -3175,6 +3215,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         event(conn, actor, "task.lint", task_id, {"problems": plain})
     event(conn, actor, "task.update", task_id, {"status": status, "note": note})
     after = isolate_private_task(conn, task(conn, task_id))
+    if after.get("waiting_on") and not task_private_readable(conn, after["waiting_on"], after):
+        # Made private, or moved under a private parent: it no longer goes in front of that person.
+        conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
+        _task_event(conn, task_id, KEEPER, "waiting_on", after["waiting_on"], None, "")
+        after = task(conn, task_id)
     if owner is not None or private is not None or task_private(conn, after) != task_private(conn, row):
         conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
     # A bot that asked for `tasks` is always told and never woken for it, so there is nothing to
@@ -3218,11 +3263,37 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         _wake(conn, after, after["owner"], f"Open: {after['title']}")
     if parent_id is not None and row.get("parent_id") and row["parent_id"] != after.get("parent_id") and row["status"] not in ("done", "closed", "declined"):
         _parent_finished(conn, {**row, "status": "closed"}, row["status"], actor)
-    _recount(conn, after["owner"])
-    _recount(conn, after["requester"])
+    recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor)
     return after
+
+
+def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
+    """The person `hub task update --status waiting --on <person>` names, or "" to clear it.
+
+    It is what makes work that waits on a person show as needing that person: the task is in
+    their Needs you and batch, and the bot counts toward `needs_human`. Only a person who can read
+    the task: a private task cannot be put in front of anyone outside its requester and owner."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    # The Needs-you item is the owner's ask: nobody else names who the owner waits on.
+    if actor != row["owner"] or not is_bot(actor):
+        refuse(conn, actor, "identity", "Only the bot that owns a task says who it waits on")
+    if owner is not None and resolve_actor(conn, owner) != row["owner"]:
+        refuse(conn, actor, "kind", "Hand the task over first; its new owner says who it waits on")
+    if (status if status is not None else row["status"]) != "waiting":
+        refuse(conn, actor, "kind", "--on names who a waiting task waits on: set --status waiting with it")
+    person = resolve_actor(conn, value)
+    if not person or not is_human(person):
+        refuse(conn, actor, "waiting_on",
+               f"{value} is not a person on the team: a task waits on a person with --on, or on another "
+               "task with --blocked-by")
+    if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
+        refuse(conn, actor, "private",
+               f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+    return person
 
 
 def _task_close_allowed(conn, actor, row, note):
@@ -3279,11 +3350,11 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     return after
 
 
-def waiting_on(conn, row):
+def waiting_for(conn, row):
     """What a task's owner is waiting for, in words, or None when there is nothing.
 
     Something is: a question its owner asked about it that nobody has answered, an unfinished
-    child, an unfinished blocker, or an approval not yet decided.
+    child, an unfinished blocker, an approval not yet decided, or a person it names (`waiting_on`).
     """
     live = "('done','closed','declined')"
     asks = [r["id"] for r in _rows(conn.execute(
@@ -3299,6 +3370,8 @@ def waiting_on(conn, row):
         return "an open blocker"
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
         return "an undecided approval"
+    if row.get("waiting_on"):
+        return f"{actor_id(row['waiting_on'])} to act"
     return None
 
 
@@ -3316,7 +3389,7 @@ def sweep_stranded(conn, at=None, grace_hours=24):
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
                                   "AND updated<=? ORDER BY updated", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
-            if waiting_on(conn, row) or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active":
+            if waiting_for(conn, row) or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active":
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("
@@ -3630,7 +3703,8 @@ def wake_stalled(conn, at=None):
                 conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
             _wake(conn, row, row["owner"],
                   f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
-                  "or set it waiting with the reason (hub task update --status waiting --note).",
+                  "or set it waiting with the reason (hub task update --status waiting --note; add --on <person> "
+                  "when a person must act).",
                   {"wake": "stalled"})
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
@@ -3934,6 +4008,32 @@ def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, ne
     return status(conn, slug)
 
 
+def status_counts(conn, actor):
+    """`(open_tasks, needs_human)` for a bot, as they are now.
+
+    `needs_human` is one per thing that waits on a person: a live task the bot filed for a person,
+    its own task set waiting on a person (`waiting_on`), a live task carrying its unanswered question
+    to a person, and an undecided approval it asked for. A task counts once whichever of these it
+    has, its approval included."""
+    live = ACTIVE_STATUSES
+    marks = ",".join("?" * len(live))
+    open_tasks = conn.execute(
+        f"SELECT COUNT(*) FROM tasks WHERE owner=? AND status IN ({marks})",
+        (actor, *live)).fetchone()[0]
+    waits = {r[0] for r in conn.execute(
+        f"SELECT t.id FROM tasks t WHERE t.status IN ({marks}) AND (t.owner=? OR t.requester=?) AND ("
+        "(t.requester=? AND t.owner LIKE 'human:%') "
+        "OR (t.owner=? AND t.status='waiting' AND t.waiting_on LIKE 'human:%') "
+        "OR EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE m.conversation_id=t.conversation_id AND {MESSAGE_TASK_SQL}=t.id AND m.kind='ask' "
+        "AND m.from_actor=? AND m.to_actor LIKE 'human:%' AND m.answered_by IS NULL AND m.deleted_at IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.in_reply_to=m.id AND a.kind='answer')))",
+        (*live, actor, actor, actor, actor, actor))}
+    approvals = sum(not r[0] or r[0] not in waits for r in conn.execute(
+        "SELECT task_id FROM approvals WHERE requested_by=? AND decision IS NULL", (actor,)))
+    return open_tasks, len(waits) + approvals
+
+
 def _recount(conn, actor):
     """`open_tasks` and `needs_human` on a bot's status row, after anything that moves a task."""
     if not is_bot(actor):
@@ -3941,18 +4041,15 @@ def _recount(conn, actor):
     slug = actor_id(actor)
     if not _one(conn, "SELECT bot FROM bot_status WHERE bot=?", (slug,)):
         return
-    live = ACTIVE_STATUSES
-    marks = ",".join("?" * len(live))
-    open_tasks = conn.execute(
-        f"SELECT COUNT(*) FROM tasks WHERE owner=? AND status IN ({marks})",
-        (actor, *live)).fetchone()[0]
-    waiting = conn.execute(
-        f"SELECT COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND status IN ({marks})",
-        (actor, *live)).fetchone()[0]
-    waiting += conn.execute("SELECT COUNT(*) FROM approvals WHERE requested_by=? AND decision IS NULL",
-                            (actor,)).fetchone()[0]
+    open_tasks, waiting = status_counts(conn, actor)
     conn.execute("UPDATE bot_status SET open_tasks=?, needs_human=?, updated_at=? WHERE bot=?",
                  (open_tasks, waiting, now(), slug))
+
+
+def recount(conn, actors):
+    """`_recount` for each bot among `actors` (task deletes and restores)."""
+    for actor in dict.fromkeys(a for a in actors if a):
+        _recount(conn, actor)
 
 
 # ----------------------------------------------------------------------------- schedules, turns, limits
@@ -4359,7 +4456,8 @@ def tasks_asked_of(conn, actor):
 
 
 def needs_you(conn, who):
-    """The "Needs you" list: my open tasks, unanswered asks to me, approvals, declined-to-me.
+    """The "Needs you" list: my open tasks, unanswered asks to me, bot tasks waiting on me,
+    approvals, declined-to-me.
 
     A task on a numbered type is a ticket on that type's board, worked through there: it is on
     the list only while it carries a question for the person, and a declined one stays off its
@@ -4376,8 +4474,13 @@ def needs_you(conn, who):
              if (t.get("lane") or "company") != "product"]
     seen = {t["id"] for t in owned}
     asked = [t for t in tasks_asked_of(conn, actor) if t["id"] not in seen]
+    seen |= {t["id"] for t in asked}
+    # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
+    waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
+                                            "ORDER BY created", (actor,))) if t["id"] not in seen]
     return {"actor": actor,
             "tasks": asked + owned,
+            "waiting": waited,
             "approvals": pending,
             "declined": tasks(conn, requester=actor, status="declined", tickets=False)}
 
@@ -4408,7 +4511,17 @@ def approvals(conn, requested_by=None, decision=None, pending=False):
 
 
 def status(conn, bot_slug):
+    """A bot's status row as stored. Its counts are recounted on every change that moves them
+    (`_recount`); `status_live` counts them afresh for a display."""
     return _one(conn, "SELECT * FROM bot_status WHERE bot=?", (actor_id(bot_slug),))
+
+
+def status_live(conn, bot_slug):
+    """`status`, with `open_tasks` and `needs_human` counted now: for what a person is shown."""
+    row = status(conn, bot_slug)
+    if row:
+        row["open_tasks"], row["needs_human"] = status_counts(conn, bot_actor(row["bot"]))
+    return row
 
 
 def status_all(conn):

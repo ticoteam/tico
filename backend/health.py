@@ -45,13 +45,15 @@ def _computers(c, runners_online, settings):
     rows, fleet = [], runner_versions.load(c)
     wanted, assigned = providers.runtimes_needed(c, settings)
     default = providers.load(c, settings)["runtime"]
-    for r in c.execute("SELECT id,label,last_seen,platform,readiness_json FROM runners WHERE revoked_at IS NULL "
-                       "ORDER BY label"):
+    for r in c.execute("SELECT r.id,r.label,r.last_seen,r.platform,r.readiness_json,coalesce(nullif(h.name,''),r.operator) "
+                       "AS operator FROM runners r LEFT JOIN humans h ON h.id=r.operator WHERE r.revoked_at IS NULL "
+                       "ORDER BY r.label"):
         document = readiness_document(r["readiness_json"])
         runtimes = document.get("runtimes") or {}
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen": r["last_seen"],
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
                      "disk": document.get("disk"),
+                     "operator": r["operator"], "container_exec": document.get("container_exec"),
                      # Only what the company or an assigned bot uses, or what is installed anyway: the
                      # other harnesses are not this computer's business, so they are not listed.
                      "runtimes": [{"name": n, "installed": bool(v.get("installed")),
@@ -510,6 +512,12 @@ def view(c, who, settings, auth, github, config):
                                      f"{computer['label']}: disk is {100 * (1 - free / total):.0f}% full "
                                      f"({free / 1024**3:.1f} GB free). Free space on this computer; for Docker, run "
                                      "`docker image prune -a` to remove unused images. The update retries when space frees.",
+                                     [_fix("Open Computers", "#/settings", "devices")]))
+            container = computer.get("container_exec") or {}
+            if computer["online"] and container.get("ok") is False:
+                checks.append(_check("container_exec:" + computer["id"], "Containers", "warn",
+                                     f"{computer['label']} ({computer['operator']}): containers do not start "
+                                     f"({container.get('error') or 'failed'}). Restart Docker there; bot container work stalls until then.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
         wanted = _wanted_runtimes(providers.load(c, settings))
         signed = _signed_in_runtime(online, wanted)

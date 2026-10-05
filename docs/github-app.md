@@ -64,6 +64,55 @@ Anyone else gets 403 with the reason. Without the administration permission the 
 how to create the repository by hand. If the app is installed on selected repositories only, add the
 new repository to the installation.
 
+## Creating a product repository
+
+An Owner can create an exact product repository without the `bot-` prefix from **Settings → Repositories**.
+Enter one repository name, review the connected organization, exact name, and private/empty settings, then
+select **Create private empty repository**. The API also exposes this flow to the Owner's Hub CLI:
+
+    hub repo product-create tico-recorder
+
+The command prints the same preview and requires typing the exact `org/name` before it writes. Both flows
+create with `private: true` and `auto_init: false`, so GitHub receives no initial commit and existing local
+history can be published separately. The write is audited as `github.product_repo_created` and retries with
+the same request key replay the saved receipt. This path is Owner-only; it does not alter the bot-prefixed
+creator or grant repository access to any bot.
+
+Before sending the create request, Tico durably binds the Owner, operation key, request digest, and exact
+organization/name. If GitHub's response is lost, times out, or returns a server error, the API returns
+`409 github_create_outcome_unknown`; a retry with different content gets `409 idempotency_conflict`, and a
+retry with the same content reports the unresolved outcome without issuing another create. Check the
+connected organization directly before taking another action. Tico does not infer that an existing
+repository belongs to the unresolved operation, adopt it, or retry that external write automatically.
+The operation binding and completed receipt outlive the generic idempotency cache.
+
+Creating the empty repository does not publish source. Publishing a preserved source bundle is a separate,
+Owner-authorized step: restore or use the preserved checkout, verify its expected branch and history, and
+push normally to the exact new `org/name` using a credential authorized for that repository. Do not reset
+the preserved checkout or force-push. If the destination already has refs, the push is non-fast-forward,
+or the source history does not match the reviewed bundle, stop and have an Owner reconcile it before any
+write. If the GitHub App uses selected repositories, an Owner must separately add the new repository in
+GitHub installation settings before Tico can access it; Tico does not change that selection.
+
+The stable API is `GET /api/v2/github/product-repos/preview?name=tico-recorder`, followed after review by
+`POST /api/v2/github/product-repos` with an `Idempotency-Key` and this body:
+
+```json
+{"org":"<connected org>","name":"tico-recorder","visibility":"private","auto_init":false,"confirmed":true}
+```
+
+The preview reports the exact `org/name` plus one capability state: `available`, `missing`, `unknown`,
+or `not_installed`. If the app is not connected, the preview returns `409 github_not_connected` instead
+of claiming a target organization. Creation returns the repository URL and whether the selected installation
+can access it. The server rejects names containing an organization or URL and revalidates the preview's
+organization at write time.
+
+Before confirmation, Tico reads the connected GitHub App installation's live permissions. It reports whether
+Administration: write is available, missing, or could not be verified; a stored setup choice alone is not
+treated as proof. If the installation uses selected repositories, the result says when the new repository is
+not yet accessible. An Owner must add it in GitHub App installation settings and then refresh **Settings →
+Repositories**. Tico never changes the installation's repository selection or bot access grants.
+
 ### A bot whose repository already exists on a computer
 
 A bot BotOps built locally (no GitHub yet) has history to keep, so it needs an empty repository, not

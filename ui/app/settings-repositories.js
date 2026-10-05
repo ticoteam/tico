@@ -10,6 +10,7 @@ let REPOS_SHOW_BOTS = false;      // bot repositories stay out of the list until
 let REPOS_SHOW_ARCHIVED = false; // archived repositories are available on request
 const REPOS_FILTER_AT = 10;       // a short list reads at a glance; the filter box earns its place past this
 const REPO_SOURCES = ['tico.json', 'conductor.json'];
+let PRODUCT_REPO_PREVIEW = null;
 const repoPath = name => String(name).split('/').map(encodeURIComponent).join('/');
 const repoNameHTML = name => {
   const cut = String(name).indexOf('/');
@@ -56,6 +57,7 @@ async function renderSettingsRepos(fresh) {
     return;
   }
   const bots = (REPOS.repositories || []).filter(r => r.bot_repo).length;
+  PRODUCT_REPO_PREVIEW = null;
   host.innerHTML = `<header><h2>Repositories</h2><span class="spacer"></span>
       ${bots ? `<label class="repos-bots"><input type="checkbox" data-repos-bots${REPOS_SHOW_BOTS ? ' checked' : ''}>Show bot repos</label>` : ''}
       <label class="repos-bots"><input type="checkbox" data-repos-archived${REPOS_SHOW_ARCHIVED ? ' checked' : ''}>Show archived</label>
@@ -64,6 +66,13 @@ async function renderSettingsRepos(fresh) {
     <div class="repos-bar"><span class="repos-k" id="repos-newbot">New bots get</span>
       ${repoSegHTML('repos_new_bot', 'New bots get', [['own', 'Own repo only'], ['all', 'All ticked repos']], REPOS.new_bot_default || 'own', !admin)}
       <input type="search" class="repos-filter" data-repos-filter placeholder="Filter" aria-label="Filter repositories" autocomplete="off" hidden></div>
+    ${S.me?.role === 'owner' ? `<section class="card" data-product-repo>
+      <h3>Product repository</h3><p class="repos-line">Create an empty, private repository.</p>
+      <label for="product-repo-name">Repository name</label><div class="repos-bar"><input id="product-repo-name" data-product-repo-name maxlength="100" autocomplete="off" placeholder="tico-recorder">
+      <button class="ghost" type="button" data-product-repo-preview>Preview</button></div>
+      <div data-product-repo-result role="status" aria-live="polite" hidden></div>
+      <button type="button" data-product-repo-create hidden disabled>Create private empty repository</button>
+    </section>` : ''}
     <ul class="repos-list" data-repos-list aria-label="Repositories"></ul>`;
   reposDrawList();
 }
@@ -117,6 +126,13 @@ document.addEventListener('change', async event => {
 });
 document.addEventListener('input', event => {
   if (event.target.matches('#set-repos [data-repos-filter]')) reposDrawList();
+  if (event.target.matches('#set-repos [data-product-repo-name]')) {
+    PRODUCT_REPO_PREVIEW = null;
+    const result = event.target.closest('[data-product-repo]')?.querySelector('[data-product-repo-result]');
+    const create = event.target.closest('[data-product-repo]')?.querySelector('[data-product-repo-create]');
+    if (result) { result.hidden = true; result.textContent = ''; }
+    if (create) { create.hidden = true; create.disabled = true; }
+  }
 });
 document.addEventListener('keydown', event => {
   const input = event.target.closest?.('#set-repos [data-repo-setup]');
@@ -128,6 +144,56 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('click', async event => {
+  const previewButton = event.target.closest('#set-repos [data-product-repo-preview]');
+  if (previewButton) {
+    if (S.me?.role !== 'owner') return;
+    const section = previewButton.closest('[data-product-repo]');
+    const result = section.querySelector('[data-product-repo-result]');
+    const create = section.querySelector('[data-product-repo-create]');
+    const name = section.querySelector('[data-product-repo-name]').value.trim();
+    previewButton.disabled = true;
+    result.hidden = false; result.textContent = 'Checking the connected organization and current GitHub App permission…';
+    try {
+      const query = new URLSearchParams({name});
+      PRODUCT_REPO_PREVIEW = await get(`/v2/github/product-repos/preview?${query}`);
+      const p = PRODUCT_REPO_PREVIEW;
+      result.textContent = `${p.repository} · private · empty (no initial commit). ${p.capability_detail}`;
+      create.hidden = p.capability !== 'available';
+      create.disabled = p.capability !== 'available';
+    } catch (error) {
+      PRODUCT_REPO_PREVIEW = null;
+      result.textContent = error.message;
+      create.hidden = true; create.disabled = true;
+    } finally { previewButton.disabled = false; }
+    return;
+  }
+  const createButton = event.target.closest('#set-repos [data-product-repo-create]');
+  if (createButton) {
+    if (S.me?.role !== 'owner') return;
+    const section = createButton.closest('[data-product-repo]');
+    const resultHost = section.querySelector('[data-product-repo-result]');
+    const currentName = section.querySelector('[data-product-repo-name]').value.trim();
+    if (!PRODUCT_REPO_PREVIEW || currentName !== PRODUCT_REPO_PREVIEW.name || PRODUCT_REPO_PREVIEW.capability !== 'available') {
+      PRODUCT_REPO_PREVIEW = null;
+      resultHost.hidden = false; resultHost.textContent = 'Preview this name again before creating it.';
+      createButton.hidden = true; createButton.disabled = true;
+      return;
+    }
+    createButton.disabled = true; createButton.textContent = 'Creating…';
+    try {
+      const p = PRODUCT_REPO_PREVIEW;
+      const created = await post('/v2/github/product-repos', {org: p.org, name: p.name, visibility: p.visibility, auto_init: p.auto_init, confirmed: true});
+      PRODUCT_REPO_PREVIEW = null;
+      resultHost.hidden = false;
+      resultHost.innerHTML = `Created <a href="${esc(created.html_url)}" target="_blank" rel="noopener noreferrer">${esc(created.repository)}</a>. ${esc(created.note)}`;
+      createButton.hidden = true;
+      toast(`Created ${created.repository}`);
+    } catch (error) {
+      resultHost.hidden = false; resultHost.textContent = error.message;
+      createButton.disabled = false; createButton.textContent = 'Create private empty repository';
+    }
+    return;
+  }
   const button = event.target.closest('#set-repos [data-repos-refresh]');
   if (!button) return;
   button.disabled = true; button.textContent = 'Refreshing…';

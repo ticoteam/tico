@@ -82,8 +82,9 @@ def test_a_turn_cannot_read_the_registration_but_can_run_a_harness_and_push(volu
 
 
 def test_the_runner_starts_again_after_a_turn_took_the_secrets_folder(volume):
-    # Before a turn the supervisor gives the secrets folder to the bot user (isolation.adopt); the next start
-    # of the container must still prepare the volume instead of failing on chmod.
+    # An older image gave the secrets folder to the bot user before a turn; legacy secrets are now the
+    # supervisor's (runner-entrypoint.sh), so the next start must still prepare the volume, not fail on
+    # chmod, and take the folder back.
     seeded = docker("run", "--rm", "-u", "0", "-v", f"{volume}:/home/runner", "--entrypoint", "sh", IMAGE, "-c", """
         set -e; cd /home/runner; : > .tico-two-user-layout; chown 10002:10002 . .tico-two-user-layout
         mkdir -p workspace/secrets; echo A=1 > workspace/secrets/_shared.env
@@ -94,7 +95,7 @@ def test_the_runner_starts_again_after_a_turn_took_the_secrets_folder(volume):
                      "-v", f"{volume}:/home/runner", IMAGE, "sh", "-c",
                      "stat -c '%u %a' /home/runner/workspace/secrets; cat /home/runner/workspace/secrets/_shared.env")
     assert started.returncode == 0, started.stdout + started.stderr
-    assert started.stdout.split() == ["10003", "770", "A=1"], started.stdout
+    assert started.stdout.split() == ["10002", "700", "A=1"], started.stdout
 
 
 def test_the_codex_home_is_the_bot_users_and_group_writable_so_both_users_can_use_a_login(volume):

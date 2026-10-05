@@ -141,7 +141,7 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     api.app.state.store.initialize(seed_market=False)
     assert queue(api)['meetings'][0]['id'] == made['id']
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute('SELECT version FROM cloud_migrations WHERE version>=53')} == {53, 54, 55, 56, 57}
+        assert {53, 54, 55, 56, 57} <= {r[0] for r in c.execute('SELECT version FROM cloud_migrations WHERE version>=53')}
 
 
 def test_granola_account_sync_lands_in_the_persons_pending_queue(api):

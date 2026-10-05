@@ -339,8 +339,8 @@ class APersonsReplyAnswersWhatWasAsked(HubCase):
         reply = H.task_comment(self.conn, ANA, first["id"], "Markdown")
         self.assertEqual(H.answers_to(self.conn, [question["id"]])[question["id"]]["id"], reply["id"])
         self.assertIsNone(H.unanswered_ask(self.conn, first))
-        self.assertIsNone(H.waiting_on(self.conn, first))
-        self.assertEqual(H.waiting_on(self.conn, second), "an unanswered question")
+        self.assertIsNone(H.waiting_for(self.conn, first))
+        self.assertEqual(H.waiting_for(self.conn, second), "an unanswered question")
         self.assertEqual([row["id"] for row in H.tasks_asked_of(self.conn, ANA)], [second["id"]])
         self.assertTrue(H.task_ask(self.conn, CMO, first["id"], "Which date?"))
         self.refused("one-question", H.task_ask, self.conn, CMO, second["id"], "Another question?")
@@ -385,7 +385,7 @@ class WaitingWithDependency(HubCase):
         after = H.task_update(self.conn, CMO, task['id'], status='waiting',
                               blocked_by=blocker['id'], note='Needs the build environment')
         self.assertEqual((after['status'], after['blocked_by']), ('waiting', blocker['id']))
-        self.assertEqual(H.waiting_on(self.conn, after), 'an open blocker')
+        self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
         future = H.shift(H.now(), hours=48)
         self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
         self.assertEqual(H.sweep_stranded(self.conn, at=future), [])
@@ -417,3 +417,60 @@ class WaitingWithDependency(HubCase):
                      status='waiting', blocked_by=blocker['id'])
         self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
         self.assertIsNone(H.task(self.conn, task['id'])['blocked_by'])
+
+    def test_a_task_waiting_on_a_person_stays_waiting_and_counts_until_they_answer(self):
+        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
+        needs = lambda: H.status(self.conn, "cmo")["needs_human"]
+        task = H.task_create(self.conn, CMO, 'Fix the build host', '', CMO, private=False)
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                              note='Restart the build host; it refuses SSH')
+        self.assertEqual((after['waiting_on'], needs()), (ANA, 1))
+        self.assertEqual(H.waiting_for(self.conn, after), 'ana to act')
+        self.assertEqual(H.sweep_stranded(self.conn, at=H.shift(H.now(), hours=48)), [])
+        self.assertEqual([t['id'] for t in H.needs_you(self.conn, 'ana')['waiting']], [task['id']])
+        H.task_comment(self.conn, ANA, task['id'], 'Restarted it')
+        self.assertEqual((H.task(self.conn, task['id'])['waiting_on'], needs()), (None, 0))
+        # A question to a person counts too, once per task, until it is answered.
+        other = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO)
+        ask = H.task_ask(self.conn, CMO, other['id'], 'Which date?')
+        self.assertEqual(needs(), 1)
+        H.answer(self.conn, ANA, ask['id'], 'Friday')
+        self.assertEqual(needs(), 0)
+        secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
+        self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')
+
+    def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
+        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
+        H.status_set(self.conn, H.KEEPER, "seo", state="idle")
+        stored = lambda bot: self.conn.execute("SELECT needs_human FROM bot_status WHERE bot=?", (bot,)).fetchone()[0]
+        task = H.task_create(self.conn, ANA, 'Fix the build host', '', CMO, private=False)
+        wait = lambda **kw: H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                                          note='Restart it', **kw)
+        self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
+        self.refused('kind', wait, owner='seo')
+        self.refused('escape', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                     note='Read secrets/mail.env')
+        self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
+                     private=True)
+        wait()
+        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], note='Still down')['waiting_on'])
+        wait()
+        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], owner='seo')['waiting_on'])
+        self.assertEqual((stored('cmo'), stored('seo')), (0, 0), "the handoff recounts the old owner too")
+        # Made private: the wait no longer goes in front of a person who cannot read it.
+        own = H.task_create(self.conn, CMO, 'Rotate the deploy key', '', CMO, private=False)
+        H.task_update(self.conn, CMO, own['id'], status='waiting', waiting_on='ben', note='Approve the rotation')
+        self.assertIsNone(H.task_update(self.conn, CMO, own['id'], private=True)['waiting_on'])
+        # An approval on a task that waits on a person is the same wait.
+        key = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
+        H.task_update(self.conn, CMO, key['id'], status='waiting', waiting_on='ana', note='Approve the purchase')
+        H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
+        self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (1, 1))
+        # A plain reply answers a question; deleting the reply reopens it.
+        other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
+        H.task_ask(self.conn, SEO, other['id'], 'Which date?')
+        self.assertEqual(stored('seo'), 1)
+        reply = H.task_comment(self.conn, ANA, other['id'], 'Friday')
+        self.assertEqual(stored('seo'), 0)
+        H.task_comment_delete(self.conn, ANA, other['id'], reply['id'])
+        self.assertEqual(stored('seo'), 1)

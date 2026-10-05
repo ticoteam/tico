@@ -283,6 +283,8 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal:has(.task-layout) .tmodal-head{gap:8px}
 .tmodal:has(.task-layout) .tmodal-title{font-size:17px;line-height:1.3;margin:12px 16px 2px;overflow-wrap:anywhere}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:12px}
+/* a bot's task set waiting on you (`--on`) */
+.tl-waiting{flex:none;font-size:10.5px;font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait)}
 .tchip-blocked{flex:none;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:11.5px;color:var(--muted);cursor:default}
 .tmodal-age{flex:none}

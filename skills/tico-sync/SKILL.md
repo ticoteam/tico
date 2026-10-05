@@ -47,7 +47,8 @@ Below, to "call" a tool means either way.
      otherwise mark it read.
 5. **Your tasks.** For each task that is yours and can move now, do the work, then call
    `hub_task_update`: `status: done` with a short result note, or `status: waiting` with the reason
-   (who or what you are waiting for). A task you cannot touch this run stays as it is; do not
+   (who or what you are waiting for). Waiting on a person to act: set `waiting_on` to their id and
+   say in the note exactly what they need to do, so it reaches their Needs you. A task you cannot touch this run stays as it is; do not
    churn statuses. The requester closes a task you finished.
 6. **Stop.** When the messages are marked read and the tasks moved, end the run with one line:
    what you answered and what you moved (for example `answered 2, finished 1, waiting on 1`).

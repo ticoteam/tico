@@ -499,7 +499,8 @@ def conversation_snapshot(c, cid, who=None):
 # from a bot about its own work comes first, the person's own tasks next, and what an inbox
 # bot lifted out of mail last; within a source the decisive kinds lead, oldest first.
 SOURCE_RANK = {"bot": 0, "self": 1, "mail": 2}
-KIND_RANK = {"approval": 0, "question": 1, "declined": 2, "task": 3, "report": 4}
+# A bot's task set waiting on the person blocks that bot just as its question does.
+KIND_RANK = {"approval": 0, "question": 1, "waiting": 1, "declined": 2, "task": 3, "report": 4}
 
 
 def needs_source(actor):
@@ -597,7 +598,10 @@ def recent_bots(c, auth, who, since, limit, needs):
         touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated"])
     waiting = {}
     for item in needs:
-        for actor in (item.get("origin_actor"), (item.get("ask") or {}).get("from_actor"), item.get("requester"), item.get("owner")):
+        # A task waiting on the person waits with the bot that owns it, whoever asked for it.
+        actors = ((item.get("owner"),) if item.get("kind") == "waiting" else
+                  (item.get("origin_actor"), (item.get("ask") or {}).get("from_actor"), item.get("requester"), item.get("owner")))
+        for actor in actors:
             if str(actor or "").startswith("bot:"):
                 waiting.setdefault(H.actor_id(actor), []).append(item.get("title") or item.get("first_line") or "")
                 break
@@ -636,9 +640,9 @@ def recent_bots(c, auth, who, since, limit, needs):
 
 def needs_items(c, auth, who, task_view):
     raw = H.needs_you(c, who.actor)
-    H.hydrate_task_tags(c, raw["tasks"] + raw["declined"])
+    H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     items = []
-    for kind in ("tasks", "declined"):
+    for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
             try:
                 auth.task(c, who, row["id"])
@@ -647,7 +651,7 @@ def needs_items(c, auth, who, task_view):
             open_asks = H.open_task_asks(c, row, actor=privacy.actor(who))
             ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
             items.append({**task_view(row),
-                          "kind": "declined" if kind == "declined" else "question" if ask else "task",
+                          "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
                           "origin_actor": H.task_origin(c, row), "ask": ask, "open_asks": len(open_asks),
                           "first_line": (row.get("body") or "").split("\n")[0]})
     for row in raw["approvals"]:

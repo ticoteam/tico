@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 if __package__ in (None, ""):                          # imported by a script run from anywhere
@@ -29,6 +30,28 @@ def via_tool(client, args, **more):
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
 
+def product_repo_create(client, name, *, stdin=None, stderr=None):
+    """Preview the exact target and require an interactive exact-name confirmation before writing."""
+    stdin = stdin or sys.stdin
+    stderr = stderr or sys.stderr
+    preview = client.get("github/product-repos/preview", name=name)
+    print(f"Product repository preview: {preview['repository']} · private · empty (no initial commit)", file=stderr)
+    print(f"GitHub App capability: {preview['capability']}. {preview['capability_detail']}", file=stderr)
+    if preview["capability"] != "available":
+        raise APIError("github_capability", preview["capability_detail"], 409)
+    if not stdin.isatty():
+        raise APIError("confirmation_required", "This command requires an interactive terminal. Type the exact org/name shown to confirm; no repository was created")
+    print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
+    if stdin.readline().strip() != preview["repository"]:
+        raise APIError("cancelled", "Confirmation did not match; no repository was created")
+    request_id = os.environ.get("HUB_OPERATION_ID") or uuid.uuid4().hex
+    key = (request_id + ":product-repository")[:200]
+    return client.post("github/product-repos", {
+        "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+        "auto_init": preview["auto_init"], "confirmed": True,
+    }, key=key)
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
@@ -43,6 +66,8 @@ def run(args, who=None):
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
+        if args.fn == "repo product-create":
+            return product_repo_create(client, args.name)
         if args.sub == "list":
             return hubtools.repo_list(client, {})
         return hubtools.repo_update(client, {"full_name": args.full_name, "enabled": args.sub == "tick"})
@@ -370,6 +395,8 @@ def run(args, who=None):
                         body[field] = getattr(args, field)
                 if args.blocked_by is not None:
                     body["blocked_by"] = args.blocked_by
+                if getattr(args, "waiting_on", None) is not None:
+                    body["waiting_on"] = args.waiting_on
             return post("tasks/" + args.id, body)
     if cmd == "goal":
         if sub == "create":
