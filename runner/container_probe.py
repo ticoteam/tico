@@ -2,10 +2,13 @@
 
 Docker can answer `docker info` while every `docker run` hangs (a stalled disk under Docker Desktop's VM),
 and then a bot's container work waits forever with nothing in Health. So, where a `docker` CLI is on PATH
-and its daemon answers, the runner starts a throwaway container from an image already on the computer
-every few minutes, in the background, with a time limit. It never pulls, and never touches the network.
+and its daemon answers, the runner starts a throwaway container from an image already on the computer,
+in the background, with a time limit. It never pulls: it only starts an image the local listing shows, so
+it needs no `--pull` flag, which Docker before 20.10 does not know.
 
-A daemon that is simply not running is not a stall: nothing is reported then.
+Probes are rare (Docker Desktop's Resource Saver lets its VM sleep between them). A failure is checked
+again at once, and only a second failure in a row is reported, so one slow start on a waking VM is not
+a warning. A daemon that is simply not running is not a stall: nothing is reported then.
 """
 import datetime
 import os
@@ -15,10 +18,15 @@ import threading
 import time
 import uuid
 
-EVERY_S = 300           # a probe costs a container start; a heartbeat is far more often
+EVERY_S = 900           # a probe costs a container start and wakes a sleeping Docker Desktop VM
+FAILING_EVERY_S = 300   # while failing, look sooner so Health clears soon after Docker recovers
 LIMIT_S = 20            # a cached image starts in well under this on a healthy computer
-LIST_LIMIT_S = 10
+ANSWER_S = 10           # listing images or containers
 IMAGE_ENV = "TICO_RUNNER_PROBE_IMAGE"
+LABEL = "tico.probe=1"
+# The test suite sets this (conftest.py): a readiness call there must not start real containers.
+# Read once at import, so a test that clears the environment does not turn probes back on.
+OFF = os.environ.get("TICO_RUNNER_CONTAINER_PROBE") == "off"
 # Images likely to have `true`, best first; any other local image is the fallback.
 PREFERRED = ("ghcr.io/ticoteam/tico", "tico-runner", "busybox", "alpine", "debian", "ubuntu", "python")
 
@@ -27,14 +35,19 @@ def _run(args, limit):
     return subprocess.run(args, capture_output=True, text=True, timeout=limit, stdin=subprocess.DEVNULL)
 
 
+def _remove(docker, *names):
+    if names:
+        _run([docker, "rm", "-fv", *names], LIMIT_S)
+
+
 def _image(docker):
     """A local image to start, or None when there is none. Raises TimeoutExpired when the daemon hangs."""
-    if os.environ.get(IMAGE_ENV):
-        return os.environ[IMAGE_ENV]
-    listed = _run([docker, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], LIST_LIMIT_S)
+    listed = _run([docker, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], ANSWER_S)
     if listed.returncode != 0:
         return None       # no daemon running: not a stall
     images = [line for line in listed.stdout.split() if "<none>" not in line]
+    if os.environ.get(IMAGE_ENV):
+        return os.environ[IMAGE_ENV] if os.environ[IMAGE_ENV] in images else None
     return next((image for prefix in PREFERRED for image in images if image.startswith(prefix)),
                 images[0] if images else None)
 
@@ -52,19 +65,20 @@ def probe():
                 "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     try:
         image = _image(docker)
+        if not image:
+            return None
+        # A wedged daemon leaves earlier probes in Created; clear them before adding another.
+        _remove(docker, *_run([docker, "ps", "-aq", "--filter", "label=" + LABEL], ANSWER_S).stdout.split())
     except subprocess.TimeoutExpired:
-        return result(False, f"docker did not list images within {LIST_LIMIT_S} s")
+        return result(False, f"docker did not answer within {ANSWER_S} s")
     except OSError as exc:
         return result(False, str(exc))
-    if not image:
-        return None
     try:
-        ran = _run([docker, "run", "--rm", "--name", name, "--network", "none", "--pull", "never",
+        ran = _run([docker, "run", "--rm", "--name", name, "--label", LABEL, "--network", "none",
                     "--entrypoint", "true", image], LIMIT_S)
     except subprocess.TimeoutExpired:
-        # The CLI is gone but the container may still be starting; remove it without waiting.
-        threading.Thread(target=lambda: subprocess.run([docker, "rm", "-f", name], capture_output=True, timeout=60),
-                         daemon=True).start()
+        # The CLI is gone but the container may still be starting; the next probe removes it if this cannot.
+        threading.Thread(target=lambda: _remove(docker, name), daemon=True).start()
         return result(False, f"a container did not start within {LIMIT_S} s")
     except OSError as exc:
         return result(False, str(exc))
@@ -76,25 +90,37 @@ def probe():
 
 
 class ContainerProbe:
-    """The last probe result, refreshed in the background at most every EVERY_S seconds."""
+    """The last probe result, refreshed in the background (or inline, for the one-shot doctor)."""
 
-    def __init__(self, check=probe):
+    def __init__(self, check=probe, background=True, enabled=None):
         self.check = check
+        self.background = background
+        self.enabled = not OFF if enabled is None else enabled
         self.last = None
         self.at = None
-        self.running = False
+        self.thread = None
+
+    def due(self):
+        every = FAILING_EVERY_S if self.last and self.last.get("ok") is False else EVERY_S
+        return self.at is None or time.monotonic() - self.at >= every
 
     def report(self):
-        if not self.running and (self.at is None or time.monotonic() - self.at >= EVERY_S):
-            self.running = True
+        if not self.enabled:
+            return None
+        if not (self.thread and self.thread.is_alive()) and self.due():
             self.at = time.monotonic()
-            threading.Thread(target=self._refresh, daemon=True).start()
+            if self.background:
+                self.thread = threading.Thread(target=self._refresh, daemon=True)
+                self.thread.start()
+            else:
+                self._refresh()
         return self.last
 
     def _refresh(self):
         try:
-            self.last = self.check()
+            result = self.check()
+            if result and result.get("ok") is False and not (self.last and self.last.get("ok") is False):
+                result = self.check()       # once more at once: report only two failures in a row
+            self.last = result
         except Exception:     # a probe must never stop the heartbeat
             self.last = None
-        finally:
-            self.running = False
