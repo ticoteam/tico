@@ -132,7 +132,7 @@ async function taskModalShow(task, d = taskModal()) {
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
-  const full = {...detail.task, children: detail.children || [], parent: detail.parent || null, related: detail.related || []};
+  const full = {...detail.task, children: detail.children || []};
   // the redraw keeps the focus where it was (a header button, the title, a property)
   const a = d.contains(document.activeElement) ? document.activeElement : null;
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
@@ -192,25 +192,43 @@ function taskModalBind(d, task, full = false) {
       if (linkCurrent() && data.task) taskModalShow(data.task, d);
     } catch (e) { toast(e.message, true); }
   });
-  // Related tasks: attached from a picker of open tasks, each one opens, × takes it off (on both tasks).
-  const relate = async body => {
-    try {
-      await post(`/v2/tasks/${encodeURIComponent(task.id)}/related`, body);
-      const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-      if (linkCurrent() && data.task) taskModalShow(data.task, d);
-    } catch (e) { toast(e.message, true); }
-  };
+  // Related tasks, by kind: + asks which kind, then finds the task; each one opens, × takes it off (from both tasks).
   const addRelated = $('[data-related-add]', d);
-  if (addRelated) addRelated.onclick = async () => {
-    const have = new Set((task.related || []).map(k => String(k.id)));
-    const rows = (await taskPropCandidates(task, 'related')).filter(x => !have.has(String(x.id)));
-    if (!addRelated.isConnected) return;
-    propMenu(d, addRelated, {label: 'Attach a related task', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
-      html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`})),
-      onPick: it => relate({task: it.value})});
-  };
-  d.querySelectorAll('[data-drop-related]').forEach(b => b.onclick = () => relate({task: b.dataset.dropRelated, remove: true}));
+  if (addRelated) addRelated.onclick = () => propMenu(d, addRelated, {label: 'Relation', items: TASK_REL_ADD.map(([kind, text]) => ({value: kind, text, html: `<span>${esc(text)}</span>`})),
+    onPick: kind => setTimeout(async () => {
+      const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
+      const rows = (await taskPropCandidates(task, kind.value)).filter(x => !have.has(String(x.id)));
+      if (!addRelated.isConnected) return;
+      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`})),
+        onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
+    }, 0)});
+  d.querySelectorAll('[data-drop-rel]').forEach(b => b.onclick = () => {
+    const [kind, direction, other] = b.dataset.dropRel.split(' ');
+    // A row this task is the far end of is taken off from the other task's side.
+    if (direction === 'in') void taskRelate(d, task, {task: String(task.id), kind, remove: true}, other);
+    else void taskRelate(d, task, {task: other, kind, remove: true});
+  });
   d.querySelectorAll('[data-open-task]').forEach(b => b.onclick = ev => { ev.preventDefault(); void taskModalOpen(b.dataset.openTask, d); });
+}
+// The kinds the Related section adds, and the groups it shows: [kind, direction, label].
+const TASK_REL_ADD = [['related', 'Related'], ['blocked_by', 'Blocked by'], ['blocks', 'Blocks'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
+const TASK_REL_GROUPS = [['blocks', 'in', 'Blocked by'], ['blocks', 'out', 'Blocks'], ['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
+  ['duplicate_of', 'in', 'Duplicated by'], ['follow_up', 'out', 'Follow-up of'], ['follow_up', 'in', 'Follow-ups']];
+// One relation added or taken off (POST /v2/tasks/{id}/relations), then the task redrawn. `on` is the task whose
+// endpoint takes it, when that is the other end.
+async function taskRelate(d, task, body, on = task.id) {
+  try {
+    await post(`/v2/tasks/${encodeURIComponent(on)}/relations`, body);
+    const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
+    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
+  } catch (e) { toast(e.message, true); }
+}
+function taskRelHTML(t) {
+  const groups = TASK_REL_GROUPS.map(([kind, dir, label]) => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
+  return `<section class="tsec task-related"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
@@ -285,7 +303,11 @@ const commentAuthor = (a, via) => {
 const TASK_EVENT_WORDS = {step: id => id ? `moved it to ${pipelineStepName(id)}` : 'cleared the step', type: id => `set the type to ${TASK_TYPES.find(type => type.id === id)?.name || id}`, status: s => `moved it to ${STATUS_WORD[s] || s}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
   blocked_by: v => v ? 'marked it blocked' : 'cleared the block', parent_id: v => v ? 'filed it under a parent task' : 'took it out of its parent',
-  link: v => v ? `linked ${v}` : 'removed a link', related: v => v ? 'attached a related task' : 'removed a related task', due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
+  subtask: v => v ? 'added a subtask' : 'moved a subtask out', blocks: v => v ? 'made it block another task' : 'stopped it blocking a task',
+  related: v => v ? 'attached a related task' : 'removed a related task', duplicate_of: v => v ? 'marked it a duplicate' : 'unmarked it as a duplicate',
+  duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
+  follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
+  link: v => v ? `linked ${v}` : 'removed a link', due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
   lint: v => `noted: ${v}`, note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.js), for the files a comment carried.
 function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
@@ -437,8 +459,9 @@ function taskPeekPos(id) {
 function hubModalHTML(t, it, opts = {}) {
   const askToYou = taskAskToPerson(t);
   const finished = taskFinished(t);
-  // What it waits on: a question to you reads as one; any other waiting note is a quiet line. A blocker is a property.
-  const waitText = clipLine(t.blocker?.title && !askToYou ? '' : taskWaitLine(t), 400);
+  // What it waits on: a question to you reads as one; any other waiting note is a quiet line. A blocker is in Related.
+  const blockers = taskBlockers(t);
+  const waitText = clipLine(blockers.length && !askToYou ? '' : taskWaitLine(t), 400);
   const waitLabel = askToYou ? needsWho(t) : t.status === 'waiting' ? 'Waiting on' : '';
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
@@ -446,8 +469,8 @@ function hubModalHTML(t, it, opts = {}) {
   const mover = canMove();
   const links = (t.links || []).filter(l => l.kind !== 'pr' && l.kind !== 'worktree');   // those are Code, in the rail
   const pos = opts.peek ? taskPeekPos(t.id) : '';
-  return `<div class="tmodal-head"><span class="pill tstatus">${esc(statusWord)}</span>${t.private ? '<span title="Only the requester and assignee can see this task" aria-label="Private"><span class="nav-icon" aria-hidden="true">lock</span></span>' : ''}${t.blocked_by && !finished
-      ? `<span class="tchip-blocked" title="Blocked by ${esc(t.blocker?.title || 'another task')}">blocked</span>` : ''}
+  return `<div class="tmodal-head"><span class="pill tstatus">${esc(statusWord)}</span>${t.private ? '<span title="Only the requester and assignee can see this task" aria-label="Private"><span class="nav-icon" aria-hidden="true">lock</span></span>' : ''}${blockers.length && !finished
+      ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}
       <span class="tmodal-owner">${actorFace(t.owner, 18)}<span class="who">${esc(actorLabel(t.owner))}</span></span>
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
       <span class="muted tnum tmodal-age" title="Updated ${esc(fmt(it.updated))}">${esc(ago(it.updated))}</span>
@@ -466,8 +489,7 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="tsec task-links"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
-      ${t.related ? `<section class="tsec task-related"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Attach a related task" title="Attach a related task">${TL_ICON.plus}</button></h3>
-        ${t.related.length ? `<div class="tlinks">${t.related.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-related="${esc(k.id)}" aria-label="Remove related task">×</button></span>`).join('')}</div>` : ''}</section>` : ''}
+      ${t.relations ? taskRelHTML(t) : ''}
       <section class="tsec task-files" data-task-files aria-label="Files" hidden></section>
       </div>
       <aside class="task-side" aria-label="Details">

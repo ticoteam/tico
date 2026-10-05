@@ -1,7 +1,10 @@
 """Deleting tasks offline removes them and their conversations, and refuses a task carrying work."""
 
+import json
+
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
+from backend import task_relations as TR
 from backend.store import encode
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
 
@@ -12,7 +15,7 @@ def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_l
     post(api, f"tasks/{ticket['id']}/links", {"url": "https://example.com/c/18945"})
     post(api, f"tasks/{ticket['id']}/comments", {"text": "Copied from the old board."})
     parent = post(api, "tasks", {"owner": "ben", "title": "Plan the launch", "body": "x"})
-    post(api, "tasks", {"owner": "priya", "title": "Write the post", "body": "x", "parent_id": parent["id"]})
+    post(api, "tasks", {"owner": "priya", "title": "Write the post", "body": "x", "relations": [{"task": parent["id"], "kind": "parent"}]})
 
     with store.transaction() as c:
         conversation = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[0]
@@ -39,7 +42,7 @@ def test_a_person_deletes_a_task_they_asked_for_and_nobody_else_can(api):
     mine = post(api, "tasks", {"owner": "ben", "title": "Fix the duplicate page", "body": "x"}, token="priya-test")
     theirs = post(api, "tasks", {"owner": "ben", "title": "Fix the pricing page", "body": "x"}, token="ben-test")
     parent = post(api, "tasks", {"owner": "ben", "title": "Plan the launch", "body": "x"}, token="priya-test")
-    post(api, "tasks", {"owner": "ben", "title": "Write the post", "body": "x", "parent_id": parent["id"]}, token="priya-test")
+    post(api, "tasks", {"owner": "ben", "title": "Write the post", "body": "x", "relations": [{"task": parent["id"], "kind": "parent"}]}, token="priya-test")
 
     refused = post(api, f"tasks/{theirs['id']}/delete", {}, token="priya-test", expected=403)
     assert refused["error"]["code"] == "forbidden"
@@ -119,17 +122,47 @@ def test_a_bulk_delete_and_restore_keeps_links_inside_the_list(api):
     from backend.task_delete import restore_tasks
     store = api.app.state.store
     parent = post(api, "tasks", {"owner": "ben", "title": "Plan the import", "body": "x"})
-    child = post(api, "tasks", {"owner": "ben", "title": "Copy the cards", "body": "x", "parent_id": parent["id"]})
+    child = post(api, "tasks", {"owner": "ben", "title": "Copy the cards", "body": "x", "relations": [{"task": parent["id"], "kind": "parent"}]})
     with store.transaction() as c:
         assert delete_tasks(c, [parent["id"], child["id"]], apply=True)["applied"] is True
         assert c.execute("SELECT count(*) FROM tasks WHERE id IN (?,?)", (parent["id"], child["id"])).fetchone()[0] == 0
         assert restore_tasks(c, [parent["id"], child["id"]])["unlinked"] == {}
-        assert c.execute("SELECT parent_id FROM tasks WHERE id=?", (child["id"],)).fetchone()[0] == parent["id"]
+        assert TR.parent_of(c, child["id"]) == parent["id"]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
         # Restoring only the subtask leaves its link to the still-deleted parent unset, and says so.
         assert delete_tasks(c, [parent["id"], child["id"]], apply=True)["applied"] is True
-        assert restore_tasks(c, [child["id"]])["unlinked"] == {child["id"]: ["parent_id"]}
-        assert c.execute("SELECT parent_id FROM tasks WHERE id=?", (child["id"],)).fetchone()[0] is None
+        assert restore_tasks(c, [child["id"]])["unlinked"] == {child["id"]: ["parent"]}
+        assert TR.parent_of(c, child["id"]) is None
+        # Restoring the parent later files the subtask under it again.
+        assert restore_tasks(c, [parent["id"]])["unlinked"] == {}
+        assert TR.parent_of(c, child["id"]) == parent["id"]
+
+
+def test_relations_go_to_the_trash_from_either_end_and_come_back(api):
+    from backend.task_delete import restore_tasks
+    store = api.app.state.store
+    one = post(api, "tasks", {"owner": "ben", "title": "Fix the card import", "body": "x"})
+    blocker = post(api, "tasks", {"owner": "ben", "title": "Fix the card export", "body": "x"})
+    twin = post(api, "tasks", {"owner": "ben", "title": "Fix the card import too", "body": "x",
+                               "relations": [{"task": one["id"], "kind": "duplicate_of"}]})
+    post(api, "tasks/" + one["id"] + "/relations", {"task": blocker["id"], "kind": "blocked_by"})
+    with store.transaction() as c:
+        before = {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")}
+        assert len(before) == 2
+        assert delete_tasks(c, [one["id"]], apply=True)["applied"] is True
+        assert c.execute("SELECT count(*) FROM task_relations").fetchone()[0] == 0
+        assert restore_tasks(c, [one["id"]])["unlinked"] == {}
+        assert {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")} == before
+        # A trash entry written before task_relations kept the blocker on the task row: it still relinks.
+        assert delete_tasks(c, [one["id"]], apply=True)["applied"] is True
+        snap = json.loads(c.execute("SELECT rows_json FROM task_trash WHERE task_id=?", (one["id"],)).fetchone()[0])
+        snap["rows"].pop("task_relations")
+        snap["rows"]["tasks"][0]["blocked_by"] = blocker["id"]
+        c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snap), one["id"]))
+        assert restore_tasks(c, [one["id"]])["unlinked"] == {}
+        assert TR.blocker_ids(c, one["id"]) == [blocker["id"]]
+        assert TR.parent_of(c, one["id"]) is None and twin["id"] not in TR.blocker_ids(c, one["id"])
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
 

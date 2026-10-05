@@ -115,7 +115,7 @@ def test_assignment_actor_contact_is_limited_to_its_linked_delivery(api):
         with pytest.raises(Problem) as new_task:
             auth.require_bot_contact(c, human, target, kind="task")
         assert new_task.value.code == "assignment_scope"
-    refused = post(api, "tasks", {"owner": made["bot"], "parent_id": linked["id"],
+    refused = post(api, "tasks", {"owner": made["bot"], "relations": [{"task": linked["id"], "kind": "parent"}],
                                    "title": "Another assigned task", "body": "Must remain on the linked task."},
                    expected=403)
     assert refused["error"]["code"] == "assignment_scope"

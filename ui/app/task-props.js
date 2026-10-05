@@ -18,7 +18,6 @@ function taskPropRights(t) {
   const live = !taskFinished(t);
   return {mover, party, live, edit: (mover || party) && live, links: mover && live, reopen: mover || party};
 }
-const taskPropTask = id => id && ((TASKS_ST?.tasks || []).find(x => String(x.id) === String(id)) || null);
 function taskPropsHTML(t, opts = {}) {
   const r = taskPropRights(t);
   const type = pipelineType(t), typed = !!type && pipelineTypeId(t) !== 'general';
@@ -57,16 +56,14 @@ function taskPropsHTML(t, opts = {}) {
     || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
     ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
       : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
-  // Part of and Blocked by: the other task's title is a link to it, × clears it; empty, a picker finds one.
-  for (const [key, label, id, known, verb] of [['parent', 'Part of', t.parent_id, t.parent, 'parent'], ['blocked', 'Blocked by', t.blocked_by, t.blocker, 'blocker']]) {
-    const other = id ? (known && String(known.id) === String(id) ? known : null) || taskPropTask(id) : null;
-    const title = other?.title || 'A task';
-    if (id) {
-      rows.push(`<div class="prop" data-prop-row="${key}"><span class="prop-k" aria-hidden="true">${esc(label)}</span><span class="prop-vwrap">`
-        + `<button type="button" class="prop-v prop-link" data-open-task="t${esc(id)}" aria-label="${esc(label)}: ${esc(title)}. Open it"><span class="prop-txt">${esc(title)}</span></button>`
-        + (r.links ? `<button type="button" class="prop-x" data-prop-clear="${key}" aria-label="Clear ${esc(label)}" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
-    } else rows.push(row(key, label, txt(r.links ? `Add ${verb}` : 'None'), {edit: r.links, empty: true, words: 'none'}));
-  }
+  // Part of: the parent's title is a link to it, × takes the task out; empty, a picker finds one. Blockers and
+  // other relations are in the Related section.
+  const parent = taskParent(t);
+  if (parent) {
+    rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
+      + `<button type="button" class="prop-v prop-link" data-open-task="t${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
+      + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
+  } else rows.push(row('parent', 'Part of', txt(r.links ? 'Add parent' : 'None'), {edit: r.links, empty: true, words: 'none'}));
   // Type and Step: only for a task that has a type
   if (typed) {
     rows.push(row('type', 'Type', `<span class="prop-ic">${PROP_ICON.type}</span>` + txt(type.name), {edit: r.edit && TASK_TYPES.length > 1, words: type.name}));
@@ -76,7 +73,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', blocked: 'Blocked by', type: 'Type', step: 'Step'};
+const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step'};
 function taskPropsMsgPaint(d) {
   const box = $('[data-props-msg]', d); if (!box) return;
   const errs = d.propsErrs?.id === String(d.dataset.task) ? [...d.propsErrs.map] : [];
@@ -169,13 +166,14 @@ async function taskPropCandidates(t, key) {
   return rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
 }
 // What a picker must not offer, because it would make a loop: the task itself, and for Part of everything under it
-// (children, grandchildren…), for Blocked by every task that already waits on it, however far down the chain;
-// for Related only the task itself.
+// (children, grandchildren…), for Blocked by every task that already waits on it, for Blocks every task it already
+// waits on, however far along the chain; for the other kinds only the task itself.
 function taskPropLoops(t, key, rows) {
-  if (key === 'related') return new Set([String(t.id)]);   // a relation has no direction, so it cannot loop
-  const here = String(t.id), field = key === 'parent' ? 'parent_id' : 'blocked_by';
-  const under = new Map();
-  for (const x of rows) { const up = String(x[field] || ''); if (up) { if (!under.has(up)) under.set(up, []); under.get(up).push(String(x.id)); } }
+  const here = String(t.id), under = new Map();
+  const ups = key === 'parent' ? x => [taskParentId(x)] : key === 'blocked_by' ? x => taskBlockers(x).map(b => String(b.id))
+    : key === 'blocks' ? x => taskRels(x, 'blocks', 'out').map(b => String(b.id)) : null;
+  if (!ups) return new Set([here]);
+  for (const x of rows) for (const up of ups(x)) if (up) { if (!under.has(up)) under.set(up, []); under.get(up).push(String(x.id)); }
   const out = new Set([here]), todo = [here];
   while (todo.length) for (const k of under.get(todo.pop()) || []) if (!out.has(k)) { out.add(k); todo.push(k); }
   return out;
@@ -191,7 +189,8 @@ function taskPropsBind(d, task, change) {
     const clear = ev.target.closest('[data-prop-clear]');
     if (clear) {
       const key = clear.dataset.propClear;
-      void save(key, key === 'due' ? {due: ''} : key === 'parent' ? {parent_id: ''} : {blocked_by: ''});
+      if (key === 'parent') { d.focusProp = key; void taskRelate(d, task, {task: taskParentId(task), kind: 'parent', remove: true}); }
+      else void save(key, {due: ''});
       return;
     }
     const b = ev.target.closest('[data-prop]'); if (!b) return;
@@ -231,15 +230,14 @@ function taskPropsBind(d, task, change) {
       const add = tag => { tag = String(tag).trim().toLowerCase(); if (tag && !have.has(tag)) void save('tags', cur => (cur.labels || []).includes(tag) ? null : {labels: [...(cur.labels || []), tag]}); };
       propMenu(d, b, {label: 'Add a tag', entry: 'Tag', none: 'Type a tag, then Enter', items: keys.map(k => ({value: k, text: k,
         html: `<span class="tl-dot" style="--hue:${tagHue(k)}"></span><span>${esc(k)}</span>`})), onPick: it => add(it.value), onEntry: add});
-    } else if (key === 'parent' || key === 'blocked') {
-      const field = key === 'parent' ? 'parent_id' : 'blocked_by';
+    } else if (key === 'parent') {
       const rows = await taskPropCandidates(task, key);
       if (!b.isConnected) return;
-      propMenu(d, b, {label: key === 'parent' ? 'Part of' : 'Blocked by', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
+      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
         html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`,
-        checked: String(task[field] || '') === String(x.id)})), onPick: it => {
+        checked: taskParentId(task) === String(x.id)})), onPick: it => {
           if (taskPropLoops(task, key, TASKS_ST?.tasks || PROP_TASKS?.rows || []).has(String(it.value))) { d.propsErrs = {id: String(task.id), map: new Map([[key, 'That would make a loop.']])}; taskPropsMsgPaint(d); return; }
-          if (String(it.value) !== String(task[field] || '')) void save(key, {[field]: it.value});
+          if (String(it.value) !== taskParentId(task)) { d.focusProp = key; void taskRelate(d, task, {task: it.value, kind: 'parent'}); }
         }});
     }
   };

@@ -53,11 +53,12 @@ keep their existing behavior.
 
 ## Work that is waiting
 
-Keep actively worked tasks in **Doing**. When another task must finish first, set **Waiting**
-and attach that blocker together:
+Keep actively worked tasks in **Doing**. When another task must finish first, relate the blocker,
+then set **Waiting**:
 
 ```sh
-hub task update <task> --status waiting --blocked-by <blocker> --note "Needs the build environment"
+hub task relate <task> <blocker> --kind blocked_by
+hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
@@ -225,12 +226,13 @@ block its parent.
 ```sh
 hub task child <parent-id> --owner engineer --title "Build the service" --body "Use the plan."
 hub task tree <task-id>
-hub task parent <task-id> <new-parent-id>
-hub task parent <task-id> ""
+hub task relate <task-id> <new-parent-id> --kind parent
+hub task relate <task-id> <parent-id> --kind parent --remove
 ```
 
-The corresponding MCP tools are `hub_task_child_create`, `hub_task_tree` and `hub_task_reparent`.
-Task create accepts `parent_id`; task update accepts `parent_id` with the current `version`.
+The corresponding MCP tools are `hub_task_child_create`, `hub_task_tree` and `hub_task_relate`.
+`hub task create --parent <id>` files a new task as a subtask; the API takes
+`"relations": [{"task": "<id>", "kind": "parent"}]` on task create.
 `GET /api/v2/tasks/{id}/tree` returns nested subtasks with `id`, `title`, `status`, `owner`,
 `pr_state` and `children`. Task detail and list answers include `children_summary` with descendant
 counts: `total`, `open`, `done`, `prs_total` and `prs_merged`, plus `direct_total` and
@@ -271,23 +273,35 @@ PRs in another repository remain Ready for their release or a human's completion
 
 ## Related tasks
 
-Two tasks that belong together, when neither waits on the other (that is Blocked by) nor is a
-part of it (that is a subtask), can be attached to each other the way cards are attached on a
-board: the same bug reported twice, the front-end and back-end halves of one change. Each task
-then lists the other under Related, and the history of both records who attached it. A relation
-has no direction and changes nothing else: no status moves, nobody is woken.
+Every link between two tasks is a relation, read `<task> <kind> <other>`:
+
+| Kind | Means | Shown as |
+|---|---|---|
+| `parent` | the task is a subtask of the other (one parent a task; no loops) | Part of, and Subtasks on the parent |
+| `blocks` / `blocked_by` | the task blocks, or waits on, the other (several blockers allowed; no loops) | Blocks, Blocked by |
+| `related` | they belong together: the same bug seen twice, two halves of one change | Related |
+| `duplicate_of` | the task duplicates the other | Duplicate of, Duplicated by |
+| `follow_up` | the task was split off or followed up from the other | Follow-up of, Follow-ups |
 
 ```sh
-hub task relate <task-id> <other-task-id>
-hub task relate <task-id> <other-task-id> --remove
+hub task relate <task-id> <other-task-id>                      # related
+hub task relate <task-id> <other-task-id> --kind blocked_by
+hub task relate <task-id> <other-task-id> --kind parent --remove
 ```
 
-The MCP tool is `hub_task_relate`. `POST /api/v2/tasks/{id}/related` with `{"task": "<other id>"}`
-attaches, and with `"remove": true` takes it off; either task's id, prefix or number works. The caller
-must be able to change both tasks, as for links. Task detail includes `related`: `id`, `title`,
-`status` and `owner` of each related task the caller may read, so a private task never shows on a
-task its parties do not share. Deleting a task keeps its relations in the trash; restoring it puts
-back each one whose other task still exists.
+The MCP tool is `hub_task_relate`; the API is `POST /api/v2/tasks/{id}/relations` with
+`{"task": "<other id>", "kind": "...", "remove": false}`, and task create takes `"relations": [...]`.
+Either task's id, prefix or number works. A parent or a blocker follows the rules those always had (the
+task's parties or a mover; a blocker is the owner's or a mover's); the other kinds need the right to
+change both tasks, as for links. Finishing a blocker takes its relation off and wakes the bot owner
+once nothing else blocks it. Each change is in both tasks' history.
+
+Every task answer carries `relations`, by kind: each `{id, title, status, owner, direction}`, where
+`direction` is `out` when the task is the subtask, blocker, duplicate or follow-up, `in` for the other
+end, and `both` for `related`. Its own subtasks are `children` instead. A task the reader cannot open is
+never listed, and a bot's run gets the relations it may read in its assigned task. Deleting a task keeps
+its relations in the trash; restoring it puts back each one whose other task still exists. In SQL they
+are the `task_relations` table ([Hub SQL](hub-sql.md)).
 
 ## Files, versions and questions
 

@@ -30,9 +30,11 @@ def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, b
         task = H.task_create(c, requester, "Diagnose the missing mail registry", "Find its approved source.", "bot:botops")
         blocker = H.task_create(c, 'bot:botops', "Find the approved registry source", "Identify the source.", "bot:finance")
     attempt = claim(api, botops, "botops")
+    err, result = mcp(api, "hub_task_relate", {"id": task["id"], "task": blocker["id"], "kind": "blocked_by"},
+                      attempt["token"])
+    assert not err, result
     err, result = mcp(api, "hub_task_update", {"id": task["id"], "status": "waiting",
-                      "note": "The authorized registry source is missing.", "blocked_by": blocker["id"],
-                      "quiet": True}, attempt["token"])
+                      "note": "The authorized registry source is missing.", "quiet": True}, attempt["token"])
     assert not err, result
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "waiting"

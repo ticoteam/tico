@@ -40,11 +40,12 @@ def test_a_unique_prefix_reaches_the_task_and_listings_show_it(api):
 
 def test_prefixes_work_for_blocked_by_and_parent(api):
     parent, blocker, child = make(api, title="Parent"), make(api, title="Blocker"), make(api, title="Child")
-    done = post(api, "tasks/" + child["short_id"], {"version": child["version"], "blocked_by": blocker["short_id"],
-                                                    "parent_id": parent["short_id"]})
-    assert (done["blocked_by"], done["parent_id"]) == (blocker["id"], parent["id"])
-    sub = post(api, "tasks", {"owner": "ops", "title": "Sub", "body": "x", "parent_id": parent["short_id"]})
-    assert sub["parent_id"] == parent["id"]
+    post(api, "tasks/" + child["short_id"] + "/relations", {"task": blocker["short_id"], "kind": "blocked_by"})
+    done = post(api, "tasks/" + child["short_id"] + "/relations", {"task": parent["short_id"], "kind": "parent"})
+    assert ([r["id"] for r in done["relations"]["blocks"]], [r["id"] for r in done["relations"]["parent"]]) \
+        == ([blocker["id"]], [parent["id"]])
+    sub = post(api, "tasks", {"owner": "ops", "title": "Sub", "body": "x", "relations": [{"task": parent["short_id"], "kind": "parent"}]})
+    assert sub["relations"]["parent"][0]["id"] == parent["id"]
 
 
 def test_an_ambiguous_prefix_lists_short_ids_and_titles(api):

@@ -938,7 +938,7 @@ class Auth:
 
         number = re.fullmatch(r"#(\d{1,18})", ident)
         if number:
-            rows = readable(H._rows(c.execute("SELECT id,title,owner,requester,parent_id FROM tasks WHERE number=? AND ("
+            rows = readable(H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE number=? AND ("
                                               + visible + ")", (int(number.group(1)),))))
             if rows:
                 return rows[0]["id"]
@@ -946,7 +946,7 @@ class Auth:
 
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(H._rows(c.execute(
-                "SELECT id,title,owner,requester,parent_id FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
+                "SELECT id,title,owner,requester FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
                 "ORDER BY created LIMIT 50", (len(ident), ident.lower()))))
             if len(rows) == 1:
                 return rows[0]["id"]
@@ -956,7 +956,7 @@ class Auth:
                                                              for r in rows[:10])), 409)
         if len(ident) >= 34:
             near = []
-            for row in H._rows(c.execute("SELECT id,title,owner,requester,parent_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
+            for row in H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE length(id) BETWEEN ? AND ? "
                                          "AND (" + visible + ")", (len(ident) - 2, len(ident) + 2))):
                 distance = _edit_distance(ident.lower(), row["id"], 2)
                 if distance is not None:

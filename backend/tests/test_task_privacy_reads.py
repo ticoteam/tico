@@ -35,20 +35,22 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
     hidden = task(api, labels=["sensitive-only"])
     public = task(api, private=False, requester="human:ana", owner="human:ana", title="Public parent")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (public["id"], hidden["id"]))
-        c.execute("UPDATE tasks SET blocked_by=? WHERE id=?", (hidden["id"], public["id"]))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (hidden["id"], public["id"], "parent"))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (hidden["id"], public["id"], "blocks"))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (*sorted((hidden["id"], public["id"])), "related"))
         H.event(c, "human:ana", "task.inspect", hidden["id"], {"title": hidden["title"]})
     for suffix in ("", "/comments", "/links", "/files", "/answers", "/tree"):
         get(api, "tasks/" + hidden["id"] + suffix, expected=404)
     page = get(api, "tasks/" + public["id"])
     assert not page["children"] and page["task"]["parts"]["total"] == 0
-    assert page["task"]["blocked_by"] is None and page["task"].get("blocker") is None
+    assert page["task"]["relations"] == {} and hidden["id"] not in json.dumps(page)
     listed = get(api, "tasks")
     assert hidden["id"] not in json.dumps(listed)
     assert "sensitive-only" not in json.dumps(get(api, "tags"))
     assert not sql(api, "SELECT id FROM tags WHERE key='sensitive-only'")
     assert not sql(api, "SELECT detail_json FROM events WHERE action='task.inspect'")
-    assert sql(api, "SELECT blocked_by FROM tasks WHERE title='Public parent'") == [[None]]
+    assert sql(api, "SELECT from_task FROM task_relations") == []
+    assert len(sql(api, "SELECT from_task FROM task_relations", "ben-test")) == 3
     assert any(t[0] == hidden["id"] for t in sql(api, "SELECT id FROM tasks", "ben-test"))
 
 

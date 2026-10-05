@@ -21,6 +21,7 @@ from clients.agent_skill import WHO_NEEDS_ME
 from . import agents, batch, grokbot, inbox_isolation, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
+from . import task_relations as TR
 from . import placement as placing
 from .statuses import is_parked
 from . import turns as turn_work
@@ -713,10 +714,7 @@ def create_app(settings=None):
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
         value["step"] = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
         if c is not None:
-            for relation in ("parent_id", "blocked_by"):
-                if row.get(relation) and not c.execute("SELECT 1 FROM tasks WHERE id=? AND (" + visible_sql + ")",
-                                                       (row[relation],)).fetchone():
-                    value[relation] = None
+            value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
             routine = c.execute('SELECT schedule_id FROM schedule_occurrences WHERE task_id=?', (row['id'],)).fetchone()
             if routine:
                 value.update(routine_id=routine['schedule_id'])
@@ -730,12 +728,9 @@ def create_app(settings=None):
             value["links"] = H.task_links(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
-            if value.get("blocked_by"):
-                blocker = H.task(c, row["blocked_by"])
-                value["blocker"] = {"id": blocker["id"], "title": blocker["title"], "status": blocker["status"]} if blocker else None
             if parts is None:
-                counts = c.execute("SELECT COUNT(*), SUM(status IN ('done','closed')) FROM tasks WHERE parent_id=? AND (" + visible_sql + ")",
-                                   (row["id"],)).fetchone()
+                counts = c.execute("SELECT COUNT(*), SUM(status IN ('done','closed')) FROM tasks WHERE id IN ("
+                                   + TR.CHILD_IDS + ") AND (" + visible_sql + ")", (row["id"],)).fetchone()
                 parts = {"total": counts[0] or 0, "done": counts[1] or 0}
             value["parts"] = parts
         return value
@@ -752,8 +747,11 @@ def create_app(settings=None):
 
         parts = {row["parent_id"]: {"total": row["total"] or 0, "done": row["done"] or 0}
                  for row in c.execute(
-                     f"SELECT parent_id,COUNT(*) total,SUM(status IN ('done','closed')) done FROM tasks "
-                     f"WHERE parent_id IN ({marks}) AND ({visible_sql}) GROUP BY parent_id", ids)}
+                     f"SELECT r.to_task parent_id,COUNT(*) total,SUM(t.status IN ('done','closed')) done "
+                     f"FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' "
+                     f"AND r.to_task IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {visible_sql}) "
+                     f"GROUP BY r.to_task", ids)}
+        relations = TR.grouped(c, ids, visible_sql)
         routines_by_task = {row["task_id"]: row["schedule_id"] for row in c.execute(
             f"SELECT task_id,schedule_id FROM schedule_occurrences WHERE task_id IN ({marks})", ids)}
 
@@ -767,13 +765,6 @@ def create_app(settings=None):
                 f"SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id "
                 f"WHERE a.task_id IN ({marks})", ids):
             attachments[asset["task_id"]].append(brief(asset))
-
-        blocker_ids = list({row.get("blocked_by") for row in rows if row.get("blocked_by")})
-        blockers = {}
-        if blocker_ids:
-            blocker_marks = ",".join("?" * len(blocker_ids))
-            blockers = {row["id"]: dict(row) for row in c.execute(
-                f"SELECT id,title,status FROM tasks WHERE id IN ({blocker_marks}) AND ({visible_sql})", blocker_ids)}
 
         from .privacy_index import ReadIndex
         provenance = ReadIndex(c, who)
@@ -813,11 +804,8 @@ def create_app(settings=None):
         result = []
         for row in rows:
             value = task_view(row, pipelines=pipelines)
-            for relation in ("parent_id", "blocked_by"):
-                if row.get(relation) and not c.execute("SELECT 1 FROM tasks WHERE id=? AND (" + visible_sql + ")",
-                                                       (row[relation],)).fetchone():
-                    value[relation] = None
             value.update({
+                "relations": relations[row["id"]],
                 "parts": parts.get(row["id"], {"total": 0, "done": 0}),
                 "links": links[row["id"]],
                 "children_summary": summaries[row["id"]],
@@ -825,8 +813,6 @@ def create_app(settings=None):
                 "attachments": attachments[row["id"]], "cover": covers.get(row["id"]),
                 "ask": asks.get(row["id"]), "open_asks": open_counts.get(row["id"], 0),
             })
-            if row.get("blocked_by"):
-                value["blocker"] = blockers.get(row["blocked_by"])
             if row.get("next_run"):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
             if row["id"] in routines_by_task:
@@ -2186,17 +2172,9 @@ def create_app(settings=None):
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
             children = [{"id": t["id"], "title": t["title"], "status": t["status"], "owner": t["owner"]}
-                        for t in H._rows(c.execute("SELECT id,title,status,owner FROM tasks WHERE parent_id=? AND ("
+                        for t in H._rows(c.execute("SELECT id,title,status,owner FROM tasks WHERE id IN (" + TR.CHILD_IDS + ") AND ("
                                                    + auth.task_sql(c, who) + ") ORDER BY (rank IS NULL), rank, created",
                                                    (tid,)))]
-            related = H._rows(c.execute("SELECT id,title,status,owner FROM tasks WHERE id IN (" + H.RELATED_IDS
-                                        + ") AND (" + auth.task_sql(c, who) + ") ORDER BY created", (tid, tid)))
-            parent = H.task(c, row["parent_id"]) if row.get("parent_id") else None
-            if parent:
-                try:
-                    auth.task_row(c, who, parent)
-                except Problem:
-                    parent = None
             from .task_review import comment_rights
             try:
                 comment_rights(c, auth, who, tid)
@@ -2206,8 +2184,7 @@ def create_app(settings=None):
             return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
                     "events": [e for e in H.task_history(c, tid) if privacy.content_readable(c, privacy.actor(who), e)],
                     "can_comment": can_comment,
-                    "children": children, "related": related,
-                    "parent": {"id": parent["id"], "title": parent["title"], "status": parent["status"]} if parent else None,
+                    "children": children,
                     "comments": H.task_comments(c, tid, actor=privacy.actor(request.state.identity)),
                     "mover": mover(c, request.state.identity),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
@@ -2222,8 +2199,11 @@ def create_app(settings=None):
         request_id = body.request_id
         if request_id:
             who = delegated_identity(c, who, request_id)
-        if body.parent_id:
-            body.parent_id = auth.resolve_task(c, who, body.parent_id)
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        if len(parents) > 1:
+            raise Problem("relations", "A task has one parent", 422)
+        parent_id = auth.resolve_task(c, who, parents[0]) if parents else None
+        others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations if r.kind != "parent"]
         from .shared_bots import route
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
@@ -2232,19 +2212,21 @@ def create_app(settings=None):
         if privacy.private_execution(c, source):
             privacy.require_destination(c, source, owner, None, {})
             privacy.require_destination(c, source, who.actor, None, {})
-        auth.require_bot_contact(c, who, owner, task_id=body.parent_id, kind="task")
+        auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
         # not wait, and its own completions are quiet, so parking on one would wait for ever.
         # Every other bot keeps the handoff flow in `policies/handoffs.md`.
-        if (body.parent_id and who.role == "bot" and owner != who.actor
+        if (parent_id and who.role == "bot" and owner != who.actor
                 and str(owner).startswith("bot:")
                 and (H.tasks_only(c, who.actor) or H.tasks_only(c, owner))):
             raise Problem("subtask", "A bot set to tasks-only files work flat: give it its own "
                                      "task without a parent, and do not wait for it.", 422)
-        if body.parent_id:
-            auth.task(c, who, body.parent_id)
-        parent = H.task(c, body.parent_id) if body.parent_id else None
+        if parent_id:
+            auth.task(c, who, parent_id)
+        for other, _ in others:
+            auth.task(c, who, other)
+        parent = H.task(c, parent_id) if parent_id else None
         # Delegation retains the bot's sensitive default and cannot use a person's
         # explicit-public choice to override either creator or assignee defaults.
         if actual_bot and body.private is False:
@@ -2259,7 +2241,7 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if (who.role == "bot" and owner == who.actor and not body.parent_id and who.attempt_id
+        if (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
                 and private):
             origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot=?",
@@ -2277,11 +2259,11 @@ def create_app(settings=None):
                 raise Problem("privacy", "The verified requester cannot receive this private execution's other context", 403)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, body.parent_id,
+        row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor,
                             private=private, conversation_id=rooms.task_conversation_id(c, auth, owner,
-                                H.task(c, body.parent_id)["requester"] if body.parent_id and H.is_human(who.actor)
-                                and H.is_human(H.task(c, body.parent_id)["requester"]) else who.actor),
+                                parent["requester"] if parent and H.is_human(who.actor)
+                                and H.is_human(parent["requester"]) else who.actor),
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
                             number=body.number, mover=mover(c, who) or None)
@@ -2291,6 +2273,8 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        for other, kind in others:
+            TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who)}
 
     @app.post("/api/v2/tasks")
@@ -2331,7 +2315,7 @@ def create_app(settings=None):
                 raise Problem("not_found", "Unknown goal", 404)
             if body.close:
                 if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
-                                               body.labels, body.blocked_by, body.waiting_on, body.parent_id, body.rank,
+                                               body.labels, body.waiting_on, body.rank,
                                                body.goal_id, body.type, body.step, body.step_rank, body.number, body.private)):
                     raise Problem("close", "Close and edit are separate operations", 422)
                 note = body.note or ""
@@ -2344,10 +2328,6 @@ def create_app(settings=None):
                 H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet)
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
-                for name in ("blocked_by", "parent_id"):
-                    if fields[name]:
-                        fields[name] = auth.resolve_task(c, who, fields[name])
-                        auth.task(c, who, fields[name])
                 H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None)
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
             return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
@@ -2588,20 +2568,17 @@ def create_app(settings=None):
             return {"links": H.task_links(c, task_id)}
         return mutate(request, body, work)
 
-    @app.post("/api/v2/tasks/{tid}/related")
-    def task_related(request: Request, tid: str, body: M.TaskRelated):
-        """Attach another task to this one, or take it off with `remove`; each then lists the other."""
+    @app.post("/api/v2/tasks/{tid}/relations")
+    def task_relation(request: Request, tid: str, body: M.TaskRelation):
+        """Relate another task to this one (`{id} kind {task}`), or take the relation off with `remove`."""
         who = request.state.identity
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
             other_id = auth.resolve_task(c, who, body.task)
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
-            change = H.task_unrelate if body.remove else H.task_relate
-            change(c, who.actor, task_id, other_id, mover=mover(c, who))
-            return {"related": H._rows(c.execute(
-                "SELECT id,title,status,owner FROM tasks WHERE id IN (" + H.RELATED_IDS + ") AND ("
-                + auth.task_sql(c, who) + ") ORDER BY created", (task_id, task_id)))}
+            TR.relate(c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None)
+            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.get("/api/v2/preferences/{key}")

@@ -95,13 +95,22 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
+RelationKind = Literal["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"]
+
+
+class TaskRelationRef(Contract):
+    """The new task `kind` the other: `parent` files it under `task`, `blocked_by` makes it wait on it."""
+    task: ID
+    kind: RelationKind = "related"
+
+
 class TaskCreate(Contract):
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
     due: str | None = None
-    parent_id: ID | None = None
+    relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
@@ -137,9 +146,7 @@ class TaskUpdate(Contract):
     close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
-    blocked_by: str | None = Field(default=None, max_length=64)     # "" clears
     waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
-    parent_id: str | None = Field(default=None, max_length=64)      # "" clears
     rank: float | None = None
     type: ID | None = None
     step: str | None = Field(default=None, max_length=200)   # "" clears the step
@@ -247,8 +254,11 @@ class TaskLink(Contract):
     remove: ID | None = None
 
 
-class TaskRelated(Contract):
+class TaskRelation(Contract):
+    """`{id} kind {task}`: parent (task is its parent), blocks, blocked_by, related, duplicate_of,
+    follow_up (it was split off or followed up from task)."""
     task: ID
+    kind: RelationKind = "related"
     remove: bool = False
 
 

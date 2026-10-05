@@ -614,7 +614,7 @@ def parser():
 
     task = sub.add_parser("task").add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
-    s.add_argument("parent_id")
+    s.add_argument("parent")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
@@ -622,10 +622,6 @@ def parser():
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")
     s.set_defaults(fn="task tree")
-    s = task.add_parser("parent", help="move a subtree; empty parent clears it")
-    s.add_argument("id")
-    s.add_argument("parent_id")
-    s.set_defaults(fn="task reparent")
     worktree = task.add_parser("worktree", help="create or attach this task's worktree").add_subparsers(dest="worktree_sub")
     for operation, argument in (("add", "repo"), ("attach", "path"), ("setup", "repo")):
         s = worktree.add_parser(operation)
@@ -639,7 +635,7 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
-    s.add_argument("--parent")
+    s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
@@ -693,7 +689,6 @@ def parser():
     s.add_argument("--note")
     s.add_argument("--owner")
     s.add_argument("--due")
-    s.add_argument("--blocked-by", dest="blocked_by", help="the task this one waits on; '' clears it")
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
@@ -733,9 +728,12 @@ def parser():
     s.add_argument("url")
     s.add_argument("--title")
     s.set_defaults(fn="task link")
-    s = task.add_parser("relate", help="attach another task to this one; each lists the other as related")
+    s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")
+    s.add_argument("--kind", default="related", choices=["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
+                   help="parent: task is its parent; blocks / blocked_by; related (default); duplicate_of; "
+                        "follow_up: it was split off or followed up from task")
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
     s = task.add_parser("label", help="add or remove labels on a task")

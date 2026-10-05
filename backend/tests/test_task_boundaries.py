@@ -82,7 +82,8 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
 
 def test_tag_task_summaries_revoke_private_ask_provenance_and_relations(api):
     target = make_task(api, 'Review shared packet', labels=['shared-review'])
-    source = make_task(api, 'Review source packet', labels=['shared-review'], parent_id=target['id'])
+    source = make_task(api, 'Review source packet', labels=['shared-review'],
+                       relations=[{'task': target['id'], 'kind': 'parent'}])
     first = post(api, f"tasks/{source['id']}/comments", {'text': 'Source material'})['comment']
     ordinary = post(api, 'messages', {'to': 'ops', 'kind': 'ask', 'text': 'Public question',
         'conversation_id': target['conversation_id'], 'refs': {'task': target['id']}})
@@ -95,22 +96,23 @@ def test_tag_task_summaries_revoke_private_ask_provenance_and_relations(api):
     assert summary['parts']['total'] == 1
 
     post(api, 'tasks/' + source['id'], {'version': source['version'], 'private': True})
-    # A legacy dependency must also stay hidden when the tag hydrates its tasks.
+    # A dependency written behind the rules must also stay hidden when the tag hydrates its tasks.
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET blocked_by=? WHERE id=?', (source['id'], target['id']))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (source['id'], target['id'], 'blocks'))
     page = get(api, 'tags/shared-review', 'ben-test')
     assert [t['id'] for t in page['tasks']] == [target['id']]
     summary = page['tasks'][0]
     assert summary['ask']['id'] == ordinary['id'] and summary['open_asks'] == 1
     assert summary['parts']['total'] == 0 and summary['children_summary']['total'] == 0
-    assert summary['blocked_by'] is None and summary['blocker'] is None
+    assert summary['relations'] == {}
     assert source['id'] not in json.dumps(page) and 'Restricted' not in json.dumps(page)
     own = get(api, 'tags/shared-review')['tasks']
     assert {t['id'] for t in own} == {source['id'], target['id']}
     summary = next(t for t in own if t['id'] == target['id'])
     assert summary['ask']['id'] == derived['id'] and summary['open_asks'] == 2
     assert summary['parts']['total'] == 1 and summary['children_summary']['total'] == 1
-    assert summary['blocked_by'] == source['id'] and summary['blocker']['id'] == source['id']
+    assert [r['id'] for r in summary['relations']['blocks']] == [source['id']]
+    assert 'parent' not in summary['relations']       # its subtasks are its children, not relations
 
 
 def test_nested_answers_and_file_reviews_filter_each_source_message(api):

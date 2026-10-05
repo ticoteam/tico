@@ -3,7 +3,7 @@
 //    or removed one says so) and per pull request (#212 title and its checks, conflict, review and comment chips), each
 //    a GitHub link; a mover removes one with its ✕ (DELETE .../links/{id});
 //  - Subtasks: the roll-up line from children_summary, one level of children from GET /tasks/{id}/tree (the list's status
-//    icon, PR badge, owner), a child's own children on expand, and "Add subtask" posting a task with parent_id;
+//    icon, PR badge, owner), a child's own children on expand, and "Add subtask" posting a task with a parent relation;
 //  - a worktree with no repo names it from its folder, else says "unknown repo" (muted);
 //  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
 //  - the bot page's Active rows carry one small PR badge each, from the task's pr_state, and none without PRs.
@@ -59,7 +59,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       note: 'The draft is checked; the rollout still needs a decision.', labels: ['checkout'], acceptance_criteria: ['Both flows send a receipt.']});
     data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ana', requester: 'bot:eng', status: 'open'}),
       task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester: 'bot:eng', done_at: now, closed_at: now}),
-      ...data.tree.map(({children, ...t}) => task(t.id, {...t, parent_id: 't-checkout'})));
+      ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner: 'bot:eng', direction: 'out'}]}})));
     data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created: now, refs: {task: 't-checkout', note: true}},
       {id: 'm2', kind: 'ask', from_actor: 'bot:eng', body: 'Which rollout day?', created: now, answers: [], refs: {task: 't-checkout',
         questions: [{id: 'day', question: 'Which rollout day?', options: [{label: 'Tuesday'}, {label: 'Thursday'}], multi: true, other: true}]}}];
@@ -105,7 +105,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
       const owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
-      const made = task('k5', {title: body.title, owner, parent_id: body.parent_id, status: 'open'});
+      const up = (body.relations || []).find(r => r.kind === 'parent');
+      const made = task('k5', {title: body.title, owner, status: 'open', relations: up ? {parent: [{id: up.task, direction: 'out'}]} : {}});
       data.tree.push({id: 'k5', title: body.title, status: 'open', owner, pr_state: null, children: []});
       data.tasks[0].children_summary = {...data.tasks[0].children_summary, total: 11, open: 7, direct_total: 5};
       return json({task: made});
@@ -129,7 +130,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const t = data.tasks.find(x => x.id === decodeURIComponent(one[1]));
       if (!t) return json({error: {detail: 'Not found'}}, 404);
       return json({task: t, children: t.id === 't-checkout' ? data.tree.map(({children, ...k}) => k) : [],
-        parent: data.tasks.find(x => x.id === t.parent_id) || null, comments: rich && t.id === 't-checkout' ? data.comments : [],
+        comments: rich && t.id === 't-checkout' ? data.comments : [],
         events: rich && t.id === 't-checkout' ? data.events : []});
     }
     if (rich && p === '/api/v2/tasks/t-checkout/files') return json({files: data.files});
@@ -220,7 +221,7 @@ async function desktop(browser) {
   assert.ok(side.x > main.x + main.width - 1, 'the rail is to the right');
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await modal.screenshot({path: path.join(SHOTS, 'task-code-desktop-dark.png')}); }
 
-  // Add subtask: a task with parent_id, for whoever is picked (the parent's owner to start with).
+  // Add subtask: a task with a parent relation, for whoever is picked (the parent's owner to start with).
   const form = rail.locator('[data-sub-add]');
   // For whom: an avatar picker, not a native select.
   assert.equal(await form.locator('select').count(), 0);
@@ -232,7 +233,7 @@ async function desktop(browser) {
   const add = form.locator('input[name=title]');
   await add.fill('Check the receipts in the app'); await add.press('Enter');
   await rail.locator('.sub-row[data-sub="k5"]').waitFor();
-  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner: 'api', parent_id: 't-checkout'}});
+  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner: 'api', relations: [{task: 't-checkout', kind: 'parent'}]}});
   assert.equal(await rail.locator('#task-subs-h .cnt').innerText(), '5');
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'api', 'the pick stays for the next one');
   assert.equal(await page.evaluate(() => document.activeElement?.name), 'title', 'ready for the next subtask');

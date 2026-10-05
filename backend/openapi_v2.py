@@ -175,6 +175,9 @@ STABLE = [
      "Change the text of a comment you wrote; it wakes nobody and is marked edited_at", "CommentResult"),
     ("/api/v2/tasks/{tid}/comments/{mid}/delete", "post", "Tasks", "deleteTaskComment",
      "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain", "CommentResult"),
+    ("/api/v2/tasks/{tid}/relations", "post", "Tasks", "relateTask",
+     "Relate another task to this one ({task, kind}: parent, blocks, blocked_by, related, duplicate_of, "
+     "follow_up), or take the relation off with remove", "TaskResult"),
     ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
      "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
      "as themselves; a task carrying work is refused (409 has_work)", None),
@@ -456,6 +459,12 @@ SCHEMAS = {
                                       "height": {"type": ["integer", "null"]}}), {"type": "null"}]},
                 open_asks={"type": "integer", "description": "Questions on this task with no answer or dismissal"},
                 type_id={"type": ["string", "null"]}, step_id={"type": ["string", "null"]},
+                relations={"type": "object", "description": "Related tasks the reader may open, by kind (parent, "
+                           "blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; "
+                           "direction is out when this task is the subtask, blocker, duplicate or follow-up, in for "
+                           "the other end, both for related. Subtasks are in the task's children.",
+                           "additionalProperties": items(obj({"id": "s", "title": "s", "status": "s", "owner": "s",
+                                                              "direction": "s"}))},
                 type={"oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}]},
                 step={"oneOf": [ref("TaskStep"), {"type": "null"}]},
                 body={"type": "string", "description": "Left out of a list asked for with brief=true, "
@@ -539,7 +548,7 @@ SCHEMAS = {
     "TaskList": obj({"tasks": items(ref("Task")), "next_offset": {"type": ["integer", "null"]}},
                      required=["tasks", "next_offset"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
-    "TaskDetail": obj({"task": ref("Task"), "events": "a", "children": "a", "related": "a", "comments": items(ref("Message")),
+    "TaskDetail": obj({"task": ref("Task"), "events": "a", "children": "a", "comments": items(ref("Message")),
                        "messages": items(ref("Message")), "has_more": "b", "can_comment": "b", "mover": "b"},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),

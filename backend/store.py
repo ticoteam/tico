@@ -836,7 +836,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=29").fetchone():
                     # The tasks board: a lane picks the
                     # pipeline, a rank is the place in the owner's queue, labels stand in for
-                    # projects, blocked_by points at the task in the way. task_links and
+                    # projects (blockers are task_relations rows now, migration 60). task_links and
                     # preferences are created above. A comment tagged `quiet` never queues a
                     # turn (same explicit trigger replacement as migration 11).
                     columns = {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
@@ -846,8 +846,6 @@ class Store:
                         c.execute("ALTER TABLE tasks ADD COLUMN rank REAL")
                     if "labels_json" not in columns:
                         c.execute("ALTER TABLE tasks ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'")
-                    if "blocked_by" not in columns:
-                        c.execute("ALTER TABLE tasks ADD COLUMN blocked_by TEXT")
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
                     # day one looks like yesterday: every open task keeps its creation order
                     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
@@ -890,8 +888,6 @@ class Store:
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
                               "lane,COALESCE(closed_at,done_at,updated,created) DESC,id DESC) "
                               "WHERE status IN ('done','closed')")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id)")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_blocked_by ON tasks(blocked_by)")
                     c.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
                     c.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
                     c.execute("INSERT INTO cloud_migrations VALUES(33,?)", (H.now(),))
@@ -1017,6 +1013,12 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
                     H._apply(c, H.WAITING_ON_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
+                    # Every task-to-task relationship in task_relations; tasks.parent_id and
+                    # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
+                    from . import task_relations as _task_relations
+                    _task_relations.migrate(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash

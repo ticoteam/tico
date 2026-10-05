@@ -144,7 +144,8 @@ def guarded(c, auth, who, inner, function):
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
         "task_reminders": by_task, "task_assets": by_task, "task_links": by_task,
-        "task_relations": "task_id IN (SELECT id FROM tasks) AND related_id IN (SELECT id FROM tasks)",
+        # A relation is read only when the caller may read both of its tasks.
+        "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
                       ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE to_actor={me})") + ")"),
@@ -278,12 +279,6 @@ def connect(path, c, auth, who, trace=None):
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         for table, (predicate, _) in tables.items():
             projection = "*"
-            if table == "tasks":
-                columns = [r[1] for r in conn.execute('PRAGMA main.table_info("tasks")')]
-                projection = ",".join(f'CASE WHEN "{col}" IN (SELECT id FROM tasks) THEN "{col}" ELSE NULL END AS "{col}"'
-                                      if col in ("parent_id", "blocked_by") else f'"{col}"' for col in columns)
-                # Avoid a self-recursive view while checking the referenced task's rights.
-                projection = projection.replace("SELECT id FROM tasks", f"SELECT id FROM {inner('tasks')} WHERE {predicate}")
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.

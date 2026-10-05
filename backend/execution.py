@@ -747,6 +747,16 @@ class Execution:
                               'WHERE o.task_id=?', (task['id'],)).fetchone()
             if saved:
                 routine = dict(saved)
+            # Its related tasks the bot may open (kind, direction, title, status); one it may not
+            # open is left out without a trace.
+            def readable(other):
+                try:
+                    self.auth.task_row(c, bot_who, other)
+                    return True
+                except Problem:
+                    return False
+            from .task_relations import for_prompt
+            task = {**task, "relations": for_prompt(c, task["id"], lambda other: bool(other) and readable(other))}
         recovery = c.execute("SELECT * FROM job_recovery WHERE job_id=? AND attempt_id=? AND decision='resume'",
                              (row['id'],row['attempt_id'])).fetchone()
         if recovery:

@@ -11530,6 +11530,77 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/relations": {
+      "post": {
+        "summary": "Relate another task to this one ({task, kind}: parent, blocks, blocked_by, related, duplicate_of, follow_up), or take the relation off with remove",
+        "operationId": "relateTask",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskRelation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/restore": {
       "post": {
         "summary": "Put a deleted task back with its conversation, comments, links and number: whoever deleted it, its requester or a mover, signed in as themselves",
@@ -20475,6 +20546,41 @@
               "null"
             ]
           },
+          "relations": {
+            "type": "object",
+            "description": "Related tasks the reader may open, by kind (parent, blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; direction is out when this task is the subtask, blocker, duplicate or follow-up, in for the other end, both for related. Subtasks are in the task's children.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "owner": {
+                    "type": "string"
+                  },
+                  "direction": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "direction",
+                  "id",
+                  "owner",
+                  "status",
+                  "title"
+                ],
+                "additionalProperties": true
+              }
+            }
+          },
           "type": {
             "oneOf": [
               {
@@ -20725,18 +20831,13 @@
             ],
             "title": "Due"
           },
-          "parent_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Id"
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRelationRef"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Relations"
           },
           "goal_id": {
             "anyOf": [
@@ -20871,9 +20972,6 @@
             "type": "array"
           },
           "children": {
-            "type": "array"
-          },
-          "related": {
             "type": "array"
           },
           "comments": {
@@ -21127,6 +21225,71 @@
           "tasks"
         ],
         "additionalProperties": true
+      },
+      "TaskRelation": {
+        "properties": {
+          "task": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Task"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "parent",
+              "blocks",
+              "blocked_by",
+              "related",
+              "duplicate_of",
+              "follow_up"
+            ],
+            "title": "Kind",
+            "default": "related"
+          },
+          "remove": {
+            "type": "boolean",
+            "title": "Remove",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task"
+        ],
+        "title": "TaskRelation",
+        "description": "`{id} kind {task}`: parent (task is its parent), blocks, blocked_by, related, duplicate_of,\nfollow_up (it was split off or followed up from task)."
+      },
+      "TaskRelationRef": {
+        "properties": {
+          "task": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Task"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "parent",
+              "blocks",
+              "blocked_by",
+              "related",
+              "duplicate_of",
+              "follow_up"
+            ],
+            "title": "Kind",
+            "default": "related"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task"
+        ],
+        "title": "TaskRelationRef",
+        "description": "The new task `kind` the other: `parent` files it under `task`, `blocked_by` makes it wait on it."
       },
       "TaskResult": {
         "type": "object",
@@ -21578,18 +21741,6 @@
             ],
             "title": "Labels"
           },
-          "blocked_by": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Blocked By"
-          },
           "waiting_on": {
             "anyOf": [
               {
@@ -21601,18 +21752,6 @@
               }
             ],
             "title": "Waiting On"
-          },
-          "parent_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Id"
           },
           "rank": {
             "anyOf": [

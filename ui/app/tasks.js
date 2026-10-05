@@ -31,8 +31,17 @@ const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
 function taskAskToPerson(t) {
   return !!(t?.ask?.body && actorPerson(t.ask.to_actor));
 }
+// A task's relations (the server's `relations`, by kind; each {id, title, status, owner, direction}). `out` is the
+// task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
+const taskRels = (t, kind, direction) => ((t?.relations || {})[kind] || []).filter(r => !direction || r.direction === direction);
+const taskParent = t => taskRels(t, 'parent', 'out')[0] || null;
+const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
+const taskBlockers = t => taskRels(t, 'blocks', 'in');
+// The related count a board card shows: everything but its parent (subtasks have their own ring).
+const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
 function taskWaitLine(t) {
-  if (t?.blocker?.title) return `Blocked by: ${t.blocker.title}`;
+  const blocker = taskBlockers(t)[0];
+  if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
   if (ask) return ask;
   return String(t?.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
@@ -47,7 +56,7 @@ function hubColumn(t) {
   if (status === 'done' || status === 'closed') return 'done';
   if (status === 'declined') return 'needs';
   if (actorPerson(t.owner) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
-  if (status === 'waiting' || t.blocked_by) return 'waiting';
+  if (status === 'waiting' || taskBlockers(t).length) return 'waiting';
   return 'doing';
 }
 // The person an open task waits on: you (myActor()), another person ('human:sam'), someone who cannot be told
@@ -230,7 +239,7 @@ function actorFace(actor, size = 18) {
 function taskRowTip(t) {
   const lines = [t.title || ''];
   const meta = [taskStatusLabel(t), `Owner: ${actorLabel(t.owner)}`, taskSourceLine(t)];
-  if (t.parent?.title) meta.push(`Part of ${t.parent.title}`);
+  if (taskParent(t)?.title) meta.push(`Part of ${taskParent(t).title}`);
   lines.push(meta.filter(Boolean).join(' · '));
   const note = taskWaitLine(t);
   if (note) lines.push(plainMd(note));
@@ -238,13 +247,19 @@ function taskRowTip(t) {
 }
 // The note a row shows: what a waiting, blocked or asking task waits on. Amber only when it waits on you.
 function taskRowNote(t) {
-  if (!t || taskFinished(t) || (t.status !== 'waiting' && !t.blocked_by && !taskAskToPerson(t) && t.status !== 'declined')) return null;
+  if (!t || taskFinished(t) || (t.status !== 'waiting' && !taskBlockers(t).length && !taskAskToPerson(t) && t.status !== 'declined')) return null;
   const text = clipLine(plainMd(taskWaitLine(t)), 220);
   if (!text) return null;
   return {text, mine: taskNeedsViewer(t)};
 }
 
 // ---- the board: one column per state; an empty column folds to a thin strip with its name and count
+// A small count of the card's related tasks, like an attachment count.
+function taskRelChip(t) {
+  const n = taskRelCount(t); if (!n) return '';
+  const words = `${n} related task${n === 1 ? '' : 's'}`;
+  return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
+}
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
 function taskCard(it) {
@@ -254,7 +269,7 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}<span class="spacer"></span>${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       <span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>
       <span class="age tnum" title="${esc(fmt(it.updated))}">${esc(ageShort(it.updated))}</span></div>
   </div>`);

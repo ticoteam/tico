@@ -4,6 +4,7 @@ import json
 import pytest
 
 from backend import hubdb as H
+from backend import task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post
 
 
@@ -76,14 +77,17 @@ def test_private_defaults_reassignment_and_human_publication(api):
 def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
     parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
     child = post(api, 'tasks', {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
-                               'parent_id': parent['id']}, token='ben-test')
+                               'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token='ben-test')
     assert child['private'] and child['requester'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
-    published = post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False, 'parent_id': ''}, token='ben-test')
-    assert not published['private'] and published['parent_id'] is None
+    detached = post(api, 'tasks/' + child['id'] + '/relations', {'task': parent['id'], 'kind': 'parent', 'remove': True},
+                    token='ben-test')
+    assert 'parent' not in detached['relations']
+    published = post(api, 'tasks/' + child['id'], {'version': detached['version'], 'private': False}, token='ben-test')
+    assert not published['private']
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
@@ -101,7 +105,7 @@ def test_cached_comment_response_cannot_bypass_reassignment(api):
 def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     ordinary = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review ordinary work', 'body': 'Ordinary content.'})
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review the older work', 'body': 'Older content.'})
-    child = post(api, 'tasks', {'owner': 'ben', 'title': 'Review related work', 'body': 'Related content.', 'parent_id': task['id']})
+    child = post(api, 'tasks', {'owner': 'ben', 'title': 'Review related work', 'body': 'Related content.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     routine = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review scheduled work', 'body': 'Scheduled content.'})
     orphan = post(api, 'tasks', {'owner': 'priya', 'title': 'Review orphaned work', 'body': 'Orphan content.'})
     post(api, 'tasks/' + task['id'] + '/files', {'name': 'legacy-brief.md', 'text': 'Legacy attachment bytes.'})
@@ -165,11 +169,11 @@ def test_private_reassignment_updates_thread_members_without_losing_messages(api
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
     private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
-    post(api, 'tasks/' + public['id'], {'version': public['version'], 'blocked_by': private['id']}, expected=422)
+    post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET blocked_by=? WHERE id=?', (private['id'], public['id']))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
         H._unblock(c, H.task(c, private['id']))
-        assert H.task(c, public['id'])['blocked_by'] == private['id']
+        assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
             H.task_update(c, 'bot:cpo', private['id'], body='Read secrets/SECRET-PACKET')
         assert exc.value.private
