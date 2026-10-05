@@ -166,8 +166,9 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     public = (root / ".github/workflows/app.yml").read_text()
     assert "vars.TICO_" not in public and "TICO_COMPANY_APPS" not in public
     workflow = yaml.safe_load((root / ".github/workflows/company-app.yml").read_text())
-    upload = next(step for step in workflow["jobs"]["build"]["steps"] if "actions/upload-artifact@" in step.get("uses", ""))
-    assert upload["with"]["path"] == "out/bundles.enc"
+    for job in ("build", "rebrand-mac"):
+        upload = next(step for step in workflow["jobs"][job]["steps"] if "actions/upload-artifact@" in step.get("uses", ""))
+        assert upload["with"]["path"] == "out/bundles.enc"
     release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
     assert "needs" not in release["jobs"]["release"]   # the server release never waits for desktop builds
     assert "release" in release["jobs"]["desktop-assets"]["needs"]

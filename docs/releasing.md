@@ -223,15 +223,30 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
-each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
-installer with signature, and Linux AppImage with signature plus Debian package. The app version
-is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
-and never save to it, so no branded output reaches a cache a public build could read. A tag whose shell did not change
-leaves each company's bucket manifest as it is; after adding a company, run the Release workflow from the current tag
-with `desktop` checked. Every build uses the same updater signing key as the generic app,
-with `team.tico.env.<stable UUID>` as its bundle ID, its own name and PNG icon, its own server
-address, and `<runner_url or url>/download/latest.json` as the update endpoint.
+A version tag whose shell changed publishes, for each configured company, its macOS universal DMG and signed updater
+archive, Windows NSIS installer with signature, and Linux AppImage with signature plus Debian package
+(`.github/workflows/company-app.yml`, called twice by the Release workflow):
+
+- **macOS is a rebrand, not a build.** After the generic desktop build finishes, the `publish` stage downloads that
+  run's generic `app-universal-apple-darwin` artifact, unpacks the `.app`, and patches in the company: `Info.plist`
+  bundle ID and display name, the PNG icon converted to `.icns`, and `Contents/Resources/company.json` (name, server
+  URL, slug, tray label, bundle ID, updater feed). It then re-signs with the Developer ID (ad hoc without one), builds
+  the DMG, notarizes and staples it when the Apple secrets exist, and signs a fresh `.app.tar.gz` with the updater key
+  (`scripts/company_apps.py rebrand`). This takes a few minutes per company, most of it notarization.
+- **Windows and Linux still compile per company** (the `build` stage, beside the generic build). Patching the NSIS
+  installer's compressed payload and repacking AppImage/deb is not done yet; those builds restore the generic build's
+  Rust cache (compiled dependencies and the Tauri CLI) and never save to it, so no branded output reaches a cache a
+  public build could read. The shell reads `company.json` beside the Windows executable or in `usr/lib/<binary>/` on
+  Linux, so moving them to a rebrand later needs no shell change.
+
+The shell reads its company identity at start: build-time values (`scripts/app.sh --env`, the Windows and Linux
+builds) first, then the bundled `company.json`, then generic Tico. It applies the file's bundle ID, name and updater
+feed to the runtime configuration, so app data folders, single-instance locking and updates follow the company, not
+the generic build's `tauri.conf.json`. An invalid `company.json` leaves the generic app. The app version is the
+generic build's, stamped from the tag. A tag whose shell did not change leaves each company's bucket manifest as it
+is; after adding a company, run the Release workflow from the current tag with `desktop` checked. Every company app uses
+the same updater signing key as the generic app, with `team.tico.env.<stable UUID>` as its bundle ID, its own name and
+PNG icon, its own server address, and `<runner_url or url>/download/latest.json` as the update endpoint.
 
 The company shell preserves its configured updater endpoint, including a separate public
 `runner_url`. If the configured endpoint is the generic default, it uses the selected hub's
@@ -267,7 +282,8 @@ letters or digits fall back to `TIC`. To distinguish colliding names, add option
 uppercase. Omitted or empty means automatic. Labels are display-only: they never change
 the UUID, sessions, updater endpoint, or company Dock icon. The native label and template
 mark follow light/dark appearance; Windows/Linux and generic builds keep their existing tray.
-Changes to the app name, company slug, or label trigger Rust recompilation. No generated
+On macOS, changes to the app name, slug or label only change `company.json`; on Windows and Linux they trigger Rust
+recompilation. No generated
 fonts or colored tray images are needed, and private labels are masked with other company
 configuration in CI.
 

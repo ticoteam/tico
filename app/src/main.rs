@@ -1,7 +1,8 @@
 // Tico: a thin native shell around the local or cloud hub.
 // A bundled first-run page selects the server. One window on the hub's own page and a tray item
-// toggle the window with a left click and show status on a right click. One source builds every company's app on macOS, Windows and
-// Linux: the name, icon, identifier and server URL come in at build time (scripts/app.sh).
+// toggle the window with a left click and show status on a right click. One generic build serves every company: CI
+// rebrands it with a bundled company.json (name, server URL, identifier, updater feed; see config.rs). Build-time values
+// (scripts/app.sh, and the Windows and Linux company builds) still take precedence.
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 mod config;
@@ -130,7 +131,11 @@ fn main() {
             }
         })
         .on_menu_event(|app, event| menu_event(app, event.id().as_ref()))
-        .build(tauri::generate_context!())
+        .build({
+            let mut context = tauri::generate_context!();
+            config::apply_company(context.config_mut());
+            context
+        })
         .expect("the app could not start")
         .run(|_app, _event| {});
 }
@@ -339,7 +344,7 @@ fn saved_path() -> Option<std::path::PathBuf> {
 
 fn dirs_config_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let name = option_env!("TICO_ENV_SLUG").filter(|s| !s.is_empty()).unwrap_or("tico");
+    let name = Some(config::env_slug()).filter(|s| !s.is_empty()).unwrap_or("tico");
     let dir = std::path::PathBuf::from(home).join(".config").join("tico").join("app").join(name);
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
@@ -570,7 +575,7 @@ fn build_tray(app: &App) -> tauri::Result<()> {
     // Native text and the template mark follow macOS light/dark appearance together.
     #[cfg(target_os = "macos")]
     let builder = match identity::tray_label(config::app_name(),
-        option_env!("TICO_ENV_SLUG").unwrap_or(""), option_env!("TICO_TRAY_LABEL").unwrap_or("")) {
+        config::env_slug(), config::tray_label()) {
         Some(label) => builder.title(label),
         None => builder,
     };

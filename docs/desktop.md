@@ -53,7 +53,10 @@ GitHub builds.
 
 Download your company's app from your own Tico page. It has your team's name and logo, opens
 your Team directly, and updates itself from your server. Each company has a stable bundle ID,
-so its app can coexist with another company's app and the generic Tico app. The download API
+so its app can coexist with another company's app and the generic Tico app. The Mac app is the
+generic Tico build with your team's name, logo, bundle ID and server added in a `company.json`
+inside the app, re-signed and notarized; the Windows and Linux apps are still built per company.
+The download API
 `GET /api/download/{mac|windows|linux}` returns `app_kind: company` or `generic`; a frontend
 can show **Download Tico for <team name>** for a company build.
 
@@ -146,4 +149,5 @@ sign-in proxy, or use another public HTTPS PNG URL.
 When blob storage uses S3, its server credential also needs DeleteObject for retired icon blobs;
 a cleanup failure preserves the current icon and blocks another replacement until cleanup succeeds.
 
-Operators configure private company builds as described in [Releasing](releasing.md#company-apps).
+Operators configure private company builds (the macOS rebrand and the Windows and Linux builds) as described in
+[Releasing](releasing.md#company-apps).
