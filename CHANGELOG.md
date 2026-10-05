@@ -7,8 +7,16 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-10-05
+
 ### Added
 - Delete a task made by mistake into a trash it can be restored from: its human requester, or anyone who may move any task, with `hub task delete`, `hub_task_delete` or `POST /api/v2/tasks/{id}/delete`. The task leaves every list, board, search and bot context at once and keeps its number; `hub task restore` puts it back with its conversation, comments and links. A task carrying work (a bot turn, a file, an approval, a subtask) is refused; bots close instead. `python -m backend.manage delete-tasks` deletes a list offline, such as a bulk import run twice, and `purge-deleted-tasks` empties the trash for good ([Tasks](docs/tasks.md#deleting-tasks-made-by-mistake)).
+- Live Meetings: bots join a text meeting, answer when named, and the meeting can be replayed; attaching a bot needs Write access to it, and the saved meeting waits in each person's review queue.
+- Temporary assignment branches: a task can get its own short-lived engineer copy of a role, with a shared learning trunk, a three-slot limit and cleanup that never removes unpublished or stashed work.
+- An Owner can create an empty private product repository from Settings or `hub repo product-create`, after a preview and an exact-name confirmation.
+- Owners and admins can delete a group from the team chart; its teammates and groups move up a level.
+- A bot can mark its task as waiting on a named person (`hub task update --status waiting --on <person>`); the task shows in that person's Needs you with a Waiting label and counts as needing them.
+- Each computer checks every 15 minutes that it can really start a container; Health warns, naming the computer and its operator, after two failures in a row.
 
 ### Changed
 - The Librarian is the market's curator: it builds the first market map and now keeps it current, with a daily **Curate the market** routine and an **Urgent market insight** routine, both seeded on a new install and added to an existing Librarian at its next start. The server accepts market graph writes, and serves the insight queue, only to the Librarian and the owner ([Librarian](docs/librarian.md)).
@@ -24,6 +32,10 @@ All notable changes to Tico are recorded here. The format follows
 - A bot with a stopped run saved for later shows idle, not crashed, after each later run that finishes cleanly; the saved run stays in Health until reviewed.
 - The server updater refuses an update when `compose.override.yaml` pins the `server` or `slack` image, and rolls back when the switched server does not run the pulled image or report the target release. A rollback from an untagged image returns to the release the server reported ([Updates](docs/updates.md#moving-a-hand-managed-install-onto-the-updater)).
 - Docker installs pass `TICO_APP_NAME`, `TICO_ASSISTANT_NAME`, `TICO_INTEGRATIONS_DIR`, `AWS_REGION` and `AWS_DEFAULT_REGION` to the server and Slack, and `TICO_SLACK_SECRET_ARN` to Slack, when set; an empty AWS region is treated as unset.
+- A runner input that was taken in and then requeued no longer fails every poll; it moves to the next run once, and a private task's input waits for its own run instead of joining another task's.
+- Interrupted worktree creation resumes, and worktrees on computers still running an older release keep their state instead of looping restores.
+- A Codex model at capacity counts as a usage limit, not a failed run.
+- A task number given by hand can no longer take a deleted task's number, so a restored task keeps it.
 
 ## [0.3.21] - 2026-10-04
 
