@@ -16,7 +16,7 @@
     },
     {
       "name": "Repositories",
-      "description": "Team repositories and bot repository access."
+      "description": "Team repositories, Owner product-repository creation, and bot repository access."
     },
     {
       "name": "Subscriptions",
@@ -4371,6 +4371,120 @@
         },
         "tags": [
           "Files"
+        ]
+      }
+    },
+    "/api/v2/github/product-repos": {
+      "post": {
+        "summary": "Create the confirmed product repository",
+        "operationId": "createProductRepository",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductRepoCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRepositoryResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Repositories"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/github/product-repos/preview": {
+      "get": {
+        "summary": "Preview an empty private product repository",
+        "operationId": "previewProductRepository",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRepositoryPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Repositories"
         ]
       }
     },
@@ -18651,6 +18765,128 @@
             }
           }
         }
+      },
+      "ProductRepoCreate": {
+        "properties": {
+          "org": {
+            "type": "string",
+            "maxLength": 39,
+            "minLength": 1,
+            "title": "Org"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "visibility": {
+            "type": "string",
+            "const": "private",
+            "title": "Visibility"
+          },
+          "auto_init": {
+            "type": "boolean",
+            "const": false,
+            "title": "Auto Init"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "org",
+          "name",
+          "visibility",
+          "auto_init",
+          "confirmed"
+        ],
+        "title": "ProductRepoCreate"
+      },
+      "ProductRepositoryPreview": {
+        "type": "object",
+        "properties": {
+          "org": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "private"
+            ]
+          },
+          "auto_init": {
+            "type": "boolean"
+          },
+          "capability": {
+            "enum": [
+              "available",
+              "missing",
+              "unknown",
+              "not_installed"
+            ]
+          },
+          "capability_detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "auto_init",
+          "capability",
+          "capability_detail",
+          "name",
+          "org",
+          "repository",
+          "visibility"
+        ],
+        "additionalProperties": true
+      },
+      "ProductRepositoryResult": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "html_url": {
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "private"
+            ]
+          },
+          "auto_init": {
+            "type": "boolean"
+          },
+          "installation_access": {
+            "enum": [
+              "available",
+              "owner_action_required",
+              "unverified"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "auto_init",
+          "html_url",
+          "installation_access",
+          "note",
+          "repository",
+          "visibility"
+        ],
+        "additionalProperties": true
       },
       "QuestionOption": {
         "properties": {

@@ -13,6 +13,7 @@ const FULL = {see: true, read: true, write: true};
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], calls = [], failures = new Set();
+  const deletion = {status: 0, hold: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
     {id: 'ben', name: 'Ben Cole', org_parent: 'p:ana', team: 'marketing', reports_to: 'ana'},
@@ -46,7 +47,7 @@ async function open(browser, me, branches = false) {
       for (const one of (body.remove || {})[kind] || []) rows.find(r => r[key] === one).team = '';
     }
   };
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
@@ -74,6 +75,17 @@ async function open(browser, me, branches = false) {
       const body = request.postDataJSON(); calls.push(['PATCH', m[1], body]); apply(m[1], body);
       return json({id: m[1]});
     }
+    if ((m = p.match(/^\/api\/v2\/groups\/([^/]+)$/)) && method === 'DELETE') {
+      calls.push(['DELETE', m[1]]);
+      if (deletion.hold) await deletion.hold;
+      const group = groups.find(g => g.id === m[1]), status = deletion.status || (group ? 0 : 404);
+      if (status) return route.fulfill({status, contentType: 'application/json',
+        body: JSON.stringify({error: {detail: status === 403 ? 'Permission denied' : 'Group not found'}})});
+      for (const child of groups) if (child.parent === group.id) child.parent = group.parent;
+      for (const teammate of [...people, ...bots]) if (teammate.team === group.id) teammate.team = group.parent;
+      groups.splice(groups.indexOf(group), 1);
+      return json({id: m[1], deleted: true, moved_to: group.parent});
+    }
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -82,7 +94,7 @@ async function open(browser, me, branches = false) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
   await page.locator('#tree a.node').first().waitFor();
-  return {page, errors, calls, people, groups, bots, failures};
+  return {page, errors, calls, people, groups, bots, failures, deletion};
 }
 
 // The chart as nested text: a group is {name: [...]}, a human or a bot is its name.
@@ -158,7 +170,7 @@ async function owner(browser) {
   assert.equal(await page.locator('#nav-inboxes-section').isHidden(), true);
   for (const name of ['Message bots']) {
     assert.equal(await row(page, name).getAttribute('draggable'), null);
-    assert.equal(await row(page, name).locator('[data-group-add], [data-group-rename]').count(), 0);
+    assert.equal(await row(page, name).locator('[data-group-add], [data-group-rename], [data-group-delete]').count(), 0);
   }
   await row(page, 'Message bots').locator('.dept-label').click();
   assert.equal(await node(page, 'b:inbox').isVisible(), false);
@@ -229,11 +241,73 @@ async function member(browser) {
   assert.deepEqual(await shape(page), [
     {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
   assert.equal(await page.locator('#org-add-group').isVisible(), false);
-  assert.equal(await page.locator('[data-group-rename], [data-group-add], #tree .org-no-group').count(), 0);
+  assert.equal(await page.locator('[data-group-rename], [data-group-add], [data-group-delete], #tree .org-no-group').count(), 0);
+  await page.evaluate(() => orgGroupDelete('marketing'));
   assert.equal(await page.locator('#tree .noderow[data-org^="g:"][draggable="true"]').count(), 0);
   assert.equal(await node(page, 'b:scout').getAttribute('draggable'), null, 'a member moves only what reports up to them');
   assert.deepEqual(errors, []);
   await page.close();
+}
+
+async function deleteGroups(browser) {
+  const clickDelete = async (page, id) => {
+    await node(page, 'g:' + id).hover();
+    await page.locator(`[data-group-delete="${id}"]`).click();
+  };
+  for (const me of [{id: 'ana', role: 'owner', cloud: true}, {id: 'ben', role: 'viewer', bot_admin: true, cloud: true}]) {
+    const {page, errors, calls, people, groups, bots, deletion} = await open(browser, me);
+    const reporting = [...people, ...bots].map(p => [p.id || p.name, p.reports_to]);
+    assert.equal(await row(page, 'Message bots').locator('[data-group-delete]').count(), 0);
+    page.once('dialog', async dialog => { assert.match(dialog.message(), /^Delete Sales\? Its teammates and groups move to .+; its subscriptions are unassigned\.$/); await dialog.dismiss(); });
+    await clickDelete(page, 'sales');
+    assert.deepEqual(calls, [], 'cancellation never sends a delete');
+
+    deletion.status = 403;
+    page.once('dialog', dialog => dialog.accept());
+    await clickDelete(page, 'sales');
+    await page.locator('.toast.err', {hasText: 'Permission denied'}).waitFor();
+    assert.equal(await row(page, 'Sales').count(), 1, 'permission loss preserves the displayed group');
+    assert.deepEqual(calls.splice(0), [['DELETE', 'sales']]);
+    deletion.status = 0;
+
+    groups.push({id: 'links', name: 'Links', parent: 'seo'});
+    await page.evaluate(() => refresh(true));
+    let release;
+    deletion.hold = new Promise(resolve => { release = resolve; });
+    page.once('dialog', async dialog => {
+      assert.equal(dialog.message(), 'Delete SEO? Its teammates and groups move to Marketing; its subscriptions are unassigned.');
+      await dialog.accept();
+    });
+    await clickDelete(page, 'seo');
+    await page.waitForFunction(() => document.querySelector('[data-group-delete=seo]')?.disabled);
+    await page.evaluate(() => refresh(false));
+    assert.equal(await page.locator('[data-group-delete=seo]').isDisabled(), true);
+    await page.evaluate(() => orgGroupDelete('seo'));
+    assert.deepEqual(calls, [['DELETE', 'seo']], 'refresh and a repeated invocation cannot duplicate deletion');
+    release(); deletion.hold = null;
+    await page.locator('[data-group-delete=seo]').waitFor({state: 'detached'});
+    assert.equal(groups.find(g => g.id === 'links').parent, 'marketing');
+    assert.equal(bots.find(b => b.name === 'writer').team, 'marketing');
+    assert.equal(await row(page, 'Marketing').locator('..').locator('[data-org="b:writer"]').count(), 1);
+
+    page.once('dialog', async dialog => { assert.match(dialog.message(), /move to No group/); await dialog.accept(); });
+    await clickDelete(page, 'marketing');
+    await page.locator('[data-group-delete=marketing]').waitFor({state: 'detached'});
+    assert.equal(groups.find(g => g.id === 'links').parent, '');
+    assert.equal(people.find(p => p.id === 'ben').team, '');
+    assert.equal(bots.find(b => b.name === 'cmo').team, '');
+    assert.equal(people.length, 3); assert.equal(bots.length, 6);
+    assert.deepEqual([...people, ...bots].map(p => [p.id || p.name, p.reports_to]), reporting);
+
+    // Another session removed Sales; a stale click refreshes the chart and reports the refusal.
+    groups.splice(groups.findIndex(g => g.id === 'sales'), 1);
+    page.once('dialog', dialog => dialog.accept());
+    await clickDelete(page, 'sales');
+    await page.locator('.toast.err', {hasText: 'Group not found'}).waitFor();
+    assert.equal(await row(page, 'Sales').count(), 0);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
 }
 
 async function personalBranches(browser) {
@@ -269,6 +343,7 @@ async function personalBranches(browser) {
     await externalChanges(browser);
     await owner(browser);
     await member(browser);
+    await deleteGroups(browser);
     await personalBranches(browser);
     console.log('PASS: groups nest in the team chart; owners add, rename, drag into and nest groups; members read.');
   } finally { await browser.close(); }

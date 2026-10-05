@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 
+import pytest
+
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
@@ -81,6 +83,76 @@ def test_kpi_archive_and_historical_cli_commands_call_supported_routes(monkeypat
     assert sent == [("GET", "kpis", {"goal_id": None, "owner": None, "unlinked": None,
                                       "auto_for": None, "include_archived": "1"}),
                     ("POST", "kpis/K1/archive", {}), ("POST", "kpis/K1/restore", {})]
+
+
+def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation(monkeypatch):
+    from clients import remotecli
+    from io import StringIO
+    sent = []
+
+    class Api:
+        def get(self, path, **query):
+            sent.append(("GET", path, query))
+            return {"org": "Acme", "name": "tico-recorder", "repository": "Acme/tico-recorder",
+                    "visibility": "private", "auto_init": False, "capability": "available",
+                    "capability_detail": "Administration: write verified"}
+        def post(self, path, body, key=None):
+            sent.append(("POST", path, body, key))
+            return {"repository": "Acme/tico-recorder"}
+
+    args = hubcli.parser().parse_args(["repo", "product-create", "tico-recorder"])
+    assert args.fn == "repo product-create"
+    out = StringIO("Acme/tico-recorder\n")
+    out.isatty = lambda: True
+    remotecli.product_repo_create(Api(), args.name, stdin=out, stderr=StringIO())
+    assert sent[0] == ("GET", "github/product-repos/preview", {"name": "tico-recorder"})
+    assert sent[1][:3] == ("POST", "github/product-repos", {"org": "Acme", "name": "tico-recorder",
+                                                               "visibility": "private", "auto_init": False,
+                                                               "confirmed": True})
+    assert sent[1][3] and len(sent[1][3]) <= 200
+
+
+def test_product_repository_cli_never_writes_without_matching_confirmation(monkeypatch):
+    from clients import remotecli
+    from io import StringIO
+    calls = []
+
+    class Api:
+        def get(self, path, **query):
+            return {"org": "Acme", "name": "tico-recorder", "repository": "Acme/tico-recorder",
+                    "visibility": "private", "auto_init": False, "capability": "available",
+                    "capability_detail": "Administration: write verified"}
+        def post(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    out = StringIO("Acme/other\n")
+    out.isatty = lambda: True
+    with pytest.raises(remotecli.APIError, match="Confirmation did not match"):
+        remotecli.product_repo_create(Api(), "tico-recorder", stdin=out, stderr=StringIO())
+    assert calls == []
+
+
+def test_product_repository_cli_refuses_missing_capability_and_noninteractive_confirmation():
+    from clients import remotecli
+    from io import StringIO
+
+    class Api:
+        writes = 0
+        def __init__(self, capability):
+            self.capability = capability
+        def get(self, path, **query):
+            return {"org": "Acme", "name": "tico-recorder", "repository": "Acme/tico-recorder",
+                    "visibility": "private", "auto_init": False, "capability": self.capability,
+                    "capability_detail": "Live Administration permission is not available"}
+        def post(self, *args, **kwargs):
+            self.writes += 1
+
+    with pytest.raises(remotecli.APIError, match="not available"):
+        remotecli.product_repo_create(Api("missing"), "tico-recorder", stdin=StringIO(""), stderr=StringIO())
+    available = Api("available")
+    with pytest.raises(remotecli.APIError, match="requires an interactive terminal"):
+        remotecli.product_repo_create(available, "tico-recorder", stdin=StringIO("Acme/tico-recorder\n"), stderr=StringIO())
+    assert available.writes == 0
 
 
 class Parser(unittest.TestCase):
