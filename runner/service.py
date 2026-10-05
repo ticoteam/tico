@@ -20,7 +20,7 @@ import yaml
 from clients import mcp_servers
 from clients.manifest import manifest_path, repo_dir, tools_of
 from clients.tico import APIError, Client
-from . import credential_socket, declared_access, files_publish, git_credentials, harness_tools, isolation, mail_key, op, profiles, usage
+from . import container_probe, credential_socket, declared_access, files_publish, git_credentials, harness_tools, isolation, mail_key, op, profiles, usage
 from . import redact as redact_mod
 from . import goals, repositories, worktrees, safe_git, subscription_usage
 from .release_update import Follower
@@ -579,6 +579,7 @@ class Runner:
         self.harness_relay = harness_tools.Relay(self.tools, self.client)
         self.claude_cold_start = threading.Lock()
         self.maintenance_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.container_probe = container_probe.ContainerProbe()
         self.maintenance = None
         self.renew_interval = 10
         self.cloud = Outage("Tico runner")
@@ -1775,6 +1776,10 @@ class Runner:
             held = None
         if held == "exposed":
             document["mail_key"] = held
+        probe = getattr(self, "container_probe", None)
+        container = probe.report() if probe else None
+        if container:
+            document["container_exec"] = container      # Health warns while containers do not start here
         if self.tools is not None and time.monotonic() >= self._harness_after:
             document["harnesses"] = self.tools.report(runtimes)
         if RECENT:
@@ -2633,7 +2638,7 @@ class Runner:
 
     def _report_heartbeat(self, body):
         readiness = body["readiness"]
-        optional = ("worktrees", "disk", "harnesses", "mail_key", "shared_env", "recent_errors")
+        optional = ("worktrees", "disk", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec")
         unsupported = self.__dict__.setdefault("_readiness_unsupported", {})
         for field, until in list(unsupported.items()):
             if time.monotonic() < until:
@@ -2715,7 +2720,7 @@ class Runner:
                               re.search(r"readiness\.(?:StructuredReadiness\.)?" + name + r"(?:[.: ;]|$)", detail)), None) if extra else None
                 generic = extra and "readiness." not in detail
                 if not field and generic:
-                    field = next((name for name in ("worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "disk")
+                    field = next((name for name in ("worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "disk")
                                   if name in readiness), None)
                 if field:
                     readiness.pop(field, None)
