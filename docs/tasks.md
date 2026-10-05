@@ -436,3 +436,44 @@ hub task comment-delete <task-id> <comment-id>
 The comment id is the `id` in the task's `comments` (`hub task show`). MCP: `hub_task_comment_edit`
 (`id`, `comment_id`, `text`) and `hub_task_comment_delete` (`id`, `comment_id`). The API routes are
 in [Task comments](api.md#task-comments).
+
+## Deleting tasks made by mistake
+
+Closing keeps a task as history. A task made by mistake, such as a duplicate, can be deleted
+instead: by its human requester, or by anyone who may move any task, signed in as themselves.
+Bots and delegated sessions close tasks; they never delete one.
+
+```sh
+hub task delete <task-id>
+hub task deleted              # deleted tasks you may restore, newest first
+hub task restore <task-id>    # or its number
+```
+
+`hub_task_delete`, `hub_task_deleted` and `hub_task_restore`, and `POST /api/v2/tasks/{id}/delete`,
+`GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same. A client can tell a
+server offers this by the `deleteTask` operation in `GET /api/v2/openapi.json`.
+
+Deleting moves the task to the trash with its events, links, labels, delegations, reminders, a
+service key's mapping, and its conversation with every message in it. Nothing reads it there: it
+leaves lists, boards, search and every bot's context at once. Its number stays with it, so no new
+task takes it. Restoring puts the same rows back; a link to a task that is still deleted comes back
+unset, and the answer says which. Whoever deleted the task, its requester, or anyone who may move any
+task can restore it.
+
+A task carrying work is refused (`409 has_work`, close it instead), so deleting never touches what
+someone did: a bot turn, a job, an approval, a file, a routine occurrence, a meeting delivery, or a
+subtask. The audit log keeps `task.deleted`, `task.restored` and `task.purged` events with who did it
+and the task's title.
+
+To delete many at once, such as a bulk import run twice, the owner runs the offline command on the
+server after a snapshot ([environments.md](environments.md)). The whole list is refused, and
+nothing changes, if any id is unknown or any task carries work. The trash keeps everything until it
+is purged, also offline:
+
+```sh
+python -m backend.manage delete-tasks /data/hub.sqlite --ids-file ids.txt          # lists what would go
+python -m backend.manage delete-tasks /data/hub.sqlite --ids-file ids.txt --apply  # moves them to the trash
+python -m backend.manage restore-tasks /data/hub.sqlite --ids-file ids.txt         # puts them back
+python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 30          # lists
+python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 30 --apply  # removes for good
+```

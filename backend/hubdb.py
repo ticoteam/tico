@@ -824,6 +824,9 @@ def migrate(conn, adopt_legacy=False):
         conn.execute("ALTER TABLE conversations ADD COLUMN owner_actor TEXT")
     if "room_key" not in columns:
         conn.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
+    # Deleted tasks wait here until restored or purged (backend/task_delete.py).
+    from .task_delete import ensure as ensure_task_trash
+    ensure_task_trash(conn)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
                  "ON conversations(owner_actor,room_key) WHERE scope='personal' AND closed_at IS NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
@@ -2161,9 +2164,12 @@ def _number_free(conn, actor, number):
 def _next_number(conn, actor, task_id, type_id, note=""):
     """The team's next number (the highest yet, plus one) for a task without one on a numbered type."""
     numbered = _one(conn, "SELECT 1 FROM task_types WHERE id=? AND numbered=1", (type_id,))
-    if numbered and conn.execute("UPDATE tasks SET number=(SELECT COALESCE(MAX(number), 0) + 1 FROM tasks) "
+    # A deleted task keeps its number in the trash, so a restore never meets it on another task.
+    top = ("(SELECT MAX(n) FROM (SELECT COALESCE(MAX(number), 0) AS n FROM tasks "
+           "UNION ALL SELECT COALESCE(MAX(number), 0) FROM task_trash))")
+    if numbered and conn.execute(f"UPDATE tasks SET number={top} + 1 "
                                  "WHERE id=? AND number IS NULL "
-                                 "AND (SELECT COALESCE(MAX(number), 0) FROM tasks)<999999999", (task_id,)).rowcount:
+                                 f"AND {top}<999999999", (task_id,)).rowcount:
         number = _one(conn, "SELECT number FROM tasks WHERE id=?", (task_id,))["number"]
         _task_event(conn, task_id, actor, "number", None, number, note)
     elif numbered and _one(conn, "SELECT 1 FROM tasks WHERE id=? AND number IS NULL", (task_id,)):

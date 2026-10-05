@@ -172,6 +172,14 @@ STABLE = [
      "Change the text of a comment you wrote; it wakes nobody and is marked edited_at", "CommentResult"),
     ("/api/v2/tasks/{tid}/comments/{mid}/delete", "post", "Tasks", "deleteTaskComment",
      "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain", "CommentResult"),
+    ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
+     "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
+     "as themselves; a task carrying work is refused (409 has_work)", None),
+    ("/api/v2/tasks/{tid}/restore", "post", "Tasks", "restoreTask",
+     "Put a deleted task back with its conversation, comments, links and number: whoever deleted it, its "
+     "requester or a mover, signed in as themselves", None),
+    ("/api/v2/deleted-tasks", "get", "Tasks", "listDeletedTasks",
+     "Deleted tasks this person may restore, newest first", None),
     ("/api/v2/updates", "get", "Updates", "listUpdates", "Daily and weekly updates", "UpdateList"),
     ("/api/v2/updates/unread", "get", "Updates", "countUnreadUpdates", "How many updates are unread", "Unread"),
     ("/api/v2/updates/read", "post", "Updates", "markUpdatesRead", "Mark updates read or unread", None),
