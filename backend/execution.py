@@ -985,7 +985,19 @@ class Execution:
                 if (str(row["from_actor"]).startswith("human:") and (row["from_actor"] != requester or not related)
                         or row["kind"] == "notice" and not cancelled):
                     continue
-            c.execute("INSERT INTO attempt_inputs VALUES(?,?,NULL)", (aid, row["id"]))
+            # A message keeps one attempt_inputs row (message_id is the key). Its job being queued
+            # again means a finished run handed it back on purpose (a requeued or deferred turn, a
+            # resumed review), so that old row moves to this run, unacknowledged, and is delivered
+            # here once. A row still held by another live run is left alone, and one already on
+            # this run keeps its acknowledgement so it is not delivered twice.
+            prior = c.execute("SELECT i.attempt_id,a.state FROM attempt_inputs i "
+                              "LEFT JOIN attempts a ON a.id=i.attempt_id WHERE i.message_id=?",
+                              (row["id"],)).fetchone()
+            if prior and prior["attempt_id"] != aid and prior["state"] in ("leased", "running"):
+                continue
+            c.execute("INSERT INTO attempt_inputs VALUES(?,?,NULL) ON CONFLICT(message_id) DO UPDATE SET "
+                      "acked_at=CASE WHEN attempt_id=excluded.attempt_id THEN acked_at END,"
+                      "attempt_id=excluded.attempt_id", (aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, row["conversation_id"]))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (aid, row["id"]))
         ids = c.execute("SELECT message_id FROM attempt_inputs WHERE attempt_id=? AND acked_at IS NULL", (aid,)).fetchall()

@@ -97,3 +97,50 @@ def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the
     continuation = claim(api, botops, "botops")
     changed = act(api, continuation, "GET", "bots/ops/access")
     assert changed.status_code == 200, changed.text
+
+
+def test_acknowledged_input_requeued_by_a_finished_run_is_delivered_once_to_the_next_run(api):
+    # TIDY v0.3.21: a folded, acknowledged input whose job went back to the queue made every later
+    # inputs poll fail with UNIQUE constraint failed: attempt_inputs.message_id (a 500 each retry).
+    r, origin, first = setup_attempt(api)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    follow = post(api, "chat/ops", {"text": "Also include the weekly numbers"})
+    assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [follow["id"]]
+    post(api, f"attempts/{first['id']}/inputs/{follow['id']}/ack", {}, r["token"])
+    assert post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"] == []
+    # The runtime could not renew its sign-in: nothing ran, so the turn and its input are requeued.
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "sign-in lapsed",
+         "last_seq": 0, "retryable": True}, r["token"])
+    with api.app.state.store.read() as c:
+        assert {s for (s,) in c.execute("SELECT state FROM jobs WHERE message_id IN (?,?)",
+                                        (origin["id"], follow["id"]))} == {"queued"}
+    second = claim(api, r)
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
+    with api.app.state.store.read() as c:
+        started_for = c.execute("SELECT message_id FROM jobs WHERE id=?", (second["job_id"],)).fetchone()[0]
+    other = follow["id"] if started_for == origin["id"] else origin["id"]
+    # The requeued message reaches the new run once, and acknowledging it there ends delivery.
+    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [other]
+    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [other]
+    post(api, f"attempts/{second['id']}/inputs/{other}/ack", {}, r["token"])
+    assert post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT attempt_id,acked_at IS NOT NULL FROM attempt_inputs WHERE message_id=?",
+                         (other,)).fetchone()[:] == (second["id"], 1)
+        assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (other,)).fetchone()[:] == ("input", second["id"])
+
+
+def test_requeued_input_already_acknowledged_by_this_run_is_not_redelivered(api):
+    r, _, first = setup_attempt(api)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    follow = post(api, "chat/ops", {"text": "One more thing"})
+    post(api, f"attempts/{first['id']}/inputs", {}, r["token"])
+    with api.app.state.store.transaction() as c:
+        # A job back in the queue while the run that already took its input is still live.
+        c.execute("UPDATE jobs SET state='queued' WHERE message_id=?", (follow["id"],))
+        c.execute("UPDATE attempt_inputs SET acked_at=? WHERE message_id=?", ("2026-01-01T00:00:00Z", follow["id"]))
+    # Same run: already acknowledged there, so not delivered again and no error.
+    assert post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT attempt_id,acked_at FROM attempt_inputs WHERE message_id=?",
+                         (follow["id"],)).fetchone()[:] == (first["id"], "2026-01-01T00:00:00Z")
