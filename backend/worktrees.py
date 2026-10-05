@@ -124,9 +124,20 @@ def heartbeat(c, who, reports, capable, default_org=""):
             row['repo'] = grant['full_name'] if connection else report.repo
             c.execute('UPDATE task_links SET repo=? WHERE id=?', (row['repo'], row['id']))
         detail = json.loads(row['detail_json'] or '{}')
-        legacy_passthrough = (row['state'] == 'present' and report.state == 'present'
-                              and detail.get('checkout_state') is None and report.checkout_state is None
-                              and not detail.get('setup_pending'))
+        # 0.2.x runners do not send checkout_state. Keep their established report semantics
+        # for links that were already known to exist (including offline/unknown links), while
+        # never using that compatibility path for a modern queued/setup-pending checkout.
+        legacy_restore_passthrough = (detail.get('legacy_restore_pending') is True
+                                      and row['state'] in ('present', 'missing')
+                                      and report.state in ('present', 'missing')
+                                      and detail.get('checkout_state') is None
+                                      and report.checkout_state is None
+                                      and detail.get('setup_pending'))
+        legacy_passthrough = ((row['state'] in ('present', 'unknown', 'missing')
+                               and report.state in ('present', 'missing')
+                               and detail.get('checkout_state') is None and report.checkout_state is None
+                               and not detail.get('setup_pending'))
+                              or legacy_restore_passthrough)
         now = H.now()
         changed = (detail.get('last_commit') != report.last_commit or detail.get('dirty_files') != report.dirty_files
                    or detail.get('last_activity') != report.last_activity)
@@ -137,7 +148,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
             detail['checkout_state'] = 'unverified'
         legacy_complete = (detail.get('checkout_state') == 'legacy_present'
                            and row['state'] in ('present', 'unknown') and not detail.get('setup_pending'))
-        initialization_pending = (not legacy_complete and
+        initialization_pending = (not legacy_complete and not legacy_passthrough and
                                   (detail.get('checkout_state') != 'ready'
                                    or not detail.get('expected_head')
                                    or not detail.get('checkout_target')
@@ -175,7 +186,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                              or (checkout_state == 'legacy_present' and not detail.get('setup_pending')
                                  and row['state'] in ('present', 'unknown')))
         state = ('removed' if report.state == 'removed' else
-                 'present' if legacy_passthrough else
+                 report.state if legacy_passthrough else
                  'pending' if not completion_proven else
                  'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state not in ('ready', 'legacy_present') else
                  'pending' if row['state'] == 'pending' and row['repo'] and report.state == 'missing' else report.state)
@@ -345,8 +356,13 @@ def install(app, store, auth, mutate):
             detail = json.loads(link['detail_json'] or '{}')
             checkout_state = body.checkout_state if body.checkout_state is not None else detail.get('checkout_state')
             setup_pending = body.setup_pending if body.setup_pending is not None else detail.get('setup_pending', False)
+            legacy_restore_report = (who.role == 'runner' and body.state == 'present'
+                                     and body.checkout_state is None and body.setup_pending is True
+                                     and link['state'] == 'pending' and link['added_by'].startswith('human:')
+                                     and detail.get('checkout_state') in (None, 'queued'))
             if body.state == 'present' and (checkout_state != 'ready' or setup_pending
-                    or not body.expected_head or not body.checkout_target or not body.expected_base):
+                    or not body.expected_head or not body.checkout_target or not body.expected_base) \
+                    and not legacy_restore_report:
                 raise Problem('worktree_not_ready', 'Checkout and setup must complete before a worktree is reported present', 409)
             if body.cleanup and who.role != 'runner':
                 raise Problem('forbidden', 'Only the computer reports cleanup', 403)
@@ -356,6 +372,14 @@ def install(app, store, auth, mutate):
                 detail.pop('restore_on_reopen', None)
                 detail['removed_by'] = who.actor
                 detail.pop('cleanup_requested', None)
+            if legacy_restore_report:
+                # Released 0.2.x runners report a restored human worktree as present while
+                # setup_pending, without the newer checkout proof fields. Accept that legacy
+                # receipt so the runner stops repeating restore, but preserve the incomplete
+                # setup state and do not manufacture a completion marker.
+                for key in ('checkout_state', 'expected_head', 'checkout_target', 'expected_base'):
+                    detail.pop(key, None)
+                detail['legacy_restore_pending'] = True
             if body.setup_pending is not None:
                 detail['setup_pending'] = body.setup_pending
             if body.checkout_state is not None:
