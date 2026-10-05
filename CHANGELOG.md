@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Long chats show an **Outline**: a list of every prompt a person sent, across all pages, that jumps to the one you pick ([Conversation](docs/conversation.md)).
 - A bot's **Learnings** button beside its name shows every change to its `memory/` and `knowledge/` as a history, newest first: the commit subject, who made it and when, the diff once pushed, a GitHub link, and the task or chat it came from when the reader may see it. The computer running the bot reports these commits after each run and every five minutes ([Learnings](docs/learnings.md)).
 - Delete a task made by mistake into a trash it can be restored from: its human requester, or anyone who may move any task, with `hub task delete`, `hub_task_delete` or `POST /api/v2/tasks/{id}/delete`. The task leaves every list, board, search and bot context at once and keeps its number; `hub task restore` puts it back with its conversation, comments and links. A task carrying work (a bot turn, a file, an approval, a subtask) is refused; bots close instead. `python -m backend.manage delete-tasks` deletes a list offline, such as a bulk import run twice, and `purge-deleted-tasks` empties the trash for good ([Tasks](docs/tasks.md#deleting-tasks-made-by-mistake)).
 
