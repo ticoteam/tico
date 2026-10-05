@@ -289,6 +289,28 @@ function orgDragWire(tree) {
 // Adding and renaming a group happen in the tree: a one-line field where the group goes or is. Enter saves, Escape or
 // leaving the field cancels.
 let ORG_EDIT = null;                       // {add: parent group id or ''} or {rename: group id}
+const ORG_DELETING = new Set();
+async function orgGroupDelete(id) {
+  const group = (S.orgGroups || []).find(g => g.id === id);
+  if (!orgCanGroups() || !group || ORG_DELETING.has(id)) return;
+  const parent = (S.orgGroups || []).find(g => g.id === group.parent);
+  const destination = parent ? `the parent group "${parent.name}"` : 'No group';
+  if (!confirm(`Delete group "${group.name}"?\n\nIts people, bots and child groups move to ${destination}. Teammates, their histories and reporting lines stay. Subscriptions assigned to this group will be unassigned.`)) return;
+  ORG_DELETING.add(id);
+  renderTree();
+  try {
+    await writeRequest('DELETE', `/v2/groups/${encodeURIComponent(id)}`);
+    collapsed.delete('g:' + id); saveCollapsed();
+    await refresh(true);
+    toast(S.overviewRosterFresh ? 'Group deleted' : 'Group deleted. Refresh the chart to see the updated team.');
+  } catch (e) {
+    await refresh(true);                         // a stale group or changed permission needs fresh chart state
+    toast(e.message, true);
+  } finally {
+    ORG_DELETING.delete(id);
+    renderTree();
+  }
+}
 function orgGroupEdit(edit) { ORG_EDIT = edit; if (edit.add) { collapsed.delete('g:' + edit.add); saveCollapsed(); } renderTree(); }
 async function orgGroupSave(input) {
   const edit = ORG_EDIT, name = input.value.trim(); ORG_EDIT = null;
@@ -464,7 +486,7 @@ function renderTree() {
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
         ${renaming ? orgGroupFieldHTML(node.name) : `<span class="dept-label" data-toggle="${esc(key)}" role="button" tabindex="0">${esc(node.name)}</span>`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button></span>` : ''}</div>
+        ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button><button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
     if (node.kind === 'person') {
@@ -513,6 +535,8 @@ function renderTree() {
   orgDragWire($('#tree'));
   orgGroupFieldWire();
   $('#tree').onclick = ev => {
+    const remove = ev.target.closest('[data-group-delete]');
+    if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
     const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');
     if (add || rename) { ev.preventDefault(); orgGroupEdit(add ? {add: add.dataset.groupAdd} : {rename: rename.dataset.groupRename}); return; }
     const b = ev.target.closest('[data-toggle]'); if (!b) return;
