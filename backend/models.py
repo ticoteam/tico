@@ -1550,8 +1550,9 @@ class PersonalTokenCreate(Contract):
 
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
-    task it files."""
+    task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
     label: str = Field(min_length=1, max_length=80)
+    scope: Literal["tasks", "update"] = "tasks"
 
 
 class InboundTask(Contract):

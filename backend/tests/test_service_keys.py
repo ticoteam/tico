@@ -127,3 +127,50 @@ def test_service_key_transition_to_sensitive_default_returns_only_ack_and_revoke
     with api.app.state.store.read() as c:
         assert H.task(c, ack['task']['id'])['private']
     inbound(api, secret, 403, key='transition', body='Overwrite')
+
+
+def test_an_update_key_checks_starts_and_follows_an_update_and_reaches_nothing_else(api, monkeypatch):
+    import httpx
+    from backend import releases
+    calls = []
+
+    def network(request):
+        calls.append((request.method, request.url.path))
+        if request.url.host == "updater":
+            return httpx.Response(200, json={"state": "pulling", "from": "0.1.0", "to": "0.2.0", "message": ""})
+        return httpx.Response(200, json={"tag_name": "v0.2.0", "html_url": "", "published_at": "", "name": "v0.2.0"})
+    monkeypatch.setattr(releases, "CHECKER", releases.Checker())
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(network))
+    monkeypatch.setenv("TICO_UPDATE_CHECK", "on")
+    monkeypatch.setenv("TICO_RELEASES_URL", "https://releases.acme.example/latest")
+    monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")
+    monkeypatch.setenv("TICO_VERSION", "0.1.0")
+    # Only the owner makes one: only the owner updates the install.
+    post(api, "service-keys", {"label": "Release bot", "scope": "update"}, token="ben-test", expected=403)
+    made = post(api, "service-keys", {"label": "Release bot", "scope": "update"})
+    assert made["scope"] == "update"
+    assert {k["id"]: k["scope"] for k in get(api, "service-keys")["keys"]} == {made["id"]: "update"}
+    sk = {"Authorization": "Bearer " + made["key"]}
+    assert api.post("/api/v2/system/update/check", headers=sk).json()["latest"] == "0.2.0"
+    started = api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=sk)
+    assert started.status_code == 200 and started.json()["state"] == "pulling"
+    status = api.get("/api/v2/system/update", headers=sk).json()
+    assert status["to"] == "0.2.0" and status["running"] == "0.1.0" and isinstance(status["computers"], dict)
+    assert ("POST", "/update") in calls
+    with api.app.state.store.read() as c:
+        started_by = c.execute("SELECT actor FROM events WHERE action='system.update.started'").fetchone()[0]
+    assert started_by == "service:" + made["id"]
+    assert api.get("/healthz").status_code == 200
+    for method, path in (("get", "/api/v2/tasks"), ("get", "/api/v2/me"), ("get", "/api/v2/service-keys"),
+                         ("post", "/api/v2/service-keys"), ("post", "/api/v2/inbound/tasks"), ("post", "/api/v2/sql"),
+                         ("post", "/api/v2/mcp"), ("get", "/api/v2/credentials"), ("put", "/api/v2/system/usage-count"),
+                         ("get", "/api/v2/system/update/check"), ("get", "/api/v2/computers")):
+        r = api.request(method.upper(), path, headers=sk, json={} if method != "get" else None)
+        assert r.status_code == 403, path
+    # A tasks key does not reach the updater.
+    tasks_key = {"Authorization": "Bearer " + post(api, "service-keys", {"label": "Billing"})["key"]}
+    for method, path in (("get", "/api/v2/system/update"), ("post", "/api/v2/system/update"),
+                         ("post", "/api/v2/system/update/check")):
+        assert api.request(method.upper(), path, headers=tasks_key, json={"version": "0.2.0"}).status_code == 403
+    post(api, "service-keys/" + made["id"] + "/revoke", {})
+    assert api.get("/api/v2/system/update", headers=sk).status_code == 401

@@ -175,7 +175,8 @@ def run(args, who=None):
     if args.cmd == "service-key":
         # A person's own shell (hubtools.SHELL_ONLY): a new key is shown to them, never to an agent's context.
         if fn == "service-key create":
-            return client.post("service-keys", {"label": args.label}, key=os.environ.get("HUB_OPERATION_ID"))
+            return client.post("service-keys", {"label": args.label, "scope": getattr(args, "scope", "tasks")},
+                               key=os.environ.get("HUB_OPERATION_ID"))
         if fn == "service-key revoke":
             return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]

@@ -9146,7 +9146,7 @@
         ]
       },
       "post": {
-        "summary": "Make a key another system uses to file, update and close tasks, and nothing else; shown once (owner and admins)",
+        "summary": "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, owner only), and nothing else; shown once (owner and admins)",
         "operationId": "createServiceKey",
         "requestBody": {
           "content": {
@@ -19653,6 +19653,15 @@
             "maxLength": 80,
             "minLength": 1,
             "title": "Label"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "tasks",
+              "update"
+            ],
+            "title": "Scope",
+            "default": "tasks"
           }
         },
         "additionalProperties": false,
@@ -19661,7 +19670,7 @@
           "label"
         ],
         "title": "ServiceKeyCreate",
-        "description": "A service key (backend/service_keys.py): the label names the system that holds it, on every\ntask it files."
+        "description": "A service key (backend/service_keys.py): the label names the system that holds it, on every\ntask it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."
       },
       "Snapshot": {
         "type": "object",
@@ -22369,7 +22378,7 @@
       "serviceKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A service key, tico_sk_..., which reaches POST /api/v2/inbound/tasks and nothing else."
+        "description": "A service key, tico_sk_...: a tasks key reaches POST /api/v2/inbound/tasks and nothing else (an update key reaches only /api/v2/system/update, docs/service-keys.md)."
       },
       "cookie": {
         "type": "apiKey",

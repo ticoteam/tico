@@ -964,9 +964,15 @@ def create_app(settings=None):
         with store.read() as c:
             return {**config_view(c, settings, request.state.identity), "features": {"task_files_multipart": True}}
 
+    def updater_only(who, what):
+        """The owner, or an `update` service key (backend/service_keys.py) held by a release bot on another install."""
+        if who.role == "service" and who.scope == "update":
+            return
+        owner_only(who, what)
+
     @app.get("/api/v2/system/update")
     def system_update_status(request: Request):
-        owner_only(request.state.identity, "sees update progress")
+        updater_only(request.state.identity, "sees update progress")
         result = releases.status()
         if result.get("state") in ("healthy", "rolled_back", "failed"):
             record_update_outcome(result)
@@ -976,7 +982,20 @@ def create_app(settings=None):
         result["running"] = releases.version()
         result["previous"] = ran[-2]["version"] if len(ran) > 1 else ""
         result["history"] = ran[-5:]
+        # How the computers stand against this server's release, so a rollout can see them follow.
+        result["computers"] = computer_releases()
         return result
+
+    def computer_releases():
+        """Online computers counted by state (backend/runner_versions.py): current, updating, needs_update, ..."""
+        counts = {}
+        with store.read() as c:
+            cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
+            known = runner_versions.load(c)
+            for row in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL AND last_seen>?", (cutoff,)):
+                state = runner_versions.view(known.get(row["id"]))["state"]
+                counts[state] = counts.get(state, 0) + 1
+        return counts
 
     @app.get("/api/v2/system/usage-count")
     def usage_count_status(request: Request):
@@ -1002,7 +1021,7 @@ def create_app(settings=None):
 
     @app.post("/api/v2/system/update/check")
     def system_update_check(request: Request):
-        owner_only(request.state.identity, "checks for updates")
+        updater_only(request.state.identity, "checks for updates")
         return releases.check_now()
 
     # The updater restarts this process, so the outcome is written by whichever process first
@@ -1021,7 +1040,7 @@ def create_app(settings=None):
     @app.post("/api/v2/system/update")
     def system_update(request: Request, body: M.SystemUpdate):
         who = request.state.identity
-        owner_only(who, "updates the installation")
+        updater_only(who, "updates the installation")
         result = releases.start(body.version)
         target = str(body.version).lstrip("v")
         with store.transaction() as c:

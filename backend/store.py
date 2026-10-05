@@ -118,11 +118,11 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used TEXT, expires_at TEXT, revoked_at TEXT);
--- Service keys (backend/service_keys.py): another system's credential for one route, as a hash, and
--- the task each (key, that system's own key for the work) pair names.
+-- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
+-- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL,
- created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT);
+ created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT, scope TEXT NOT NULL DEFAULT 'tasks');
 CREATE TABLE IF NOT EXISTS service_key_tasks(
  key_id TEXT NOT NULL REFERENCES service_keys(id), external_key TEXT NOT NULL,
  task_id TEXT NOT NULL REFERENCES tasks(id), created TEXT NOT NULL, PRIMARY KEY(key_id, external_key));
@@ -1021,6 +1021,9 @@ class Store:
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
                 ensure_task_trash(c)
+                # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
+                # the trash: an older release reads the table as before and never sees the column.
+                H.add_column(c, "service_keys", "scope", "TEXT NOT NULL DEFAULT 'tasks'")
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL

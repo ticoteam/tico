@@ -9,7 +9,7 @@ icon: new_releases
 suggest: common
 tags: [saas, github, releases, changelog, mobile]
 when: "Offer when GitHub is connected and the team ships a product people use."
-summary: "Gets each release ready: a readiness checklist with a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, and a suggested version. A human tags and publishes."
+summary: "Gets each release ready: a readiness checklist with a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, and a suggested version. After the owner approves a release, it tags it and rolls it out to the team's installs."
 pains:
   - "release notes are written by hand at the last minute"
   - "customers don't know what changed in each release"
@@ -22,7 +22,7 @@ owns:
   - "The release readiness checklist for each release: checks green, open blockers, migrations, flags, rollback plan, and a go or no-go recommendation"
   - "A suggested version bump with the reason (knowledge/versioning.md)"
 never:
-  - "Publish a release, push a tag, edit the CHANGELOG file in the repository or post the notes anywhere outside the requested work or Tools"
+  - "Push a release tag before the owner approves that version, publish a release by hand, edit the CHANGELOG file in the repository or post the notes anywhere outside the requested work or Tools"
   - "Describe a change it did not read, or promise a fix or a date to a customer"
   - "Include an internal name, a customer name, a credential or a security detail without evidence that it may be shared"
   - "Choose the version number outside the requested work or Tools"

@@ -1,7 +1,8 @@
 # Service keys
 
 A service key lets another system, such as your product's backend, put work in front of a person or a bot in Tico,
-change it, and take it away when the work is done over there. A weekly report is ready, so its account manager gets a
+change it, and take it away when the work is done over there. An [update key](#update-keys) instead lets a release bot
+on another install update this one. A weekly report is ready, so its account manager gets a
 task to review it; the report is sent, so the task closes. The key files, updates and closes tasks and does nothing
 else. Do not put a personal API token in a product backend: it carries everything its person may do.
 
@@ -69,6 +70,30 @@ curl -sS https://tico.acme.example/api/v2/inbound/tasks \
   -d '{"key": "weekly-report-1042", "close": true, "note": "Sent to Acme."}'
 ```
 
+## Update keys
+
+An update key lets a release bot on another Tico install update this one, which is how one team's Release Manager rolls
+a release out to several installs ([Releasing](releasing.md#the-release-managers-rollout)). Only the owner makes one,
+because only the owner updates the install:
+
+```sh
+hub service-key create --label "Release Manager" --scope update
+```
+
+(`POST /api/v2/service-keys` with `{"label": "...", "scope": "update"}`.) It reaches these routes, the same ones the
+owner's **Check for updates** and **Update now** use, and nothing else:
+
+| Route | |
+|---|---|
+| `POST /api/v2/system/update/check` | Look for a new release now (at most once a minute); answers `current`, `latest`, `available` |
+| `POST /api/v2/system/update` `{"version": "X.Y.Z"}` | Start the update to that release through the install's updater |
+| `GET /api/v2/system/update` | How the update stands (`state`, `from`, `to`, `message`), the release `running`, and `computers`: online computers counted by state (`current`, `updating`, `needs_update`, `incompatible`, `unknown`) |
+
+`GET /healthz` needs no key; its `release` is the release the server runs. Every other route answers `403`, the task
+routes included, and a tasks key answers `403` on these. The update is recorded as started by the key
+(`system.update.started` with actor `service:<id>`). The updater checks, snapshots and rolls back exactly as for the
+owner's click ([Updates](updates.md#the-servers-own-updater)). `hub service-key list` shows each key's `scope`.
+
 ## What a person sees
 
 The task arrives like any other, added by Tico, which files it as it files a routine's tasks. Its description ends
@@ -77,7 +102,7 @@ as made by Tico.
 
 ## Security
 
-- The key works on `POST /api/v2/inbound/tasks` only. Anywhere else that needs a sign-in it is refused with `403`, the
+- A tasks key works on `POST /api/v2/inbound/tasks` only, an update key on the three update routes only. Anywhere else that needs a sign-in it is refused with `403`, the
   SQL page, MCP and the service key routes included. It returns only a task id and write flags; task contents, comments, links and attachments are never returned.
 - A task marked private is refused with `403` before any update, reopen or close, even when this key filed it.
 - Tico keeps a hash of the key, never the key; SQL cannot read either.

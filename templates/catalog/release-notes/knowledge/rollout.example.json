@@ -1,0 +1,7 @@
+{
+  "repository": "acme/product",
+  "installs": [
+    {"name": "Acme", "url": "https://tico.acme.example", "key_env": "TICO_UPDATE_KEY_ACME", "canary": true},
+    {"name": "Acme EU", "url": "https://eu.tico.acme.example", "key_env": "TICO_UPDATE_KEY_ACME_EU"}
+  ]
+}

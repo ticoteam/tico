@@ -70,7 +70,8 @@ STABLE = [
     ("/api/v2/me/tokens/{token_id}/revoke", "post", "Session", "revokeMyToken", "Revoke a personal API token", None),
     ("/api/v2/service-keys", "get", "Session", "listServiceKeys", "Service keys, never the secret (owner and admins)", None),
     ("/api/v2/service-keys", "post", "Session", "createServiceKey",
-     "Make a key another system uses to file, update and close tasks, and nothing else; shown once (owner and admins)", None),
+     "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, "
+     "owner only), and nothing else; shown once (owner and admins)", None),
     ("/api/v2/service-keys/{key_id}/revoke", "post", "Session", "revokeServiceKey", "Revoke a service key", None),
     ("/api/v2/openapi.json", "get", "Session", "getOpenApi", "This document", None),
     ("/api/v2/config", "get", "Team", "getConfig", "Team and app names, version, setup state", "Config"),
@@ -925,7 +926,8 @@ def spec(app):
                 "bearer": {"type": "http", "scheme": "bearer",
                            "description": "A bearer session from POST /auth/token (browser apps) or a personal API token (servers)."},
                 "serviceKey": {"type": "http", "scheme": "bearer",
-                               "description": "A service key, tico_sk_..., which reaches POST /api/v2/inbound/tasks and nothing else."},
+                               "description": "A service key, tico_sk_...: a tasks key reaches POST /api/v2/inbound/tasks and nothing else "
+                                              "(an update key reaches only /api/v2/system/update, docs/service-keys.md)."},
                 "cookie": {"type": "apiKey", "in": "cookie", "name": "tico_session",
                            "description": "The browser session of Tico's own page (`__Host-tico_session` over https)."}}},
         "security": [{"bearer": []}, {"cookie": []}],

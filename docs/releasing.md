@@ -101,6 +101,41 @@ route are rejected. Company installer URLs are constructed from that same hub ro
 storage uses the blob store's region, endpoint and bucket prefix; environment artifacts belong
 under `<prefix>/releases/app/` when a prefix is configured.
 
+## The Release Manager's rollout
+
+A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's approval of a
+named release on its release task is the only gate: an approval card the bot requested (`hub approval request --kind
+publish`) that the owner approved, or the owner's own message on the task naming the version. From there the bot runs
+`playbooks/rollout.md` (`software/rollout.py` in its repository) without waiting on anyone:
+
+1. it creates the tag `vX.Y.Z` at the approved commit through the GitHub API, with its own write grant on the
+   repository. A tag made with the GitHub App's installation token starts the Release and Docker workflows, which a
+   tag made with a workflow's `GITHUB_TOKEN` would not;
+2. it waits for the GitHub release, which installs update from, and stops if the Release or Docker workflow for the
+   tag fails;
+3. it updates the canary, the team's own install, through that install's update key, and waits for the updater to
+   report `healthy` and `/healthz` to report the new release, then for its computers to follow (reported, never a gate);
+4. it updates every other install together the same way;
+5. it reports each install's version before and after on the task.
+
+A failed or rolled-back update stops the rollout: the updater has already put that install back, a canary failure
+leaves the other installs untouched, and the bot asks the owner what to do next.
+
+Setup, once:
+
+- **Write on the repository.** An owner or admin ticks the repository in Settings → Repositories and gives the bot
+  write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
+  same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
+- **An update key per install.** The owner of each install, the team's own included, runs
+  `hub service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
+  Each key is stored in Tools → Credentials on the Release Manager's install, granted to the bot, with the variable
+  named in its config.
+- **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
+  `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).
+
+A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`,
+`software/rollout.py` and the `.claude/settings.json` line that allows it from `templates/catalog/release-notes`.
+
 ## What installations do
 
 The server asks Tico HQ (`https://updates.tico.team/v1/latest`, which serves the same release from GitHub and counts the install

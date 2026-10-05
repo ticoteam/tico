@@ -254,6 +254,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
+    hub service-key create --label "Release Manager" --scope update
+                                           the owner: a key a release bot on another install uses to check for,
+                                           start and follow an update of this one (/api/v2/system/update), and nothing else
     hub service-key list | revoke <id>     every service key, never its secret; stop one at once
     hub grokbot sync --file f.json         sync your Grok Bots into Tico
 
@@ -1541,9 +1544,11 @@ def parser():
     s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
     s.add_argument("message")
     s.set_defaults(fn="support file")
-    keys = sub.add_parser("service-key", help="keys another system uses to file, update and close tasks (owner and admins)").add_subparsers(dest="sub")
+    keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")
+    s.add_argument("--scope", choices=["tasks", "update"], default="tasks",
+                   help="tasks (default): files tasks; update (owner only): checks for, starts and follows an update of this install")
     s.set_defaults(fn="service-key create")
     keys.add_parser("list", help="every service key, never its secret").set_defaults(fn="service-key list")
     s = keys.add_parser("revoke", help="stop a key at once")
