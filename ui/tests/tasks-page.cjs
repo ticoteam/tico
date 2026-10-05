@@ -785,6 +785,25 @@ async function views(browser) {
   await page.close();
 }
 
+async function waitingOnYou(browser) {
+  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
+  // and no buttons other rows lack.
+  const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner: 'bot:engineer',
+    requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated: at(5)};
+  const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
+  const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host, sams]});
+  const row = page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]');
+  assert.equal(await row.count(), 1);
+  assert.equal(await row.locator('.tl-waiting').innerText(), 'Waiting');
+  assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
+  assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
+  const buttons = r => page.locator(`[data-task-key="${r}"] button`).evaluateAll(b => b.map(x => x.className));
+  assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
+  assert.deepEqual(errors, []);
+  console.log('Waiting on you: ok');
+  await page.close();
+}
+
 async function donePagination(browser) {
   const types = [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}];
   const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated, done_at: updated});
@@ -1079,7 +1098,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, donePagination, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, waitingOnYou, donePagination, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

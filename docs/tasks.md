@@ -60,9 +60,24 @@ and attach that blocker together:
 hub task update <task> --status waiting --blocked-by <blocker> --note "Needs the build environment"
 ```
 
+When the task waits on a person to act instead (a decision, access, a host only they can fix),
+name them with `--on` and say exactly what they need to do in the note:
+
+```sh
+hub task update <task> --status waiting --on ana --note "Restart the build host; it refuses SSH"
+```
+
+The task is then in that person's **Needs you** and their batch as one item, its title and that
+note, and the bot counts toward `needs_human` on its status. When the person comments on the task
+(or says done or answers in a batch) the bot wakes and the task leaves their list; the bot sets it
+waiting on them again if it still needs something. Only the bot that owns the task names the
+person. A new status, note or owner clears `--on` unless the same update names the person again,
+and `--on ""` clears it by hand. A private task can only wait on a person who can read it, and a
+task made private stops waiting on anyone who cannot.
+
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
-child task or a pending approval can also justify waiting. Finishing a blocker clears the dependency
+child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency
 and wakes the waiting bot. **Waiting** does not mean a person must review the code.
 
 For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
@@ -436,3 +451,44 @@ hub task comment-delete <task-id> <comment-id>
 The comment id is the `id` in the task's `comments` (`hub task show`). MCP: `hub_task_comment_edit`
 (`id`, `comment_id`, `text`) and `hub_task_comment_delete` (`id`, `comment_id`). The API routes are
 in [Task comments](api.md#task-comments).
+
+## Deleting tasks made by mistake
+
+Closing keeps a task as history. A task made by mistake, such as a duplicate, can be deleted
+instead: by its human requester, or by anyone who may move any task, signed in as themselves.
+Bots and delegated sessions close tasks; they never delete one.
+
+```sh
+hub task delete <task-id>
+hub task deleted              # deleted tasks you may restore, newest first
+hub task restore <task-id>    # or its number
+```
+
+`hub_task_delete`, `hub_task_deleted` and `hub_task_restore`, and `POST /api/v2/tasks/{id}/delete`,
+`GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same. A client can tell a
+server offers this by the `deleteTask` operation in `GET /api/v2/openapi.json`.
+
+Deleting moves the task to the trash with its events, links, labels, delegations, reminders, a
+service key's mapping, and its conversation with every message in it. Nothing reads it there: it
+leaves lists, boards, search and every bot's context at once. Its number stays with it, so no new
+task takes it. Restoring puts the same rows back; a link to a task that is still deleted comes back
+unset, and the answer says which. Whoever deleted the task, its requester, or anyone who may move any
+task can restore it.
+
+A task carrying work is refused (`409 has_work`, close it instead), so deleting never touches what
+someone did: a bot turn, a job, an approval, a file, a routine occurrence, a meeting delivery, or a
+subtask. The audit log keeps `task.deleted`, `task.restored` and `task.purged` events with who did it
+and the task's title.
+
+To delete many at once, such as a bulk import run twice, the owner runs the offline command on the
+server after a snapshot ([environments.md](environments.md)). The whole list is refused, and
+nothing changes, if any id is unknown or any task carries work. The trash keeps everything until it
+is purged, also offline:
+
+```sh
+python -m backend.manage delete-tasks /data/hub.sqlite --ids-file ids.txt          # lists what would go
+python -m backend.manage delete-tasks /data/hub.sqlite --ids-file ids.txt --apply  # moves them to the trash
+python -m backend.manage restore-tasks /data/hub.sqlite --ids-file ids.txt         # puts them back
+python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 30          # lists
+python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 30 --apply  # removes for good
+```

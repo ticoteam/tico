@@ -163,6 +163,8 @@ def main(argv=None):
                                                 args.config.parent / "harnesses-doctor.json")
         service.tools.expose_path()
         service.tools.want(service.enabled_providers(), {e["config"].get("runtime") for e in assignments})
+        from .container_probe import ContainerProbe
+        service.container_probe = ContainerProbe(background=False)     # one run: wait for the result
         candidates = service.readiness_candidates(assignments, eligible)
         runtimes = service.runtime_report(candidates)
         rows = service.preflight(candidates, runtimes)

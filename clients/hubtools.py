@@ -548,6 +548,8 @@ def task_ask(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "blocked_by": _s("The id (or 8-character short id) of the task this one waits on; an empty string clears it"),
+       "waiting_on": _s("With status waiting: the person it waits on (their id), so it shows in their Needs you; "
+                        "put exactly what they must do in the note. An empty string clears it"),
        "goal_id": _s("The goal this task serves; an empty string takes it off")},
       required=("id",), writes=True)
 def task_update(api, args):
@@ -565,6 +567,8 @@ def task_update(api, args):
         body["private"] = args["private"]
     if args.get("blocked_by") is not None:
         body["blocked_by"] = args["blocked_by"]
+    if args.get("waiting_on") is not None:
+        body["waiting_on"] = args["waiting_on"]
     return api.post("tasks/" + args["id"], body, key=_key(args))
 
 
@@ -642,6 +646,26 @@ def task_comment_edit(api, args):
       "bot.", {"id": TASK_ID, "comment_id": COMMENT_ID}, required=("id", "comment_id"), writes=True)
 def task_comment_delete(api, args):
     return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_task_delete", "Delete a task made by mistake, such as a duplicate: it goes to the trash and can be "
+      "restored. Only a person signed in as themselves may: the task's requester, or someone who may move any "
+      "task. A task carrying work (a bot turn, a file, an approval, a subtask) is refused; close it instead.",
+      {"id": TASK_ID}, required=("id",), writes=True)
+def task_delete(api, args):
+    return api.post(f"tasks/{args['id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_task_deleted", "Deleted tasks you may restore, newest first. A person only.", {})
+def task_deleted(api, args):
+    return api.get("deleted-tasks")
+
+
+@tool("hub_task_restore", "Put a deleted task back with its conversation, comments, links and number: whoever "
+      "deleted it, its requester, or someone who may move any task. A person only.", {"id": TASK_ID},
+      required=("id",), writes=True)
+def task_restore(api, args):
+    return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
 @tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",

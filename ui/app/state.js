@@ -78,6 +78,6 @@ const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // The org tree's number is what needs you from that bot, counted the way the
 // Needs you list groups it (companyNeedActor), so the two always agree.
 function needsMeCount(slug) {
-  return (S.v2?.needs || []).filter(it => (it.kind === 'task' || it.kind === 'question') && taskNeedsMe(it)
+  return (S.v2?.needs || []).filter(it => ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
     && companyNeedActor(it, it) === 'bot:' + slug).length;
 }

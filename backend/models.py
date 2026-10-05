@@ -138,6 +138,7 @@ class TaskUpdate(Contract):
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
     blocked_by: str | None = Field(default=None, max_length=64)     # "" clears
+    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
     parent_id: str | None = Field(default=None, max_length=64)      # "" clears
     rank: float | None = None
     type: ID | None = None
@@ -685,6 +686,14 @@ class DiskReadiness(Contract):
     free_bytes: int = Field(ge=0)
 
 
+class ContainerExecReadiness(Contract):
+    """A throwaway container start on the computer (runner/container_probe.py)."""
+    ok: StrictBool
+    seconds: float = Field(ge=0, le=3600, allow_inf_nan=False)
+    error: Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v), Field(max_length=300)] = ""
+    checked_at: str = Field(max_length=50)
+
+
 class StructuredReadiness(Contract):
     worktrees: bool | None = None
     schema_version: Literal[1] = 1
@@ -694,6 +703,7 @@ class StructuredReadiness(Contract):
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
     mail_key: Literal["exposed"] | None = None      # the mail key is where bots can read it (runner/mail_key.py)
     shared_env: Literal[True] | None = None         # secrets/_shared.env holds keys every bot there receives
+    container_exec: ContainerExecReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
     recent_errors: list[Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v),
@@ -704,6 +714,8 @@ class StructuredReadiness(Contract):
         data = handler(self)
         if data.get("disk") is None:
             data.pop("disk", None)
+        if data.get("container_exec") is None:
+            data.pop("container_exec", None)
         if not data.get("recent_errors"):
             data.pop("recent_errors", None)       # a stored report keeps only what the runner sent
         return data

@@ -75,6 +75,16 @@ async function open(browser, {role = 'owner', connected = true, viewport = {widt
     if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
     const list = () => ({repositories: data.repositories, new_bot_default: data.new_bot_default, github_connected: data.github_connected});
     if (p === '/api/v2/repositories') return json(list());
+    if (p === '/api/v2/github/product-repos/preview' && method === 'GET') {
+      const name = url.searchParams.get('name');
+      return json({org: 'acme', name, repository: `acme/${name}`, visibility: 'private', auto_init: false,
+        capability: 'available', capability_detail: 'Administration: write verified'});
+    }
+    if (p === '/api/v2/github/product-repos' && method === 'POST') {
+      const body = req.postDataJSON(); writes.push({p, body});
+      return json({repository: `${body.org}/${body.name}`, html_url: `https://github.com/${body.org}/${body.name}`,
+        installation_access: 'available', note: 'No bot access was granted.'});
+    }
     if (p === '/api/v2/repositories/refresh' && method === 'POST') { writes.push({p, body: {}}); return json(list()); }
     if (p === '/api/v2/repositories/settings' && method === 'PUT') {
       const body = req.postDataJSON(); writes.push({p, body}); data.new_bot_default = body.new_bot_default; return json({new_bot_default: body.new_bot_default});
@@ -214,6 +224,25 @@ async function owner(browser) {
   await page.close();
 }
 
+async function productCreate(browser) {
+  const {page, errors, writes} = await open(browser);
+  const section = page.locator('#set-repos [data-product-repo]');
+  await section.waitFor();
+  await section.locator('[data-product-repo-name]').fill('tico-recorder');
+  await section.locator('[data-product-repo-preview]').click();
+  await section.locator('[data-product-repo-create]').waitFor({state: 'visible'});
+  assert.match(await section.locator('[data-product-repo-result]').innerText(), /acme\/tico-recorder · private · empty/);
+  assert.deepEqual(writes.filter(w => w.p === '/api/v2/github/product-repos'), []);
+  await section.locator('[data-product-repo-create]').click();
+  await section.locator('[data-product-repo-result] a').waitFor();
+  assert.equal(await section.locator('[data-product-repo-result] a').getAttribute('href'), 'https://github.com/acme/tico-recorder');
+  assert.deepEqual(writes.filter(w => w.p === '/api/v2/github/product-repos').map(w => w.body), [
+    {org: 'acme', name: 'tico-recorder', visibility: 'private', auto_init: false, confirmed: true},
+  ]);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
 // LOCAL-2: a refused save shows what the server holds, with the reason; LOCAL-4: saves go one at a time and the latest
 // choice is the one that lands.
 async function saves(browser) {
@@ -286,6 +315,7 @@ async function saves(browser) {
 async function member(browser) {
   const {page, errors, writes} = await open(browser, {role: 'member'});
   await page.locator('#set-repos .repo-row').first().waitFor();
+  assert.equal(await page.locator('#set-repos [data-product-repo]').count(), 0, 'product creation is Owner-only');
   assert.equal(await page.locator('#set-repos [data-repo-tick]:not([disabled])').count(), 0);
   assert.equal(await page.locator('#set-repos [data-repo-setup]:not([readonly])').count(), 0);
   assert.equal(await page.locator('#set-repos input[name=repos_new_bot]:not([disabled])').count(), 0);
@@ -340,6 +370,7 @@ async function phone(browser) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     await owner(browser);
+    await productCreate(browser);
     await saves(browser);
     await member(browser);
     await notConnected(browser);

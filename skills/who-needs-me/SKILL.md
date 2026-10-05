@@ -45,6 +45,9 @@ EACH ITEM (one at a time, never several at once)
 - If the item has an `answer`, the bot has replied to something the user asked earlier. Lead
   with that answer.
 - A `report` item is a bot's general notes. Summarise them.
+- A `waiting` item is the bot's own task, parked until the user does something; its `note` says
+  what. Say the title and that note. "decide + done" (what they did, in text) or "decide + answer"
+  goes back on the task and wakes the bot.
 - If the user wants more detail, call hub_task_show with the task id: the part after "task:"
   in the item key. An approval's details are already in its `payload`, so don't call
   hub_task_show for an approval.

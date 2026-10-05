@@ -58,6 +58,9 @@ For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` 
 `ask` too). Ask once per version. Read the `answer: {...}` block in the wake, or
 `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
+When a task waits on a person to act (a decision, access, a fix only they can make), name them:
+`hub task update <id> --status waiting --on <person> --note "<exactly what they need to do>"`. It
+shows in their Needs you; a task left waiting with only a note in chat reaches nobody.
 
 ## Deciding with the decision model (`hub decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

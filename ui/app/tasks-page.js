@@ -406,7 +406,9 @@ async function tasksLoadAllDone(state) {
 }
 function companyNeedActor(task, need) {
   const me = myActor();
-  const candidates = [need?.ask?.from_actor, task?.ask?.from_actor, taskRequester(task), task?.owner];
+  // A task waiting on me waits with the bot that owns it, whoever asked for it.
+  const candidates = taskWaitingOn(task) === me ? [task.owner]
+    : [need?.ask?.from_actor, task?.ask?.from_actor, taskRequester(task), task?.owner];
   return candidates.find(actor => actorSlug(actor) && actor !== me)
     || candidates.find(actor => actor && actor !== me)
     || me;

@@ -358,3 +358,26 @@ def test_owner_storage_counts_and_local_server_note(environment):
     liveness = api.get('/healthz').json()
     assert liveness['ok'] is True and liveness['service'] == 'tico'
     assert set(liveness) == {'ok', 'service', 'protocol', 'release', 'environment_id'}
+
+
+def test_health_warns_while_containers_do_not_start_on_a_computer_and_clears_when_they_do(environment):
+    import json
+    api = environment()
+    rid = enrolled(api)
+    heartbeat(api, rid, runtimes=SIGNED_IN)
+
+    def report(container):
+        with api.app.state.store.transaction() as c:
+            doc = json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (rid,)).fetchone()[0])
+            doc["container_exec"] = container
+            c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(doc), rid))
+            return c.execute("SELECT r.label,coalesce(nullif(h.name,''),r.operator) FROM runners r "
+                             "LEFT JOIN humans h ON h.id=r.operator WHERE r.id=?", (rid,)).fetchone()
+
+    label, operator = report({"ok": False, "seconds": 20.0, "error": "a container did not start within 20 s",
+                              "checked_at": H.now()})
+    check = health_of(api)[1]["container_exec:" + rid]
+    assert check["status"] == "warn" and label in check["summary"] and operator in check["summary"]
+    assert "within 20 s" in check["summary"]
+    report({"ok": True, "seconds": 2.1, "error": "", "checked_at": H.now()})
+    assert "container_exec:" + rid not in health_of(api)[1]

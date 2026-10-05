@@ -46,6 +46,29 @@ def test_previous_release_database_boots_twice_and_keeps_rows(tmp_path):
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == 2
 
 
+def test_waiting_and_live_meeting_migrations_follow_append_only_order_and_replay(tmp_path):
+    order = [H.MIGRATIONS.index(schema) for schema in (
+        H.WAITING_ON_SCHEMA,
+        H.LIVE_MEETINGS_SCHEMA,
+        H.LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
+        H.LIVE_MEETINGS_CHAT_ROUTING_SCHEMA,
+    )]
+    assert order == sorted(order)
+
+    path = old_release(tmp_path)
+    boot(path)
+    first = state(path)
+    with sqlite3.connect(path) as c:
+        assert "waiting_on" in {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
+        tables = {row[0] for row in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"live_meetings", "live_meeting_chat_routes"} <= tables
+        assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone()
+
+    boot(path)
+    assert state(path) == first
+
+
 def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):
     path = old_release(tmp_path)
     with sqlite3.connect(path) as c:

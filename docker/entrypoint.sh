@@ -26,6 +26,9 @@ server_environment() {
   export TICO_DB=$DATA/hub.sqlite TICO_REGISTRY_DIR=$DATA/registry
   [ -n "${TICO_BLOB_BUCKET:-}" ] || export TICO_BLOB_DIR=$DATA/blobs
   export TICO_APP_NAME="${TICO_APP_NAME:-$TICO_COMPANY_NAME}" TICO_ASSISTANT_NAME="${TICO_ASSISTANT_NAME:-Assistant}"
+  # An empty AWS region from .env would break the AWS SDK's own default; unset is what it expects.
+  [ -n "${AWS_REGION:-}" ] || unset AWS_REGION
+  [ -n "${AWS_DEFAULT_REGION:-}" ] || unset AWS_DEFAULT_REGION
   # An explicit TICO_SCHEDULER=0 is kept; unset means on.
   export TICO_SCHEDULER="${TICO_SCHEDULER:-1}"
   if rehearsal; then

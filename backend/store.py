@@ -987,6 +987,13 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=57").fetchone():
                     H.migrate_task_privacy(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(57,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
+                    H._apply(c, H.WAITING_ON_SCHEMA)
+                    c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
+                # Deleted tasks wait here until restored or purged; created unversioned, like the
+                # trigger below, so it never takes a migration number another change needs.
+                from .task_delete import ensure as ensure_task_trash
+                ensure_task_trash(c)
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL

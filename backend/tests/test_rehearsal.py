@@ -20,7 +20,7 @@ def stub_uvicorn(tmp_path):
     stub.parent.mkdir(exist_ok=True)
     stub.write_text(textwrap.dedent("""\
         #!/bin/sh
-        env | grep -E '^(TICO_[A-Z_]*)=' | sort > "$STUB_ENV"
+        env | grep -E '^(TICO_[A-Z_]*|AWS_[A-Z_]*REGION)=' | sort > "$STUB_ENV"
         echo "uvicorn $@" >> "$STUB_LOG"
     """))
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
@@ -61,6 +61,12 @@ def test_an_explicit_scheduler_off_is_kept_and_unset_means_on(tmp_path):
     result, seen, _ = serve(tmp_path, TICO_BACKUP="off")
     assert result.returncode == 0, result.stderr
     assert seen["TICO_SCHEDULER"] == "1"
+
+
+def test_an_empty_aws_region_is_unset_so_the_sdk_keeps_its_default(tmp_path):
+    result, seen, _ = serve(tmp_path, TICO_BACKUP="off", AWS_REGION="us-west-2", AWS_DEFAULT_REGION="")
+    assert result.returncode == 0, result.stderr
+    assert seen["AWS_REGION"] == "us-west-2" and "AWS_DEFAULT_REGION" not in seen
 
 
 def test_rehearsal_turns_off_the_scheduler_backups_and_everything_outbound(tmp_path):

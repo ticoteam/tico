@@ -48,11 +48,12 @@ HUB_MCP_ENV = ("HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR")
 
 
 # One rule, kept here so every host classifies a usage limit the same way. A provider with no
-# capacity right now (Gemini "UNAVAILABLE (code 503): No capacity available", "overloaded",
+# capacity right now (Gemini "UNAVAILABLE (code 503): No capacity available", Codex "Selected model is at
+# capacity", "overloaded",
 # RESOURCE_EXHAUSTED) is the same thing for the cloud: nothing ran, try again later, not a
 # person's review (a turn could sit "uncertain" on one of these).
 LIMIT_RE = re.compile(r"hit your usage limit|usage limit|usage_limit_reached|rate limit(?:ed)?"
-                      r"|no capacity available|\boverloaded\b|resource_exhausted|\b(?:code|status|http) (?:429|503)\b", re.I)
+                      r"|no capacity available|model is at capacity|\boverloaded\b|resource_exhausted|\b(?:code|status|http) (?:429|503)\b", re.I)
 # A sign-in that could not renew itself. The turn was refused before it began, so it is
 # retryable rather than reviewable (one lost renewal could leave a bot
 # sitting "uncertain" and claiming nothing for hours).

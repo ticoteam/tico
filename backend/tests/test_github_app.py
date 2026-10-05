@@ -37,6 +37,10 @@ class FakeGitHub:
         self.refuse = None                       # (status, message) for every token request
         self.permissions = None                  # the installation's live permissions; None leaves them out
         self.missing, self.selection, self.forbidden = set(), "all", False   # repositories GitHub answers 404 for
+        self.selected_repositories = set()
+        self.created_repositories = set()
+        self.create_response_message = ""
+        self.lose_next_product_create_response = False
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
@@ -70,11 +74,23 @@ class FakeGitHub:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
             if body and any(name in self.missing for name in body.get("repositories", [])):
                 return httpx.Response(403 if self.forbidden else 422, json={"message": "Validation Failed"})
+            if body and self.selection == "selected" and any(
+                    name not in self.selected_repositories for name in body.get("repositories", [])):
+                return httpx.Response(422, json={"message": "Repository is not in this selected installation"})
             exp = datetime.now(timezone.utc) + timedelta(seconds=self.ttl)
             return httpx.Response(201, json={"token": "ghs_" + uuid.uuid4().hex, "expires_at": exp.strftime("%Y-%m-%dT%H:%M:%SZ")})
         if path.startswith("/orgs/") and path.endswith("/repos"):
-            return httpx.Response(self.generate_status, json={"full_name": path.split("/")[2] + "/" + body["name"],
-                                                            "html_url": "https://github.com/" + path.split("/")[2] + "/" + body["name"]})
+            repository = path.split("/")[2] + "/" + body["name"]
+            if self.generate_status >= 300:
+                return httpx.Response(self.generate_status, json={"message": self.create_response_message})
+            if body.get("description") == "Tico product repository" and repository in self.created_repositories:
+                return httpx.Response(422, json={"message": "name already exists"})
+            self.created_repositories.add(repository)
+            if body.get("description") == "Tico product repository" and self.lose_next_product_create_response:
+                self.lose_next_product_create_response = False
+                raise httpx.ReadTimeout("synthetic response timeout", request=request)
+            return httpx.Response(self.generate_status, json={"full_name": repository,
+                                                              "html_url": "https://github.com/" + repository})
         if path.endswith("/generate"):
             return httpx.Response(self.generate_status, json={"full_name": body["owner"] + "/" + body["name"],
                                                             "html_url": "https://github.com/" + body["owner"] + "/" + body["name"]})
@@ -118,6 +134,11 @@ def api(tmp_path, gh):
 
 def auth(token="owner-test"):
     return {"Authorization": "Bearer " + token}
+
+
+def product_repo_request(api, body, *, key="product-create-1", actor="owner-test"):
+    return api.post("/api/v2/github/product-repos", json=body,
+                    headers={**auth(actor), "Idempotency-Key": key})
 
 
 def manifest(api, **params):
@@ -448,6 +469,246 @@ def test_unreadable_live_permissions_keep_the_stored_flag(api, gh):
     assert api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth()).status_code == 200
 
 
+def test_product_repository_preview_is_owner_only_and_rejects_paths_before_github(api, gh):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    path = "/api/v2/github/product-repos/preview"
+    botops_turn(api)
+    before = len(gh.calls)
+    body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
+            "auto_init": False, "confirmed": True}
+    for actor in ("person-test", "botops-test"):
+        assert api.get(path, params={"name": "tico-recorder"}, headers=auth(actor)).status_code == 403
+        assert product_repo_request(api, body, actor=actor, key="non-owner-" + actor).status_code == 403
+    assert len(gh.calls) == before, "non-Owner credentials cannot preview or create a product repository"
+    for name in ("Acme/tico-recorder", "https://github.com/Acme/tico-recorder", "..", "../tico"):
+        assert api.get(path, params={"name": name}, headers=auth()).status_code == 422
+    assert len(gh.calls) == before, "authorization and exact-name validation happen before GitHub discovery"
+    preview = api.get(path, params={"name": "tico-recorder"}, headers=auth())
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {"org": "Acme", "name": "tico-recorder", "repository": "Acme/tico-recorder",
+                              "visibility": "private", "auto_init": False, "capability": "available",
+                              "capability_detail": "The connected installation currently has Administration: write."}
+    assert not any(call[0] == "POST" and call[1].endswith("/repos") for call in gh.calls)
+
+
+def test_product_repository_preview_without_connected_app_reports_an_explicit_error(api, gh):
+    response = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth())
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "github_not_connected"
+    assert gh.calls == []
+
+
+def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_receipt(api, gh, monkeypatch):
+    from backend import repositories
+    refreshes = []
+    monkeypatch.setattr(repositories, "queue_sync", lambda service, refresh=False: refreshes.append(refresh))
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    created = product_repo_request(api, body, key="product-create-same")
+    assert created.status_code == 200, created.text
+    assert created.json() == {"repository": "Acme/tico-recorder", "html_url": "https://github.com/Acme/tico-recorder",
+                              "visibility": "private", "auto_init": False, "installation_access": "available",
+                              "note": "Created as a private empty repository. Tico will refresh its repository inventory; no bot access was granted."}
+    creation = next(call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos")
+    assert creation[2] == {"name": "tico-recorder", "private": True, "auto_init": False,
+                           "description": "Tico product repository"}
+    assert refreshes == [True]
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+    count = len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"])
+    replay = product_repo_request(api, body, key="product-create-same")
+    assert replay.status_code == 200 and replay.json() == created.json()
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == count
+    changed_retry = product_repo_request(api, {**body, "name": "another-name"}, key="product-create-same")
+    assert changed_retry.status_code == 409 and changed_retry.json()["error"]["code"] == "idempotency_conflict"
+    duplicate = product_repo_request(api, body, key="product-create-different")
+    assert duplicate.status_code == 409 and duplicate.json()["error"]["code"] == "github_repo_exists"
+    assert gh.created_repositories == {"Acme/tico-recorder"}, "a retry never replaces or duplicates existing history"
+    with api.app_state.store.read() as c:
+        event = c.execute("SELECT action,target,detail_json FROM events WHERE action='github.product_repo_created'").fetchone()
+        assert event and event["target"] == "Acme/tico-recorder"
+        assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM idempotency WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()[0] == 1
+        operation = c.execute("SELECT state,target_org,target_name FROM github_product_repo_operations "
+                              "WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()
+        assert tuple(operation) == ("completed", "Acme", "tico-recorder")
+    calls_before_durable_replay = len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"])
+    with api.app_state.store.transaction() as c:
+        c.execute("DELETE FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
+                  ("/api/v2/github/product-repos", "product-create-same"))
+    durable_replay = product_repo_request(api, body, key="product-create-same")
+    assert durable_replay.status_code == 200 and durable_replay.json() == created.json()
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == calls_before_durable_replay
+
+
+def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries_create(api, gh):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    gh.lose_next_product_create_response = True
+
+    lost = product_repo_request(api, body, key="lost-create-response")
+    assert lost.status_code == 409 and lost.json()["error"]["code"] == "github_create_outcome_unknown"
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+
+    changed = product_repo_request(api, {**body, "name": "another-product"}, key="lost-create-response")
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict"
+    same = product_repo_request(api, body, key="lost-create-response")
+    assert same.status_code == 409 and same.json()["error"]["code"] == "github_create_outcome_unknown"
+
+    create_calls = [call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]
+    assert len(create_calls) == 1
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+    with api.app_state.store.read() as c:
+        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response_json "
+                              "FROM github_product_repo_operations WHERE actor='human:ana' AND key=?",
+                              ("lost-create-response",)).fetchone()
+        assert operation["actor"] == "human:ana"
+        assert operation["operation"] == "/api/v2/github/product-repos"
+        assert operation["key"] == "lost-create-response"
+        assert operation["request_hash"] == G.digest(encode(body))
+        assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
+        assert operation["state"] == "pending" and operation["response_json"] is None
+
+
+def test_receipt_write_failure_leaves_pending_binding_and_retry_does_not_create_again(api, gh, monkeypatch):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    original_event = G.H.event
+
+    def fail_receipt(*args, **kwargs):
+        if len(args) > 2 and args[2] == "github.product_repo_created":
+            raise RuntimeError("synthetic receipt write failure")
+        return original_event(*args, **kwargs)
+
+    monkeypatch.setattr(G.H, "event", fail_receipt)
+    failed = product_repo_request(api, body, key="receipt-write-failure")
+    assert failed.status_code == 409 and failed.json()["error"]["code"] == "github_create_outcome_unknown"
+
+    with api.app_state.store.read() as c:
+        operation = c.execute("SELECT state,response_json FROM github_product_repo_operations "
+                              "WHERE actor='human:ana' AND key=?", ("receipt-write-failure",)).fetchone()
+        assert tuple(operation) == ("pending", None)
+        assert c.execute("SELECT 1 FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
+                         ("/api/v2/github/product-repos", "receipt-write-failure")).fetchone() is None
+
+    retry = product_repo_request(api, body, key="receipt-write-failure")
+    assert retry.status_code == 409 and retry.json()["error"]["code"] == "github_create_outcome_unknown"
+    assert gh.created_repositories == {"Acme/tico-recorder"}
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
+
+
+def test_concurrent_product_requests_cannot_reuse_one_key_for_two_names(api, gh):
+    from concurrent.futures import ThreadPoolExecutor
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    bodies = [
+        {"org": "Acme", "name": name, "visibility": "private", "auto_init": False, "confirmed": True}
+        for name in ("tico-recorder", "tico-recorder-other")
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda body: product_repo_request(api, body, key="same-concurrent-key"), bodies))
+    successes = [response for response in responses if response.status_code == 200]
+    conflicts = [response for response in responses if response.status_code == 409]
+    assert len(successes) == len(conflicts) == 1
+    assert conflicts[0].json()["error"]["code"] == "idempotency_conflict"
+    create_calls = [call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]
+    assert len(create_calls) == 1
+    assert len(gh.created_repositories) == 1
+
+
+def test_product_preview_and_create_report_live_missing_or_unknown_administration(api, gh):
+    connect(api, administration="true")
+    path = "/api/v2/github/product-repos/preview"
+    gh.permissions = {"contents": "write", "metadata": "read"}
+    preview = api.get(path, params={"name": "tico-recorder"}, headers=auth())
+    assert preview.status_code == 200 and preview.json()["capability"] == "missing"
+    p = preview.json()
+    denied = product_repo_request(api, {"org": p["org"], "name": p["name"], "visibility": p["visibility"],
+                                        "auto_init": p["auto_init"], "confirmed": True}, key="missing-admin")
+    assert denied.status_code == 409 and denied.json()["error"]["code"] == "github_permission_missing"
+    assert not any(call[0] == "POST" and call[1] == "/orgs/Acme/repos" for call in gh.calls)
+
+    gh.permissions = None                  # stored setup says yes, but live GitHub cannot confirm it
+    unknown = api.get(path, params={"name": "tico-recorder"}, headers=auth())
+    assert unknown.status_code == 200 and unknown.json()["capability"] == "unknown"
+    p = unknown.json()
+    refused = product_repo_request(api, {"org": p["org"], "name": p["name"], "visibility": p["visibility"],
+                                         "auto_init": p["auto_init"], "confirmed": True}, key="unknown-admin")
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_capability_unknown"
+    assert not any(call[0] == "POST" and call[1] == "/orgs/Acme/repos" for call in gh.calls)
+
+
+def test_product_create_revalidates_org_and_reports_selected_installation_access_without_granting_it(api, gh, monkeypatch):
+    from backend import repositories
+    refreshes = []
+    monkeypatch.setattr(repositories, "queue_sync", lambda service, refresh=False: refreshes.append(refresh))
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    before = len(gh.calls)
+    wrong_org = product_repo_request(api, {**body, "org": "Other"}, key="other-org")
+    assert wrong_org.status_code == 409 and len(gh.calls) == before
+    unconfirmed = product_repo_request(api, {**body, "confirmed": False}, key="not-confirmed")
+    assert unconfirmed.status_code == 422 and len(gh.calls) == before
+
+    gh.selection = "selected"           # installation can create, but the new repo is not in its selected set
+    created = product_repo_request(api, body, key="selected-install")
+    assert created.status_code == 200, created.text
+    assert created.json()["installation_access"] == "owner_action_required"
+    assert "An Owner must add it" in created.json()["note"]
+    assert refreshes == []               # no inventory registration or grant while GitHub denies scoped access
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("status", [400, 401])
+def test_product_create_definite_refusal_is_not_retried(api, gh, status):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    gh.generate_status = status
+    gh.create_response_message = "ghs_SYNTHETIC_DO_NOT_EXPOSE"
+    body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
+            "auto_init": False, "confirmed": True}
+    refused = product_repo_request(api, body, key="definite-refusal")
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "github_create_failed"
+    assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in refused.text
+    replay = product_repo_request(api, body, key="definite-refusal")
+    assert replay.status_code == 409 and replay.json() == refused.json()
+    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
+
+
+def test_product_create_does_not_expose_github_error_bodies(api, gh):
+    connect(api, administration="true")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    gh.refuse = (500, "ghs_SYNTHETIC_DO_NOT_EXPOSE")
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
+    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+            "auto_init": preview["auto_init"], "confirmed": True}
+    token_failed = product_repo_request(api, body, key="safe-token-error")
+    assert token_failed.status_code == 409
+    assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in token_failed.text
+    assert not any(call[0] == "POST" and call[1] == "/orgs/Acme/repos" for call in gh.calls)
+
+    gh.refuse = None
+    gh.generate_status = 500
+    gh.create_response_message = "ghs_SYNTHETIC_DO_NOT_EXPOSE"
+    failed = product_repo_request(api, body, key="safe-create-error")
+    assert failed.status_code == 409 and failed.json()["error"]["code"] == "github_create_outcome_unknown"
+    assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in failed.text
+
+
 def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     connect(api, administration='true')
     runner_token(api, 'cmo')
@@ -472,6 +733,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     made = create({'slug': 'newbie', 'empty': True})
     assert made.status_code == 200, made.text
     assert made.json()['repository'] == 'Acme/bot-newbie'
+    assert gh.created_repositories == {"Acme/bot-newbie"}, "the existing bot creator keeps its bot- name contract"
     with api.app_state.store.read() as c:
         assert c.execute("SELECT actor FROM events WHERE action='github.repo_created'").fetchone()[0] == 'bot:cmo'
         assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
