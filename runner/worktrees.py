@@ -555,6 +555,10 @@ def command(client, operation, value, task=None):
                 setup_pending = bool(link.get('setup_pending', detail.get('setup_pending', False)))
                 if state is None and path.exists():
                     _verify_worktree(path, workspace, repo, link['branch'], env)
+                    if (link.get('state') == 'present' and not setup_pending
+                            and not git(path, 'ls-files', '--deleted', '-z', env=env).stdout):
+                        return {**link, 'state': 'present', 'checkout_state': 'legacy_present',
+                                'setup_pending': False, 'workspace_path': str(path)}
                     return {**link, 'state': 'pending', 'checkout_state': 'unverified',
                             'setup_pending': True, 'workspace_path': str(path),
                             'warning': 'Legacy worktree has no completion proof; kept unchanged and not reported ready'}

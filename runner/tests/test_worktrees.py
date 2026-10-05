@@ -286,7 +286,8 @@ def test_legacy_present_checkout_remains_usable_without_new_marker(trees):
     assert marker is None or not marker.exists()
 
     link = client.post.return_value
-    link.update(state='present', checkout_state='legacy_present', setup_pending=False)
+    link.pop('checkout_state', None)
+    link.update(state='present', setup_pending=False)
     result = W.command(client, 'add', 'org/product')
     assert result['state'] == 'present' and result['checkout_state'] == 'legacy_present'
     assert (path / 'file').read_text() == 'legacy user edit'
