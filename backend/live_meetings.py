@@ -326,7 +326,8 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
         if not attached:
             skipped.append({"bot": slug, "reason": "not_attached"})
             continue
-        busy = c.execute("SELECT 1 FROM live_meeting_turns WHERE bot=? AND status IN ('pending','claimed') LIMIT 1",
+        busy = c.execute("SELECT 1 FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
+                         "WHERE t.bot=? AND t.status IN ('pending','claimed') AND m.state='live' LIMIT 1",
                          (slug,)).fetchone()
         if not busy:
             busy = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "

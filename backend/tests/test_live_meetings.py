@@ -463,6 +463,33 @@ def test_chat_sent_while_paused_is_saved_but_never_dispatched(live):
     assert not detail["router"]["turns"]
 
 
+def test_paused_meeting_turn_does_not_block_live_meeting_but_active_current_turn_does(live):
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.9} for key in questions}}
+    paused = connect(live, title="Paused Meeting A", cooldown_seconds=0)
+    attach(live, paused["id"], "ops")
+    chunk(live, paused["id"], 1, 0, 30_000, "First meeting request")
+    paused_turn = get(live, f"live-meetings/{paused['id']}")["router"]["turns"][0]
+    post(live, f"live-meetings/{paused['id']}/control", {"action": "pause"})
+    paused_detail = get(live, f"live-meetings/{paused['id']}")
+    assert paused_detail["state"] == "paused"
+    assert next(turn for turn in paused_detail["router"]["turns"]
+                if turn["id"] == paused_turn["id"])["status"] == "pending"
+
+    current = connect(live, title="Current Meeting B", cooldown_seconds=0)
+    attach(live, current["id"], "ops")
+    chunk(live, current["id"], 1, 0, 30_000, "Current meeting request")
+    first_window = get(live, f"live-meetings/{current['id']}")["router"]["windows"][0]
+    assert first_window["outcome"] == "route"
+    assert first_window["trace"]["selected"] == ["ops"]
+
+    chunk(live, current["id"], 2, 30_000, 60_000, "Still waiting on the current meeting turn")
+    current_detail = get(live, f"live-meetings/{current['id']}")
+    assert current_detail["router"]["windows"][1]["trace"]["skipped"] == [
+        {"bot": "ops", "reason": "busy"}]
+
+
 def test_active_live_reply_in_another_meeting_is_busy_until_settled(live):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider", "ms": 1,
