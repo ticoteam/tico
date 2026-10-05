@@ -41,7 +41,9 @@ def post(api, path, body, token='owner-test'):
 
 def mark_ready(api, tid, link_id):
     return api.patch(f'/api/v2/tasks/{tid}/links/{link_id}',
-                     json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False},
+                     json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
+                           'expected_head': 'a' * 40, 'checkout_target': 'refs/heads/tico/test',
+                           'expected_base': 'b' * 64},
                      headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
 
 
@@ -107,11 +109,15 @@ def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
 def test_archived_cleanup_token_is_repository_scoped_and_stale_wakes_once(prepared, gh):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
     body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'worktrees': True},
             'worktrees': [{'link_id': link['link_id'], 'state': 'missing'}]}
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     with api.app_state.store.transaction() as c:
-        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps({'missing_since': old}), link['link_id']))
+        saved = c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        detail = json.loads(saved['detail_json'])
+        detail['missing_since'] = old
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
     for _ in range(2):
         assert post(api, 'runners/heartbeat', body, 'runner-test').status_code == 200
     with api.app_state.store.transaction() as c:
@@ -361,8 +367,12 @@ def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(p
     headers = {**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex}
     response = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': True}, headers=headers)
     assert response.status_code == 409 and response.json()['error']['code'] == 'worktree_not_ready'
+    response = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False},
+                         headers={**headers, 'Idempotency-Key': uuid.uuid4().hex})
+    assert response.status_code == 409 and response.json()['error']['code'] == 'worktree_not_ready'
     response = api.patch(route, json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
-                                      'expected_head': 'a' * 40, 'checkout_target': 'refs/heads/tico/test'},
+                                      'expected_head': 'a' * 40, 'checkout_target': 'refs/heads/tico/test',
+                                      'expected_base': 'b' * 64},
                          headers={**headers, 'Idempotency-Key': uuid.uuid4().hex})
     assert response.status_code == 200, response.text
     with api.app_state.store.read() as c:
@@ -375,7 +385,7 @@ def test_legacy_pending_link_is_not_promoted_by_git_directory_alone(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps({'owner': 'bot:cmo'}), link['link_id']))
+        c.execute("UPDATE task_links SET state='present',detail_json=? WHERE id=?", (json.dumps({'owner': 'bot:cmo'}), link['link_id']))
     beat = {'version': '0.3.21', 'platform': 'test', 'readiness': {'schema_version': 1, 'worktrees': True},
             'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'],
                            'repo': 'Acme/product'}]}

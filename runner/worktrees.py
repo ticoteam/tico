@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import threading
+import uuid
 import weakref
 
 from clients.tico import APIError
@@ -126,7 +127,113 @@ def _patch_link(client, task, link_id, **fields):
     return client.patch(f'tasks/{task}/links/{link_id}', fields)
 
 
-def _verify_worktree(path, workspace, repo, branch, env):
+def _common_dir(path, env):
+    return Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=env).stdout.strip()).resolve()
+
+
+def _base_identity(common_dir):
+    # Keep the runner's filesystem path local; the service needs only a stable comparison token.
+    return hashlib.sha256(str(Path(common_dir).resolve()).encode('utf-8')).hexdigest()
+
+
+def _marker_path(workspace, link_id, *, create=False):
+    if not isinstance(link_id, str) or not link_id or len(link_id) > 200:
+        raise ValueError('Worktree initialization has an invalid link identity; left as it is')
+    root = Path(workspace).resolve()
+    tasks = root / 'tasks'
+    folder = tasks / '.checkout-state'
+    if tasks.is_symlink() or folder.is_symlink():
+        raise ValueError('Worktree initialization state points through a symlink; left as it is')
+    if create:
+        isolation.mkdir(folder, mode=0o700)
+    if not folder.exists():
+        return None
+    marker = folder / (hashlib.sha256(link_id.encode()).hexdigest() + '.json')
+    if marker.is_symlink():
+        raise ValueError('Worktree initialization marker is a symlink; left as it is')
+    return marker
+
+
+def _read_marker(workspace, link_id):
+    marker = _marker_path(workspace, link_id)
+    if marker is None or not marker.exists():
+        return None
+    if not marker.is_file():
+        raise ValueError('Worktree initialization marker is not a regular file; left as it is')
+    try:
+        value = json.loads(marker.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise ValueError('Worktree initialization marker cannot be read; left as it is') from None
+    if not isinstance(value, dict) or value.get('schema') != 1:
+        raise ValueError('Worktree initialization marker is invalid; left as it is')
+    return value
+
+
+def _write_marker(workspace, value):
+    marker = _marker_path(workspace, value.get('link_id'), create=True)
+    if marker is None:
+        raise ValueError('Worktree initialization marker directory is unavailable')
+    temp = marker.with_name(marker.name + '.' + uuid.uuid4().hex + '.tmp')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(temp, flags, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(value, handle, sort_keys=True, separators=(',', ':'))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, marker)
+    except OSError:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ValueError('Worktree initialization marker could not be committed atomically') from None
+
+
+def _marker_identity(link_id, task, relative_path, repo, branch, expected_head, checkout_target, expected_base):
+    return {'schema': 1, 'link_id': link_id, 'task_id': task, 'path': relative_path,
+            'repo': repo.get('full_name') or repo.get('repo'), 'branch': branch,
+            'expected_head': expected_head, 'checkout_target': checkout_target,
+            'expected_base': expected_base}
+
+
+def _canonical_task_id(task, marker=None):
+    recorded = marker.get('task_id') if isinstance(marker, dict) else None
+    if isinstance(recorded, str) and (recorded == task or
+                                      isinstance(task, str) and len(task) >= 8 and recorded.startswith(task)):
+        return recorded
+    current = os.environ.get('HUB_TASK_ID')
+    if isinstance(current, str) and isinstance(task, str) and len(task) >= 8 and current.startswith(task):
+        return current
+    return task
+
+
+def _check_marker(marker, expected):
+    if not marker:
+        raise ValueError('Worktree has no local initialization proof; kept unchanged for inspection')
+    if any(marker.get(key) != value for key, value in expected.items()):
+        raise ValueError('Worktree initialization marker does not match this task registration; kept unchanged')
+
+
+def _verify_ready_registration(workspace, row, repo, task=None):
+    link_id = row.get('id') or row.get('link_id')
+    detail = _detail(row)
+    expected_head = row.get('expected_head') or detail.get('expected_head')
+    checkout_target = row.get('checkout_target') or detail.get('checkout_target')
+    expected_base = row.get('expected_base') or detail.get('expected_base')
+    marker = _read_marker(workspace, link_id)
+    task_id = row.get('task_id') or _canonical_task_id(task, marker)
+    if not all((link_id, task_id, row.get('path'), row.get('branch'), expected_head,
+                checkout_target, expected_base)):
+        raise ValueError('Ready worktree has no complete registration proof; kept unverified')
+    identity = _marker_identity(link_id, task_id, row['path'], repo, row['branch'],
+                                expected_head, checkout_target, expected_base)
+    _check_marker(marker, identity)
+    if marker.get('phase') != 'ready':
+        raise ValueError('Ready worktree has no completed local setup record; kept unverified')
+
+
+def _verify_worktree(path, workspace, repo, branch, env, expected_base=None):
     if not (path / '.git').is_file():
         raise ValueError('Tracked path is not a Git worktree; left as it is')
     origin = git(path, 'config', '--get', 'remote.origin.url', env=env).stdout.strip()
@@ -135,9 +242,11 @@ def _verify_worktree(path, workspace, repo, branch, env):
         raise ValueError('Worktree repository does not match its task link; left as it is')
     if git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip() != branch:
         raise ValueError('Worktree branch does not match its task link; left as it is')
-    common = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir', env=env).stdout.strip()).resolve()
+    common = _common_dir(path, env)
     if Path(workspace).resolve() not in common.parents:
         raise ValueError('Worktree base must be inside the team workspace')
+    if expected_base and _base_identity(common) != expected_base:
+        raise ValueError('Worktree is attached to a different managed base clone; left as it is')
     return common.parent
 
 
@@ -151,22 +260,23 @@ def _porcelain_records(path, env):
     return [record for record in raw.split('\0') if record]
 
 
-def _resume_interrupted_checkout(path, workspace, repo, branch, expected_head, env):
-    """Repair only an explicitly marked checkout with the exact expected commit and deletion-only damage."""
+def _resume_interrupted_checkout(path, workspace, repo, branch, expected_head, expected_base,
+                                 marker_identity, env):
+    """Accept only a complete clean materialization; never restore or overwrite its contents."""
     if not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', expected_head or ''):
         raise ValueError('Interrupted checkout has no valid expected commit; left as it is')
-    _verify_worktree(path, workspace, repo, branch, env)
+    _verify_worktree(path, workspace, repo, branch, env, expected_base)
     if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected_head:
         raise ValueError('Interrupted checkout moved from its recorded commit; left as it is')
+    marker = _read_marker(workspace, marker_identity['link_id'])
+    _check_marker(marker, marker_identity)
+    if marker.get('phase') not in ('materializing', 'checkout_complete'):
+        raise ValueError('Worktree is not in a resumable checkout phase; kept unchanged')
     records = _porcelain_records(path, env)
     if records:
-        if any(record[:2] != ' D' or len(record) < 4 for record in records):
-            raise ValueError('Interrupted checkout has user changes; kept worktree for manual recovery')
-        # The explicit initialization marker and exact original HEAD establish this as an
-        # unfinished materialization. Restore only paths Git reports as missing; never touch edits.
-        git(path, 'restore', '--worktree', '--source=HEAD', '--', '.', env=env)
-        if _porcelain_records(path, env):
-            raise ValueError('Checkout remains incomplete after restoring missing files; kept worktree')
+        raise ValueError('Checkout contents changed or are incomplete; kept worktree without restoring files')
+    if marker.get('phase') == 'materializing':
+        _write_marker(workspace, {**marker, 'phase': 'checkout_complete'})
 
 
 def _checkout_target(base, branch, default, env):
@@ -176,40 +286,166 @@ def _checkout_target(base, branch, default, env):
     return target, git(base, 'rev-parse', '--verify', target, env=env).stdout.strip()
 
 
+def _worktree_registered(base, path, env):
+    expected = Path(path).resolve()
+    for line in git(base, 'worktree', 'list', '--porcelain', env=env).stdout.splitlines():
+        if line.startswith('worktree ') and Path(line[9:]).resolve() == expected:
+            return True
+    return False
+
+
 def _create_or_resume_checkout(path, workspace, base, default, link, repo, task, env, client):
-    state = link.get('checkout_state') or 'queued'
-    expected = link.get('expected_head')
-    target = link.get('checkout_target')
+    detail = _detail(link)
+    state = link.get('checkout_state') or detail.get('checkout_state') or 'queued'
+    fresh_queued = state == 'queued'
+    expected = link.get('expected_head') or detail.get('expected_head')
+    target = link.get('checkout_target') or detail.get('checkout_target')
+    expected_base = link.get('expected_base') or detail.get('expected_base')
     branch = checked_branch(link['branch'])
-    if state == 'initializing' and expected and target:
+    actual_base = _base_identity(_common_dir(base, env))
+    if state == 'initializing':
+        if not expected or not target or not expected_base:
+            raise ValueError('Initialization is missing its registered commit or base; kept worktree unchanged')
+        if expected_base != actual_base:
+            raise ValueError('Managed base clone changed since initialization; kept worktree unchanged')
         if target not in ('refs/heads/' + branch, 'refs/remotes/origin/' + default):
             raise ValueError('Interrupted checkout target does not match its task; left as it is')
         target_head = git(base, 'rev-parse', '--verify', target, env=env, check=False)
         if target_head.returncode or target_head.stdout.strip() != expected:
             raise ValueError('Task branch changed since checkout initialization; left as it is')
-    elif state == 'queued' or state == 'initializing':
+    elif state == 'queued':
         target, expected = _checkout_target(base, branch, default, env)
+        expected_base = actual_base
         _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
-                    checkout_state='initializing', expected_head=expected, checkout_target=target)
+                    checkout_state='initializing', expected_head=expected, checkout_target=target,
+                    expected_base=expected_base)
+        state = 'initializing'
     else:
         raise ValueError('Checkout is not in a resumable initialization state; leave it unchanged')
 
+    marker = _read_marker(workspace, link['link_id'])
+    identity = _marker_identity(link['link_id'], _canonical_task_id(task, marker), link['path'], repo, branch,
+                                expected, target, expected_base)
     if path.exists():
-        _resume_interrupted_checkout(path, workspace, repo, branch, expected, env)
+        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base,
+                                     identity, env)
     else:
+        marker = _read_marker(workspace, link['link_id'])
+        if marker:
+            registered = _worktree_registered(base, path, env)
+            if fresh_queued and not registered:
+                # An explicit new add can reuse a removed link only when its worktree path is absent
+                # and Git no longer registers it. Keep the same task/repo/branch/base identity.
+                stable = {key: identity[key] for key in ('link_id', 'task_id', 'path', 'repo', 'branch', 'expected_base')}
+                _check_marker(marker, stable)
+                marker = {**identity, 'phase': 'planned'}
+                _write_marker(workspace, marker)
+            else:
+                _check_marker(marker, identity)
+                if marker.get('phase') == 'materializing':
+                    if registered:
+                        raise ValueError('Git still registers the missing interrupted worktree; preserved for bounded recovery')
+                    marker = {**marker, 'phase': 'planned'}
+                    _write_marker(workspace, marker)
+                elif marker.get('phase') == 'planned' and registered:
+                    raise ValueError('Git registers a worktree without a materialized path; preserved for bounded recovery')
+                elif marker.get('phase') != 'planned':
+                    raise ValueError('A previously materialized worktree is missing; preserved for bounded recovery')
+        else:
+            if state != 'initializing' or _worktree_registered(base, path, env):
+                raise ValueError('Worktree is missing without safe initialization proof; preserved for recovery')
+            _write_marker(workspace, {**identity, 'phase': 'planned'})
         isolation.mkdir(path.parent, mode=0o755)
+        _write_marker(workspace, {**identity, 'phase': 'materializing'})
         if target == 'refs/heads/' + branch:
             git(base, 'worktree', 'add', str(path), branch, env=env)
         else:
             git(base, 'worktree', 'add', '--no-track', '-b', branch, str(path), target, env=env)
-        if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected:
-            raise ValueError('New checkout does not match its recorded commit; kept worktree')
-        if _porcelain_records(path, env):
-            raise ValueError('New checkout is incomplete or has user changes; kept worktree')
-        _verify_worktree(path, workspace, repo, branch, env)
+        _resume_interrupted_checkout(path, workspace, repo, branch, expected, expected_base,
+                                     identity, env)
     _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
-                checkout_state='checkout_ready', expected_head=expected, checkout_target=target)
+                checkout_state='checkout_ready', expected_head=expected, checkout_target=target,
+                expected_base=expected_base)
     return expected, target
+
+
+def _link_value(link, key):
+    return link.get(key) if link.get(key) is not None else _detail(link).get(key)
+
+
+def _run_registered_setup(path, workspace, repo, branch, link, task, env, client):
+    link_id = link.get('link_id') or link.get('id')
+    state = _link_value(link, 'checkout_state')
+    expected = _link_value(link, 'expected_head')
+    target = _link_value(link, 'checkout_target')
+    expected_base = _link_value(link, 'expected_base')
+    if state not in ('checkout_ready', 'setup_failed', 'setup_running'):
+        raise ValueError('Legacy or unknown worktree initialization is unverified; setup was not run')
+    if not expected or not target or not expected_base:
+        raise ValueError('Worktree setup lacks recorded commit and base identity; kept unchanged')
+    marker = _read_marker(workspace, link_id)
+    identity = _marker_identity(link_id, _canonical_task_id(task, marker), link['path'], repo, branch,
+                                expected, target, expected_base)
+    _check_marker(marker, identity)
+    phase = marker.get('phase')
+    if phase not in ('checkout_complete', 'restored', 'setup_failed', 'setup_running', 'ready'):
+        raise ValueError('Worktree setup has no completed checkout proof; kept unchanged')
+    _verify_worktree(path, workspace, repo, branch, env, expected_base)
+    if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected:
+        raise ValueError('Worktree moved from its recorded setup commit; kept unchanged')
+    if state == 'checkout_ready' and phase == 'checkout_complete' and _porcelain_records(path, env):
+        raise ValueError('Checkout changed before setup; kept worktree without running setup')
+    if phase == 'ready' and state == 'setup_running':
+        return _patch_link(client, task, link_id, state='present', setup_pending=False,
+                           checkout_state='ready', expected_head=expected, checkout_target=target,
+                           expected_base=expected_base)
+
+    _write_marker(workspace, {**marker, 'phase': 'setup_running'})
+    _patch_link(client, task, link_id, state='pending', setup_pending=True,
+                checkout_state='setup_running', expected_head=expected, checkout_target=target,
+                expected_base=expected_base)
+    try:
+        setup(path, repo.get('setup_command'), env)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        _write_marker(workspace, {**marker, 'phase': 'setup_failed'})
+        _patch_link(client, task, link_id, state='pending', setup_pending=True,
+                    checkout_state='setup_failed', expected_head=expected, checkout_target=target,
+                    expected_base=expected_base)
+        raise
+    _write_marker(workspace, {**marker, 'phase': 'ready'})
+    return _patch_link(client, task, link_id, state='present', setup_pending=False,
+                       checkout_state='ready', expected_head=expected, checkout_target=target,
+                       expected_base=expected_base)
+
+
+def _record_restored_checkout(workspace, row, repo, env):
+    path = safe_path(workspace, row['path'])
+    base, _ = repositories.worktree_base(workspace, repo, env)
+    expected_base = _base_identity(_common_dir(base, env))
+    branch = checked_branch(row['branch'])
+    _verify_worktree(path, workspace, repo, branch, env, expected_base)
+    expected = git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()
+    target = 'refs/heads/' + branch
+    if git(base, 'rev-parse', '--verify', target, env=env, check=False).returncode:
+        raise ValueError('Restored task branch is missing from its managed base; kept worktree')
+    identity = _marker_identity(row['id'], row['task_id'], row['path'], repo,
+                                branch, expected, target, expected_base)
+    _write_marker(workspace, {**identity, 'phase': 'restored'})
+    return expected, target, expected_base
+
+
+def _record_attached_checkout(workspace, link, repo, env):
+    path = safe_path(workspace, link['path'])
+    branch = checked_branch(link['branch'])
+    common = _common_dir(path, env)
+    expected_base = _base_identity(common)
+    _verify_worktree(path, workspace, repo, branch, env, expected_base)
+    expected = git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()
+    target = 'refs/heads/' + branch
+    identity = _marker_identity(link['link_id'], _canonical_task_id(link['task_id']), link['path'], repo,
+                                branch, expected, target, expected_base)
+    _write_marker(workspace, {**identity, 'phase': 'ready'})
+    return expected, target, expected_base
 
 
 def command(client, operation, value, task=None):
@@ -236,21 +472,21 @@ def command(client, operation, value, task=None):
                 state = detail.get('checkout_state')
                 if state == 'initializing':
                     base, default = repositories.worktree_base(workspace, repo, env)
-                    _create_or_resume_checkout(path, workspace, base, default,
-                                               {**row, 'link_id': row['id'], **detail}, repo, task, env, client)
-                    detail['checkout_state'] = 'checkout_ready'
-                elif state in ('queued', 'unverified'):
-                    raise ValueError('Checkout is not verified; run hub task worktree add again or inspect it before setup')
+                    expected, target = _create_or_resume_checkout(
+                        path, workspace, base, default, {**row, **detail, 'link_id': row['id']},
+                        repo, task, env, client)
+                    detail.update(checkout_state='checkout_ready', expected_head=expected,
+                                  checkout_target=target)
+                    detail['expected_base'] = detail.get('expected_base') or _base_identity(_common_dir(base, env))
                 if not path.exists():
                     raise ValueError('Worktree is missing; restore it before setup')
-                _verify_worktree(path, workspace, repo, row['branch'], env)
-                _patch_link(client, task, row['id'], state='pending', setup_pending=True, checkout_state='setup_running')
-                try:
-                    setup(path, repo.get('setup_command'), env)
-                except (ValueError, OSError, subprocess.SubprocessError):
-                    _patch_link(client, task, row['id'], state='pending', setup_pending=True, checkout_state='setup_failed')
-                    raise
-                return _patch_link(client, task, row['id'], state='present', setup_pending=False, checkout_state='ready')
+                if state == 'ready':
+                    _verify_worktree(path, workspace, repo, row['branch'], env,
+                                     detail.get('expected_base'))
+                    _verify_ready_registration(workspace, row, repo, task)
+                    return row
+                link = {**row, **detail, 'link_id': row['id']}
+                return _run_registered_setup(path, workspace, repo, row['branch'], link, task, env, client)
         if operation == 'add':
             disk_floor(workspace)
             repo = metadata(client, value)
@@ -260,65 +496,70 @@ def command(client, operation, value, task=None):
             with locked(workspace, link['path']):
                 checked_branch(link['branch'])
                 path = safe_path(workspace, link['path'])
-                state = link.get('checkout_state')
-                setup_pending = bool(link.get('setup_pending', False))
+                detail = _detail(link)
+                state = link.get('checkout_state') or detail.get('checkout_state')
+                setup_pending = bool(link.get('setup_pending', detail.get('setup_pending', False)))
                 if state is None and path.exists():
                     _verify_worktree(path, workspace, repo, link['branch'], env)
-                    if setup_pending:
-                        raise ValueError('Legacy worktree has pending setup but no initialization record; inspect it before retry')
-                    return {**link, 'workspace_path': str(path),
-                            'warning': 'Legacy worktree has no initialization record; left unchanged'}
+                    return {**link, 'state': 'pending', 'checkout_state': 'unverified',
+                            'setup_pending': True, 'workspace_path': str(path),
+                            'warning': 'Legacy worktree has no completion proof; kept unchanged and not reported ready'}
                 if state is None:
                     state = 'queued'
                 if path.exists():
                     if state == 'queued':
                         raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
-                    base = _verify_worktree(path, workspace, repo, link['branch'], env)
-                    detail = {**link, **_detail(link)}
+                    base, default = repositories.worktree_base(workspace, repo, env)
+                    expected_base = link.get('expected_base') or detail.get('expected_base')
                     if state == 'initializing':
-                        default = repo.get('default_branch') or git(base, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD', env=env, check=False).stdout.strip().removeprefix('origin/')
-                        _create_or_resume_checkout(path, workspace, base, default,
-                                                   {**link, **detail, 'link_id': link['link_id']},
-                                                   repo, task, env, client)
+                        _, target = _create_or_resume_checkout(
+                            path, workspace, base, default, {**link, **detail}, repo, task, env, client)
                         state = 'checkout_ready'
-                    elif state in ('setup_running', 'setup_failed'):
-                        raise ValueError('Setup did not finish; use hub task worktree setup to retry explicitly')
+                        expected_base = expected_base or _base_identity(_common_dir(base, env))
+                        detail.update(checkout_state=state, checkout_target=target,
+                                      expected_base=expected_base)
                     elif state == 'checkout_ready':
                         expected = link.get('expected_head') or detail.get('expected_head')
-                        if git(path, 'rev-parse', 'HEAD', env=env).stdout.strip() != expected or _porcelain_records(path, env):
-                            raise ValueError('Checkout changed before setup; kept worktree for manual recovery')
-                    elif state != 'ready':
+                        target = link.get('checkout_target') or detail.get('checkout_target')
+                        if not expected_base or not expected or not target:
+                            raise ValueError('Checkout lacks recorded base and commit identity; kept unchanged')
+                        identity = _marker_identity(link['link_id'], task, link['path'], repo,
+                                                    link['branch'], expected, target, expected_base)
+                        _resume_interrupted_checkout(path, workspace, repo, link['branch'],
+                                                     expected, expected_base, identity, env)
+                    elif state in ('setup_running', 'setup_failed'):
+                        raise ValueError('Setup did not finish; use hub task worktree setup to retry explicitly')
+                    elif state == 'ready':
+                        if not expected_base:
+                            raise ValueError('Ready worktree has no recorded base identity; kept unchanged')
+                        _verify_worktree(path, workspace, repo, link['branch'], env, expected_base)
+                        _verify_ready_registration(workspace, link, repo, task)
+                        return {**link, 'state': 'present', 'checkout_state': 'ready',
+                                'workspace_path': str(path)}
+                    else:
                         raise ValueError('Worktree initialization is not verified; kept it unchanged')
                 else:
                     base, default = repositories.worktree_base(workspace, repo, env)
                     if state not in ('queued', 'initializing'):
                         raise ValueError('Missing worktree is not in a resumable initialization state')
-                    target = link.get('checkout_target')
-                    expected = link.get('expected_head')
-                    if state != 'initializing' or not target or not expected:
-                        target, expected = _checkout_target(base, link['branch'], default, env)
-                        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True,
-                                    checkout_state='initializing', expected_head=expected, checkout_target=target)
-                    elif target not in ('refs/heads/' + link['branch'], 'refs/remotes/origin/' + default) or \
-                            git(base, 'rev-parse', '--verify', target, env=env, check=False).stdout.strip() != expected:
-                        raise ValueError('Task branch changed since checkout initialization; left it unchanged')
-                    git(base, 'worktree', 'prune', '--expire', 'now', env=env)
-                    _create_or_resume_checkout(path, workspace, base, default,
-                                               {**link, 'checkout_state': 'initializing', 'expected_head': expected,
-                                                'checkout_target': target}, repo, task, env, client)
+                    expected, target = _create_or_resume_checkout(
+                        path, workspace, base, default, {**link, 'checkout_state': state},
+                        repo, task, env, client)
                     state = 'checkout_ready'
                     setup_pending = True
+                    expected_base = _base_identity(_common_dir(base, env))
+                    detail.update(checkout_state=state, expected_head=expected,
+                                  checkout_target=target, expected_base=expected_base)
                 if state == 'checkout_ready' or setup_pending:
-                    _patch_link(client, task, link['link_id'], state='pending', setup_pending=True, checkout_state='setup_running')
-                    try:
-                        setup(path, repo.get('setup_command'), env)
-                    except (ValueError, OSError, subprocess.SubprocessError):
-                        _patch_link(client, task, link['link_id'], state='pending', setup_pending=True, checkout_state='setup_failed')
-                        raise
-                    _patch_link(client, task, link['link_id'], state='present', setup_pending=False, checkout_state='ready')
+                    _run_registered_setup(path, workspace, repo, link['branch'],
+                                          {**link, **detail, 'link_id': link['link_id'],
+                                           'checkout_state': state, 'expected_base': expected_base},
+                                          task, env, client)
                 elif state != 'ready':
                     raise ValueError('Worktree is not ready; no initialization or setup completion was recorded')
-                return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
+                return {**link, 'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,
+                        'workspace_path': str(path),
+                        **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
         else:
             raw = Path(value)
             relative = str(raw.relative_to(Path(workspace).resolve())) if raw.is_absolute() else value
@@ -339,8 +580,11 @@ def command(client, operation, value, task=None):
                 env = safe_git.environment()
             branch = checked_branch(git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip())
             link = client.post(f'tasks/{task}/worktrees/attach', {'path': relative, 'repo': repo['full_name'], 'branch': branch})
+            expected_head, checkout_target, expected_base = _record_attached_checkout(
+                workspace, {**link, 'task_id': task}, repo, env)
         client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path'],
-                     'setup_pending': False, 'checkout_state': 'ready'})
+                     'setup_pending': False, 'checkout_state': 'ready', 'expected_head': expected_head,
+                     'checkout_target': checkout_target, 'expected_base': expected_base})
         return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
     except (ValueError, OSError, subprocess.SubprocessError):
         if operation == 'add' and 'link' in locals() and ('path' not in locals() or not (path / '.git').is_file()):
@@ -400,9 +644,17 @@ def inspect(workspace, row, env=None, cache=None):
         path = safe_path(workspace, row['path'])
         detail = _detail(row)
         checkout_state = detail.get('checkout_state')
-        not_ready = bool(checkout_state and checkout_state != 'ready' or detail.get('setup_pending'))
-        if checkout_state is not None:
-            result['checkout_state'] = checkout_state
+        not_ready = checkout_state != 'ready' or bool(detail.get('setup_pending'))
+        result['checkout_state'] = checkout_state or 'unverified'
+        expected_base = detail.get('expected_base')
+        expected_head = detail.get('expected_head')
+        checkout_target = detail.get('checkout_target')
+        if expected_head is not None:
+            result['expected_head'] = expected_head
+        if checkout_target is not None:
+            result['checkout_target'] = checkout_target
+        if expected_base is not None:
+            result['expected_base'] = expected_base
         if not path.exists():
             result['state'] = 'removed' if row['state'] == 'removed' else ('pending' if not_ready else 'missing')
             return result
@@ -421,6 +673,15 @@ def inspect(workspace, row, env=None, cache=None):
             result['repo'] = None
             result['error'] = 'Invalid or oversized repository name'
         branch = git(path, 'symbolic-ref', '--short', 'HEAD', env=env).stdout.strip()
+        common = _common_dir(path, env)
+        if expected_base and _base_identity(common) != expected_base:
+            raise ValueError('Worktree is attached to a different managed base clone')
+        if checkout_state == 'ready' and (not expected_base or not expected_head or not checkout_target):
+            not_ready = True
+            result['checkout_state'] = 'unverified'
+        elif checkout_state == 'ready':
+            _verify_ready_registration(workspace, {**row, **detail},
+                                       {'full_name': result['repo']})
         result.update(state='pending' if not_ready else 'present',
                       dirty_files=len(git(path, 'status', '--porcelain', env=env).stdout.splitlines()),
                       last_commit=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip()[:100])
@@ -433,8 +694,13 @@ def inspect(workspace, row, env=None, cache=None):
                 raise ValueError('Attached worktree metadata is invalid; left as it is')
             if row.get('branch') and row['branch'] != result['branch']:
                 raise ValueError('Attached worktree branch does not match its task link')
-            result['checkout_state'] = 'ready'
+            result.update(checkout_state='ready',
+                          expected_head=git(path, 'rev-parse', 'HEAD', env=env).stdout.strip(),
+                          checkout_target='refs/heads/' + result['branch'],
+                          expected_base=_base_identity(common))
             checkout_state = 'ready'
+            not_ready = False
+            result['state'] = 'present'
         task_branch = row.get('branch')
         remote = 'refs/remotes/origin/' + task_branch if task_branch else ''
         if remote and git(path, 'show-ref', '--verify', remote, env=env, check=False).returncode == 0:
@@ -721,15 +987,22 @@ class Worktrees:
                     return fresh is not None and self.bot_idle(row['owner']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or json.loads(fresh.get('detail_json') or '{}').get('delete_requested'))
                 state = act(self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed)
                 restore_pending = action['action'] == 'restore'
+                if restore_pending:
+                    expected_head, checkout_target, expected_base = _record_restored_checkout(
+                        self.workspace, row, repo, env)
                 self.client.patch(f'tasks/{row["task_id"]}/links/{row["id"]}',
                                   {'state': 'pending' if restore_pending else state,
                                    'cleanup': action['action'] == 'remove', 'setup_pending': restore_pending,
-                                   **({'checkout_state': 'checkout_ready'} if restore_pending else {}),
+                                   **({'checkout_state': 'checkout_ready', 'expected_head': expected_head,
+                                       'checkout_target': checkout_target, 'expected_base': expected_base}
+                                      if restore_pending else {}),
                                    **{k: action_row[k] for k in ('snapshot_skipped', 'restore_source') if k in action_row}})
                 row['state'] = 'pending' if restore_pending else state
                 if restore_pending:
                     detail = _detail(row)
-                    detail.update(checkout_state='checkout_ready', setup_pending=True)
+                    detail.update(checkout_state='checkout_ready', setup_pending=True,
+                                  expected_head=expected_head, checkout_target=checkout_target,
+                                  expected_base=expected_base)
                     row['detail_json'] = json.dumps(detail)
                 errors.pop(row['id'], None)
                 self.retry.pop(row['id'], None)
