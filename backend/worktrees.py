@@ -247,6 +247,7 @@ def install(app, store, auth, mutate):
             if existing['state'] != 'removed':
                 detail = json.loads(existing['detail_json'] or '{}')
                 return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
+                        'state': existing['state'],
                         'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
                         'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
                         'expected_base': detail.get('expected_base')}
@@ -265,6 +266,7 @@ def install(app, store, auth, mutate):
             c.execute("UPDATE task_links SET state='pending',computer_id=?,detail_json=?,updated=? WHERE id=?",
                       (assigned['id'], json.dumps(detail), H.now(), existing['id']))
             return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
+                    'state': 'pending',
                     'checkout_state': 'attached_pending' if attaching else 'queued',
                     'setup_pending': not attaching, 'expected_head': None, 'checkout_target': None,
                     'expected_base': None}
@@ -278,7 +280,7 @@ def install(app, store, auth, mutate):
         c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
                   (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
                                'setup_pending': not attaching}), link))
-        return {'link_id': link, 'branch': branch, 'path': path,
+        return {'link_id': link, 'branch': branch, 'path': path, 'state': 'pending',
                 'checkout_state': 'attached_pending' if attaching else 'queued', 'setup_pending': not attaching,
                 'expected_head': None, 'checkout_target': None, 'expected_base': None}
 

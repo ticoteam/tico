@@ -15,6 +15,7 @@ def test_legacy_add_consumes_actual_provision_response(prepared, trees, monkeypa
     workspace, base, remote, row, client = trees
     route = f'tasks/{task}/worktrees'
     link = post(api, route, {'repo': 'Acme/product'}, 'bot-test').json()
+    assert link['state'] == 'pending'
     path = workspace / link['path']
     path.parent.mkdir(parents=True)
     git(base, 'config', 'remote.origin.url', 'https://github.com/Acme/product.git')
@@ -30,6 +31,7 @@ def test_legacy_add_consumes_actual_provision_response(prepared, trees, monkeypa
                   ('pending' if pending else 'present', json.dumps(detail), link['link_id']))
     response = post(api, route, {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
+    assert response.json()['state'] == ('pending' if pending else 'present')
     client.post.return_value = response.json()
     client.get.return_value = {'configured': True, 'repositories': [{
         'full_name': 'Acme/product', 'access': 'write', 'default_branch': 'main',

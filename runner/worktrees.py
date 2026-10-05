@@ -598,7 +598,12 @@ def command(client, operation, value, task=None):
                         _verify_worktree(path, workspace, repo, link['branch'], env)
                         if git(path, 'ls-files', '--deleted', '-z', env=env).stdout:
                             raise ValueError('Legacy worktree has missing tracked files; kept unchanged and unverified')
+                        if link.get('state') != 'present' or setup_pending:
+                            return {**link, 'state': 'pending', 'checkout_state': 'legacy_present',
+                                    'setup_pending': setup_pending, 'workspace_path': str(path),
+                                    'warning': 'Legacy worktree is not recorded present with setup complete; kept unchanged'}
                         return {**link, 'state': 'present', 'checkout_state': 'legacy_present',
+                                'setup_pending': False,
                                 'workspace_path': str(path)}
                     else:
                         raise ValueError('Worktree initialization is not verified; kept it unchanged')
@@ -756,7 +761,7 @@ def inspect(workspace, row, env=None, cache=None):
                               error='Legacy worktree has missing tracked files; kept unchanged and unverified')
                 return result
             result['checkout_state'] = 'legacy_present'
-            not_ready = False
+            not_ready = bool(detail.get('setup_pending'))
         if checkout_state == 'ready' and (not expected_base or not expected_head or not checkout_target):
             not_ready = True
             result['checkout_state'] = 'unverified'
