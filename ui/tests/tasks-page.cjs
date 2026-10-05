@@ -785,6 +785,30 @@ async function views(browser) {
   await page.close();
 }
 
+async function waitingOnYou(browser) {
+  // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it. Its Done and Reply go back
+  // on the task as a comment that wakes the bot; nothing offers to set the bot's status.
+  const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner: 'bot:engineer',
+    requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated: at(5)};
+  const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host]});
+  assert.equal(await page.locator('.tl-group[data-group="a:bot:engineer"] [data-task-key="tt-host"]').count(), 1);
+  const comments = [];
+  await page.route('**/api/v2/tasks/t-host/comments', route => { comments.push(route.request().postDataJSON()); return route.fulfill({contentType: 'application/json', body: '{}'}); });
+  await page.evaluate(it => { const box = document.createElement('div'); box.id = 'waiting-item'; box.style.cssText = 'position:fixed;top:0;right:0;width:600px;z-index:9999'; box.innerHTML = needsV2Item(it, false); document.body.append(box); },
+    {...host, kind: 'waiting', conversation_id: 'c-host'});
+  const item = page.locator('#waiting-item');
+  assert.equal(await item.locator('[data-v2-status], [data-v2-close], [data-v2-reply]').count(), 0, 'no status change on the bot\'s task');
+  assert.equal(await item.locator('.req-from').innerText(), 'Engineer:', 'named for the bot that owns it');
+  assert.equal(await item.locator('.pill').innerText(), 'Waiting');
+  await item.locator('summary').click();
+  await item.locator('[data-v2-done]').click();
+  await page.waitForFunction(() => !document.querySelector('#waiting-item .req'));
+  assert.deepEqual(comments, [{text: 'Done.'}]);
+  assert.deepEqual(errors, []);
+  console.log('Waiting on you: ok');
+  await page.close();
+}
+
 async function donePagination(browser) {
   const types = [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}];
   const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated, done_at: updated});
@@ -1079,7 +1103,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, donePagination, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, board, bulk, views, waitingOnYou, donePagination, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

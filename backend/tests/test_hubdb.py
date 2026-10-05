@@ -438,3 +438,39 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(needs(), 0)
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')
+
+    def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
+        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
+        H.status_set(self.conn, H.KEEPER, "seo", state="idle")
+        stored = lambda bot: self.conn.execute("SELECT needs_human FROM bot_status WHERE bot=?", (bot,)).fetchone()[0]
+        task = H.task_create(self.conn, ANA, 'Fix the build host', '', CMO, private=False)
+        wait = lambda **kw: H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                                          note='Restart it', **kw)
+        self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
+        self.refused('kind', wait, owner='seo')
+        self.refused('escape', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                     note='Read secrets/mail.env')
+        self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
+                     private=True)
+        wait()
+        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], note='Still down')['waiting_on'])
+        wait()
+        self.assertIsNone(H.task_update(self.conn, CMO, task['id'], owner='seo')['waiting_on'])
+        self.assertEqual((stored('cmo'), stored('seo')), (0, 0), "the handoff recounts the old owner too")
+        # Made private: the wait no longer goes in front of a person who cannot read it.
+        own = H.task_create(self.conn, CMO, 'Rotate the deploy key', '', CMO, private=False)
+        H.task_update(self.conn, CMO, own['id'], status='waiting', waiting_on='ben', note='Approve the rotation')
+        self.assertIsNone(H.task_update(self.conn, CMO, own['id'], private=True)['waiting_on'])
+        # An approval on a task that waits on a person is the same wait.
+        key = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
+        H.task_update(self.conn, CMO, key['id'], status='waiting', waiting_on='ana', note='Approve the purchase')
+        H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
+        self.assertEqual((H.status(self.conn, 'cmo')['needs_human'], stored('cmo')), (1, 1))
+        # A plain reply answers a question; deleting the reply reopens it.
+        other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
+        H.task_ask(self.conn, SEO, other['id'], 'Which date?')
+        self.assertEqual(stored('seo'), 1)
+        reply = H.task_comment(self.conn, ANA, other['id'], 'Friday')
+        self.assertEqual(stored('seo'), 0)
+        H.task_comment_delete(self.conn, ANA, other['id'], reply['id'])
+        self.assertEqual(stored('seo'), 1)

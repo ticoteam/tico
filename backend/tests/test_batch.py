@@ -149,3 +149,18 @@ def test_a_bot_task_waiting_on_a_person_needs_that_person_until_they_act(api):
     task = get(api, f"tasks/{task['id']}")["task"]
     task = post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"}, token=token)
     assert task["waiting_on"] is None
+    # A deleted task stops counting; restored, it counts again.
+    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "waiting", "waiting_on": "ana",
+                                             "note": note}, token=token)
+
+    def stored():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT needs_human FROM bot_status WHERE bot='finance'").fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("DELETE FROM task_delegations")
+    assert stored() == 1
+    post(api, f"tasks/{task['id']}/delete", {})
+    assert stored() == 0
+    post(api, f"tasks/{task['id']}/restore", {})
+    assert stored() == 1

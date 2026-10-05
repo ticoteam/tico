@@ -70,8 +70,10 @@ hub task update <task> --status waiting --on ana --note "Restart the build host;
 The task is then in that person's **Needs you** and their batch as one item, its title and that
 note, and the bot counts toward `needs_human` on its status. When the person comments on the task
 (or says done or answers in a batch) the bot wakes and the task leaves their list; the bot sets it
-waiting on them again if it still needs something. Any other status change clears `--on`, and
-`--on ""` clears it by hand. A private task can only wait on a person who can read it.
+waiting on them again if it still needs something. Only the bot that owns the task names the
+person. A new status, note or owner clears `--on` unless the same update names the person again,
+and `--on ""` clears it by hand. A private task can only wait on a person who can read it, and a
+task made private stops waiting on anyone who cannot.
 
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open

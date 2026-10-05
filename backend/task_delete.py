@@ -201,10 +201,13 @@ def delete_tasks(c, ids, apply=False, actor=None):
     for p in _parts(ids):
         c.execute(f"UPDATE tasks SET parent_id=NULL, blocked_by=NULL WHERE id IN ({_marks(p)})", p)
     _delete(c, "tasks", "id", ids)
+    parties = []
     for tid in ids:
         t = c.execute("SELECT title,requester,owner,status FROM task_trash WHERE task_id=?", (tid,)).fetchone()
+        parties += [t[1], t[2]]
         H.event(c, actor, "task.deleted", tid, {"title": t[0], "requester": t[1], "owner": t[2], "status": t[3],
                                                 "restorable": True})
+    H.recount(c, parties)       # what a bot waited on a person for leaves with the task
     report["applied"] = True
     return report
 
@@ -318,6 +321,7 @@ def restore_tasks(c, ids, actor=None):
         c.execute("DELETE FROM task_trash WHERE task_id=?", (e["task_id"],))
         H.event(c, actor, "task.restored", e["task_id"], {"title": e["title"], "deleted_by": e["deleted_by"],
                                                           "unlinked": unlinked.get(e["task_id"], [])})
+    H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 
 

@@ -344,11 +344,13 @@ def status(c, who, row, *, tasks=None, approvals=None):
                     "(SELECT 1 FROM messages a WHERE a.in_reply_to=m.id AND a.kind='answer')", (bot,)):
                 if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m):
                     waits.add(m["about"])
-        row["needs_human"] = len(waits)
         approvals = approvals if approvals is not None else c.execute(
-            "SELECT m.* FROM approvals a JOIN messages m ON m.id=a.message_id "
+            "SELECT m.*, a.task_id AS approval_task FROM approvals a JOIN messages m ON m.id=a.message_id "
             "WHERE a.requested_by=? AND a.decision IS NULL", ("bot:" + row["bot"],))
-        row["needs_human"] += sum(message_readable(c, actor(who), m) for m in approvals)
+        # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
+        row["needs_human"] = len(waits) + sum(
+            message_readable(c, actor(who), m) and not (dict(m).get("approval_task") in waits)
+            for m in approvals)
     return row
 
 
