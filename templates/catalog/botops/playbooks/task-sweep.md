@@ -13,7 +13,7 @@ Run this sweep only when its routine is enabled or it is explicitly requested; d
 For each: start it with `hub task run <id>` when the bot can simply do it; fix the cause when something in the bot
 or Tico keeps it stuck; or tell its requester in one line why it cannot move.
 For a task you own, always record the result: continue it, finish it, or set it waiting with a specific
-dependency or one question on the task. A bot or keeper requester does not prevent this bookkeeping.
+dependency or one question on the task. Waiting on a person to act: `--on <person>` with a note saying what. A bot or keeper requester does not prevent this bookkeeping.
 When assigned a diagnosis, finish the diagnostic with the evidence and repair dependency; do not keep
 the diagnostic open solely because the underlying repair cannot yet be made.
 

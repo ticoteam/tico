@@ -46,7 +46,7 @@ function hubColumn(t) {
   const status = String(t.status || 'open');
   if (status === 'done' || status === 'closed') return 'done';
   if (status === 'declined') return 'needs';
-  if (actorPerson(t.owner) || taskAskToPerson(t)) return 'needs';
+  if (actorPerson(t.owner) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
   if (status === 'waiting' || t.blocked_by) return 'waiting';
   return 'doing';
 }
@@ -56,7 +56,8 @@ function taskWaitsOn(t) {
   if (!t || taskFinished(t)) return null;
   if (taskNeedsViewer(t)) return myActor();
   if (hubColumn(t) !== 'needs') return null;
-  const pid = actorPerson(t.ask?.to_actor) || actorPerson(t.owner) || (t.status === 'declined' ? actorPerson(taskRequester(t)) : '');
+  const pid = actorPerson(t.ask?.to_actor) || actorPerson(t.owner) || actorPerson(taskWaitingOn(t))
+    || (t.status === 'declined' ? actorPerson(taskRequester(t)) : '');
   return pid && (S.people || []).some(p => p.id === pid) ? 'human:' + pid : '';
 }
 // "Needs you", "Needs Sam" or "Needs someone": the approved words for who a task waits on
@@ -117,8 +118,12 @@ function taskMatches(it, query) {
 // A task’s state is written in words; its owner and dependencies remain separate properties.
 function taskNeedsViewer(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && (t.owner === me || t.ask?.to_actor === me
+  return !!me && !!t && !taskFinished(t) && (t.owner === me || t.ask?.to_actor === me || taskWaitingOn(t) === me
     || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner)));
+}
+// The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
+function taskWaitingOn(t) {
+  return t?.status === 'waiting' && actorPerson(t.waiting_on) ? t.waiting_on : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {

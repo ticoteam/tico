@@ -52,7 +52,13 @@ answers instead. Three things have to be true and specific in it:
 - which work the bot owns, named concretely. Sending to outsiders stays off until requested.
 
 Cut every line that is not true for this team. A vague line left in is worse than a missing one,
-because the bot will act on it. Do the same pass over `bot.yaml`: the display name, the labels,
+because the bot will act on it.
+
+A setup answer that is still missing blocks only the step that needs it. Never write "if setup is
+incomplete, stop" into the instructions or a routine: name the step that waits (publishing, sending
+to outsiders, a rollout, a payment) and say that everything else goes ahead, with the bot asking the
+missing question once, naming the person, while it works. A Release Manager without rollout access
+still builds, checks and writes up the candidate; only the rollout waits. Do the same pass over `bot.yaml`: the display name, the labels,
 and a schedule only if the owner asked for one.
 
 If the instructions include a `Mailbox: <email>` line (message bots), replace every `{{mailbox}}` in

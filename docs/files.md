@@ -163,7 +163,7 @@ Keys are passed directly to S3 clients, never exported into the server's environ
 Only the source kind is reported. Region uses `TICO_BLOB_REGION`, then `TICO_BACKUP_REGION`
 when both storage and backups use AWS (both endpoint settings unset), then `AWS_REGION` or
 `AWS_DEFAULT_REGION` inside the server, then boto3's default. Docker does not forward the
-operator's shell AWS credentials or regions. Empty settings are treated as unset. The bucket
+operator's shell AWS credentials; `AWS_REGION` and `AWS_DEFAULT_REGION` pass through when set. Empty settings are treated as unset. The bucket
 script needs Python with boto3 and provisioning rights; it is idempotent. Use a dedicated
 bucket since it sets security controls.
 

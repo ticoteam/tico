@@ -114,7 +114,7 @@ def install(app, store, auth, mutate, settings):
                 bot = H.bot(c, H.actor_id(owner)) or {}
                 names[owner] = {"kind": "bot", "id": H.actor_id(owner),
                                 "name": bot.get("display_name") or H.actor_id(owner),
-                                "status": H.status(c, H.actor_id(owner))}
+                                "status": H.status_live(c, H.actor_id(owner))}
             else:
                 human = H.human(c, H.actor_id(owner)) or {}
                 names[owner] = {"kind": "person", "id": H.actor_id(owner), "name": human.get("name") or H.actor_id(owner)}

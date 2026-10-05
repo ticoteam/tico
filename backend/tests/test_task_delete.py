@@ -199,3 +199,15 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
         H._next_number(c, "human:priya", second["id"], "t2")
         assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 91
     assert get(api, "deleted-tasks", token="priya-test")["tasks"] == []
+
+
+def test_a_number_given_by_hand_cannot_take_a_deleted_tasks_number(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO task_types(id,name,created,updated,numbered) VALUES('t3','Ticket',?,?,1)", (H.now(), H.now()))
+    first = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x", "type": "t3", "number": 41})
+    post(api, f"tasks/{first['id']}/delete", {})
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Fix the cart page again", "body": "x", "type": "t3",
+                                       "number": 41}, headers=headers())
+    assert r.status_code >= 400 and r.json()["error"]["code"] == "duplicate", r.text
+    assert post(api, f"tasks/{first['id']}/restore", {})["unlinked"] == []

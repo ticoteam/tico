@@ -241,7 +241,8 @@ all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
 **A bot needs you.** It asks with `hub task ask` (the task goes `waiting`), requests an approval,
-or files a task for you. All of these appear in **Needs you** at the top of **Tasks** with
+files a task for you, or sets its own task waiting on you (`hub task update --status waiting --on
+<you> --note "<what you need to do>"`). All of these appear in **Needs you** at the top of **Tasks** with
 **Reply**, **Approve** / **Decline**, **Done** / **Close**. Needs you is your queue: approvals and
 questions first (each blocks a bot), then your own tasks in rank order. Tickets on a numbered type
 stay on their board and come to Needs you only with a question for you ([Tasks](tasks.md)). There

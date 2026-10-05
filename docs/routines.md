@@ -38,6 +38,11 @@ Three doors, one table (`schedules`, `backend/routines.py`):
 Who may write a bot's routines: the environment owner, the bot's owner, the bot itself, and
 BotOps.
 
+A routine's text says which step waits when something is missing, not that the whole run stops: a
+missing setup answer, credential or access blocks only the step that needs it (publishing, sending,
+a rollout), and the run does everything else and asks for the missing piece by name. A routine that
+stops at its first line on an open setup question does nothing every time it fires.
+
 A routine runs on a time (`cron`, five fields, in `timezone`, America/Los_Angeles by default) or
 on something happening in Tico (`on`), never both. Tico emits `meeting.ready` when a team meeting with a transcript is first imported (a private meeting emits nothing; `recording.ready` is its old name and is still emitted, so older routines keep firing; see [Meetings](meetings.md)). It emits `market.insight.urgent` when someone reports a market insight with
 `--urgent`; that opens the market curator's urgent routine and does not fire for an ordinary report. Each event opens one task per routine and per subject, titled `<routine title>:

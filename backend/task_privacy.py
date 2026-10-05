@@ -328,12 +328,29 @@ def status(c, who, row, *, tasks=None, approvals=None):
     if "open_tasks" in row:
         row["open_tasks"] = sum(t["owner"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks)
     if "needs_human" in row:
-        row["needs_human"] = sum(t["requester"] == "bot:" + row["bot"] and H.is_human(t["owner"])
-                                 and t["status"] in H.ACTIVE_STATUSES for t in tasks)
+        # One per readable task that waits on a person (hubdb._recount): filed for a person, set
+        # waiting on one, or carrying the bot's unanswered question to one.
+        bot = "bot:" + row["bot"]
+        live = {t["id"]: t for t in tasks if t["status"] in H.ACTIVE_STATUSES}
+        waits = {i for i, t in live.items()
+                 if (t["requester"] == bot and H.is_human(t["owner"]))
+                 or (t["owner"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
+        if len(waits) < len(live):
+            for m in c.execute(
+                    f"SELECT m.*, {H.MESSAGE_TASK_SQL} AS about FROM messages m "
+                    "JOIN conversations cv ON cv.id=m.conversation_id "
+                    "WHERE m.kind='ask' AND m.from_actor=? AND m.to_actor LIKE 'human:%' "
+                    "AND m.answered_by IS NULL AND m.deleted_at IS NULL AND NOT EXISTS "
+                    "(SELECT 1 FROM messages a WHERE a.in_reply_to=m.id AND a.kind='answer')", (bot,)):
+                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m):
+                    waits.add(m["about"])
         approvals = approvals if approvals is not None else c.execute(
-            "SELECT m.* FROM approvals a JOIN messages m ON m.id=a.message_id "
+            "SELECT m.*, a.task_id AS approval_task FROM approvals a JOIN messages m ON m.id=a.message_id "
             "WHERE a.requested_by=? AND a.decision IS NULL", ("bot:" + row["bot"],))
-        row["needs_human"] += sum(message_readable(c, actor(who), m) for m in approvals)
+        # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
+        row["needs_human"] = len(waits) + sum(
+            message_readable(c, actor(who), m) and not (dict(m).get("approval_task") in waits)
+            for m in approvals)
     return row
 
 

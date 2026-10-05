@@ -457,7 +457,9 @@ SCHEMAS = {
                       "as is acceptance_criteria"},
                 number={"type": ["integer", "null"], "description": "The task's number, unique across the team "
                         "(#18945); given once on a numbered type and never changed"},
-                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"}),
+                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
+                waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
+                            "the task is in their Needs you"}),
     "Person": obj({"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
                   required=["id", "name", "org_parent"]),
     "Access": obj({"see": "b", "read": "b", "write": "b"},

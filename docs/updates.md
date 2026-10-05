@@ -122,6 +122,11 @@ The previous files are kept in `.bundle-previous/`. A download or checksum failu
 changes; a release that does not turn healthy is rolled back, image and bundle together. Slack and the front door are
 recreated from the new file when it changes them.
 
+Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
+refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
+`image:` would keep it on the old one. After the switch the server must run the image just pulled and report the target
+release on `/healthz`; otherwise the update counts as unhealthy and is rolled back.
+
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
 
@@ -142,6 +147,20 @@ sidecar. The last update's outcome is kept in `.updater-status.json` so the new 
 
 Settings still reach the server through the explicit `environment:` list in `compose.yaml`, not `env_file: .env`, which
 would also pass credentials that belong to other services (such as `CLOUDFLARE_TUNNEL_TOKEN`) into the server.
+
+## Moving a hand-managed install onto the updater
+
+An install run with its own `compose.override.yaml` can use **Update now**. The override may keep its environment,
+volumes, entrypoint and the `cloudflared` command; it must not set `image:` for `server` or `slack`, or the updater
+refuses every update. Then in `.env`:
+
+```
+COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
+TICO_UPDATER_URL=http://updater:8080
+TICO_TAG=vX.Y.Z                         # the release running now
+```
+
+and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 
 ## A Docker runner
 

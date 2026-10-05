@@ -59,7 +59,8 @@ def _row(it, actor):
     """One item as a front end presents it: the whole question, never a clipped title."""
     key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
     row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
-    frm = it.get("requester") if it["kind"] == "approval" else (it.get("ask") or {}).get("from_actor") or it.get("origin_actor") or it.get("requester")
+    frm = (it.get("requester") if it["kind"] == "approval" else it.get("owner") if it["kind"] == "waiting"
+           else (it.get("ask") or {}).get("from_actor") or it.get("origin_actor") or it.get("requester"))
     if frm:
         row["from"] = frm
     if it.get("status"):
@@ -429,6 +430,13 @@ def _apply_decide(c, auth, who, item, r):
         H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
         return f"{verdict.capitalize()}: {item['title']}"
     row = auth.task(c, who, ident)
+    if item["kind"] == "waiting" and decision in ("done", "answer"):
+        # The bot's own task waits on the person: "done" or an answer goes back on the task and wakes
+        # the bot (task_comment also takes it off the person's list). Its status stays the bot's.
+        said = text or "Done."
+        H.task_comment(c, who.actor, ident, said)
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
+        return f"Told {H.actor_id(row['owner'])}: {_clip(said, 120)}"
     if decision in ("approve", "decline"):
         status = "done" if decision == "approve" else "declined"
         note = text or ("Approved." if decision == "approve" else "Declined.")
