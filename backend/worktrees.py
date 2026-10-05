@@ -127,8 +127,10 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # 0.2.x runners do not send checkout_state. Keep their established report semantics
         # for links that were already known to exist (including offline/unknown links), while
         # never using that compatibility path for a modern queued/setup-pending checkout.
-        legacy_restore_passthrough = (detail.get('legacy_restore_pending') is True
-                                      and row['state'] in ('present', 'missing')
+        legacy_restore_receipt = (detail.get('legacy_restore_pending') is True
+                                  or (row['added_by'] or '').startswith('human:'))
+        legacy_restore_passthrough = (legacy_restore_receipt
+                                      and row['state'] in ('present', 'missing', 'unknown')
                                       and report.state in ('present', 'missing')
                                       and detail.get('checkout_state') is None
                                       and report.checkout_state is None
