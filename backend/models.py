@@ -147,6 +147,7 @@ class TaskUpdate(Contract):
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
     waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
+    wait_until: str | None = Field(default=None, max_length=64)     # when a waiting task expects to move; "" clears
     rank: float | None = None
     type: ID | None = None
     step: str | None = Field(default=None, max_length=200)   # "" clears the step

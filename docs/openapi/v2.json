@@ -20635,6 +20635,20 @@
             ],
             "description": "The person a waiting task waits on; the task is in their Needs you"
           },
+          "wait_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a waiting task expects to move; past it, the wait is put in front of a person"
+          },
+          "wait_escalated_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person a silent or overdue wait was put in front of"
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -21752,6 +21766,18 @@
               }
             ],
             "title": "Waiting On"
+          },
+          "wait_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Until"
           },
           "rank": {
             "anyOf": [

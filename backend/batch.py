@@ -75,6 +75,8 @@ def _row(it, actor):
         row["payload"] = _clip(json.dumps(it["payload"], sort_keys=True, default=str), 800)
     if it.get("note"):
         row["note"] = _clip(it["note"], 300)
+    if it.get("why"):
+        row["why"] = it["why"]          # a silent or overdue wait: names no one, or past its time
     if it.get("created"):
         row["created"] = it["created"]
     return row

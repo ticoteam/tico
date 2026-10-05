@@ -76,6 +76,14 @@ person. A new status, note or owner clears `--on` unless the same update names t
 and `--on ""` clears it by hand. A private task can only wait on a person who can read it, and a
 task made private stops waiting on anyone who cannot.
 
+No wait is silent. `--until <time>` (ISO-8601 with a timezone) says when the bot expects the task to
+move. Once a minute, with the stall check, the hub puts two kinds of wait in front of a person (the
+task's human requester, else the team's default person) as one item in their Needs you and batch,
+with its title, its note and why: a bot's task waiting over an hour that names no one (no `--on`,
+blocker, child task, question or approval), and any waiting task past its `--until`. The person's
+comment, done or answer wakes the bot; any new status, note, `--on` or `--until` from the bot takes
+it off their list. Bots never invent cutoffs or scheduling windows nobody asked for.
+
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
 child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency

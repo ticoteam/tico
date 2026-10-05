@@ -473,7 +473,11 @@ SCHEMAS = {
                         "(#18945); given once on a numbered type and never changed"},
                 step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
                 waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
-                            "the task is in their Needs you"}),
+                            "the task is in their Needs you"},
+                wait_until={"type": ["string", "null"], "description": "When a waiting task expects to move; "
+                            "past it, the wait is put in front of a person"},
+                wait_escalated_to={"type": ["string", "null"], "description": "The person a silent or overdue "
+                                   "wait was put in front of"}),
     "Person": obj({"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
                   required=["id", "name", "org_parent"]),
     "Access": obj({"see": "b", "read": "b", "write": "b"},

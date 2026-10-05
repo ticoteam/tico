@@ -60,7 +60,10 @@ For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` 
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
 When a task waits on a person to act (a decision, access, a fix only they can make), name them:
 `hub task update <id> --status waiting --on <person> --note "<exactly what they need to do>"`. It
-shows in their Needs you; a task left waiting with only a note in chat reaches nobody.
+shows in their Needs you; a task left waiting with only a note in chat reaches nobody. Add
+`--until <time>` when you expect it to move by then. A wait that names no one for an hour, or runs past
+its `--until`, goes in front of a person anyway. Never invent cutoffs, deadlines or scheduling windows
+nobody asked for.
 
 ## Deciding with the decision model (`hub decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

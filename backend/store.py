@@ -1019,6 +1019,9 @@ class Store:
                     from . import task_relations as _task_relations
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
+                    H._apply(c, H.SILENT_WAITS_SCHEMA)
+                    c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash

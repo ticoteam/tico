@@ -400,6 +400,8 @@ def run(args, who=None):
                         body[field] = getattr(args, field)
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
+                if getattr(args, "wait_until", None) is not None:
+                    body["wait_until"] = args.wait_until
             return post("tasks/" + args.id, body)
     if cmd == "goal":
         if sub == "create":
