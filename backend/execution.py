@@ -995,13 +995,20 @@ class Execution:
                               (row["id"],)).fetchone()
             if prior and prior["attempt_id"] != aid and prior["state"] in ("leased", "running"):
                 continue
+            if prior and prior["attempt_id"] != aid:
+                # The earlier run did read this message, so it keeps the message's tasks for
+                # privacy (attempt_tasks reads this event) once the row is no longer its own.
+                privacy.record_moved_input(c, prior["attempt_id"], aid, row)
             c.execute("INSERT INTO attempt_inputs VALUES(?,?,NULL) ON CONFLICT(message_id) DO UPDATE SET "
                       "acked_at=CASE WHEN attempt_id=excluded.attempt_id THEN acked_at END,"
                       "attempt_id=excluded.attempt_id", (aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, row["conversation_id"]))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (aid, row["id"]))
         ids = c.execute("SELECT message_id FROM attempt_inputs WHERE attempt_id=? AND acked_at IS NULL", (aid,)).fetchall()
-        return {"messages": [m for row in ids if (m := H.message(c, row[0]))
+        # `attempt_id` lets the response check read these as the bot, as for the turn itself:
+        # each message was just checked readable by the bot, and a private task's message is
+        # never readable by the computer's own identity.
+        return {"attempt_id": aid, "messages": [m for row in ids if (m := H.message(c, row[0]))
                              and privacy.message_readable(c, "bot:" + attempt["bot"], m)]}
 
     def acknowledge_input(self, c, who, aid, mid):

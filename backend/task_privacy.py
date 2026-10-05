@@ -99,9 +99,23 @@ def attempt_tasks(c, aid):
                          "WHERE i.attempt_id=?", (aid, aid)):
         ids.update(message_tasks(c, row, include_run=False))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
-    for row in c.execute("SELECT detail_json FROM events WHERE action='task.next-run.carried' AND target=?", (aid,)):
+    for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
+                         (aid,)):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
+
+
+# Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
+# of an input that a later run took over after this one had already read it.
+INPUT_MOVED = "attempt.input.moved"
+RUN_TASK_EVENTS_SQL = "'task.next-run.carried','" + INPUT_MOVED + "'"
+
+
+def record_moved_input(c, from_attempt, to_attempt, message):
+    """Before an input row moves to another run, keep its tasks against the run that read it."""
+    H.event(c, H.KEEPER, INPUT_MOVED, from_attempt,
+            {"message_id": message["id"], "to_attempt": to_attempt,
+             "tasks": sorted(message_tasks(c, message, include_run=False))})
 
 
 def readable(c, actor, ids):

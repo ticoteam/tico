@@ -52,7 +52,7 @@ class ReadIndex:
             for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
                 if aid in rows and tid in self.private:
                     rows[aid]["tasks"].add(tid)
-            for aid, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action='task.next-run.carried'"):
+            for aid, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"):
                 if aid in rows:
                     rows[aid]["tasks"].update(self.references(H._json(detail, {}) or {}))
             self._attempts = rows

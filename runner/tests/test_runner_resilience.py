@@ -76,6 +76,35 @@ class Execution(unittest.TestCase):
         runner.renew_interval = 0.05
         return runner
 
+    def test_an_input_another_run_took_over_is_not_acknowledged_again(self):
+        # A run that lapsed and was restored may find its input moved to a later run: the ack is a 404.
+        message = {"id": "msg-2", "kind": "say", "from_actor": "human:ana", "body": "One more thing"}
+        for error, settled in ((APIError("not_found", "This input is not assigned to this execution", 404), True),
+                               (GONE, False)):
+            client = FakeClient()
+            post = client.post
+
+            def scripted(path, body=None, key=None, post=post, error=error):
+                if path.endswith("/inputs"):
+                    post(path, body, key)
+                    return {"attempt_id": "att-1", "messages": [message]}
+                if path.endswith("/ack"):
+                    post(path, body, key)
+                    raise error
+                return post(path, body, key)
+            client.post = scripted
+            runner = self.runner(client)
+            steered = []
+            self.host.steer = lambda thread, turn, text: steered.append(text)
+            if settled:
+                runner.receive_inputs("att-1", self.host, "thread", "turn")
+                runner.receive_inputs("att-1", self.host, "thread", "turn")
+                self.assertEqual(len(steered), 1, "applied once, never steered again")
+                self.assertEqual(sum(path.endswith("/ack") for path, _ in client.posts), 2)
+            else:
+                with self.assertRaises(APIError):
+                    runner.receive_inputs("att-1", self.host, "thread", "turn")
+
     def test_a_refused_key_is_held_until_a_credential_changes_or_the_recheck(self):
         runner = self.runner(FakeClient())
         (Path(self.tmp.name) / "secrets").mkdir()

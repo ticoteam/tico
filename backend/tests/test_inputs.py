@@ -130,17 +130,47 @@ def test_acknowledged_input_requeued_by_a_finished_run_is_delivered_once_to_the_
         assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (other,)).fetchone()[:] == ("input", second["id"])
 
 
-def test_requeued_input_already_acknowledged_by_this_run_is_not_redelivered(api):
-    r, _, first = setup_attempt(api)
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
-    follow = post(api, "chat/ops", {"text": "One more thing"})
-    post(api, f"attempts/{first['id']}/inputs", {}, r["token"])
+
+def test_deferred_private_input_moves_to_the_next_run_and_the_first_run_stays_private(api):
+    from backend import task_privacy
+    from backend.store import H
+    from backend.tests.test_task_privacy_reads import sql
+    r = runner(api)
+    for bot in ("ops", "finance"):
+        assign(api, r, bot)
+    ready(api, r, ["ops", "finance"])
     with api.app.state.store.transaction() as c:
-        # A job back in the queue while the run that already took its input is still live.
-        c.execute("UPDATE jobs SET state='queued' WHERE message_id=?", (follow["id"],))
-        c.execute("UPDATE attempt_inputs SET acked_at=? WHERE message_id=?", ("2026-01-01T00:00:00Z", follow["id"]))
-    # Same run: already acknowledged there, so not delivered again and no error.
-    assert post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"] == []
+        private = H.task_create(c, "bot:finance", "Private packet", "Confidential figures.", "bot:ops",
+                                private=True, lint=False)
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")
+    post(api, "chat/ops", {"text": "Check the public numbers"})
+    first = claim(api, r, "ops")
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    post(api, "chat/finance", {"text": "Ask ops about the packet"})
+    finance = claim(api, r, "finance")
+    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Are the packet figures final?", "wait_s": 60,
+                                 "refs": {"task": private["id"]}}, finance["token"])
+    assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
+    post(api, f"attempts/{first['id']}/inputs/{ask['id']}/ack", {}, r["token"])
+    # The run ends without answering or touching the private task, so its question waits for a later run.
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0},
+         r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT attempt_id,acked_at FROM attempt_inputs WHERE message_id=?",
-                         (follow["id"],)).fetchone()[:] == (first["id"], "2026-01-01T00:00:00Z")
+        assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (ask["id"],)).fetchone()[:] == ("queued", None)
+    get(api, f"turns/{first['id']}/steps", expected=404)
+    post(api, "chat/ops", {"text": "One more check"})
+    second = claim(api, r, "ops")
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
+    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
+    post(api, f"attempts/{second['id']}/inputs/{ask['id']}/ack", {}, r["token"])
+    assert post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"] == []
+    # The first run read the private question; moving the row must not open that run to others.
+    get(api, f"turns/{first['id']}/steps", expected=404)
+    assert not sql(api, f"SELECT id FROM attempts WHERE id='{first['id']}'")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (ask["id"],)).fetchone()[0] == second["id"]
+        assert private["id"] in task_privacy.attempt_tasks(c, first["id"])
+        assert not task_privacy.attempt_readable(c, "human:ana", first["id"])
+        assert task_privacy.attempt_readable(c, "bot:ops", first["id"])
+        event = c.execute("SELECT * FROM events WHERE action='attempt.input.moved' AND target=?", (first["id"],)).fetchone()
+        assert not task_privacy.event_readable(c, "human:ana", event)
