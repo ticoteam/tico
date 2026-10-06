@@ -276,6 +276,68 @@ async function v2StepsOpen(state, el) {
 function chatCopyHTML(text) {
   return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button></div>` : '';
 }
+const COMMIT_EXCLUSION_NOTICE = /^left out of the commit: (.+) \(contains a secret\)$/;
+const COMMIT_NOT_PUSHED = 'not pushed: a commit made this turn contains a secret';
+function v2CommitExclusionSource(m) {
+  const refs = m?.refs || {}, attempt = refs.run?.attempt_id;
+  return typeof m?.from_actor === 'string' && m.from_actor.startsWith('bot:') &&
+    typeof refs.turn_id === 'string' && refs.turn_id.length > 0 && attempt === refs.turn_id;
+}
+function v2CommitNoticeParagraph(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(COMMIT_EXCLUSION_NOTICE);
+  return match ? {path: match[1], reason: 'contains a secret'} : null;
+}
+function v2CommitExclusionDisplay(m) {
+  const original = String(m?.body || '');
+  if (!v2CommitExclusionSource(m)) return {text: original, notices: []};
+  const refs = m.refs || {};
+  const supplied = refs.commit_exclusions;
+  const structured = Array.isArray(supplied) && supplied.length > 0 && supplied.length <= 200 &&
+    supplied.every(item => item && typeof item.path === 'string' && item.path.length > 0 &&
+      item.path.length <= 4096 && item.reason === 'contains a secret');
+  const stripGenerated = (value, block) => {
+    if (value === block) return '';
+    if (!value.endsWith(block)) return null;
+    const prefix = value.slice(0, -block.length), separator = prefix.match(/\n+$/)?.[0] || '';
+    return separator.length >= 2 ? prefix.slice(0, -2) : null;
+  };
+  let text = original, warning = '';
+  if (text === COMMIT_NOT_PUSHED) { warning = text; text = ''; }
+  else if (text.endsWith(COMMIT_NOT_PUSHED)) {
+    const visible = stripGenerated(text, COMMIT_NOT_PUSHED);
+    if (visible !== null) { warning = COMMIT_NOT_PUSHED; text = visible; }
+  }
+  let notices = [];
+  if (structured) {
+    const block = supplied.map(item => `left out of the commit: ${item.path} (contains a secret)`).join('\n\n');
+    const visible = stripGenerated(text, block);
+    if (visible !== null) {
+      text = visible;
+      notices = supplied;
+    }
+  }
+  if (!notices.length) {
+    // Historical runner replies have only the text suffix. Restrict recognition to an exact
+    // terminal paragraph block and a server-authenticated bot run reply; quotes stay ordinary text.
+    const paragraphs = text.replace(/\n+$/, '').split(/\n{2,}/), tail = [];
+    while (paragraphs.length) {
+      const notice = v2CommitNoticeParagraph(paragraphs[paragraphs.length - 1]);
+      if (!notice) break;
+      tail.unshift(notice); paragraphs.pop();
+    }
+    if (tail.length) { notices = tail; text = paragraphs.join('\n\n'); }
+  }
+  if (warning) text = text ? `${text}\n\n${warning}` : warning;
+  return {text, notices};
+}
+function v2CommitExclusionsHTML(notices, open = false) {
+  if (!notices.length) return '';
+  const count = notices.length, summary = `${count} ${count === 1 ? 'file' : 'files'} excluded from commit`;
+  return `<details class="commit-exclusions"${open ? ' open' : ''}><summary>${summary}</summary><ul>${notices.map(item =>
+    `<li><code>${esc(item.path)}</code><span>${esc(item.reason === 'contains a secret' ? 'Contains a secret' : item.reason)}</span></li>`
+  ).join('')}</ul></details>`;
+}
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('.bubble [data-chat-copy]');
   if (!button) return;
@@ -299,14 +361,16 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
   const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
+  const commitExclusion = !mine ? v2CommitExclusionDisplay(m) : {text: m.body || '', notices: []};
+  const exclusionsOpen = commitExclusion.notices.length && V2C?.openCommitExclusions?.has(m.id) ? ' open' : '';
+  const body = mine ? esc(m.body || '') : `${commitExclusion.text ? `<div class="md">${safeMd(commitExclusion.text, {shortLinks: true})}</div>` : ''}${v2CommitExclusionsHTML(commitExclusion.notices, !!exclusionsOpen)}`;
   return `<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
     <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
       <span class="tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</span></div>
-    <div class="bubble ${mine ? 'you' : 'bot reply'}"><span class="who">${who}</span>${
-      mine ? esc(m.body || '') : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body)}</div>
+    <div class="bubble ${mine ? 'you' : 'bot reply'}"><span class="who">${who}</span>${body}${chatCopyHTML(m.body)}</div>
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
     ${v2RunHTML(m)}${v2MessageCards(m)}</div>`;
 }
@@ -363,6 +427,7 @@ function v2Jump(state, fresh) {
 function v2ChatRender(state) {
   const thread = $('#conv-thread');
   if (!thread || V2C !== state) return;
+  state.openCommitExclusions ||= new Set();
   if (!state.resize) {
     state.threadHeight = thread.clientHeight;
     thread.addEventListener('scroll', () => {
@@ -371,7 +436,15 @@ function v2ChatRender(state) {
         if (state.followLatest) v2Jump(state);
       }
     }, {passive: true});
-    thread.addEventListener('toggle', ev => { if (ev.target.matches?.('details.run-steps') && V2C === state) v2StepsOpen(state, ev.target); }, true);
+    thread.addEventListener('toggle', ev => {
+      if (V2C !== state) return;
+      if (ev.target.matches?.('details.run-steps')) { v2StepsOpen(state, ev.target); return; }
+      if (ev.target.matches?.('details.commit-exclusions')) {
+        const id = ev.target.closest('.conv-run.chat')?.dataset.message;
+        if (!id) return;
+        if (ev.target.open) state.openCommitExclusions.add(id); else state.openCommitExclusions.delete(id);
+      }
+    }, true);
     thread.addEventListener('click', ev => {
       if (!ev.target.closest('[data-pending-dismiss]') || V2C !== state) return;
       state.dismissed = ev.target.closest('[data-pending]')?.dataset.pending;
