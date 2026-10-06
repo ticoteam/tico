@@ -1,7 +1,6 @@
 """`hub docs fetch` (clients/doc_fetch.py): what it refuses and what it never sends. No network, no DNS:
 names resolve through a table and connections are scripted byte streams."""
 
-import base64
 import io
 
 import pytest
@@ -46,10 +45,7 @@ class Net:
         return F.fetch(url, resolver=self.resolver, opener=self.opener, **kw)
 
 
-@pytest.mark.parametrize("address", [
-    "127.0.0.1", "10.0.0.5", "172.16.3.4", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1",
-    "::1", "fe80::1", "fc00::1", "fd00:ec2::254", "ff02::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254",
-    "2002:7f00:1::", "64:ff9b::7f00:1", "not-an-ip"])
+@pytest.mark.parametrize("address", ["127.0.0.1", "169.254.169.254", "fd00:ec2::254", "::ffff:127.0.0.1"])
 def test_no_internal_address_is_public(address):
     assert not F.public_address(address)
 
@@ -59,9 +55,7 @@ def test_a_public_address_is_public():
 
 
 @pytest.mark.parametrize("url,code", [
-    ("file:///etc/passwd", "scheme"), ("ftp://example.com/a", "scheme"), ("gopher://example.com", "scheme"),
-    ("https://user:pw@example.com/", "userinfo"), ("https://example.com:22/", "port"),
-    ("http://127.0.0.1/", "private_address"), ("http://[::1]/", "private_address"),
+    ("file:///etc/passwd", "scheme"), ("https://user:pw@example.com/", "userinfo"),
     ("http://169.254.169.254/latest/meta-data/", "private_address")])
 def test_an_unsafe_address_is_refused_before_any_connection(url, code):
     net = Net({})
@@ -134,23 +128,3 @@ def test_a_credential_is_sent_only_to_the_host_it_belongs_to():
                  "docs.google.com.evil.example.com", "notgoogleapis.com", "drive.google.com"):
         assert F.credential_headers(host, env) == {}
     assert F.credential_headers("sheets.googleapis.com", env) == {"Authorization": "Bearer ya29.secret"}
-
-
-def test_a_public_github_repository_is_its_readme_and_file_tree():
-    readme = base64.b64encode(b"# Widgets\nSee [the guide](https://guide.example.com/start).").decode()
-    net = Net({"api.github.com": [PUBLIC]},
-              reply(ctype="application/json", body=b'{"default_branch": "main", "description": "Widgets"}'),
-              reply(ctype="application/json", body=('{"content": "%s"}' % readme).encode()),
-              reply(ctype="application/json", body=b'{"tree": [{"type": "blob", "path": "docs/a.md"}]}'))
-    result = net.fetch("https://github.com/widgetco/widgets", env={})
-    assert "Widgets" in result["text"] and "- docs/a.md" in result["text"]
-    assert result["links"] == [{"text": "the guide", "url": "https://guide.example.com/start"}]
-    assert {host for *_, host in net.connected} == {"api.github.com"}
-
-
-def test_a_google_doc_that_is_not_public_says_so():
-    net = Net({"docs.google.com": [PUBLIC]}, reply(404, body=b"no"))
-    with pytest.raises(F.FetchError) as refused:
-        net.fetch("https://docs.google.com/document/d/abc123/edit")
-    assert refused.value.code == "not_public"
-

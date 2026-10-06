@@ -10,7 +10,6 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from runner import declared_access
 from runner.service import Runner
 
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready", "detail": "", "models": [],
@@ -88,31 +87,6 @@ class DeclaredAccess(unittest.TestCase):
         text = json.dumps(self.report())
         for secret in ("phx_super_secret_value", "hunter2", "must-not-be-reported", "reader:"):
             self.assertNotIn(secret, text)
-
-    def test_a_bot_that_declares_nothing_reports_no_list(self):
-        (self.projects / "emp-atlas" / "employee.yaml").write_text("name: atlas\naccess: []\n")
-        self.assertNotIn("tools", self.report()["bots"]["atlas"])
-        self.assertEqual(declared_access.declared_tools("not a list", {}), [])
-        self.assertEqual(declared_access.declared_tools([{"identity": "no service"}, "x"], {}), [])
-
-    def test_a_server_that_predates_the_report_is_not_told_again_for_a_while(self):
-        self.runner._tools_after = float("inf")
-        self.assertNotIn("tools", self.report()["bots"]["atlas"])
-
-
-    def test_a_copy_of_a_shared_bot_may_carry_the_originals_name(self):
-        # backend-reviewer-arthur runs from emp-backend-reviewer, whose employee.yaml says the original's name.
-        copy = self.projects / "bot-atlas-arthur"
-        copy.mkdir()
-        (copy / "AGENT.md").write_text("# Atlas\n")
-        (copy / "employee.yaml").write_text(MANIFEST)            # name: atlas
-        config = {"runtime": "codex", "model": "gpt-6-sol", "model_managed_by": "cloud"}
-        for shared_from, ok in (("atlas", True), (None, False)):
-            self.entries = [{"bot": "atlas-arthur", "runner_id": "r1", "state": "active",
-                             "config": {**config, **({"shared_from": shared_from} if shared_from else {})}}]
-            problems = self.report()["bots"]["atlas-arthur"]["problems"]
-            self.assertEqual("Configuration differs from server" not in problems, ok, problems)
-
 
 if __name__ == "__main__":
     unittest.main()

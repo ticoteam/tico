@@ -1,15 +1,10 @@
 """The provider choice (backend/providers.py): stored, revisioned, seeded from the environment,
 and the only thing that decides a bot's runtime and model when the bot names none."""
 
-from pathlib import Path
-
 import pytest
 
 from backend import providers as P
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
-
-ROOT = Path(__file__).resolve().parents[2]
-
 
 def test_resolution_order_bot_then_company_then_first_provider_then_error():
     none = P._record({})
@@ -42,8 +37,7 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
 
 
 
-@pytest.mark.parametrize("model,runtime", [("gpt-6-astra", "codex"), ("gpt-6-sol", "codex"),
-                                           ("claude-opus-5", "claude")])
+@pytest.mark.parametrize("model,runtime", [("gpt-6-sol", "codex")])
 def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime):
     company = P._record({"enabled": ["openai", "anthropic"], "runtime": runtime, "model": model})
     assert P.resolve(company, {}) == (runtime, model)

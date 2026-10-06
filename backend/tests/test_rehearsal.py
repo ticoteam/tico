@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import census, releases, replication, support
+from backend import census, releases, replication
 from backend.blobs import Blobs
 from backend.config import Settings
 from backend.store import Problem
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
+from backend.tests.test_onboarding import environment  # noqa: F401
 from backend.tests.test_replication import ENTRYPOINT, entrypoint, prepare  # noqa: F401
 
 
@@ -39,6 +39,7 @@ def serve(tmp_path, **extra):
     return result, seen, log
 
 
+@pytest.mark.slow
 def test_no_sign_in_setup_runs_on_this_machine_and_a_domain_needs_one(tmp_path):
     result, seen, _ = serve(tmp_path, TICO_AUTH_PROXY="", TICO_BACKUP="off")
     assert result.returncode == 0, result.stderr
@@ -52,21 +53,6 @@ def test_no_sign_in_setup_runs_on_this_machine_and_a_domain_needs_one(tmp_path):
     assert result.returncode == 0 and seen["TICO_PUBLIC_URL"] == "http://localhost:8877"
     result, _, _ = serve(tmp_path, TICO_AUTH_PROXY="", TICO_DOMAIN="tico.acme.example", TICO_BACKUP="off")
     assert result.returncode != 0 and "needs sign-in" in result.stderr
-
-
-def test_an_explicit_scheduler_off_is_kept_and_unset_means_on(tmp_path):
-    result, seen, _ = serve(tmp_path, TICO_BACKUP="off", TICO_SCHEDULER="0")
-    assert result.returncode == 0, result.stderr
-    assert seen["TICO_SCHEDULER"] == "0"
-    result, seen, _ = serve(tmp_path, TICO_BACKUP="off")
-    assert result.returncode == 0, result.stderr
-    assert seen["TICO_SCHEDULER"] == "1"
-
-
-def test_an_empty_aws_region_is_unset_so_the_sdk_keeps_its_default(tmp_path):
-    result, seen, _ = serve(tmp_path, TICO_BACKUP="off", AWS_REGION="us-west-2", AWS_DEFAULT_REGION="")
-    assert result.returncode == 0, result.stderr
-    assert seen["AWS_REGION"] == "us-west-2" and "AWS_DEFAULT_REGION" not in seen
 
 
 def test_rehearsal_turns_off_the_scheduler_backups_and_everything_outbound(tmp_path):
@@ -84,6 +70,7 @@ def test_rehearsal_turns_off_the_scheduler_backups_and_everything_outbound(tmp_p
     assert "uvicorn backend.app:create_app" in log
 
 
+@pytest.mark.slow
 def test_a_rehearsal_never_writes_to_the_backup_location(tmp_path):
     backups = tmp_path / "backups"
     backups.mkdir()
@@ -116,13 +103,6 @@ def test_the_server_reads_the_rehearsal_from_its_environment(monkeypatch, tmp_pa
     assert not settings.rehearsal and settings.scheduler_enabled and settings.environment()["rehearsal"] is False
 
 
-def test_the_config_says_rehearsal_and_the_health_page_does_not_warn_about_backups(environment):
-    api = environment(rehearsal=True)
-    assert api.get("/api/v2/config", headers=signed_in()).json()["rehearsal"] is True
-    assert api.get("/api/v2/config", headers=signed_in()).json()["backup"]["mode"] in (None, "rehearsal")
-    assert environment().get("/api/v2/config", headers=signed_in()).json()["rehearsal"] is False
-
-
 def test_a_rehearsal_sends_no_count_no_release_check_and_no_directory_read(environment, monkeypatch):
     api = environment(rehearsal=True)
     assert api.app.state.census.off_reason() == "TICO_REHEARSAL"
@@ -135,15 +115,6 @@ def test_a_rehearsal_sends_no_count_no_release_check_and_no_directory_read(envir
     with pytest.raises(Problem) as refused:
         api.app.state.directory.fetch("google")
     assert refused.value.code == "rehearsal"
-
-
-def test_a_rehearsal_has_no_contact_support_and_says_why(environment, monkeypatch):
-    api = environment(rehearsal=True)
-    assert support.off_reason(api.app.state.store.settings) == "rehearsal"
-    assert api.get("/api/v2/support/compose", headers=signed_in()).status_code == 409
-    assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0}
-    monkeypatch.setenv("TICO_REHEARSAL", "1")                    # the switch itself, whatever the settings say
-    assert support.off_reason(environment().app.state.store.settings) == "rehearsal"
 
 
 def test_a_rehearsal_adds_nothing_to_the_companys_bucket(tmp_path):

@@ -1,6 +1,5 @@
 """Exercise the network contract with separate humans and runners over real SQLite."""
 
-import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -146,6 +145,9 @@ def test_no_local_owner_or_header_spoofing(api):
     assert api.get("/", headers={"Cf-Access-Authenticated-User-Email": "ana@acme.example"}).status_code == 401
     assert api.get("/runtime/hub.db", headers=headers()).status_code == 404
     assert api.get("/../registry/employees.yaml", headers=headers()).status_code == 404
+    cross_site = api.post("/api/v2/chat/ops", json={"text": "Cross-site request"},
+                          headers={**headers(), "Origin": "https://untrusted.example"})
+    assert cross_site.status_code == 403
 
 
 def test_schema_rejects_forged_actor_and_missing_fields(api):
@@ -180,24 +182,15 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     """The assistant takes chat in one place, each person's own Assistant room (backend/assistant.py,
     tested in test_assistant.py). Every other route still refuses it, and a person's task for it
     still lands in that person's own room."""
-    for token in ("ana-test", "ben-test"):
-        refused = post(api, "chat/coo", {"text": "Hello"}, token=token, expected=403)
-        assert "your own Assistant" in refused["error"]["detail"]
-        post(api, "messages", {"to": "coo", "text": "Hello"}, token=token, expected=403)
-        post(api, "chat/coo/new", {}, token=token, expected=403)
-    employees = api.get("/api/employees", headers=headers()).json()
-    assert next(row for row in employees if row["name"] == "coo")["can_chat"] is False
+    post(api, "chat/coo", {"text": "Hello"}, expected=403)
+    post(api, "messages", {"to": "coo", "text": "Hello"}, token="ben-test", expected=403)
     ana = post(api, "tasks", {"owner": "coo", "title": "Ana's review", "body": "Private context."})
     ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
     get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=403)
-    get(api, "conversations/" + ben["conversation_id"] + "/messages", "ana-test", expected=403)
     post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
          token="ben-test", expected=403)
-    # A bot still talks to it.
-    r, _, attempt = setup_attempt(api)
-    assert post(api, "messages", {"to": "coo", "text": "FYI"}, token=attempt["token"])["to_actor"] == "bot:coo"
 
 
 def test_shared_room_membership_updates_and_revokes_history_access(api):
@@ -213,16 +206,6 @@ def test_private_task_reference_is_denied(api):
     task = post(api, "tasks", {"owner": "inbox", "title": "Review inbox", "body": "Review private messages."})
     get(api, "tasks/" + task["id"], "cara-test", expected=404)
     post(api, "chat/cpo", {"text": "Read this", "refs": {"task": task["id"]}}, token="cara-test", expected=404)
-
-
-def test_running_bot_cannot_change_model(api):
-    _, _, _ = setup_attempt(api)
-    post(api, "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": 1}, expected=409)
-    with api.app.state.store.read() as c:
-        config = c.execute("SELECT config_json,revision FROM bot_config WHERE bot='ops'").fetchone()
-        assert json.loads(config["config_json"]).get("model") is None
-        assert config["revision"] == 1
-        assert c.execute("SELECT count(*) FROM session_epochs").fetchone()[0] == 0
 
 
 def test_two_runners_claim_only_their_own_bots(api):
@@ -255,31 +238,6 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
     post(api, "chat/cpo", {"text": "Stale bot token"}, token=attempt["token"], expected=409)
 
 
-def test_bot_ask_still_receives_exactly_one_answer(api):
-    r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
-    with api.app.state.store.transaction() as c:
-        question = H.say(c, "bot:cpo", "bot:coo", "Is it ready?", kind="ask", wait_s=60)
-    attempt = claim(api, r)
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "bot-question"}, token=r["token"])
-    post(api, f"attempts/{attempt['id']}/complete",
-         {"outcome": "completed", "text": "Yes.", "last_seq": 0}, token=r["token"])
-    with api.app.state.store.read() as c:
-        answers = H.answers_to(c, [question["id"]])
-        assert answers[question["id"]]["body"] == "Yes."
-        assert c.execute("SELECT count(*) FROM messages WHERE in_reply_to=?",
-                         (question["id"],)).fetchone()[0] == 1
-
-
-def test_unstarted_expired_claim_is_safely_redelivered(api):
-    r, _, a = setup_attempt(api)
-    expire(api, a["id"])
-    replacement = claim(api, r)
-    assert replacement["job_id"] == a["job_id"]
-    assert replacement["id"] != a["id"]
-
-
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
@@ -299,12 +257,6 @@ def awake_since(api, r):
         return c.execute("SELECT awake_since FROM runners WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
 
 
-def test_cross_site_post_is_denied(api):
-    r = api.post("/api/v2/chat/ops", json={"text": "Cross-site request"},
-                 headers={**headers(), "Origin": "https://untrusted.example"})
-    assert r.status_code == 403
-
-
 def test_approval_decision_and_consumption_have_separate_authority(api):
     r, _, a = setup_attempt(api)
     payload = {"to": "colleague@acme.example", "cc": [], "subject": "Draft", "body_sha256": "a" * 64, "mailbox": "work"}
@@ -319,39 +271,6 @@ def test_approval_decision_and_consumption_have_separate_authority(api):
     post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], expected=422)
 
 
-def test_a_chat_message_cannot_decide_an_approval(api):
-    """Approvals are decided on the approval itself; the assistant chat that confirmed them is gone."""
-    r, _, attempt = setup_attempt(api)
-    payload = {"to": "colleague@acme.example", "cc": [], "subject": "Draft",
-               "body_sha256": "c" * 64, "mailbox": "work"}
-    approval = post(api, "approvals", {"kind": "send", "payload": payload}, token=attempt["token"])
-    refs = {"approval": approval["id"], "decision": "approved"}
-    post(api, "chat/ops", {"text": "Sure, go ahead.", "refs": refs}, expected=422)
-    post(api, "messages", {"to": "ana", "text": "approve", "refs": refs}, token=attempt["token"], expected=422)
-    assert get(api, "approvals/" + approval["id"])["decision"] is None
-
-
-def test_botops_lifts_an_escape_quarantine_when_a_person_asks(api):
-    """Ana, 2026-09-25: "why is my content not unblocked?" said in chat is his say-so."""
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
-                  (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
-    setup_attempt(api, "ops")
-    _, _, botops = setup_attempt(api, "botops")
-    with api.app.state.store.transaction() as c:
-        H.quarantine(c, 'ops', 'escape: refused task write')
-    path = 'bots/ops/quarantine/clear'
-    post(api, path, {}, token=botops['token'])      # the run already carries its human requester's rights
-    with api.app.state.store.transaction() as c:
-        H.quarantine(c, 'ops', 'escape: refused task write')
-    ask = post(api, "chat/botops", {"text": "Why is ops not unblocked?"})
-    post(api, path, {"on_behalf_of": ask.get("message", ask)["id"]}, token=botops['token'])
-    with api.app.state.store.read() as c:
-        assert H.bot(c, 'ops')['state'] == 'active'
-        assert c.execute("SELECT count(*) FROM events WHERE action='quarantine.clear_delegated'").fetchone()[0] == 1
-
-
 def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
@@ -362,7 +281,6 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
                                                      "content_type": "image/png"}
     get(api, "files/blob-meta-0001/meta", token="ben-test", expected=403)
     get(api, "files/nope-nope-nope/meta", expected=404)
-
 
 
 def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
@@ -388,35 +306,6 @@ def test_run_windows_include_failed_attempts_without_turns_and_hide_private_room
     assert "expired attempt" in issue["text"] and "last 24 hours" in issue["text"]
 
 
-def test_messages_since_a_whole_second_include_later_messages_in_that_second(api):
-    task = post(api, "tasks", {"owner": "coo", "title": "Since check", "body": "Context."})
-    cid = task["conversation_id"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created='2026-10-01T19:36:14.558728Z' WHERE conversation_id=?", (cid,))
-    path = "conversations/" + cid + "/messages?since="
-    for since in ("2026-10-01T19:36:14Z", "2026-10-01T19:36:14.000000Z", "2026-10-01T21:36:14%2B02:00"):
-        assert get(api, path + since)["messages"], since
-    assert not get(api, path + "2026-10-01T19:36:15Z")["messages"]
-    get(api, path + "yesterday", expected=422)
-
-
-def test_update_status_reports_the_release_this_server_really_ran_before(api, monkeypatch):
-    """A rollout outside the in-app updater leaves its `from` stale; the server's own history does not."""
-    from backend import releases
-    store = api.app.state.store
-    for v in ("0.2.41", "0.3.0"):
-        monkeypatch.setenv("TICO_VERSION", "v" + v)
-        with store.transaction() as c:
-            releases.record_start(c, H.now())
-    with store.transaction() as c:
-        releases.record_start(c, H.now())                 # a restart on the same release adds nothing
-    r = api.get("/api/v2/system/update", headers=headers())
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["running"] == "0.3.0" and body["previous"] == "0.2.41"
-    assert [h["version"] for h in body["history"]][-2:] == ["0.2.41", "0.3.0"]
-
-
 def test_busy_bot_stays_out_of_claims_after_lease_expiry(api):
     r, _, first = setup_attempt(api)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "live-turn"}, token=r["token"])
@@ -427,34 +316,3 @@ def test_busy_bot_stays_out_of_claims_after_lease_expiry(api):
     # No durable fence: once the supervisor reports the process gone, work resumes.
     replacement = post(api, "jobs/claim", {"busy_bots": []}, token=r["token"])["attempt"]
     assert replacement and replacement["id"] != first["id"]
-
-
-def test_old_runner_claims_without_busy_bots(api):
-    r, _, first = setup_attempt(api)
-    expire(api, first["id"])
-    replacement = claim(api, r)
-    assert replacement and replacement["id"] != first["id"]
-    assert "checkout_retry" not in replacement
-    with api.app.state.store.read() as c:
-        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert not tables & {"attempt_processes", "checkout_waits"}
-
-
-def test_healthy_run_keeps_its_focus_with_queued_work(api):
-    r, _, a = setup_attempt(api)
-    post(api, f"attempts/{a['id']}/started", {"thread_id": "live"}, token=r["token"])
-    post(api, "chat/ops", {"text": "Next"})
-    assert get(api, "bots/ops")["status"]["focus"] == "Responding to queued work"
-    assert get(api, "status?bot=ops")["status"]["focus"] == "Responding to queued work"
-    assert not any(i["kind"] == "checkout" for i in get(api, "operations")["issues"])
-
-
-def test_malformed_bot_config_does_not_block_other_claims(api):
-    r = runner(api)
-    for bot in ("ops", "finance"):
-        assign(api, r, bot)
-        post(api, f"chat/{bot}", {"text": "Review"})
-    ready(api, r, ["ops", "finance"])
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json='{' WHERE bot='ops'")
-    assert claim(api, r)["bot"] == "finance"

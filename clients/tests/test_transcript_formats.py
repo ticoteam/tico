@@ -35,12 +35,6 @@ class Formats(unittest.TestCase):
             {"speaker": "Ana", "start_ms": 5000, "end_ms": 8500, "text": "Let's raise the annual plan."},
             {"speaker": "Ben", "start_ms": 70250, "end_ms": 72000, "text": "Ten percent, then. Sounds fine."}])
 
-    def test_auto_detects_and_an_explicit_format_wins(self):
-        self.assertEqual({TF.detect(VTT), TF.detect(SRT), TF.detect('[{"text": "x"}]'), TF.detect("Ana: hi")},
-                         {"vtt", "srt", "json", "text"})
-        self.assertEqual(TF.parse("[not json] but text", "text")[0]["text"], "[not json] but text")
-        self.assertEqual(TF.parse("﻿Ana: hi")[0]["speaker"], "Ana")
-
     def test_a_transcript_with_nothing_in_it_or_a_bad_shape_is_refused(self):
         for data, fmt in (("", "auto"), ("  \n\n", "text"), ("[]", "auto"), ("{}", "json"), ("[1, 2]", "json"),
                           ('[{"start": -1, "text": "x"}]', "json"), ('[{"start": "soon", "text": "x"}]', "json"),

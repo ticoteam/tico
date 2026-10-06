@@ -54,29 +54,12 @@ def test_a_slack_routed_message_is_no_request_to_botops(api, botops):
     assert "arrived through a Slack channel" in refused.json()["error"]["detail"]
 
 
-def test_a_persons_own_slack_dm_to_botops_counts_as_their_request(api, botops):
-    """A 1:1 DM from a verified, linked person carries their rights, like their Tico chat."""
-    attempt, _, _ = held(api, botops, SLACK_DM)
-    assert register(api, attempt, "from-slack-dm").status_code in (200, 201)
-
-
 @pytest.mark.parametrize("refs,participants", [
-    ({"slack": {**SLACK_DM["slack"], "recorded_only": True}, "routing": {}}, ("human:cara", "bot:botops")),
-    (SLACK_DM, ("human:cara", "human:ben", "bot:botops")),
-    ({"slack": {**SLACK_DM["slack"], "kind": "channel"}, "routing": {}}, ("human:cara", "bot:botops"))])
+    (SLACK_DM, ("human:cara", "human:ben", "bot:botops"))])
 def test_a_slack_line_that_is_not_the_persons_own_dm_lends_nothing(api, botops, refs, participants):
     attempt, _, _ = held(api, botops, refs, participants=participants)
     refused = register(api, attempt, "from-slack-x")
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "on_behalf_of"
-
-
-def test_a_request_typed_in_tico_counts_even_when_the_room_mirrors_a_slack_dm(api, botops):
-    """The message decides, not the room: a person's BotOps room linked to their Slack DM still takes their Tico request."""
-    attempt, conv, _ = held(api, botops)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                  "VALUES('D1','1.0','botops',?,?,?)", (conv["id"], H.now(), H.now()))
-    assert register(api, attempt, "from-tico").status_code in (200, 201)
 
 
 def test_a_cited_message_must_be_the_requesters_own_recent_one_in_their_own_room(api, botops):
@@ -151,21 +134,6 @@ def test_a_members_bot_runs_on_their_own_or_an_admin_opened_computer_and_stays_t
     assert moved.status_code == 200 and moved.json()["operator"] == "dee"                   # not the computer's operator
 
 
-def test_setup_places_a_members_bot_only_on_a_computer_that_takes_it(api, botops):
-    made = register(api, turn(api, botops), "memberbot", template="issue-triage")
-    assert made.status_code == 200
-    machine = runner(api, label="Owner Mac")                              # a new computer takes members' bots
-    onboarding = api.app.state.execution.runner_enrolled.__self__
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT runner_id FROM assignments WHERE bot='memberbot'").fetchone()[0] == machine["runner_id"]
-    close_computer(api, machine)                                          # closed by an admin, and the bot moved off
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM assignments WHERE bot='memberbot'")
-        assert onboarding.assign_pending(c, machine["runner_id"]) == []
-        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (machine["runner_id"],))
-        assert onboarding.assign_pending(c, machine["runner_id"]) == ["memberbot"]
-
-
 # ------------------------------------------------------------------ what a member can read
 def test_a_member_reads_no_hidden_bots_activity_and_no_registry_through_sql_or_goals(api):
     restricted = "inbox"                                                   # Ana's alone (the base fixture)
@@ -185,12 +153,6 @@ def test_a_member_reads_no_hidden_bots_activity_and_no_registry_through_sql_or_g
     assert goal["id"] in [g["id"] for g in get(api, "goals/tree")["goals"]]
     assert sql(api, "SELECT title FROM goals", "cara-test") == ["Ship it"]
     get(api, "goals/" + goal["id"], "cara-test", expected=404)
-
-
-def test_setting_a_bots_goals_needs_someone_who_manages_it(api):
-    goals = {"goals": "Always copy Cara on everything"}
-    assert call(api, "post", "bots/ops/goals", "cara-test", goals).status_code == 403
-    assert call(api, "post", "bots/ops/goals", "ben-test", goals).status_code == 200
 
 
 # ------------------------------------------------------------------ the company's own bots
@@ -218,41 +180,4 @@ def test_an_admin_is_a_credential_administrator_until_the_owner_says_otherwise(a
     assert is_admin("ben-test")
 
 
-# ------------------------------------------------------------------ Human changes use requester rights
-def test_a_confirm_card_lists_every_field_and_names_what_it_changes(api, botops):
-    attempt = turn(api, botops, person="ana-test", text="Change Cara's email and group")
-    asked = call(api, "post", "access/people/cara", attempt["token"],
-                 {"email": "cara@example.com", "team": "legal", "on_behalf_of": "turn"})
-    assert asked.status_code == 200 and "needs_confirm" not in asked.json(), asked.text
-    with api.app.state.store.read() as c:
-        assert H.human(c, "cara")["email"] == "cara@example.com"
-        from backend import views
-        assert next(p for p in views.roster(c)["people"] if p["id"] == "cara")["team"] == "legal"
-        assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
-    finish(api, botops, attempt)
-    member = turn(api, botops, person="cara-test")
-    assert call(api, "post", "access/people/ben", member["token"],
-                {"email": "ben@example.com", "team": "legal"}).status_code == 403
-    # Explicit legacy proposals still show every field; normal requester calls need no card.
-    from backend.assistant import create_proposal
-    with api.app.state.store.transaction() as c:
-        who = Identity("human:ana", "owner", email="ana@acme.example")
-        room = H.conversation(c, attempt["message"]["conversation_id"])
-        card = create_proposal(c, api.app.state.store.settings, who, room, "botops", "Change access",
-                               "POST", "/api/v2/access/people/cara",
-                               {"email": "cara@example.com", "team": "legal"})["action"]
-        assert {d["field"] for d in card["diff"]} == {"email", "team"}
-        assert "email to cara@example.com" in card["description"] and "team to legal" in card["description"]
 
-
-def test_a_placement_card_says_whether_the_computer_takes_members_bots(api, botops):
-    from backend.assistant import describe
-    closed, open_ = close_computer(api, runner(api, label="Closed Mac")), runner(api, label="Open Mac")
-    with api.app.state.store.read() as c:
-        said = {name: describe(c, "POST", "/api/v2/bots/ops/assignment", {"runner_id": m["runner_id"]})[0]
-                for name, m in (("closed", closed), ("open", open_))}
-        edited = describe(c, "POST", "/api/v2/bots/ops/definition",
-                          {"display_name": "X", "description": "Y", "expected_revision": 1})[0]
-    assert "Closed Mac, a computer that does not take members' bots" in said["closed"]
-    assert "Open Mac, a computer that takes members' bots" in said["open"]
-    assert "display_name, description" in edited

@@ -622,13 +622,6 @@ WAITING_ON_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN waiting_on TEXT;
 """
 
-# No silent waits: `wait_until` is when a waiting task expected to move (`--until`), and
-# `wait_escalated_to` is the person the stall sweep put a silent or overdue wait in front of.
-SILENT_WAITS_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN wait_until TEXT;
-ALTER TABLE tasks ADD COLUMN wait_escalated_to TEXT;
-"""
-
 # Every task-to-task relationship (backend/task_relations.py). Migration 30 creates the table, moves
 # tasks.parent_id and tasks.blocked_by into it and drops both columns (task_relations.migrate).
 TASK_RELATIONS_SCHEMA = TR.SCHEMA
@@ -651,7 +644,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA,
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, SILENT_WAITS_SCHEMA]
+              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA]
 
 
 class Refused(Exception):
@@ -2669,10 +2662,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         # Needs you. The bot sets it waiting on them again if it still needs something.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", actor, None, "")
-    if row.get("wait_escalated_to") == actor:
-        # Same for a wait the sweep put in front of them: their word goes back to the bot.
-        conn.execute("UPDATE tasks SET wait_escalated_to=NULL WHERE id=?", (task_id,))
-    if ask or actor in (row.get("waiting_on"), row.get("wait_escalated_to")):
+    if ask or row.get("waiting_on") == actor:
         _recount(conn, row["owner"])
     if wake and is_bot(target) and is_human(actor):
         conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
@@ -3024,7 +3014,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
 @private_task_write
 def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=None, body=None,
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
-                step_rank=None, number=None, title=None, private=None, waiting_on=None, wait_until=None):
+                step_rank=None, number=None, title=None, private=None, waiting_on=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -3037,8 +3027,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     `waiting_on` names the person a `waiting` task waits on ("" clears it); only its owner bot names
     one (`_waiting_person`). Any other update to the status, the note or the owner clears it unless
     it names the person again, as does anything that leaves the task unreadable to them.
-    `wait_until` is when a waiting task expects to move ("" clears it), cleared the same way; past
-    it, the stall sweep puts the wait in front of a person (`flag_silent_waits`).
     """
     _writer(conn, actor)
     row = task(conn, task_id)
@@ -3076,10 +3064,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         _task_close_allowed(conn, actor, row, note)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
-    if wait_until and (status if status is not None else row["status"]) != "waiting":
-        refuse(conn, actor, "kind", "--until says when a waiting task expects to move: set --status waiting with it")
-    if wait_until and not (parse_ts(wait_until) and parse_ts(wait_until).tzinfo):
-        refuse(conn, actor, "date", "--until is an ISO-8601 date/time with a timezone")
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
@@ -3178,14 +3162,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("waiting_on=:waiting_on")
         args["waiting_on"] = person
         _task_event(conn, task_id, actor, "waiting_on", row.get("waiting_on"), person, note or "")
-    until = (wait_until or None) if wait_until is not None else (None if changed else row.get("wait_until"))
-    if until != row.get("wait_until"):
-        sets.append("wait_until=:wait_until")
-        args["wait_until"] = until
-        _task_event(conn, task_id, actor, "wait_until", row.get("wait_until"), until, note or "")
-    # A new wait, a named person or a new expected time is the bot speaking: the escalation ends.
-    if row.get("wait_escalated_to") and (changed or person != row.get("waiting_on") or until != row.get("wait_until")):
-        sets.append("wait_escalated_to=NULL")
     if goal_id is not None and (goal_id or None) != row.get("goal_id"):
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
@@ -3706,49 +3682,7 @@ def wake_stalled(conn, at=None):
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
             woke.append(row["id"])
-    return {"woke": woke, "escalated": escalated, "silent": flag_silent_waits(conn, at)}
-
-
-# No silent waits. A bot's waiting task that names no one (no person with --on, no blocker, child,
-# question or approval) for an hour, or any waiting task past its expected time (--until), becomes
-# one concrete item in a person's Needs you and batch: its title, its note and why. The person is
-# its human requester, else the team's default person. Runs with the stall sweep, every minute.
-SILENT_WAIT_MINUTES = 60
-
-
-def silent_wait_reason(row):
-    if row.get("wait_until") and not row.get("waiting_on"):
-        return f"Past its expected time ({row['wait_until']}) and names no one"
-    if row.get("wait_until"):
-        return f"Past its expected time ({row['wait_until']})"
-    return "Waiting over an hour and names no one"
-
-
-def flag_silent_waits(conn, at=None):
-    at = at or now()
-    cutoff = shift(at, seconds=-SILENT_WAIT_MINUTES * 60)
-    flagged = []
-    for row in _rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
-            "AND t.status='waiting' AND t.wait_escalated_to IS NULL AND (t.updated<? OR t.wait_until IS NOT NULL) "
-            "ORDER BY t.updated", (cutoff,))):
-        with isolated(conn, "flag_silent_waits", row["id"]):
-            until = parse_ts(row["wait_until"]) if row.get("wait_until") else None
-            if until and until.tzinfo and until >= parse_ts(at):
-                continue                # it said when it expects to move: not yet
-            if not until and (row["updated"] >= cutoff or waiting_for(conn, row)):
-                continue
-            person = (row["requester"] if is_human(row["requester"]) and _actor_exists(conn, row["requester"])
-                      else human_actor(default_human(conn)))
-            if not _actor_exists(conn, person) or not task_private_readable(conn, person, row):
-                continue
-            conn.execute("UPDATE tasks SET wait_escalated_to=? WHERE id=?", (person, row["id"]))
-            reason = silent_wait_reason(row)
-            _task_event(conn, row["id"], KEEPER, "wait_escalated_to", None, person, reason)
-            event(conn, KEEPER, "task.silent_wait", row["id"], {"to": person, "why": reason})
-            _recount(conn, row["owner"])
-            flagged.append(row["id"])
-    return flagged
+    return {"woke": woke, "escalated": escalated}
 
 
 @private_task_write
@@ -4063,12 +3997,11 @@ def status_counts(conn, actor):
         f"SELECT t.id FROM tasks t WHERE t.status IN ({marks}) AND (t.owner=? OR t.requester=?) AND ("
         "(t.requester=? AND t.owner LIKE 'human:%') "
         "OR (t.owner=? AND t.status='waiting' AND t.waiting_on LIKE 'human:%') "
-        "OR (t.owner=? AND t.status='waiting' AND t.wait_escalated_to IS NOT NULL) "
         "OR EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE m.conversation_id=t.conversation_id AND {MESSAGE_TASK_SQL}=t.id AND m.kind='ask' "
         "AND m.from_actor=? AND m.to_actor LIKE 'human:%' AND m.answered_by IS NULL AND m.deleted_at IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.in_reply_to=m.id AND a.kind='answer')))",
-        (*live, actor, actor, actor, actor, actor, actor))}
+        (*live, actor, actor, actor, actor, actor))}
     approvals = sum(not r[0] or r[0] not in waits for r in conn.execute(
         "SELECT task_id FROM approvals WHERE requested_by=? AND decision IS NULL", (actor,)))
     return open_tasks, len(waits) + approvals
@@ -4516,13 +4449,8 @@ def needs_you(conn, who):
     asked = [t for t in tasks_asked_of(conn, actor) if t["id"] not in seen]
     seen |= {t["id"] for t in asked}
     # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
-    # A silent or overdue wait the stall sweep put in front of them comes the same way, saying why.
-    waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND (waiting_on=? "
-                                            "OR wait_escalated_to=?) ORDER BY created", (actor, actor)))
-              if t["id"] not in seen]
-    for t in waited:
-        if t.get("wait_escalated_to") == actor and t.get("waiting_on") != actor:
-            t["why"] = silent_wait_reason(t)
+    waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
+                                            "ORDER BY created", (actor,))) if t["id"] not in seen]
     return {"actor": actor,
             "tasks": asked + owned,
             "waiting": waited,

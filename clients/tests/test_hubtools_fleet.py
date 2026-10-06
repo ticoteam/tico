@@ -15,12 +15,6 @@ class _Api:
         raise AssertionError(path)
 
 
-def test_health_check_reads_the_one_health_route():
-    api = _Api()
-    assert hubtools.BY_NAME["hub_health_check"]["fn"](api, {}) == {"issues": []}
-    assert "health/issues" in api.calls
-
-
 class _Groups:
     """The group tools: a person's own token writes to the routes itself; a bot (BotOps) is the requester."""
     def __init__(self, actor="human:ana"):
@@ -107,25 +101,3 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
     assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "waiting"]}) == [{"id": "t1"}]
     assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,waiting", "lane": None, "label": None})
 
-
-def test_tool_add_and_update_carry_the_mcp_flags_as_one_block():
-    fn = hubtools.BY_NAME
-    person = _Groups()
-    fn["hub_tool_add"]["fn"](person, {"bot": "ops", "service": "linear", "can": "read", "env": "LINEAR_API_KEY",
-                                      "mcp_url": "https://mcp.linear.app/mcp", "transport": "http",
-                                      "headers": ["Authorization: Bearer ${LINEAR_API_KEY}", "X-Team: acme"]})
-    fn["hub_tool_update"]["fn"](person, {"bot": "ops", "id": "linear", "mcp_url": "https://mcp.linear.app/sse", "transport": "sse"})
-    added, updated = [c for c in person.calls if c[1] != "me"]
-    assert added[2]["mcp"] == {"url": "https://mcp.linear.app/mcp", "transport": "http",
-                               "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}", "X-Team": "acme"}}
-    assert updated[2] == {"mcp": {"url": "https://mcp.linear.app/sse", "transport": "sse"}}
-    try:
-        fn["hub_tool_add"]["fn"](person, {"bot": "ops", "service": "linear", "can": "read", "headers": {"A": "b"}})
-        raise AssertionError("headers without an address are refused")
-    except ValueError as exc:
-        assert "mcp_url" in str(exc)
-    try:
-        fn["hub_tool_add"]["fn"](person, {"bot": "ops", "service": "linear", "can": "read", "mcp_url": "https://x.example", "headers": ["no colon"]})
-        raise AssertionError("a header is Name: value")
-    except ValueError as exc:
-        assert "Name: value" in str(exc)

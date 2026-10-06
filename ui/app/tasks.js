@@ -44,10 +44,7 @@ function taskWaitLine(t) {
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
   if (ask) return ask;
-  const note = String(t?.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
-  if (t?.status !== 'waiting' || !t.wait_escalated_to) return note;
-  const why = t.waiting_on ? 'past its expected time' : 'names no one';
-  return note ? `${note} · ${why}` : why;
+  return String(t?.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
 }
 function clipLine(s, n) {
   s = String(s || '').replace(/\s+/g, ' ').trim();
@@ -133,11 +130,9 @@ function taskNeedsViewer(t) {
   return !!me && !!t && !taskFinished(t) && (t.owner === me || t.ask?.to_actor === me || taskWaitingOn(t) === me
     || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner)));
 }
-// The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or the
-// person a silent or overdue wait was put in front of, or ''.
+// The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
 function taskWaitingOn(t) {
-  if (t?.status !== 'waiting') return '';
-  return actorPerson(t.waiting_on) ? t.waiting_on : actorPerson(t.wait_escalated_to) ? t.wait_escalated_to : '';
+  return t?.status === 'waiting' && actorPerson(t.waiting_on) ? t.waiting_on : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {

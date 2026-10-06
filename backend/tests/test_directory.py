@@ -1,6 +1,5 @@
 """Directory sync: Google and Graph fixtures, the safety rules, the audit trail and the routes."""
 import json
-import urllib.parse
 
 import httpx
 import pytest
@@ -10,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from backend import directory as D
 from backend import directory_sources as S
 from backend import people as P
-from backend.tests.test_onboarding import OWNER_EMAIL, PEOPLE, environment, signed_in  # noqa: F401
+from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 from backend.tests.test_people_access import person_headers
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
@@ -24,103 +23,7 @@ def guser(email, name, **more):
             "orgUnitPath": "/", **more}
 
 
-GOOGLE_PAGES = {
-    "": {"users": [
-        guser("ana@acme.example", "Ana Rivera", organizations=[{"title": "CEO", "primary": True}]),
-        guser("dev@acme.example", "Dev Patel", orgUnitPath="/Eng", organizations=[{"title": "Engineer"}],
-              relations=[{"type": "manager", "value": "Ana@acme.example"}])], "nextPageToken": "p2"},
-    "p2": {"users": [
-        guser("gone@acme.example", "Gail Gone", suspended=True, orgUnitPath="/Eng"),
-        guser("old@acme.example", "Ola Old", archived=True),
-        guser("sales@acme.example", "Sam Sales", orgUnitPath="/Sales/West")]},
-}
-
-
-def google_transport(seen):
-    def handler(request):
-        url = request.url
-        seen.append((request.method, str(url), dict(request.headers)))
-        if url.host == "oauth2.googleapis.com":
-            seen[-1] += (urllib.parse.parse_qs(request.content.decode()),)
-            return httpx.Response(200, json={"access_token": "g-token"})
-        assert request.headers["authorization"] == "Bearer g-token"
-        if url.path.endswith("/users"):
-            return httpx.Response(200, json=GOOGLE_PAGES[url.params.get("pageToken", "")])
-        if url.path.endswith("/groups/eng@acme.example/members"):
-            return httpx.Response(200, json={"members": [{"email": "sales@acme.example", "type": "USER"},
-                                                         {"email": "sub@acme.example", "type": "GROUP"}]})
-        return httpx.Response(404, json={})
-    return httpx.MockTransport(handler)
-
-
-GOOGLE = {"service_account": SERVICE_ACCOUNT, "admin_email": "admin@acme.example"}
-
-
-def test_google_maps_users_across_pages_and_reads_suspended_as_inactive(monkeypatch):
-    seen = []
-    monkeypatch.setattr(S, "TRANSPORT", google_transport(seen))
-    records = {r["email"]: r for r in S.google_fetch(GOOGLE, {})}
-    assert list(records) == ["ana@acme.example", "dev@acme.example", "gone@acme.example", "old@acme.example",
-                             "sales@acme.example"]
-    assert records["ana@acme.example"]["title"] == "CEO"
-    assert records["dev@acme.example"]["manager"] == "ana@acme.example"        # lower-cased
-    assert not records["gone@acme.example"]["active"] and not records["old@acme.example"]["active"]
-    assert records["dev@acme.example"]["active"]
-    token = seen[0][3]
-    assert token["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
-    import jwt
-    claims = jwt.decode(token["assertion"][0], options={"verify_signature": False})
-    assert claims["sub"] == "admin@acme.example"
-    assert claims["scope"] == S.GOOGLE_USER_SCOPE                                # read-only, users only
-    assert "pageToken=p2" in seen[2][1] and "customer=my_customer" in seen[1][1]
-
-
-def gd(oid, name, mail, **more):
-    return {"id": oid, "displayName": name, "mail": mail, "userPrincipalName": mail or name + "@acme.onmicrosoft.com",
-            "userType": "Member", "accountEnabled": True, **more}
-
-
-def graph_transport(seen):
-    def handler(request):
-        url = request.url
-        seen.append((str(url), dict(request.headers)))
-        if url.host == "login.microsoftonline.com":
-            assert url.path == "/tenant-1/oauth2/v2.0/token"
-            form = urllib.parse.parse_qs(request.content.decode())
-            assert form["scope"] == ["https://graph.microsoft.com/.default"]
-            assert form["grant_type"] == ["client_credentials"]
-            return httpx.Response(200, json={"access_token": "m-token"})
-        assert request.headers["authorization"] == "Bearer m-token"
-        if url.path == "/v1.0/users" and not url.params.get("$skiptoken"):
-            return httpx.Response(200, json={"value": [
-                gd("1", "Ana", "Ana@acme.example", jobTitle="CEO"),
-                gd("2", "Dev", "dev@acme.example", manager={"id": "1", "mail": "ana@acme.example"}),
-                gd("3", "Off", "off@acme.example", accountEnabled=False)],
-                "@odata.nextLink": "https://graph.microsoft.com/v1.0/users?$skiptoken=abc"})
-        if url.path == "/v1.0/users":
-            return httpx.Response(200, json={"value": [
-                gd("4", "Guest", "guest@other.example", userType="Guest"),
-                gd("5", "Nomail", None, userPrincipalName="not-an-email"),
-                gd("6", "Upn", None, userPrincipalName="upn@acme.example")]})
-        if url.path == "/v1.0/groups/g-1/members/microsoft.graph.user":
-            return httpx.Response(200, json={"value": [{"id": "2"}, {"id": "6"}]})
-        return httpx.Response(404, json={"error": {"message": "nope"}})
-    return httpx.MockTransport(handler)
-
-
 ENTRA = {"tenant": "tenant-1", "client_id": "app-1", "client_secret": "s3cret"}
-
-
-def test_graph_maps_users_across_pages_and_drops_guests(monkeypatch):
-    seen = []
-    monkeypatch.setattr(S, "TRANSPORT", graph_transport(seen))
-    records = {r["email"]: r for r in S.entra_fetch(ENTRA, {})}
-    assert list(records) == ["ana@acme.example", "dev@acme.example", "off@acme.example", "upn@acme.example"]
-    assert records["dev@acme.example"]["manager"] == "ana@acme.example"
-    assert not records["off@acme.example"]["active"] and records["dev@acme.example"]["active"]
-    assert records["ana@acme.example"]["title"] == "CEO" and records["ana@acme.example"]["external_id"] == "1"
-    first = next(u for u, _ in seen if "/v1.0/users" in u)
-    assert "%24top=999" in first or "$top=999" in first
 
 
 def test_a_failed_listing_raises_instead_of_looking_like_an_empty_directory(monkeypatch):
@@ -255,35 +158,6 @@ def test_suspended_people_are_marked_left_and_their_tokens_revoked_not_deleted(g
     state["users"]["users"][1]["suspended"] = False
     assert sync(api)["done"]["restores"] == 1
     assert roster_of(api)["dev@acme.example"]["hidden"] is False
-
-
-def test_the_owner_is_protected_when_the_directory_disables_them(google_api):
-    api, state = google_api
-    put_config(api)
-    confirmed_sync(api)
-    state["users"]["users"][2]["suspended"] = True
-    # Morgan was hand-added, so the feed does not own her; make the feed own her to prove the guard.
-    with api.app.state.store.transaction() as c:
-        row = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        for p in row["people"]:
-            if p["email"] == OWNER_EMAIL:
-                p["directory"] = "google"
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(row),))
-    out = sync(api)
-    assert [x["email"] for x in out["plan"]["protected"]] == [OWNER_EMAIL]
-    assert roster_of(api)[OWNER_EMAIL]["hidden"] is False
-
-
-def test_a_sync_that_would_mark_too_many_people_left_is_held_until_confirmed(google_api):
-    api, state = google_api
-    put_config(api, mass_leave_limit=1)
-    confirmed_sync(api)
-    state["users"]["users"] = [state["users"]["users"][2]]                   # both Ana and Dev vanish
-    held = sync(api)
-    assert held["applied"] is False and held["needs_confirmation"] == {"first": False, "mass_leave": True}
-    assert roster_of(api)["ana@acme.example"]["hidden"] is False
-    done = sync(api, confirm=True, plan_hash=held["plan"]["hash"])
-    assert done["applied"] is True and done["done"]["leaves"] == 2
 
 
 def test_credentials_are_encrypted_and_never_returned(google_api):

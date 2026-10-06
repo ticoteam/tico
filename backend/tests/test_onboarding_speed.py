@@ -3,6 +3,7 @@ import shutil
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
 from backend.tests.test_onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment, signed_in  # noqa: F401
@@ -21,6 +22,7 @@ def picks(count=23):
     return dict(list(chosen.items())[:count])
 
 
+@pytest.mark.slow
 def test_saving_a_23_bot_draft_against_the_real_catalog_is_fast(environment):
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     shutil.copytree(CATALOG, api.app.state.store.settings.catalog_dir, dirs_exist_ok=True)

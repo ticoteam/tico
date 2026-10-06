@@ -6,8 +6,9 @@ release. Running installations look for that release to show "New version" in th
 
 ## The fast path
 
-1. **Every PR** runs the full suite against `main` before it merges (`python scripts/release_checks.py`, below).
-2. **Before you tag**, a short whole-product check, about 3 to 5 minutes: `python scripts/release_checks.py --release`.
+1. **Every PR** runs the default suites against `main` before it merges (`python scripts/release_checks.py`, below).
+2. **Before you tag**, the opt-in tests and a short whole-product check, about 3 to 5 minutes:
+   `python scripts/release_checks.py --release`.
 3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 5. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
@@ -21,8 +22,9 @@ merging a PR, run the whole thing from the repository root, on the PR merged wit
 python scripts/release_checks.py
 ```
 
-That is the full suite (pytest in parallel, then the browser scripts three at a time) and it has to finish in under
-5 minutes; the check records wall time and load and fails if the combined run reaches 300 seconds. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
+That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
+core browser scripts (`CORE` in `scripts/ui-tests.cjs`) three at a time. The check records wall time and load and fails
+if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
 builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
 GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
@@ -36,7 +38,9 @@ python scripts/release_checks.py --release                     # this checkout i
 python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag
 ```
 
-This checks only what the per-PR suite cannot: the product as installed, in Docker. It builds the server, runner and
+This checks what the per-PR suite leaves out. While the images build it runs the opt-in tests: `pytest -m slow`
+(real git, Docker, servers and long timers) and every browser script (`node scripts/ui-tests.cjs --all`). Then the
+product as installed, in Docker: it builds the server, runner and
 updater images once (BuildKit cache; a source-only change rebuilds one layer per image) and runs three checks against
 them at the same time, each with its own Docker names, while the journey installs the previous release during the build:
 
@@ -223,30 +227,15 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed publishes, for each configured company, its macOS universal DMG and signed updater
-archive, Windows NSIS installer with signature, and Linux AppImage with signature plus Debian package
-(`.github/workflows/company-app.yml`, called twice by the Release workflow):
-
-- **macOS is a rebrand, not a build.** After the generic desktop build finishes, the `publish` stage downloads that
-  run's generic `app-universal-apple-darwin` artifact, unpacks the `.app`, and patches in the company: `Info.plist`
-  bundle ID and display name, the PNG icon converted to `.icns`, and `Contents/Resources/company.json` (name, server
-  URL, slug, tray label, bundle ID, updater feed). It then re-signs with the Developer ID (ad hoc without one), builds
-  the DMG, notarizes and staples it when the Apple secrets exist, and signs a fresh `.app.tar.gz` with the updater key
-  (`scripts/company_apps.py rebrand`). This takes a few minutes per company, most of it notarization.
-- **Windows and Linux still compile per company** (the `build` stage, beside the generic build). Patching the NSIS
-  installer's compressed payload and repacking AppImage/deb is not done yet; those builds restore the generic build's
-  Rust cache (compiled dependencies and the Tauri CLI) and never save to it, so no branded output reaches a cache a
-  public build could read. The shell reads `company.json` beside the Windows executable or in `usr/lib/<binary>/` on
-  Linux, so moving them to a rebrand later needs no shell change.
-
-The shell reads its company identity at start: build-time values (`scripts/app.sh --env`, the Windows and Linux
-builds) first, then the bundled `company.json`, then generic Tico. It applies the file's bundle ID, name and updater
-feed to the runtime configuration, so app data folders, single-instance locking and updates follow the company, not
-the generic build's `tauri.conf.json`. An invalid `company.json` leaves the generic app. The app version is the
-generic build's, stamped from the tag. A tag whose shell did not change leaves each company's bucket manifest as it
-is; after adding a company, run the Release workflow from the current tag with `desktop` checked. Every company app uses
-the same updater signing key as the generic app, with `team.tico.env.<stable UUID>` as its bundle ID, its own name and
-PNG icon, its own server address, and `<runner_url or url>/download/latest.json` as the update endpoint.
+A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
+installer with signature, and Linux AppImage with signature plus Debian package. The app version
+is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
+and never save to it, so no branded output reaches a cache a public build could read. A tag whose shell did not change
+leaves each company's bucket manifest as it is; after adding a company, run the Release workflow from the current tag
+with `desktop` checked. Every build uses the same updater signing key as the generic app,
+with `team.tico.env.<stable UUID>` as its bundle ID, its own name and PNG icon, its own server
+address, and `<runner_url or url>/download/latest.json` as the update endpoint.
 
 The company shell preserves its configured updater endpoint, including a separate public
 `runner_url`. If the configured endpoint is the generic default, it uses the selected hub's
@@ -282,8 +271,7 @@ letters or digits fall back to `TIC`. To distinguish colliding names, add option
 uppercase. Omitted or empty means automatic. Labels are display-only: they never change
 the UUID, sessions, updater endpoint, or company Dock icon. The native label and template
 mark follow light/dark appearance; Windows/Linux and generic builds keep their existing tray.
-On macOS, changes to the app name, slug or label only change `company.json`; on Windows and Linux they trigger Rust
-recompilation. No generated
+Changes to the app name, company slug, or label trigger Rust recompilation. No generated
 fonts or colored tray images are needed, and private labels are masked with other company
 configuration in CI.
 

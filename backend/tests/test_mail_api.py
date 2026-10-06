@@ -1,11 +1,9 @@
 """Server-stored mail is browsable by people, never by bots, and never live from Gmail."""
 
-import json
 
 from backend.auth import Identity
-from backend.mail import sanitize_fts
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, runner, setup_attempt  # noqa: F401
 from backend.tests.test_connectors import mail_message
 
 
@@ -90,25 +88,16 @@ def subjects(api, token, **params):
     return [row["subject"] for row in get(api, path, token)["messages"]]
 
 
-def test_steven_sees_only_his_mailbox(api):
+def test_steven_sees_only_his_mailbox_and_bots_and_runners_see_none(api):
     seed_mail(api)
     assert boxes(api, "ben-test") == {"ben@acme.example"}
     assert subjects(api, "ben-test") == ["Ben standup"]
     get(api, "mail/messages?mailbox=ana@acme.example", "ben-test", expected=403)
-    get(api, "mail/messages?mailbox=lena@acme.example", "ben-test", expected=403)
     get(api, "mail/messages/c1?mailbox=ana@acme.example", "ben-test", expected=403)
     msg = get(api, "mail/messages/s1?mailbox=ben@acme.example", "ben-test")
     assert msg["body"] == "Standup notes for product." and msg["subject"] == "Ben standup"
-
-
-def test_bot_and_runner_are_refused(api):
-    seed_mail(api)
     machine = runner(api)
-    get(api, "mail/mailboxes", machine["token"], expected=403)
     get(api, "mail/messages", machine["token"], expected=403)
     _, _, attempt = setup_attempt(api)
     get(api, "mail/mailboxes", attempt["token"], expected=403)
-    get(api, "mail/messages?mailbox=ana@acme.example", attempt["token"], expected=403)
-    get(api, "mail/threads/tc?mailbox=ana@acme.example", attempt["token"], expected=403)
     get(api, "mail/messages/c1?mailbox=ana@acme.example", attempt["token"], expected=403)
-

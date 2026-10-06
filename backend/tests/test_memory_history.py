@@ -57,18 +57,6 @@ def test_only_the_assigned_computer_reports_and_runs_must_be_the_bots_own(api):
     assert [r["sha"] for r in rows] == ["b" * 40] and rows[0]["source"] is None
 
 
-def test_seen_clears_the_unseen_count(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    recent = commit(committed=__import__("backend.hubdb", fromlist=["now"]).now())
-    post(api, "bots/ops/memory/report", {"commits": [recent]}, machine["token"])
-    assert history(api, "ben-test")["unseen"] == 1
-    post(api, "bots/ops/memory/seen", {}, "ben-test")
-    assert history(api, "ben-test")["unseen"] == 0
-    post(api, "bots/ops/memory/report", {"commits": [commit("c" * 40)]}, machine["token"])
-    assert history(api, "ben-test")["unseen"] == 1
-
-
 def test_the_runner_reads_memory_commits_and_sends_a_diff_only_once_shared(tmp_path):
     origin, root = tmp_path / "origin.git", tmp_path / "bot"
     git = lambda *a, cwd=root: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True)
@@ -104,22 +92,3 @@ def test_the_runner_reads_memory_commits_and_sends_a_diff_only_once_shared(tmp_p
     assert Fake.sent[-1]["documents"] == {"memory/decisions.md": "- Ship on Fridays\n"}
     assert "sk-live" not in json.dumps(Fake.sent)
 
-
-def test_a_bot_with_no_shared_repository_sends_subjects_only(tmp_path):
-    root = tmp_path / "bot"
-    git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    git("config", "user.email", "ops@acme.example"); git("config", "user.name", "ops")
-    (root / "memory").mkdir(); (root / "memory/learnings.md").write_text("- key sk-live-456\n")
-    git("add", "."); git("commit", "-qm", "Learn something")
-
-    class Fake:
-        sent = []
-        state = State(tmp_path / "state")
-        class client:
-            @staticmethod
-            def post(path, body, key=None):
-                Fake.sent.append(body)
-    assert memory_history.report(Fake, "ops", root) == 1
-    assert Fake.sent[0]["documents"] == {} and Fake.sent[0]["commits"][0]["diff"] == ""
-    assert "sk-live" not in json.dumps(Fake.sent)

@@ -154,9 +154,9 @@ jobs:
           # Use a secret: variables can be printed in the runner's pre-step env banner.
           TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
         run: python3 scripts/company_apps.py matrix
-  # Company Windows and Linux apps still compile per company, beside the generic build. When the shell did not change,
-  # each company's bucket keeps its current latest.json, so installed company apps stay on their version.
-  company-builds:
+  # Company apps build beside the generic one, not after it. When the shell did not change, each company's bucket
+  # keeps its current latest.json, so installed company apps stay on their version.
+  companies:
     needs: company-matrix
     if: needs.company-matrix.outputs.enabled == 'true'
     strategy:
@@ -165,23 +165,6 @@ jobs:
     uses: ./.github/workflows/company-app.yml
     with:
       company: ${{ matrix.company }}
-      stage: build
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-  # macOS company apps are this run's generic build, rebranded (no compile), then each company publishes all three
-  # platforms. A company whose Windows or Linux build failed fails only its own publish.
-  companies:
-    needs: [company-matrix, desktop, company-builds]
-    if: ${{ !cancelled() && needs.company-matrix.outputs.enabled == 'true' && needs.desktop.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.company-matrix.outputs.matrix) }}
-    uses: ./.github/workflows/company-app.yml
-    with:
-      company: ${{ matrix.company }}
-      stage: publish
     secrets: inherit
     permissions:
       contents: read

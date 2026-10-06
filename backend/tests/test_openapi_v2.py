@@ -4,7 +4,7 @@ resources, committed as docs/openapi/v2.json, and true to what the API answers."
 import re
 
 from backend import openapi_v2
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
 
 
 def conforms(value, schema, root, where="$"):
@@ -68,14 +68,9 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
     assert tagged == set(openapi_v2.TAGS) == {t["name"] for t in document["tags"]}
     text = str(document)
     assert all(ref in document["components"]["schemas"] for ref in re.findall(r"#/components/schemas/(\w+)", text))
-
-
-def test_every_write_asks_for_an_idempotency_key(api):
-    document = api.get("/api/v2/openapi.json", headers=headers()).json()
-    for path, ops in document["paths"].items():
+    for path, ops in document["paths"].items():                          # every write asks for an idempotency key
         if path.startswith("/api/v2/") and "post" in ops:
-            names = [p["name"] for p in ops["post"]["parameters"]]
-            assert "Idempotency-Key" in names, path
+            assert "Idempotency-Key" in [p["name"] for p in ops["post"]["parameters"]], path
 
 
 def test_the_declared_answers_match_the_live_ones(api):
@@ -178,11 +173,3 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
 
-
-def test_pipeline_answers_match_the_public_contract(api):
-    typ = post(api, 'task-types', {'name': 'Marketing', 'steps': [{'name': 'Draft', 'status': 'open'}]})
-    root = openapi_v2.generate()
-    assert conforms(typ, openapi_v2.ref('TaskTypeResult'), root) is None
-    assert conforms(get(api, 'task-types'), openapi_v2.ref('TaskTypeList'), root) is None
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Draft the plan', 'body': 'Please.', 'type': typ['type']['id']})
-    assert conforms({'task': task}, openapi_v2.ref('TaskResult'), root) is None

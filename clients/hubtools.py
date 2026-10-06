@@ -543,8 +543,6 @@ def task_ask(api, args):
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person it waits on (their id), so it shows in their Needs you; "
                         "put exactly what they must do in the note. An empty string clears it"),
-       "wait_until": _s("With status waiting: when it expects to move (ISO-8601 with timezone); past it, "
-                        "the wait goes in front of a person. An empty string clears it"),
        "goal_id": _s("The goal this task serves; an empty string takes it off")},
       required=("id",), writes=True)
 def task_update(api, args):
@@ -560,9 +558,8 @@ def task_update(api, args):
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]
-    for field in ("waiting_on", "wait_until"):
-        if args.get(field) is not None:
-            body[field] = args[field]
+    if args.get("waiting_on") is not None:
+        body["waiting_on"] = args["waiting_on"]
     return api.post("tasks/" + args["id"], body, key=_key(args))
 
 

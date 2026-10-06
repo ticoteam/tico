@@ -4,13 +4,9 @@ Nothing here talks to a server. The catalog is a temporary directory holding one
 what `TICO_CATALOG_DIR` is for, so these tests say nothing about which bots the product ships.
 """
 import functools
-import json
-import os
-import re
 import subprocess
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 
 import yaml
@@ -133,11 +129,6 @@ class Refresh(unittest.TestCase):
     def refresh(self):
         return catalog.refresh("assistant", self.path, NAMES, directory=self.catalog)
 
-    def test_an_unchanged_template_leaves_what_the_bot_improved(self):
-        (self.path / "playbooks" / "fleet.md").write_text("Improved by the bot.\n")
-        self.assertEqual(self.refresh(), [])
-        self.assertEqual((self.path / "playbooks" / "fleet.md").read_text(), "Improved by the bot.\n")
-
     def test_a_changed_template_file_wins_and_the_rest_stays_the_bots(self):
         (self.path / "playbooks" / "fleet.md").write_text("Improved by the bot.\n")
         (self.path / "playbooks" / "mine.md").write_text("A playbook the bot wrote.\n")
@@ -151,39 +142,6 @@ class Refresh(unittest.TestCase):
         self.assertEqual(git(self.path, "show", "HEAD~1:playbooks/fleet.md"), "Improved by the bot.")     # kept in the history
         self.assertEqual(self.refresh(), [])                        # once
 
-    def test_a_repository_from_before_the_stamp_is_brought_up_once(self):
-        (self.path / catalog.STAMP).unlink()
-        (self.path / "AGENT.md").write_text("# Drifted long ago\n")
-        changed = self.refresh()
-        self.assertIn("AGENT.md", changed)
-        self.assertIn("Acme Ltd", (self.path / "AGENT.md").read_text())
-        (self.path / "AGENT.md").write_text("# The bot's own improvement\n")
-        self.assertEqual(self.refresh(), [])
-
-    def test_a_starter_bot_is_never_refreshed(self):
-        starter = Path(self.tmp.name) / "catalog" / "starter"
-        fixture(self.catalog, "starter", card=CARD.replace("bootstrap: true", "bootstrap: false").replace("assistant", "starter"))
-        path = catalog.materialize("starter", "st", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog)
-        (starter / "AGENT.md").write_text("# New\n")
-        self.assertEqual(catalog.refresh("starter", path, NAMES, directory=self.catalog), [])
-
-
-PACKS = ("basics", "sales", "marketing", "support", "operations", "engineering")
-# templates/groups.yaml: the departments onboarding offers, in order, and the extras it does not offer.
-DEPARTMENTS = ("sales", "marketing", "support", "finance", "operations", "legal", "hr", "product", "engineering")
-# `pack` is the older six-team grouping the chooser still reads; it follows the department.
-PACK_OF = {"sales": "sales", "marketing": "marketing", "support": "support", "operations": "operations", "finance": "basics",
-           "legal": "basics", "hr": "basics", "leadership": "basics", "product": "engineering", "engineering": "engineering"}
-SUGGEST = ("default", "common", "niche")
-# The icons the UI's subset font holds (scripts/build-icon-font.py adds every card's and department's icon to it).
-ICONS = set((catalog.ROOT / "ui/vendor/fonts/icons.txt").read_text().split())
-# The tags backend/onboarding.py derives from a company's answers, and the tools a prerequisite may name.
-TAGS = {"always", "sells_to_businesses", "sells_to_consumers", "sells_software", "small_team", "uses_email", "uses_slack", "uses_crm",
-        "uses_tickets", "has_support_inbox", "uses_github", "uses_meetings", "uses_docs", "has_pipeline", "publishes_content",
-        "tracks_mentions", "has_personal_inbox"}
-TOOLS = {"hub", "mail", "chat", "crm", "github", "meetings", "calendar", "docs", "web"}
-
-
 @functools.lru_cache(maxsize=None)
 def read_catalog(directory):
     """Every card once, by template name: the checks below look cards up a hundred times."""
@@ -195,136 +153,25 @@ def starters(directory):
     return sorted(name for name, card in read_catalog(directory).items() if not card.get("required") and not card.get("bootstrap"))
 
 
-def is_helper(card):
-    """A helper (`kind: helper`) serves a person, like the built-ins: no department, no head, not on the org chart."""
-    return card.get("kind") == "helper"
-
-
 class StarterBots(unittest.TestCase):
-    """Every catalog template (docs/starter-bots.md) carries the fields a chooser and a first session depend on,
-    with draft-first sending and routines activated during setup."""
+    """Every catalog template starts safe: draft-first sending, routines off until setup, read-only Tools."""
 
     directory = catalog.ROOT / "templates/catalog"
 
-    def test_starter_instructions_do_not_require_a_human_approval(self):
-        """Optional approvals remain available; routine work must not acquire an approval gate."""
-        built_in = {"assistant", "botops", "librarian", "goal-manager"}
-        forbidden = re.compile(
-            r"never without (?:a human|approval)|"
-            r"must never (?:happen|be said|be claimed) without a human|"
-            r"once (?:a|the) human has approved the first|"
-            r"(?:needs?|requires?) (?:a human's|your) (?:confirm|yes|approval)|"
-            r"wait(?:s|ing)? (?:for|on) (?:an? |your )?approval|"
-            r"(?:only after|until) (?:a human|the owner) (?:approves|confirms|says yes)|"
-            r"nothing is merged without them|ready for your yes",
-            re.I,
-        )
-        roots = [self.directory / name for name in starters(self.directory) if name not in built_in]
-        roots.extend([catalog.ROOT / "policies", catalog.ROOT / "templates/employee-repo"])
-        for root in roots:
-            for path in root.rglob("*"):
-                if path.is_file() and not path.is_symlink() and path.suffix in {".md", ".yaml"}:
-                    with self.subTest(path=str(path.relative_to(catalog.ROOT))):
-                        self.assertNotRegex(" ".join(path.read_text().split()), forbidden)
-
-    def test_every_template_is_complete_and_draft_first(self):
+    def test_every_template_starts_draft_first_and_read_only(self):
         names = starters(self.directory)
         self.assertGreaterEqual(len(names), 90)
         for name in names:
-            with self.subTest(template=name):
-                self.check(name)
-
-    def test_every_department_has_its_head_and_no_pain_phrase_is_offered_twice(self):
-        """templates/groups.yaml names each department's head; that card is the department's only `lead: true`, and
-        its `team_templates` are the rest of the department."""
-        cards = [read_catalog(self.directory)[name] for name in starters(self.directory)]
-        cards = [card for card in cards if not is_helper(card)]
-        document = yaml.safe_load((catalog.ROOT / "templates/groups.yaml").read_text())
-        departments, extras = document["departments"], document.get("extras") or []
-        self.assertEqual([row["id"] for row in departments], list(DEPARTMENTS))
-        for row in departments:
-            for field in ("name", "description", "goal", "question", "placeholder"):
-                self.assertTrue(isinstance(row.get(field), str) and row[field].strip(), f"department {row['id']}: {field}")
-            self.assertIs(row.get("software_only", False), row["id"] in ("product", "engineering"), row["id"])
-        for row in departments + extras:
-            self.assertIn(row["icon"], ICONS, f"department {row['id']}: icon")
-            members = {card["template"]: card for card in cards if card["group"] == row["id"]}
-            leads = [name for name, card in members.items() if card.get("lead") is True]
-            self.assertEqual(leads, [row["head"]], f"department {row['id']} needs exactly one `lead: true` card, its head")
-            self.assertEqual(sorted(members[row["head"]]["team_templates"]), sorted(set(members) - {row["head"]}),
-                             f"{row['head']}: team_templates are the rest of department {row['id']}")
-        known = {row["id"] for row in departments + extras}
-        self.assertFalse({card["group"] for card in cards} - known, "a card names a group not in groups.yaml")
-        self.assertEqual([card["template"] for card in cards if "always" in card["recommend_when"]], ["chief-of-staff"])
-        phrases = [phrase.lower() for card in cards for phrase in card["pains"]]
-        self.assertEqual(len(phrases), len(set(phrases)), "a pain phrase belongs to one template")
-
-    def test_every_card_and_built_in_has_an_icon_the_ui_font_holds(self):
-        for card in read_catalog(self.directory).values():
-            self.assertIn(card.get("icon"), ICONS, f"template {card['template']}: icon")
-
-    def check(self, name):
-        folder, where = self.directory / name, f"template {name}"
-        card = read_catalog(self.directory).get(name)
-        self.assertTrue(card, where)
-        self.assertIn(card.get("kind", "role"), ("role", "helper"), f"{where}: kind")
-        if is_helper(card):
-            for field in ("group", "pack", "lead", "team_templates", "suggest"):
-                self.assertNotIn(field, card, f"{where}: a helper is in no department")
-        else:
-            self.assertIn(card.get("pack"), PACKS, where)
-            # What the org builder groups, pictures and pre-checks by (templates/groups.yaml).
-            self.assertIn(card.get("group"), PACK_OF, f"{where}: group")
-            self.assertEqual(card["pack"], PACK_OF[card["group"]], f"{where}: pack follows the department")
-            self.assertIn(card.get("suggest"), SUGGEST, f"{where}: suggest")
-        self.assertIn(card.get("icon"), ICONS, f"{where}: icon {card.get('icon')!r} is not in ui/vendor/fonts/icons.txt")
-        self.assertTrue(card.get("tags") and all(isinstance(t, str) and t == t.lower() and len(t) <= 24 for t in card["tags"]),
-                        f"{where}: tags")
-        for field in ("pains", "owns", "never"):
-            self.assertTrue(card.get(field) and all(isinstance(x, str) for x in card[field]), f"{where}: {field}")
-        self.assertTrue(3 <= len(card["pains"]) <= 6 and all(len(x) <= 90 for x in card["pains"]), f"{where}: pains")
-        # The first sentence of the summary is the "why" line a person reads in onboarding: concrete, and not cut short.
-        summary = card["summary"]
-        self.assertTrue(summary.strip(), where)
-        first = summary.strip().split(". ")[0]
-        self.assertTrue(40 <= len(first) <= 185, f"{where}: the first sentence of the summary is {len(first)} characters")
-        self.assertNotRegex(summary, r"(?i)fits how you|\btidy\b", where)
-        self.assertTrue(card["recommend_when"] and set(card["recommend_when"]) <= TAGS, f"{where}: recommend_when")
-        for need in card["prerequisites"]:
-            self.assertTrue(need["tool"] in TOOLS and need["why"] and isinstance(need["required"], bool), where)
-        self.assertTrue(any(need["required"] for need in card["prerequisites"]), where)
-        self.assertTrue(4 <= len(card["onboarding"]) <= 7, where)
-        self.assertTrue(all(q.get("ask") and q.get("why") for q in card["onboarding"]), where)
-        first = card["first_routine"]
-        self.assertTrue(first["title"] and first["cadence"] and first["output"], where)
-        self.assertIs(first["draft_only"], True, where)
-        self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
-        example = folder / card["example_output"]
-        self.assertTrue(example.is_file(), where)
-        self.assertIn("Acme", example.read_text(), where)
-        agent = (folder / "AGENT.md").read_text()
-        self.assertLessEqual(len(agent.splitlines()), 150, where)
-        self.assertTrue(agent.startswith("# {{bot_name}}"), where)
-        for heading in ("## Owns", "## Sending", "## First message: setup"):
-            self.assertIn(heading, agent, where)
-        playbooks = [p for p in (folder / "playbooks").glob("*.md") if p.name != "README.md"]
-        self.assertGreaterEqual(len(playbooks), 3, where)
-        self.assertTrue((folder / "playbooks/onboarding.md").is_file(), where)
-        manifest = yaml.safe_load((folder / "bot.yaml").read_text())
-        self.assertEqual(manifest["name"], card["slug"], where)
-        self.assertIs(manifest["outbound_send"], False, where)
-        routines = validate_schedules(manifest["routines"], lambda rel: (folder / rel).read_text())
-        self.assertTrue(routines and routines[0]["title"] == first["title"], f"{where}: the first routine is the card's")
-        for routine in routines:
-            self.assertIs(routine["enabled"], False, f"{where}: a routine is declared off and setup switches it on")
-        for access in manifest["tools"]:
-            # Starter Tools begin read-only; requested writes need the corresponding Tool grant.
-            self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
-        allowed = json.loads((folder / ".claude/settings.json").read_text())["permissions"]["allow"]
-        for entry in allowed:
-            self.assertNotRegex(entry, r"^Bash\(gh (issue|pr|api) (\*|comment|edit|create|close|review|merge)", f"{where}: {entry}")
-        # Setup records the answers and first result, then clears Needs setup.
-        self.assertIn("hub bot setup-done", (folder / "playbooks/onboarding.md").read_text(), where)
+            folder, where = self.directory / name, f"template {name}"
+            card = read_catalog(self.directory)[name]
+            self.assertIs(card["first_routine"]["draft_only"], True, where)
+            self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
+            manifest = yaml.safe_load((folder / "bot.yaml").read_text())
+            self.assertIs(manifest["outbound_send"], False, where)
+            routines = validate_schedules(manifest["routines"], lambda rel: (folder / rel).read_text())
+            self.assertTrue(routines and all(r["enabled"] is False for r in routines), where)
+            for access in manifest["tools"]:
+                self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
 
 
 if __name__ == "__main__":

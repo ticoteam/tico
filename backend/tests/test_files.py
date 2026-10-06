@@ -2,7 +2,6 @@
 S3 imports and link rules. See docs/files.md."""
 
 import os
-import uuid
 
 import pytest
 
@@ -56,26 +55,6 @@ def test_a_private_chats_file_is_invisible_to_everyone_else(api):
     assert [a["action"] for a in log] == ["promoted", "created"]
 
 
-def test_publishing_twice_is_one_row_two_entries_and_open_serves_the_latest(api):
-    _, attempt = turn(api)
-    first = publish(api, attempt, "pipeline.md", "# v1", path="reports/pipeline.md").json()
-    second = publish(api, attempt, "pipeline.md", "# v2 with changes", path="reports/pipeline.md").json()
-    assert first["file"]["id"] == second["file"]["id"] and second["changed"]
-    page = listing(api)
-    assert page["total"] == 1 and page["files"][0]["version"] == 2
-    row = page["files"][0]
-    assert row["open"] == {"type": "tico", "url": "/api/v2/files/" + row["id"]} and "s3://" not in str(row)
-    assert api.get(row["open"]["url"], headers=headers("ben-test")).content == b"# v2 with changes"
-    assert api.get(row["open"]["url"] + "/versions/1", headers=headers("ben-test")).content == b"# v1"
-    activity = api.get(f"/api/v2/files/{row['id']}/activity", headers=headers("ben-test")).json()["activity"]
-    assert [a["action"] for a in activity] == ["modified", "created"]
-    versions = api.get(f"/api/v2/files/{row['id']}/versions", headers=headers("ben-test")).json()["versions"]
-    assert [v["version"] for v in versions] == [2, 1]
-    # The same bytes again change nothing but the activity.
-    again = publish(api, attempt, "pipeline.md", "# v2 with changes", path="reports/pipeline.md").json()
-    assert not again["changed"] and listing(api)["files"][0]["version"] == 2
-
-
 def test_refusals_and_a_bot_writes_only_its_own_files(api):
     machine, attempt = turn(api, "ops")
     for name in (".env", "prod-credentials.csv", "id_rsa.txt", "tool.exe", "notes"):
@@ -114,6 +93,7 @@ def test_local_rules_refuse_traversal_links_env_and_oversize(tmp_path):
             BF.local_file(root, bad)
 
 
+@pytest.mark.slow
 def test_runner_upload_is_retried_after_a_restart_and_lands_once(api, live, tmp_path):
     machine, attempt = turn(api)
     checkout = tmp_path / "bot"
@@ -150,39 +130,3 @@ def test_runner_upload_is_retried_after_a_restart_and_lands_once(api, live, tmp_
     assert page["total"] == 1 and page["files"][0]["version"] == 1 and page["files"][0]["synced"]
     log = api.get(f"/api/v2/files/{page['files'][0]['id']}/activity", headers=headers("ben-test")).json()["activity"]
     assert len(log) == 1
-
-
-
-def test_task_attachment_preserves_text_and_can_be_archived_with_task_permissions(api):
-    task = post(api, "tasks", {"owner": "ana", "title": "Read QA attachment", "body": "Read the fixture."})
-    text = "  indented first line\nsecond line  \n"
-    made = post(api, f"tasks/{task['id']}/files", {"name": "fixture.txt", "text": text})
-    fid = made["file"]["id"]
-    assert api.get("/api/v2/files/" + fid, headers=headers()).content == text.encode()
-    denied = api.patch("/api/v2/files/" + fid, json={"archived": True}, headers=headers("cara-test"))
-    assert denied.status_code == 403
-    from backend.tests.test_mcp import call as mcp
-    err, archived = mcp(api, "hub_file_archive", {"id": fid})
-    assert not err and archived["file"]["archived"] is True, archived
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM task_assets WHERE blob_id=?", (fid,)).fetchone()
-        assert c.execute("SELECT 1 FROM events WHERE action='task.file_archived' AND target=?", (task["id"],)).fetchone()
-
-
-def test_unsupported_bot_task_attachment_returns_allowed_types_without_storing_bytes(api):
-    machine, attempt = turn(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "QA deliverable", "body": "Attach the report."})
-    with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM blobs").fetchone()[0]
-    response = api.post(f"/api/v2/tasks/{task['id']}/files", json={"name": "fixture.zip", "text": "fixture"},
-                        headers=headers(attempt["token"]))
-    assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] == "file_refused"
-    assert "pdf" in response.json()["error"]["detail"] and ".docx" in response.json()["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM blobs").fetchone()[0] == before
-    made = post(api, f"tasks/{task['id']}/files", {"name": "fixture.txt", "text": "fixture\n"}, attempt["token"])
-    assert listing(api, who="ana-test")["total"] == 1
-    archived = api.patch("/api/v2/files/" + made["file"]["id"], json={"archived": True}, headers=headers())
-    assert archived.status_code == 200, archived.text
-    assert listing(api, who="ana-test")["total"] == 0

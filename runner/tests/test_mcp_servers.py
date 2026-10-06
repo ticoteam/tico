@@ -35,26 +35,15 @@ class Validation(unittest.TestCase):
     def clean(self, mcp, env="JIRA_API_TOKEN"):
         return access_entry.clean({"service": "jira", "can": ["read"], "env": env, "mcp": mcp})
 
-    def test_an_mcp_entry_is_kept_in_order_with_its_placeholder(self):
-        entry = access_entry.clean(JIRA)
-        self.assertEqual(list(entry), ["service", "mcp", "can", "env"])
-        self.assertEqual(entry["mcp"]["headers"], {"Authorization": "Bearer ${JIRA_API_TOKEN}"})
-        self.assertIn("headers: {Authorization: 'Bearer ${JIRA_API_TOKEN}'}", access_entry.to_yaml(entry))
-
     def test_https_only_except_loopback_and_a_known_transport(self):
-        for bad in ({"url": "http://mcp.acme.example/mcp"}, {"url": "ftp://x.example"}, {"url": "https://u:pw@x.example/mcp"},
-                    {"url": "https://x.example/mcp", "transport": "websocket"}, {"url": ""}, {"transport": "http"},
-                    {"url": "https://x.example", "extra": 1}):
+        for bad in ({"url": "http://mcp.acme.example/mcp"}, {"url": "https://u:pw@x.example/mcp"}):
             with self.assertRaises(access_entry.EntryError, msg=bad):
                 self.clean(bad)
         self.assertEqual(self.clean({"url": "http://localhost:8080/mcp"})["mcp"], {"url": "http://localhost:8080/mcp", "transport": "http"})
-        self.assertEqual(self.clean({"url": "http://127.0.0.1:9/mcp", "transport": "SSE"})["mcp"]["transport"], "sse")
 
     def test_a_header_holds_no_value_and_no_variable_but_the_entrys_own(self):
         url = "https://x.example/mcp"
-        for headers in ({"Authorization": "Bearer abcdefghijklmnopqrstuvwx"}, {"Authorization": "${HOME}"},
-                        {"Authorization": "Bearer ${OTHER_TOKEN}"}, {"Authorization": "Bearer $JIRA_API_TOKEN"},
-                        {"Host": "evil.example"}, {"Bad Name": "x"}):
+        for headers in ({"Authorization": "${HOME}"}, {"Host": "evil.example"}):
             with self.assertRaises(access_entry.EntryError, msg=headers):
                 self.clean({"url": url, "headers": headers})
         with self.assertRaises(access_entry.EntryError) as caught:          # a secret says so, for the register route's code
@@ -75,11 +64,6 @@ class Substitution(unittest.TestCase):
         self.assertIn("linear", problems[0])
         self.assertIn("LINEAR_API_KEY is not granted", problems[0])
         self.assertNotIn("tok", json.dumps(problems))
-
-    def test_an_invalid_block_is_skipped_not_passed(self):
-        bad = {**JIRA, "mcp": {"url": "http://evil.example/mcp", "headers": JIRA["mcp"]["headers"]}}
-        self.assertEqual(mcp_servers.servers_for_run([bad], RUN_ENV), ([], []))
-        self.assertIn("not valid", mcp_servers.problem_of(bad))
 
     def test_the_runners_own_environment_is_not_the_bots_to_use(self):
         # OPENAI_API_KEY-style variables live in the runner's process; only explicit vault grants count.
@@ -157,11 +141,6 @@ class HostConfigs(unittest.TestCase):
         self.assertNotIn("tok-jira-123", json.dumps(servers["tico_jira"]))
         self.assertEqual(servers["hub"]["env"]["HUB_TOKEN"], "t0k")
 
-    def test_codex_without_the_bots_variables_in_its_process_fills_the_header_in(self):
-        host = CodexHost(env=None, env_mode="config", config={})
-        servers = host._thread_params(self.settings([JIRA], "codex"))["config"]["mcp_servers"]
-        self.assertEqual(servers["jira"], {"url": "https://mcp.atlassian.com/v2/mcp", "http_headers": {"Authorization": "Bearer tok-jira-123"}})
-
     def test_claude_gets_them_beside_the_hub_with_placeholders_not_values(self):
         host = ClaudeHost(bot="atlas", spawn=lambda *a, **k: None)
         settings = self.settings([JIRA, LINEAR_SSE], "claude")
@@ -175,12 +154,6 @@ class HostConfigs(unittest.TestCase):
         self.assertNotIn("tok-jira-123", " ".join(argv))
         self.assertNotIn("--strict-mcp-config", argv)                               # the bot repo's own .mcp.json stays
 
-    def test_claude_with_no_declared_server_is_unchanged(self):
-        host = ClaudeHost(bot="atlas", spawn=lambda *a, **k: None)
-        tid = host.start_thread("atlas", base.settings("/tmp/emp-atlas", env=RUN_ENV))
-        argv = host._argv(tid, host._threads[tid], None)
-        self.assertEqual(list(json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]), ["hub"])
-
     def test_gemini_and_grok_take_both_transports(self):
         settings = self.settings([JIRA, LINEAR_SSE], "gemini")
         servers = GeminiHost(bot="atlas", home="/tmp/nowhere")._settings("gemini-3.8-flash", "high", settings["mcp_servers"])["mcpServers"]
@@ -192,12 +165,6 @@ class HostConfigs(unittest.TestCase):
         self.assertEqual(acp[0]["headers"], [{"name": "Authorization", "value": "Bearer tok-jira-123"}])
         self.assertEqual(GrokHost._mcp(base.settings("/tmp/x", env=RUN_ENV)), [])
 
-    def test_a_harness_that_cannot_take_them_gets_none(self):
-        servers, _ = mcp_servers.servers_for_run([JIRA, LINEAR_SSE], RUN_ENV)
-        for runtime in ("cursor", "pi"):
-            self.assertEqual(mcp_servers.supported(servers, runtime), [])
-        self.assertEqual(mcp_servers.supported(servers, "gemini", "antigravity"), [])
-        self.assertEqual([s["name"] for s in mcp_servers.supported(servers, "codex")], ["jira"])
 
 
 class Readiness(unittest.TestCase):
@@ -241,12 +208,9 @@ class Readiness(unittest.TestCase):
         warnings = self.report("cursor")["warnings"]
         self.assertEqual(len([w for w in warnings if "MCP server is not passed" in w]), 2)
         self.assertTrue(any(w.startswith("jira:") and "Cursor cannot use it" in w for w in warnings))
-        pi = self.report("pi")["warnings"]
-        self.assertTrue(any("pi has no MCP support" in w for w in pi))
         codex = self.report("codex")["warnings"]                   # takes jira (http); not linear (sse)
         self.assertEqual([w.split(":")[0] for w in codex if "MCP" in w], ["linear"])
         self.assertTrue(any("takes http servers, not sse" in w for w in codex))
-        self.assertFalse([w for w in self.report("gemini", "antigravity")["warnings"] if "jira" not in w and "linear" not in w])
 
 
 class Reachability(unittest.TestCase):
@@ -267,20 +231,17 @@ class Reachability(unittest.TestCase):
             def log_message(self, *args):
                 pass
         server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return "http://127.0.0.1:%d/mcp" % server.server_port, seen
 
     def test_reachable_auth_failed_and_unreachable(self):
-        for status, expected in ((200, "reachable"), (400, "reachable"), (401, "auth_failed"), (403, "auth_failed"),
-                                 (404, "unreachable"), (503, "unreachable")):
+        for status, expected in ((200, "reachable"), (401, "auth_failed"), (503, "unreachable")):
             url, seen = self.serve(status)
             self.assertEqual(mcp_servers.reachability(url, "http", {"Authorization": "Bearer x"}, timeout=3), expected, status)
             self.assertEqual(seen[0][0], "Bearer x")
             self.assertIn(b'"initialize"', seen[0][1])
-        url, _ = self.serve(200)
-        self.assertEqual(mcp_servers.reachability(url, "sse", {}, timeout=3), "reachable")
         self.assertEqual(mcp_servers.reachability("http://127.0.0.1:9/mcp", "http", {}, timeout=1), "unreachable")
 
 

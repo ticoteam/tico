@@ -6,7 +6,6 @@ Zoom Meetings API, Google Meet REST v2). Nothing here touches a network, and no 
 
 import base64
 import json
-import threading
 import urllib.error
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -363,10 +362,4 @@ def test_service_runs_only_available_importers_and_ignores_retired_old_server_as
     service.due.clear()
     assert service.tick() == {}
 
-
-def test_retired_explicit_importer_is_not_run_even_with_an_old_configuration(tmp_path):
-    hub = Hub()
-    service = ImporterService({"projects_dir": str(tmp_path), "url": "https://hub.test", "token": "t"}, tmp_path / "s",
-                              client=hub, only="fireflies", classes=lambda source: pytest.fail("retired importer started"))
-    assert service.tick() == {} and not hub.statuses
 

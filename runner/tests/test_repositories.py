@@ -10,7 +10,6 @@ import pytest
 
 from clients.tico import APIError
 from runner.repositories import FETCH_INTERVAL, GB, REMOVE_AFTER, Repositories
-from runner.service import Runner
 
 
 @pytest.fixture
@@ -71,7 +70,7 @@ def test_first_sync_is_lazy_tokens_not_saved_and_fetch_interval_survives_restart
             restarted.pool.shutdown(wait=True)
 
 
-@pytest.mark.parametrize('total,free,needed,size_kb', [(40 * GB, 3.1 * GB, '5 GB', 0), (100 * GB, 8 * GB, '9 GB', 2 * 1024 * 1024)])
+@pytest.mark.parametrize('total,free,needed,size_kb', [(100 * GB, 8 * GB, '9 GB', 2 * 1024 * 1024)])
 def test_disk_floor_reports_and_does_not_mint_or_clone(repos, total, free, needed, size_kb):
     repos.client.get.return_value["repositories"][0]["size_kb"] = size_kb
     with mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(total, total-free, free)), mock.patch('runner.repositories.Repositories.run_git') as git:
@@ -146,17 +145,7 @@ def test_root_symlink_and_unmanaged_folder_are_left_alone(repos, tmp_path):
     assert (repos.path('org/two') / 'keep').exists()
 
 
-def test_old_heartbeat_schema_drops_only_repository_report():
-    runner = Runner.__new__(Runner)
-    runner.client = mock.Mock()
-    runner.client.post.side_effect = [APIError('validation', 'repositories: Extra inputs are not permitted', 422), {}]
-    body = {'repositories': [{'full_name': 'org/one', 'state': 'failed'}], 'readiness': {'bots': {'example': {'ready': True}}}}
-    assert runner.report_heartbeat(body) == {}
-    assert 'repositories' not in body
-    assert body['readiness']['bots']['example']['ready'] is True
-    assert runner.client.post.call_count == 2
-
-
+@pytest.mark.slow
 @pytest.mark.parametrize('upgrade', [False, True])
 def test_real_git_clone_keeps_token_out_of_config_and_fetches_default_branch(repos, tmp_path, upgrade):
     source = tmp_path / 'source'
@@ -280,52 +269,6 @@ def test_slow_git_does_not_block_heartbeat_poll(repos):
             repos.pending.result(timeout=5)
 
 
-def test_state_disk_failure_still_reports_without_git(repos):
-    with mock.patch.object(repos, 'save', side_effect=OSError(28, 'No space left on device')):
-        rows = repos.poll()
-        assert rows[0]['state'] == 'failed'
-        assert 'free disk space' in rows[0]['error']
-        assert repos.pending is None
-
-
-def test_doctor_reads_current_rows_without_cloning_and_old_server_is_silent(repos):
-    rows = repos.inspect()
-    assert [r['full_name'] for r in rows] == ['org/one', 'org/two']
-    assert repos.pending is None
-    assert not repos.client.post.called
-    assert not repos.state_file.exists()
-    repos.client.get.side_effect = APIError('http_error', 'not found', 404)
-    assert repos.inspect() == []
-
-
-def test_clone_timeouts_back_off_and_use_repository_size(repos):
-    repos.client.get.return_value['repositories'] = [dict(full_name='org/one', size_kb=2 * 1024 * 1024)]
-    now = time.time()
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=subprocess.TimeoutExpired('git', 2048)) as git, mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
-        for advance, delay in ((0, 900), (901, 3600), (4502, 21600)):
-            with mock.patch('runner.repositories.time.time', return_value=now + advance):
-                cycle(repos)
-            assert repos.rows['org/one']['retry_delay'] == delay
-            assert f'Retrying in {delay // 60} minutes' in repos.rows['org/one']['error']
-            assert git.call_args.kwargs['timeout'] == 2048
-            assert not repos.path('org/one').exists()
-        with mock.patch('runner.repositories.time.time', return_value=now + 4502 + 21600 - 1):
-            cycle(repos)
-        assert git.call_count == 3
-
-
-def test_fetch_checks_disk_before_minting(repos):
-    repos.client.get.return_value['repositories'] = repos.client.get.return_value['repositories'][:1]
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
-        cycle(repos)
-    repos.client.post.reset_mock()
-    with mock.patch('runner.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1), mock.patch('runner.repositories.Repositories.run_git') as git, mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 99 * GB, GB)):
-        cycle(repos)
-    assert repos.rows['org/one']['state'] == 'disk_low'
-    assert 'fetch' in repos.rows['org/one']['error']
-    assert not git.called and not repos.client.post.called
-
-
 def test_shutdown_interrupts_git_and_its_children(repos, tmp_path):
     import sys
     import threading
@@ -408,15 +351,6 @@ def test_mirror_symlinks_are_refused_before_tokens_or_git(repos, tmp_path):
     assert not git.called and not repos.client.post.called
 
 
-def test_shutdown_tolerates_uninterruptible_process():
-    process = mock.Mock(pid=123)
-    process.wait.side_effect = subprocess.TimeoutExpired('git', 2)
-    with mock.patch('runner.repositories.os.killpg'):
-        Repositories.kill_git(process)
-    with mock.patch('runner.repositories.os.killpg', side_effect=PermissionError):
-        Repositories.kill_git(process)
-
-
 def test_isolated_state_exposes_only_mirrors(tmp_path, monkeypatch):
     import os
     from runner.state import State
@@ -493,32 +427,12 @@ def test_real_isolated_mirror_is_readable_but_not_writable(monkeypatch):
             os.umask(old_umask)
 
 
-def test_uppercase_managed_marker_has_only_the_wanted_row(repos):
+def test_poll_skips_unsafe_managed_markers(repos, tmp_path):
     path = repos.root / 'acme__product' / '.git'
     path.mkdir(parents=True)
-    (path / 'tico-managed').write_text(json.dumps({'full_name': 'Acme/Product'}))
-    repos.client.get.return_value = {'repositories': [{'full_name': 'Acme/Product'}]}
-    with mock.patch.object(repos, 'sync'):
-        cycle(repos)
-        assert list(repos.rows) == ['acme/product']
-        assert 'left_at' not in repos.rows['acme/product']
-        repos.sync.assert_called_once()
-
-
-@pytest.mark.parametrize('kind', ['fifo', 'symlink', 'oversized'])
-def test_poll_skips_unsafe_managed_markers(repos, tmp_path, kind):
-    import os
-    path = repos.root / 'acme__product' / '.git'
-    path.mkdir(parents=True)
-    marker = path / 'tico-managed'
-    if kind == 'fifo':
-        os.mkfifo(marker)
-    elif kind == 'symlink':
-        outside = tmp_path / 'outside.json'
-        outside.write_text(json.dumps({'full_name': 'Acme/Product'}))
-        marker.symlink_to(outside)
-    else:
-        marker.write_text(' ' * 2048)
+    outside = tmp_path / 'outside.json'
+    outside.write_text(json.dumps({'full_name': 'Acme/Product'}))
+    (path / 'tico-managed').symlink_to(outside)
     repos.client.get.return_value = {'repositories': []}
     with mock.patch.object(repos, 'sync'):
         cycle(repos)

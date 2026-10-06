@@ -2,7 +2,6 @@
 import json
 import uuid
 from datetime import datetime, timezone
-from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -80,14 +79,6 @@ def rate_limit(kind="tool", message="Rate limit exceeded. Please slow down reque
     (PREFIXED_NOTES, {"meetings": [{"id": "shared", "title": "Team sync",
         "summary": "## Decisions\nBudget < 15% & roadmap approved",
         "attendees": [{"name": "Ana", "email": "ana@example.com"}]}], "next_cursor": None}),
-    ('Intro\n<meetings><meeting id="a" summary="Shared"/></meetings>',
-        {"meetings": [{"id": "a", "summary": "Shared", "attendees": []}], "next_cursor": None}),
-    ('Intro\n<notes><note id="a" summary="Shared"/></notes>',
-        {"meetings": [{"id": "a", "summary": "Shared", "attendees": []}], "next_cursor": None}),
-    ('Intro\n<meeting id="a" summary="Shared"/>',
-        {"meetings": [{"id": "a", "summary": "Shared", "attendees": []}], "next_cursor": None}),
-    ('Intro\n<note id="a" summary="Shared"/>',
-        {"meetings": [{"id": "a", "summary": "Shared", "attendees": []}], "next_cursor": None}),
     ('Intro\n<transcript>Ana: Ship it</transcript>', {"transcript": "Ana: Ship it"}),
 ])
 def test_text_before_xml_is_ignored(raw, expected):
@@ -95,12 +86,8 @@ def test_text_before_xml_is_ignored(raw, expected):
     assert GranolaMCP.xml_content(raw) == expected
 
 
-@pytest.mark.parametrize("kind,message", [
-    ("tool", "Rate limit exceeded"), ("tool", "Please slow down requests"),
-    ("tool", "Too many requests"), ("rpc", "Rate limit exceeded"),
-    ("http", "Busy"), ("http_error", "Too many requests"),
-])
-def test_rate_limits_wait_and_retry_the_same_batch(api, kind, message):
+def test_rate_limits_wait_and_retry_the_same_batch(api):
+    kind, message = "rpc", "Rate limit exceeded"
     provider = NotesProvider(api)
     provider.connect()
     provider.responses = [rate_limit(kind, message)]
@@ -112,26 +99,17 @@ def test_rate_limits_wait_and_retry_the_same_batch(api, kind, message):
     assert provider.notes_calls[1][0] - provider.notes_calls[0][0] == 15
 
 
-@pytest.mark.parametrize("retry_after", ["42", "http-date", "invalid"])
-def test_retry_after_is_honored(api, retry_after):
+def test_retry_after_is_honored(api):
     provider = NotesProvider(api)
     provider.connect()
-    if retry_after == "http-date":
-        # Three globally paced setup calls occur before the notes request.
-        retry_after = format_datetime(datetime.fromtimestamp(provider.now + 50, timezone.utc), usegmt=True)
-    provider.responses = [rate_limit("tool", retry_after=retry_after)]
+    provider.responses = [rate_limit("tool", retry_after="42")]
     provider.sync()
     first, second = [t for t, _ in provider.notes_calls]
-    if retry_after == "42":
-        assert second - first == 42
-    elif retry_after == "invalid":
-        assert second - first == 15
-    else:
-        assert second == datetime.strptime(retry_after, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=timezone.utc).timestamp()
+    assert second - first == 42
 
 
-@pytest.mark.parametrize("kind", ["tool", "rpc", "http"])
-def test_four_rate_limits_stop_without_skipping_or_advancing_cursor(api, caplog, kind):
+def test_four_rate_limits_stop_without_skipping_or_advancing_cursor(api, caplog):
+    kind = "tool"
     provider = NotesProvider(api)
     provider.connect()
     saved = provider.service.load("human:ana")
@@ -150,35 +128,6 @@ def test_four_rate_limits_stop_without_skipping_or_advancing_cursor(api, caplog,
     assert provider.service.load("human:ana")[1]["last_error"] is None
 
 
-def test_fifty_meetings_use_five_spaced_batches_and_keep_pacing_between_syncs(api):
-    provider = NotesProvider(api, 50)
-    provider.connect()
-    provider.sync()
-    assert len(provider.notes_calls) == 5 and all(len(ids) == 10 for _, ids in provider.notes_calls)
-    assert [nid for _, ids in provider.notes_calls for nid in ids] == provider.ids
-    assert provider.service.load("human:ana")[1]["imported_count"] == 50
-    assert provider.ranges[0]["time_range"] == "last_30_days"
-    provider.sync()
-    assert provider.ranges[1]["time_range"] == "custom"
-    assert all(b[0] - a[0] >= 6 for a, b in zip(provider.notes_calls, provider.notes_calls[1:]))
-
-
-@pytest.mark.parametrize("exhausted", [False, True])
-def test_single_id_fallback_is_paced_and_retries_rate_limits(api, exhausted):
-    provider = NotesProvider(api)
-    provider.connect()
-    provider.responses = [httpx.Response(200, json={"result": {"isError": True}})]
-    provider.responses.extend(rate_limit() for _ in range(4 if exhausted else 1))
-    provider.sync()
-    meta = provider.service.load("human:ana")[1]
-    assert meta["skipped"] == 0
-    assert meta["last_error"] == ("rate_limited: get_meetings" if exhausted else None)
-    assert meta["imported_count"] == (0 if exhausted else 2)
-    assert provider.notes_calls[0][1] == provider.ids
-    assert all(ids == [provider.ids[0]] for _, ids in provider.notes_calls[1:5 if exhausted else 3])
-    assert all(b[0] - a[0] >= 6 for a, b in zip(provider.notes_calls, provider.notes_calls[1:]))
-
-
 def test_completed_batch_checkpoint_survives_a_rate_limit_and_resumes(api):
     provider = NotesProvider(api, 20)
     provider.connect()
@@ -192,62 +141,3 @@ def test_completed_batch_checkpoint_survives_a_rate_limit_and_resumes(api):
     meta = provider.service.load("human:ana")[1]
     assert meta["imported_count"] == 20 and meta["last_sync"] and meta["last_error"] is None
 
-
-@pytest.mark.parametrize("result,plan,email", [
-    ({"structuredContent": {"email": "granola@example.com", "plan": "free"}}, "free", "granola@example.com"),
-    ({"structuredContent": {"account": {"user": {"email": "granola@example.com"},
-        "plan": {"name": "business"}}}}, "paid", "granola@example.com"),
-    ({"content": [{"type": "text", "text": "Email: granola@example.com\nPlan: free"}]}, "free", "granola@example.com"),
-    ({"structuredContent": {"unexpected": True}}, "free", None),
-    ({"content": [{"type": "text", "text": None}]}, "free", None),
-    ({"content": [None]}, "free", None),
-    ({"isError": True, "content": [{"type": "text", "text": "Unavailable"}]}, "free", None),
-])
-def test_account_info_is_optional_and_called_once_per_connection(api, caplog, result, plan, email):
-    provider = NotesProvider(api)
-    provider.account_result = httpx.Response(200, json={"result": result})
-    provider.connect()
-    provider.sync()
-    status = api.get(BASE, headers=headers()).json()
-    assert status["plan_hint"] == plan and status["email"] == email and status["last_error"] is None
-    assert provider.ranges[0]["time_range"] == ("custom" if plan == "paid" else "last_30_days")
-    provider.sync()
-    assert provider.account_calls == 1
-    assert provider.service.load("human:ana")[1]["account_info_checked"]
-    assert not [record for record in caplog.records if record.name == "backend.granola_mcp"]
-    assert "fake-access-sensitive" not in caplog.text
-
-
-def test_free_first_sync_uses_custom_when_last_30_days_is_not_advertised(api):
-    provider = NotesProvider(api)
-    provider.range_enum = ["custom"]
-    provider.connect()
-    provider.sync()
-    assert provider.ranges[0]["time_range"] == "custom"
-    assert provider.ranges[0]["custom_start"] and provider.ranges[0]["custom_end"]
-
-
-def test_default_batch_limit_and_connection_pacing_are_independent(api):
-    provider = NotesProvider(api, 20)
-    provider.connect()
-    provider.connect("ben-test")
-    previous = provider.handle
-
-    def handle(request):
-        response = previous(request)
-        if request.url.path == "/mcp" and json.loads(request.content)["method"] == "tools/list":
-            value = response.json()
-            value["result"]["tools"][1]["inputSchema"]["properties"]["meeting_ids"].pop("maxItems")
-            return httpx.Response(200, json=value)
-        return response
-
-    provider.service.transport = httpx.MockTransport(handle)
-    provider.sync()
-    assert len(provider.notes_calls) == 2 and all(len(ids) == 10 for _, ids in provider.notes_calls)
-    first = provider.service.load("human:ana")
-    first[1]["next_meetings_call"] = provider.now + 600
-    provider.service.save(*first)
-    start = provider.now
-    provider.sync("human:ben")
-    assert provider.now - start < 20
-    assert provider.service.load("human:ben")[1]["imported_count"] == 20

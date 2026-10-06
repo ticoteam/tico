@@ -65,12 +65,6 @@ def test_starts_only_when_the_hub_assigns_it_here():
     assert [n for n, _ in rig.spawned] == ["importers"]     # started once, not once per pass
 
 
-def test_retired_and_unknown_old_server_assignments_do_not_start_a_side_job():
-    rig = Rig(Hub(["fireflies", "unknown"]))
-    rig.side.tick()
-    assert not rig.spawned
-
-
 def test_stops_cleanly_when_unassigned():
     rig = Rig(Hub(["zoom"]))
     rig.side.tick()

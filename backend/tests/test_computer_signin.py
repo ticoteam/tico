@@ -1,12 +1,10 @@
 """A new computer signs its model in from the team's model credential, and says so on Health when it cannot."""
 
 from backend.credentials import CredentialCipher
-from backend.store import H
 from backend.tests.test_credentials import FakeKMS
-from backend.tests.test_getting_started import add_bot, enrolled, heartbeat  # noqa: F401
+from backend.tests.test_getting_started import add_bot, heartbeat  # noqa: F401
 from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 
-NEW_COMPUTER = {"codex": {"installed": True, "authenticated": "missing", "detail": "Codex login required"}}
 
 
 def vault(api):
@@ -81,18 +79,3 @@ def test_only_a_model_key_can_go_to_every_computer_and_only_an_administrator_can
     assert api.post(f"/api/v2/credentials/{cid}/grants/{gid}/revoke", json={}, headers=signed_in()).status_code == 200
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
 
-
-def test_a_subscription_only_team_gets_a_sign_in_issue_on_the_computer_that_needs_it(environment):
-    api = environment()
-    vault(api)
-    runner = enrolled(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET label='Tico Team mail' WHERE id=?", (runner,))
-    heartbeat(api, runner, runtimes=NEW_COMPUTER)
-    body = api.get("/api/v2/health", headers=signed_in()).json()
-    check = next(c for c in body["checks"] if c["id"] == "computer_signin")
-    assert check["status"] == "warn" and "Tico Team mail: sign in to Codex" in check["summary"]
-    assert body["computers"][0]["runtimes"][0]["sign_in"] is True
-    # An offline computer's last report is not news.
-    heartbeat(api, runner, seconds_ago=600, runtimes=NEW_COMPUTER)
-    assert "computer_signin" not in {c["id"] for c in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}

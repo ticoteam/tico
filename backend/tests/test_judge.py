@@ -5,7 +5,6 @@ import json
 from backend import judge as B
 from backend.tests.test_api import api, get, headers, post, setup_attempt   # noqa: F401
 from backend.tests.test_mcp import call
-from clients import judge as J
 
 QUESTIONS = {
     "bucket": {"type": "choice", "instructions": "Where does it go?",
@@ -58,7 +57,6 @@ def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(
     err, out = call(api, "hub_decision_ask", {"state": state, "questions": QUESTIONS}, token=attempt["token"])
     assert not err and out["answers"]["is_ask"]["noul"] == 0.9
     assert events(api, "bot:ops")[0][0] == ""
-
 
 
 def test_rehearsal_decisions_never_reach_a_configured_or_fallback_provider(api, monkeypatch):

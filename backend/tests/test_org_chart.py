@@ -91,32 +91,3 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
     post(api, "bots/ops/definition", body("ops", reports_to="coo", on_behalf_of=mid), token=botops["token"], expected=403)
-
-
-
-def test_slack_task_notification_preference_is_default_on_and_editable_via_api_and_mcp(api):
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call
-    from backend import people as P
-
-    view = get(api, 'org')
-    assert all(p['notify_slack_task_done'] for p in view['people'])
-    changed = post(api, 'humans/ben', {'notify_slack_task_done': False}, token='ben-test')
-    assert changed['notify_slack_task_done'] is False
-    with api.app.state.store.read() as c:
-        doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-    assert P.person('ben', P.load(doc))['notify_slack_task_done'] is False
-    post(api, 'humans/ana', {'notify_slack_task_done': False}, token='cara-test', expected=403)
-    err, changed = call(api, 'hub_api', {'method': 'POST', 'path': 'humans/ben',
-                                      'body': {'notify_slack_task_done': True}}, token='ben-test')
-    assert not err and changed['notify_slack_task_done'] is True
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
-                  (encode({'name': 'botops', 'runtime': 'fake', 'status': 'active'}),))
-    ask = post(api, 'chat/botops', {'text': 'Turn off my task results in Slack'}, token='ben-test')
-    mid = ask.get('message', ask)['id']
-    _, _, botops = setup_attempt(api, 'botops')
-    changed = post(api, 'humans/ben', {'notify_slack_task_done': False, 'on_behalf_of': mid}, token=botops['token'])
-    assert changed['notify_slack_task_done'] is False
-    post(api, 'humans/ana', {'notify_slack_task_done': False, 'on_behalf_of': mid}, token=botops['token'], expected=403)

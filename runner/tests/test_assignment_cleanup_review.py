@@ -9,7 +9,7 @@ from runner.service import Runner
 from runner.tests.test_shared_bots import COPY, git
 
 
-@pytest.mark.parametrize("stash_tree", ["product", "learning"])
+@pytest.mark.parametrize("stash_tree", ["product", pytest.param("learning", marks=pytest.mark.slow)])
 def test_cleanup_preserves_stashed_assignment_work(stash_tree):
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
@@ -51,6 +51,7 @@ def test_cleanup_preserves_stashed_assignment_work(stash_tree):
         assert "Stashed work must survive" in git(tree, "show", "refs/stash:AGENT.md").stdout
 
 
+@pytest.mark.slow
 def test_deleted_remote_branch_is_not_proof_of_preserved_assignment_commits():
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)

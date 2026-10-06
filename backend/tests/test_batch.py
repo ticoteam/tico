@@ -3,10 +3,7 @@ the assistant's per-item report opening the next batch. backend/batch.py."""
 
 import json
 
-from backend import batch
-from backend import hubdb as H
-from backend.store import Problem
-from backend.tests.test_api import api, get, post, setup_attempt
+from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 
 
 def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
@@ -94,73 +91,3 @@ def test_a_batch_belongs_to_a_person_and_a_failed_item_does_not_stop_the_commit(
     assert done["committed"] and len(done["errors"]) == 1 and "already declined" in done["errors"][0]
     assert get(api, "batch")["batch"] is None
 
-
-def walk(api, b):
-    """Every item key of a batch, in order, leaving the cursor at the end."""
-    keys = [b["item"]["key"]] if b.get("item") else []
-    while not b.get("end"):
-        b = post(api, f"batch/{b['id']}/next", {})
-        if b.get("item"):
-            keys.append(b["item"]["key"])
-    return keys
-
-
-
-def test_a_bot_task_waiting_on_a_person_needs_that_person_until_they_act(api):
-    """A bot's own task set waiting on Ana (`--on`) is one item in her Needs you and batch, its title
-    and waiting note, and counts toward the bot's needs_human. Her "done" goes back on the task, wakes
-    the bot and takes the item off her list; the task's status stays the bot's."""
-    _, _, attempt = setup_attempt(api, "finance")
-    token = attempt["token"]
-    with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "finance", state="idle")
-    task = post(api, "tasks", {"title": "Roll out v2 to the staging host", "body": "Ship it", "owner": "finance"},
-                token=token)
-    move = {"version": task["version"], "status": "waiting"}
-    for body, why in ((move, "nobody will answer"), ({**move, "waiting_on": "finance"}, "not a person"),
-                      ({"version": task["version"], "waiting_on": "ana"}, "set --status waiting")):
-        assert why in str(post(api, f"tasks/{task['id']}", body, token=token, expected=422)), body
-    note = "Grant me SSH access to the staging host"
-    task = post(api, f"tasks/{task['id']}", {**move, "waiting_on": "ana", "note": note}, token=token)
-    assert (task["status"], task["waiting_on"]) == ("waiting", "human:ana")
-    assert get(api, "status?bot=finance")["status"]["needs_human"] == 1
-
-    need = next(it for it in get(api, "needs-you")["items"] if it["id"] == task["id"])
-    assert need["kind"] == "waiting"
-    b = post(api, "batch", {"bot": "finance"})
-    item = b["item"]
-    assert (item["key"], item["kind"], item["from"], item["title"], item["note"]) == (
-        "task:" + task["id"], "waiting", "bot:finance", "Roll out v2 to the staging host", note)
-    post(api, f"batch/{b['id']}/respond", {"kind": "decide", "decision": "approve", "text": "ok"}, expected=422)
-    post(api, f"batch/{b['id']}/respond", {"kind": "decide", "decision": "done", "text": "Added your key"})
-    done = post(api, f"batch/{b['id']}/commit", {})
-    assert done["errors"] == [] and done["applied"][0].startswith("Told finance")
-
-    task = get(api, f"tasks/{task['id']}")["task"]
-    assert (task["status"], task["waiting_on"]) == ("waiting", None)
-    assert get(api, "status?bot=finance")["status"]["needs_human"] == 0
-    assert all(it["id"] != task["id"] for it in get(api, "needs-you")["items"])
-    with api.app.state.store.read() as c:
-        told = c.execute("SELECT 1 FROM messages WHERE from_actor='human:ana' AND to_actor='bot:finance' "
-                         "AND body='Added your key'").fetchone()
-    assert told, "her answer is on the task, to the bot"
-    # Any other move clears who it waits on.
-    post(api, f"tasks/{task['id']}", {"version": task["version"], "waiting_on": "ana"}, token=token)
-    task = get(api, f"tasks/{task['id']}")["task"]
-    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"}, token=token)
-    assert task["waiting_on"] is None
-    # A deleted task stops counting; restored, it counts again.
-    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "waiting", "waiting_on": "ana",
-                                             "note": note}, token=token)
-
-    def stored():
-        with api.app.state.store.read() as c:
-            return c.execute("SELECT needs_human FROM bot_status WHERE bot='finance'").fetchone()[0]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("DELETE FROM task_delegations")
-    assert stored() == 1
-    post(api, f"tasks/{task['id']}/delete", {})
-    assert stored() == 0
-    post(api, f"tasks/{task['id']}/restore", {})
-    assert stored() == 1

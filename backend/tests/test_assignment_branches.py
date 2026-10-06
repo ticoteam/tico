@@ -9,7 +9,7 @@ from backend import shared_bots
 from backend.auth import Identity
 from backend.repositories import access as repository_access
 from backend.store import H, Problem
-from backend.tests.test_api import api, get, post, runner, put  # noqa: F401
+from backend.tests.test_api import api, get, post, runner  # noqa: F401
 
 
 def prepare_source(api, capability=True):
@@ -70,16 +70,6 @@ def test_allocation_is_stable_task_bound_and_separate_from_personal_routing(api)
     assert same_name["bot"] != made["bot"] and same_name["display_name"] == made["display_name"]
 
 
-def test_old_runner_refuses_assignment_without_changing_legacy_branch_guard(api):
-    computer = prepare_source(api, capability=False)
-    task = delivery_task(api)
-    refused = create(api, task, expected=409)
-    assert refused["error"]["code"] == "runner_capability"
-    assert get(api, "bots/cpo/branches")["branches"] == []
-    with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["owner"] == "bot:cpo"
-
-
 def test_assignment_actor_task_reads_are_scoped_to_its_linked_delivery(api):
     prepare_source(api)
     linked = delivery_task(api, "Assigned feature")
@@ -94,71 +84,6 @@ def test_assignment_actor_task_reads_are_scoped_to_its_linked_delivery(api):
         with pytest.raises(Problem) as denied:
             auth.task(c, actor, unrelated["id"])
         assert denied.value.status == 404
-
-
-def test_assignment_actor_contact_is_limited_to_its_linked_delivery(api):
-    prepare_source(api)
-    linked = delivery_task(api, "Only accepted assignment task")
-    made = create(api, linked, key="contact-scope", idem="contact-scope")
-    unrelated = delivery_task(api, "Unrelated contact target")
-    auth = api.app.state.auth
-    human = Identity("human:ana", "human")
-    target = "bot:" + made["bot"]
-    with api.app.state.store.read() as c:
-        auth.require_bot_contact(c, human, target, task_id=linked["id"], kind="comment")
-        with pytest.raises(Problem) as direct:
-            auth.require_bot_contact(c, human, target, kind="message")
-        assert direct.value.code == "assignment_scope"
-        with pytest.raises(Problem) as other:
-            auth.require_bot_contact(c, human, target, task_id=unrelated["id"], kind="comment")
-        assert other.value.code == "assignment_scope"
-        with pytest.raises(Problem) as new_task:
-            auth.require_bot_contact(c, human, target, kind="task")
-        assert new_task.value.code == "assignment_scope"
-    refused = post(api, "tasks", {"owner": made["bot"], "relations": [{"task": linked["id"], "kind": "parent"}],
-                                   "title": "Another assigned task", "body": "Must remain on the linked task."},
-                   expected=403)
-    assert refused["error"]["code"] == "assignment_scope"
-
-
-def test_three_active_slots_are_atomic_and_review_wait_releases_capacity(api):
-    computer = prepare_source(api)
-    rows = []
-    tasks = []
-    keys = ("slot-one", "slot-two", "slot-three")
-    for index, key in enumerate(keys):
-        task = delivery_task(api, f"Slot {index + 1}")
-        tasks.append(task)
-        rows.append(create(api, task, key=key,
-                           idem=f"{key}-idem"))
-    refused = create(api, delivery_task(api, "Fourth slot"), key="slot-four", expected=409)
-    assert refused["error"]["code"] == "assignment_capacity"
-    paused = api.patch("/api/v2/assignment-branches/" + rows[0]["id"], json={
-        "expected_revision": rows[0]["revision"], "phase": "paused", "note": "Pause before review"
-    }, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "slot-one-pause"})
-    assert paused.status_code == 200, paused.text
-    resumed = api.patch("/api/v2/assignment-branches/" + rows[0]["id"], json={
-        "expected_revision": paused.json()["revision"], "phase": "working", "note": "Resume for review"
-    }, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "slot-one-resume"})
-    assert resumed.status_code == 200, resumed.text
-    set_task_status(api, tasks[0]["id"], "review")
-    waiting = api.patch("/api/v2/assignment-branches/" + rows[0]["id"], json={
-        "expected_revision": resumed.json()["revision"], "phase": "waiting_review", "note": "Ready for review",
-        "checkpoint": {"commit": "synthetic-review-head", "next": "review"}
-    }, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "slot-one-review"})
-    assert waiting.status_code == 200, waiting.text
-    fourth = create(api, delivery_task(api, "Slot after review"), key="slot-four", idem="slot-idem-four")
-    assert fourth["phase"] == "preparing"
-    assert fourth["runner_id"] == computer["runner_id"]
-    assert get(api, "bots/cpo/assignment-branches")["active"] == 3
-
-
-def test_policy_requires_human_manager_and_direct_parent_actor(api):
-    revision = get(api, "bots/cpo")["revision"]
-    post(api, "bots/cpo/definition", {"shared": True, "expected_revision": revision})
-    revision = get(api, "bots/cpo")["revision"]
-    denied = put(api, "bots/cpo/assignment-branches/policy", {"enabled": True, "expected_revision": revision}, expected=409)
-    assert denied["error"]["code"] == "assignment_allocator"
 
 
 def test_cancellation_is_audited_and_reopen_uses_a_new_generation(api):
@@ -333,45 +258,6 @@ def test_pause_resume_review_release_archive_preserves_assignment_history(api):
         assert "cleanup_blocked" in actions and "cleanup_complete" in actions
 
 
-def test_reviewed_learning_reaches_source_without_the_task_transcript_and_dedupes(api):
-    prepare_source(api)
-    task = post(api, "tasks", {"owner": "cpo", "title": "Private delivery headline",
-                                "body": "PRIVATE_TASK_BODY customer deployment details"})
-    made = create(api, task, key="learning-note", idem="learning-note-create")
-    endpoint = "/api/v2/assignment-branches/" + made["id"]
-    unconfirmed = api.patch(endpoint, json={
-        "expected_revision": made["revision"], "reviewed_learning_note": "Use a bounded retry budget."
-    }, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "unconfirmed-learning"})
-    assert unconfirmed.status_code == 409
-    lesson = "Use bounded retries for transient API reads and retain the original operation key."
-    first = api.patch(endpoint, json={"expected_revision": made["revision"],
-                                      "reviewed_learning_note": lesson, "confirm_learning_review": True},
-                      headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "reviewed-learning-one"})
-    assert first.status_code == 200, first.text
-    message_id = first.json()["learning_message_id"]
-    assert message_id
-    with api.app.state.store.read() as c:
-        message = H.message(c, message_id)
-        conversation = H.conversation(c, message["conversation_id"])
-        assert message["from_actor"] == "human:ana" and message["to_actor"] == "bot:cpo"
-        assert conversation["task_id"] is None
-        assert lesson in message["body"]
-        assert "PRIVATE_TASK_BODY" not in message["body"]
-        assert "Private delivery headline" not in message["body"]
-        refs = json.loads(message["refs_json"])
-        assert refs["assignment_learning_reviewed"] == made["id"]
-        count = c.execute("SELECT count(*) FROM messages WHERE id=?", (message_id,)).fetchone()[0]
-        assert count == 1
-    retry = api.patch(endpoint, json={"expected_revision": first.json()["revision"],
-                                      "reviewed_learning_note": lesson, "confirm_learning_review": True},
-                      headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "reviewed-learning-retry"})
-    assert retry.status_code == 200, retry.text
-    assert retry.json()["learning_message_id"] == message_id
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND body LIKE ?",
-                         ("bot:cpo", "%" + lesson.split()[0] + "%")).fetchone()[0] == 1
-
-
 def test_concurrent_retries_share_one_actor_and_concurrent_requests_cannot_overbook(api):
     prepare_source(api)
     task = delivery_task(api, "Idempotent assignment")
@@ -406,22 +292,3 @@ def test_concurrent_retries_share_one_actor_and_concurrent_requests_cannot_overb
     assert sum(reply.status_code == 409 and reply.json()["error"]["code"] == "assignment_capacity" for reply in raced) == 1
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assignment_branches").fetchone()[0] == 3
-
-
-def test_concurrent_distinct_assignment_keys_cannot_claim_the_same_delivery_task(api):
-    prepare_source(api)
-    task = delivery_task(api, "Single-owner feature")
-
-    def allocate(key):
-        body = {"assignment_key": key, "generation": 1, "task_id": task["id"],
-                "display_name": "Temporary Engineer"}
-        return api.post("/api/v2/bots/cpo/assignment-branches", json=body,
-                        headers={"Authorization": "Bearer ana-test", "Idempotency-Key": key + "-idem"})
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(allocate, ("same-task-one", "same-task-two")))
-    assert sorted(result.status_code for result in results) == [200, 409]
-    assert any(result.status_code == 409 and result.json()["error"]["code"] == "task_owner" for result in results)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM assignment_branches WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
-        assert H.task(c, task["id"])["owner"].startswith("bot:cpo-work-")

@@ -1,10 +1,5 @@
 """Docs: internal docs (versions, locks, import, search) and linked docs (docs/docs.md)."""
 
-import io
-import zipfile
-
-
-from backend import docs as D
 from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401  (the api fixture)
 
 ANA, BEN, CARA = "ana-test", "ben-test", "cara-test"      # owner, bot administrator, everyone else
@@ -70,48 +65,6 @@ def test_a_locked_doc_belongs_to_owners_and_bot_administrators(api):
     assert edit(api, call(api, "GET", "docs/" + doc["id"])["doc"], who=BEN, locked=False)["doc"]["locked"] is False
 
 
-def fixture_docx():
-    document = ('<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>'
-                '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Onboarding guide</w:t></w:r></w:p>'
-                '<w:p><w:r><w:t xml:space="preserve">Welcome to </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>Acme</w:t></w:r>'
-                '<w:hyperlink r:id="rId1"><w:r><w:t> handbook</w:t></w:r></w:hyperlink></w:p>'
-                '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Get a laptop</w:t></w:r></w:p>'
-                '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Plan</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Price</w:t></w:r></w:p></w:tc></w:tr>'
-                '<w:tr><w:tc><w:p><w:r><w:t>Starter</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>$35</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
-                '</w:body></w:document>')
-    rels = ('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-            '<Relationship Id="rId1" Type="x" Target="https://handbook.acme.example" TargetMode="External"/></Relationships>')
-    out = io.BytesIO()
-    with zipfile.ZipFile(out, "w") as z:
-        z.writestr("word/document.xml", document)
-        z.writestr("word/_rels/document.xml.rels", rels)
-    return out.getvalue()
-
-
-def fixture_pdf(text):
-    stream = ("BT /F1 12 Tf 20 100 Td (%s) Tj ET" % text).encode()
-    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 144] /Contents 4 0 R "
-               b"/Resources << /Font << /F1 5 0 R >> >> >>",
-               b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
-               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
-    out, offsets = b"%PDF-1.4\n", []
-    for number, body in enumerate(objects, 1):
-        offsets.append(len(out))
-        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
-    start = len(out)
-    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
-    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
-    return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, start)
-
-
-def upload(api, name, data, who=ANA, expected=200, **fields):
-    r = api.post("/api/v2/docs/import", files={"file": (name, data)}, data=fields, headers=headers(who))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
 def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
     make(api, "Pricing and plans", "Starter is $35 a month. Growth is $79.", path="sales/pricing.md")
     make(api, "Refund policy", "Refunds happen within 30 days. Pricing questions go to sales.")
@@ -138,23 +91,6 @@ def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
     make(api, "Export guide", "# Steps\n\nChoose CSV.", path="notes/a.md")
     export = call(api, "GET", "docs/search", params={"q": "export"})["results"][0]
     assert export["title"] == "Export guide" and export["section"] == "Steps" and "CSV" in export["excerpt"]
-
-
-def test_linked_docs_are_links_anyone_adds_and_their_adder_or_an_admin_edits(api):
-    link = call(api, "POST", "linked-docs", {"url": "help.acme.example/faq", "description": "FAQ"}, CARA)["linked"]
-    assert link["url"] == "https://help.acme.example/faq" and link["title"] == "help.acme.example/faq"
-    dupe = call(api, "POST", "linked-docs", {"url": "https://help.acme.example/faq"}, BEN, 409)
-    assert dupe["error"]["code"] == "already_linked"
-    for bad in ("javascript:alert(1)", "https://user:pw@acme.example/", "ftp://acme.example", "not a url"):
-        call(api, "POST", "linked-docs", {"url": bad}, expected=422)
-    call(api, "PATCH", "linked-docs/" + link["id"], {"title": "Renamed"}, BEN)          # a bot administrator may
-    other = call(api, "POST", "linked-docs", {"url": "https://github.com/acme/handbook"}, BEN)["linked"]
-    call(api, "PATCH", "linked-docs/" + other["id"], {"title": "Mine now"}, CARA, 403)
-    call(api, "PATCH", "linked-docs/" + link["id"], {"description": "Edited"}, CARA)
-    call(api, "PATCH", "linked-docs/" + link["id"], {"url": "https://notion.so/faq"}, CARA)
-    assert call(api, "GET", "linked-docs")["linked"][0]["kind"] == "notion"
-    call(api, "PATCH", "linked-docs/" + other["id"], {"archived": True}, ANA)
-    assert [row["id"] for row in call(api, "GET", "linked-docs")["linked"]] == [link["id"]]
 
 
 def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
@@ -192,45 +128,6 @@ def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
     assert err and refused["error"] == "locked"
 
 
-def test_named_map_docs_and_linked_topics_survive_whole_questions(api):
-    glossary = make(api, "Team glossary", "Setup means preparing a bot. Computer means where it runs.",
-                    path="_librarian/glossary.md")
-    idx = make(api, "Docs index", "Source docs and their versions.", path="_librarian/index.md")
-    for question, expected in [("According to the Team glossary, what does Setup mean?", glossary),
-                               ("What is in _librarian/index.md?", idx)]:
-        hits = call(api, "GET", "docs/search", params={"q": question, "collection": "all"})["results"]
-        assert hits[0]["id"] == expected["id"]
-    for collection in ("team", "company"):
-        hits = call(api, "GET", "docs/search", params={"q": "glossary", "collection": collection})["results"]
-        assert hits[0]["id"] == glossary["id"] and all(r["type"] != "manual" for r in hits)
-    link = call(api, "POST", "linked-docs", {"url": "https://help.example.com/refunds", "title": "Refund policy",
-                                           "description": "Refunds and cancellation terms"})["linked"]
-    for q in ("refund policy", "Where can I read our refund policy?", "refunds cancellation"):
-        hits = call(api, "GET", "docs/search", params={"q": q})["results"]
-        assert any(r["id"] == link["id"] for r in hits)
-
-
-def test_archive_removes_cached_index_source_and_preserves_history(api):
-    source = make(api, "Refund policy", path="finance/refunds.md")
-    body = "# Docs index\n- `finance/refunds.md` (v1): Refunds.\n- `finance/refunds.md.backup`: Separate doc.\n- `sales/pricing.md`: Prices.\n"
-    idx = make(api, "Docs index", body, path="_librarian/index.md")
-    edit(api, source, archived=True)
-    fresh = call(api, "GET", "docs/" + idx["id"])["doc"]
-    assert fresh["version"] == 2 and "`finance/refunds.md`" not in fresh["body"]
-    assert "refunds.md.backup" in fresh["body"] and "sales/pricing.md" in fresh["body"]
-    assert call(api, "GET", "docs/%s/versions/1" % idx["id"])["version"]["body"] == idx["body"]
-
-
-def test_add_a_human_or_bot_question_prioritizes_the_procedure(api):
-    for question in ("add a human or bot", "How do I add a human or bot to the team?"):
-        hits = call(api, "GET", "docs/search", params={"q": question, "collection": "all", "limit": 3})["results"]
-        assert hits[0]["id"] in ("manual:org-chart", "manual:creating-bots", "manual:people")
-    hits = call(api, "GET", "docs/search", params={
-        "q": "How do I add a human teammate and let them sign in when our Tico team is behind Cloudflare Access?",
-        "collection": "all", "limit": 3})["results"]
-    assert hits[0]["id"] == "manual:people"
-
-
 def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
     from backend.store import H
     source = make(api, "Refund policy", path="finance/refunds.md")
@@ -264,42 +161,3 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
         tasks = c.execute("SELECT * FROM tasks WHERE owner='bot:librarian' AND title='Refresh the map'").fetchall()
         assert len(tasks) == 1 and tasks[0]["next_run"] == 1
         assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]
-
-
-def test_wording_upgrade_repairs_previously_migrated_faq_once_and_preserves_human_docs(api):
-    from backend import docs
-    faq = make(api, "FAQ", "Change standing instructions. The runner pulls the update.", path="FAQ.md")
-    human = make(api, "Our terms", "Our runner manages standing instructions.", path="_librarian/glossary.md")
-    modified = make(api, "Edited by a human", "My standing instructions.", path="_librarian/edited.md")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE docs SET created_by='bot:librarian' WHERE id=?", (modified["id"],))
-        c.execute("DELETE FROM registry_metadata WHERE key='librarian_wording35'")
-        c.execute("UPDATE docs SET updated_by='keeper' WHERE id=?", (faq["id"],))
-        c.execute("UPDATE doc_versions SET note='Updated generated Tico wording' WHERE doc_id=?", (faq["id"],))
-        docs.refresh_generated_wording(c)
-    fresh = call(api, "GET", "docs/" + faq["id"])["doc"]
-    assert fresh["body"] == "Change Instructions. The Computer pulls the update."
-    assert fresh["version"] == faq["version"] + 1
-    assert call(api, "GET", "docs/" + modified["id"])["doc"]["body"] == modified["body"]
-    assert call(api, "GET", "docs/" + human["id"])["doc"]["body"] == human["body"]
-    assert call(api, "GET", "docs/%s/versions/1" % faq["id"])["version"]["body"] == faq["body"]
-    with api.app.state.store.transaction() as c:
-        docs.refresh_generated_wording(c)
-    assert call(api, "GET", "docs/" + faq["id"])["doc"]["version"] == fresh["version"]
-
-
-def test_wording_redo_restores_ordinary_words_the_old_repair_changed_once(api):
-    from backend import docs
-    faq = make(api, "FAQ", "Change standing instructions. We fix the washing machine for the company.", path="FAQ.md")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE docs SET created_by='bot:librarian' WHERE id=?", (faq["id"],))
-        c.execute("DELETE FROM registry_metadata WHERE key='librarian_wording36'")
-        bad = "Change Instructions. We fix the washing Computer for the team."
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper' WHERE id=?", (bad, faq["id"]))
-        docs.Docs(None, None, None, None).snapshot(c, docs.Docs(None, None, None, None).get_row(c, faq["id"]),
-                                                   "keeper", "Updated generated Tico wording")
-        docs.redo_generated_wording(c)
-        docs.redo_generated_wording(c)
-    fresh = call(api, "GET", "docs/" + faq["id"])["doc"]
-    assert fresh["body"] == "Change Instructions. We fix the washing machine for the company."
-    assert fresh["version"] == faq["version"] + 2

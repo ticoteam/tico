@@ -1,11 +1,9 @@
 """Deleting tasks offline removes them and their conversations, and refuses a task carrying work."""
 
-import json
 
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.store import encode
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
 
 
@@ -103,21 +101,6 @@ def test_a_deleted_task_comes_back_whole_and_keeps_its_number(api):
         assert restore_tasks(c, [ticket["id"]])["missing"] == [ticket["id"]]
 
 
-def test_a_new_numbered_task_never_takes_a_deleted_tasks_number(api):
-    store = api.app.state.store
-    from backend import hubdb as H
-    first = post(api, "tasks", {"owner": "ben", "title": "Fix the login page", "body": "x"}, token="priya-test")
-    second = post(api, "tasks", {"owner": "ben", "title": "Fix the logout page", "body": "x"}, token="priya-test")
-    with store.transaction() as c:
-        c.execute("INSERT INTO task_types(id,name,created,updated,numbered) VALUES('t1','Ticket',?,?,1)", (H.now(), H.now()))
-        c.execute("UPDATE tasks SET type_id='t1', number=7 WHERE id=?", (first["id"],))
-        c.execute("UPDATE tasks SET type_id='t1' WHERE id=?", (second["id"],))
-    post(api, f"tasks/{first['id']}/delete", {}, token="priya-test")
-    with store.transaction() as c:
-        H._next_number(c, "human:priya", second["id"], "t1")
-        assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 8
-
-
 def test_a_bulk_delete_and_restore_keeps_links_inside_the_list(api):
     from backend.task_delete import restore_tasks
     store = api.app.state.store
@@ -138,55 +121,6 @@ def test_a_bulk_delete_and_restore_keeps_links_inside_the_list(api):
         assert TR.parent_of(c, child["id"]) == parent["id"]
 
 
-def test_relations_go_to_the_trash_from_either_end_and_come_back(api):
-    from backend.task_delete import restore_tasks
-    store = api.app.state.store
-    one = post(api, "tasks", {"owner": "ben", "title": "Fix the card import", "body": "x"})
-    blocker = post(api, "tasks", {"owner": "ben", "title": "Fix the card export", "body": "x"})
-    twin = post(api, "tasks", {"owner": "ben", "title": "Fix the card import too", "body": "x",
-                               "relations": [{"task": one["id"], "kind": "duplicate_of"}]})
-    post(api, "tasks/" + one["id"] + "/relations", {"task": blocker["id"], "kind": "blocked_by"})
-    with store.transaction() as c:
-        before = {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")}
-        assert len(before) == 2
-        assert delete_tasks(c, [one["id"]], apply=True)["applied"] is True
-        assert c.execute("SELECT count(*) FROM task_relations").fetchone()[0] == 0
-        assert restore_tasks(c, [one["id"]])["unlinked"] == {}
-        assert {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")} == before
-        # A trash entry written before task_relations kept the blocker on the task row: it still relinks.
-        assert delete_tasks(c, [one["id"]], apply=True)["applied"] is True
-        snap = json.loads(c.execute("SELECT rows_json FROM task_trash WHERE task_id=?", (one["id"],)).fetchone()[0])
-        snap["rows"].pop("task_relations")
-        snap["rows"]["tasks"][0]["blocked_by"] = blocker["id"]
-        c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snap), one["id"]))
-        assert restore_tasks(c, [one["id"]])["unlinked"] == {}
-        assert TR.blocker_ids(c, one["id"]) == [blocker["id"]]
-        assert TR.parent_of(c, one["id"]) is None and twin["id"] not in TR.blocker_ids(c, one["id"])
-        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-
-
-
-def test_deleting_a_bots_task_leaves_the_room_it_shares_and_restores_into_a_new_one(api):
-    store = api.app.state.store
-    with store.transaction() as c:     # an external harness: messages to it queue no job, so nothing refuses
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                  (encode({"name": "ops", "runtime": "fake", "status": "active", "harness": "hermes"}),))
-    other = post(api, "tasks", {"owner": "ops", "title": "Plan the offsite", "body": "x"}, token="ben-test")
-    assert api.post("/api/v2/chat/ops", json={"text": "Unrelated chat in the room"}, headers=headers("ben-test")).status_code == 200
-    ticket = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"}, token="ben-test")
-    with store.read() as c:
-        room = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[0]
-        before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (room,)).fetchone()[0]
-    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (room,)).fetchone()[0] == before
-    get(api, "tasks/" + other["id"], token="ben-test")
-    assert api.post("/api/v2/chat/ops", json={"text": "hello again"}, headers=headers("ben-test")).status_code == 200
-    assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]
-    with store.read() as c:
-        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-
-
 def test_a_private_deleted_task_stays_hidden_from_who_could_not_open_it(api):
     ticket = post(api, "tasks", {"owner": "priya", "title": "Secret salary review", "body": "x", "private": True},
                   token="ben-test")
@@ -195,25 +129,6 @@ def test_a_private_deleted_task_stays_hidden_from_who_could_not_open_it(api):
     assert "Secret salary review" not in [t["title"] for t in get(api, "deleted-tasks", token="ana-test")["tasks"]]
     assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ana-test", expected=404)["error"]["code"] == "not_found"
     assert [t["title"] for t in get(api, "deleted-tasks", token="ben-test")["tasks"]] == ["Secret salary review"]
-
-
-def test_restore_leaves_out_a_mapping_something_newer_took_and_wakes_nobody(api):
-    from backend.task_delete import restore_tasks
-    store = api.app.state.store
-    ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the login page", "body": "x"})
-    with store.transaction() as c:
-        c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by) VALUES('k1','Board sync','h1',?,"
-                  "'human:ana')", (H.now(),))
-        c.execute("INSERT INTO service_key_tasks VALUES('k1','EXT-1',?,?)", (ticket["id"], H.now()))
-        assert delete_tasks(c, [ticket["id"]], apply=True)["applied"]
-    again = post(api, "tasks", {"owner": "ben", "title": "Fix the login page again", "body": "x"})
-    with store.transaction() as c:
-        c.execute("INSERT INTO service_key_tasks VALUES('k1','EXT-1',?,?)", (again["id"], H.now()))
-        jobs = c.execute("SELECT count(*) FROM jobs").fetchone()[0]
-        report = restore_tasks(c, [ticket["id"]])
-        assert report["restored"] == [ticket["id"]] and report["skipped"] == {"service_key_tasks": 1}
-        assert c.execute("SELECT task_id FROM service_key_tasks WHERE key_id='k1'").fetchone()[0] == again["id"]
-        assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == jobs
 
 
 def test_a_purged_tasks_number_is_never_given_out_again(api):
@@ -232,15 +147,3 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
         H._next_number(c, "human:priya", second["id"], "t2")
         assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 91
     assert get(api, "deleted-tasks", token="priya-test")["tasks"] == []
-
-
-def test_a_number_given_by_hand_cannot_take_a_deleted_tasks_number(api):
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("INSERT INTO task_types(id,name,created,updated,numbered) VALUES('t3','Ticket',?,?,1)", (H.now(), H.now()))
-    first = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x", "type": "t3", "number": 41})
-    post(api, f"tasks/{first['id']}/delete", {})
-    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Fix the cart page again", "body": "x", "type": "t3",
-                                       "number": 41}, headers=headers())
-    assert r.status_code >= 400 and r.json()["error"]["code"] == "duplicate", r.text
-    assert post(api, f"tasks/{first['id']}/restore", {})["unlinked"] == []

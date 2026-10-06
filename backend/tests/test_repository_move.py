@@ -37,14 +37,6 @@ def two_computers(api):
     return old, new
 
 
-def test_the_assignment_names_the_repository_the_runner_should_clone(api):
-    old, _ = two_computers(api)
-    rows = api.get("/api/v2/runners/assignments", headers={"Authorization": "Bearer " + old["token"]}).json()
-    assert {row["bot"]: row["repository"] for row in rows}["ops"] == REPO
-    eligible = api.get("/api/v2/runners/eligible", headers={"Authorization": "Bearer " + old["token"]}).json()
-    assert {row["bot"]: row["repository"] for row in eligible}["ops"] == REPO
-
-
 def test_a_move_that_would_strand_the_only_copy_is_refused_and_names_the_cause(api):
     old, new = two_computers(api)
     report(api, old, present=True, published=False)
@@ -75,37 +67,3 @@ def test_a_published_bot_moves_and_the_old_computer_stops_claiming_it(api):
     machines = {m["id"]: m for m in get(api, "operations")["machines"]}
     assert "ops" not in machines[old["runner_id"]]["readiness"]["bots"]
     assert "ops" not in machines[old["runner_id"]]["bots"]
-
-
-def test_a_destination_that_already_has_a_copy_is_not_held_back(api):
-    old, new = two_computers(api)
-    report(api, old, present=True, published=False)
-    report(api, new, present=True, published=False)                             # copied by hand
-    assign(api, new, "ops", generation=1)
-
-
-def test_health_and_the_fleet_check_name_why_a_bot_has_no_repository(api):
-    old, _ = two_computers(api)
-    why = f"Cannot fetch {REPO} onto this computer: The repository {REPO} does not exist yet on GitHub."
-    report(api, old, present=False, problems=[why])
-    health = {row["id"]: row for row in get(api, "health")["checks"]}
-    assert health["repositories"]["status"] == "bad" and REPO in health["repositories"]["summary"]
-    assert "ops on Old Mac" in health["repositories"]["summary"]
-    assert "gh repo clone Acme/emp-ops" in health["repositories"]["summary"]
-    issues = [i for i in get(api, "fleet/check")["issues"] if i["kind"] == "repository_missing"]
-    assert [i["bot"] for i in issues] == ["ops"] and REPO in issues[0]["text"]
-    assert issues[0]["severity"] == "high" and issues[0]["fix"].startswith("hub bot repo-create ops --empty")
-    report(api, old, present=True, published=True)
-    assert "repositories" not in {row["id"]: row for row in get(api, "health")["checks"]}
-    assert not [i for i in get(api, "fleet/check")["issues"] if i["kind"] == "repository_missing"]
-
-
-def test_health_and_fleet_name_the_personal_clone_destination(api):
-    old, _ = two_computers(api)
-    path = "/Users/ana/My Projects/emp-ops"
-    report(api, old, present=False, problems=[GENERIC], repository=path)
-    fix = f"Run `gh repo clone Acme/emp-ops '{path}'` on Old Mac, or ask BotOps"
-    health = {row["id"]: row for row in get(api, "health")["checks"]}
-    assert fix in health["repositories"]["summary"]
-    issue = next(i for i in get(api, "fleet/check")["issues"] if i["kind"] == "repository_missing")
-    assert issue["fix"] == fix

@@ -112,8 +112,7 @@ first, keep unrelated changes, and make the smallest coherent change.
   assigned task's `id`, `requester`, scope and original request before acting; unrelated jobs stay separate.
   You may always update progress or record a blocker on tasks you own, as yourself. If a repair needs
   missing permission, input or a credential, set it waiting with the precise dependency or ask once on
-  the task; when a person must act, name them (`--status waiting --on <person> --note "<what to do>"`). Never invent
-  cutoffs or scheduling windows nobody asked for; a wait that names no one goes to a person after an hour. Do not leave it open just because its requester is a bot or keeper. A finished diagnosis is
+  the task; when a person must act, name them (`--status waiting --on <person> --note "<what to do>"`). Do not leave it open just because its requester is a bot or keeper. A finished diagnosis is
   done even when the repair it identifies is waiting.
   Keeper cannot answer questions: put a missing human decision in a linked child task for the
   responsible human, and use it as the repair's blocker.

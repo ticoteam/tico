@@ -3,7 +3,6 @@ import io
 import os
 import shutil
 import tempfile
-from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -51,17 +50,6 @@ def test_the_helper_uses_the_socket_and_never_the_registration(channel, monkeypa
     monkeypatch.setattr("sys.stdin", io.StringIO("protocol=https\nhost=github.com\n\n"))
     G.main(["--socket", channel.path, "--bot", "alpha"])           # no --config: the file is not readable to a turn
     assert capsys.readouterr().out == "username=x-access-token\npassword=ghs_alpha\n"
-
-
-def test_apply_points_the_turn_at_the_socket_without_the_config_path():
-    class Hub:
-        def post(self, path, body):
-            return {"configured": True, "token": "ghs_start", "repository": "acme/alpha"}
-    env = {}
-    assert G.apply(env, Hub(), "alpha", "/home/runner/runner.json", "/run/tico-runner/git-credential.sock")
-    helper = env["GIT_CONFIG_VALUE_1"]
-    assert "--socket /run/tico-runner/git-credential.sock" in helper and "runner.json" not in helper
-    assert env[C.SOCKET_ENV] == "/run/tico-runner/git-credential.sock"
 
 
 def test_bot_code_is_wrapped_only_when_told_to_and_only_as_another_user(monkeypatch):
@@ -125,17 +113,6 @@ def test_refreshed_tokens_join_attempt_redactor_and_are_released(channel):
     assert redactor.scrub_text(fresh) == MASK
     channel.unregister('attempt-a')
     assert not channel.redactors and not channel.issued
-
-
-def test_same_user_runner_refreshes_through_supervisor(monkeypatch):
-    monkeypatch.setattr(isolation, 'enabled', lambda: False)
-    server = C.serve(mock.Mock())
-    try:
-        assert server is not None and Path(server.path).exists()
-    finally:
-        directory = server.directory.name
-        server.stop()
-    assert not Path(directory).exists()
 
 
 def test_mirror_refresh_requires_live_attempt_and_its_repository(channel):

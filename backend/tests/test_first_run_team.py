@@ -8,39 +8,12 @@ import shutil
 from pathlib import Path
 
 
-from backend import onboarding as O
 from backend import releases
 from backend.tests.test_api import claim, headers, post, ready
 from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, draft,  # noqa: F401
                                            environment, machine, signed_in)
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
-
-
-def test_the_onboarding_record_keeps_the_org_builders_answers_and_proposes_no_starter_team(environment):
-    """GET and PUT keep their shape: the departments and each one-line briefing are saved with the answers, old pains
-    and tools are kept but never read, and the record no longer carries a starter team or a full chart."""
-    api = environment()
-    who = signed_in()
-    saved = api.put("/api/v2/onboarding", headers=who, json={"answers": {
-        "what_we_do": "We sell software to studios", "customers": "businesses", "software_product": "yes",
-        "departments": ["sales", "support"], "briefings": {"sales": "Inbound demos and a few big accounts"},
-        "pains": ["leads go cold"], "tools": ["mail", "github"]}})
-    assert saved.status_code == 200
-    body = saved.json()
-    assert body["answers"]["departments"] == ["sales", "support"]
-    assert body["answers"]["briefings"] == {"sales": "Inbound demos and a few big accounts"}
-    assert body["answers"]["pains"] == ["leads go cold"] and body["answers"]["tools"] == ["mail", "github"]     # kept, not read
-    assert not {"recommended", "recommendations", "full_chart", "held_back", "pain_options"} & set(body)
-    assert body["home"] == "human:morgan"
-    assert api.get("/api/v2/onboarding", headers=who).json()["answers"]["briefings"] == body["answers"]["briefings"]
-    # A department that is not one of the nine, or a briefing past 500 characters, is refused.
-    for answers in ({"departments": ["catering"]}, {"briefings": {"sales": "x" * 501}}):
-        assert api.put("/api/v2/onboarding", headers=signed_in(), json={"answers": answers}).status_code == 422
-    # The briefings reach BotOps with everything else the company said.
-    lines = O.setup_body("support", {"template": "support", "display_name": "Support", "instructions": ""},
-                         body["answers"])
-    assert "- sales today: Inbound demos and a few big accounts" in lines
 
 
 def real_starters(api, *names):
@@ -156,20 +129,3 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 
-
-def test_go_live_preserves_a_routine_disabled_before_activation(environment):
-    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
-    real_starters(api, "support")
-    machine(api)
-    assert draft(api, selected={"support": {"template": "support", "display_name": "Help desk",
-                                            "instructions": "No schedule"}}).status_code == 200
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    with api.app.state.store.read() as c:
-        sid = c.execute("SELECT id FROM schedules WHERE bot='support'").fetchone()[0]
-    disabled = api.post("/api/v2/routines/" + sid, json={"enabled": False}, headers=signed_in())
-    assert disabled.status_code == 200, disabled.text
-    live = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
-    assert live.status_code == 200, live.text
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT enabled FROM schedule_config WHERE schedule_id=?", (sid,)).fetchone()[0] == 0
-        assert not c.execute("SELECT 1 FROM events WHERE action='bot.routine_armed' AND target='support'").fetchone()

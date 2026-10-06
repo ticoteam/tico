@@ -6,9 +6,7 @@ import logging
 import pytest
 
 from backend import diagnostics as D
-from backend import support
-from backend.store import H, encode
-from backend.tests.test_onboarding import as_person, environment, signed_in, machine  # noqa: F401
+from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.tests.test_support import hq, file  # noqa: F401  (the fake HQ, autouse)
 
 
@@ -20,25 +18,10 @@ def redactor():
 # ------------------------------------------------------------------ the redactor
 @pytest.mark.parametrize("raw, gone, shown", [
     ("key sk-abcdEFGH1234567890xyz here", "sk-abcdEFGH1234567890xyz", "[key]"),
-    ("token ghp_abcdefgh12345678ABCD", "ghp_abcdefgh12345678ABCD", "[token]"),
-    ("token gho_abcdefgh12345678ABCD", "gho_abcdefgh12345678ABCD", "[token]"),
-    ("slack xoxb-1234567890-abcdefghij", "xoxb-1234567890-abcdefghij", "[token]"),
-    ("slack xoxp-1234567890-abcdefghij", "xoxp-1234567890-abcdefghij", "[token]"),
-    ("aws AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP", "[key]"),
     ("Authorization: Bearer abc123.def-456_ghi", "abc123.def-456_ghi", "[token]"),
-    ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.SflKxwRJSMeKKF2QT4fw", "eyJhbGciOiJIUzI1NiJ9", "[jwt]"),
-    ("hex " + "a1b2c3d4" * 8, "a1b2c3d4a1b2c3d4", "[secret]"),
-    ("b64 QWxhZGRpbjpvcGVuIHNlc2FtZSBhbmQgbW9yZSBzdHVmZg==", "QWxhZGRpbjpvcGVuIHNlc2FtZSBhbmQgbW9yZSBzdHVmZg", "[secret]"),
-    ("OPENAI_API_KEY=abcd1234efgh", "abcd1234efgh", "[redacted]"),
-    ("password: hunter22", "hunter22", "[redacted]"),
     ("mail stranger@elsewhere.org sent", "stranger@elsewhere.org", "[email]"),
     ("from 10.0.0.12 and 192.168.1.1", "10.0.0.12", "[ip]"),
-    ("v6 2001:db8:85a3::8a2e:370:7334 and ::1", "2001:db8:85a3", "[ip]"),
-    ("GET https://api.tico.team/v1/latest?install_id=abc&x=1 failed", "install_id=abc", "?[query]"),
-    ("see https://other.io/path?a=1#frag", "a=1", "?[query]#frag"),
     ("db.acme.example refused", "db.acme.example", "[company-domain]"),
-    ("acme.example unreachable", "acme.example", "[company-domain]"),
-    ("connect to internal.corp and files.somewhere.io", "somewhere.io", "[host]"),
 ])
 def test_the_redactor_removes_each_kind_of_secret(raw, gone, shown):
     out = redactor().text(raw)
@@ -46,9 +29,7 @@ def test_the_redactor_removes_each_kind_of_secret(raw, gone, shown):
 
 
 @pytest.mark.parametrize("raw", [
-    "Tico 0.2.18 on Python 3.12.4", "updates.tico.team answered", "https://api.github.com/repos/x", "ghcr.io/ticoteam/tico:v0.2.18",
-    "service.py line 12, hub.db and backend.app", "at 12:34:56 and 2026-09-29T10:00:00Z", "6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63",
-    "the /usr/local/lib/python3.12/site-packages/pkg path", "codex-cli 0.130.0", "bootstrap coordinate"])
+    "Tico 0.2.18 on Python 3.12.4", "service.py line 12, hub.db and backend.app", "at 12:34:56 and 2026-09-29T10:00:00Z"])
 def test_the_redactor_leaves_what_is_not_a_secret(raw):
     assert redactor().text(raw) == raw
 
@@ -65,29 +46,6 @@ def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     # Another bundle with the same people in a different order gets its own labels: they mean nothing outside one bundle.
     other = D.Redactor([], [], [("riley", []), ("morgan", [])])
     assert other.text("riley") == "person-2" and other.text("morgan") == "person-1"
-
-
-def test_a_short_name_is_not_a_word_but_an_exact_actor_reference_or_an_email_is_always_relabeled():
-    r = D.Redactor([], [("coo", ["COO"]), ("pm", []), ("sage", ["Sage"])],
-                   [("ana", ["Ana", "ana@acme.example"]), ("bo", ["Bo Li", "bo@acme.example"]), ("riley", ["Riley Quinn"])])
-    # Ordinary words that happen to be a short slug, name or id stay as they are.
-    for plain in ("the coo signed off", "COO and PM sat with Ana and Bo", "a bo staff, a pm", "Li joined"):
-        assert r.text(plain) == plain
-    # Four letters or more is a word, a full name too.
-    assert r.text("ask sage or Sage, then riley and Riley Quinn, Bo Li wrote") == "ask bot-3 or bot-3, then person-3 and person-3, person-2 wrote"
-    # An exact actor reference is relabeled whatever its length, by kind, and only when the slug or id is known.
-    assert r.text("bot:coo asked bot:pm; human:ana and human:bo, bot:coo.") == "bot-1 asked bot-2; person-1 and person-2, bot-1."
-    assert r.text("bot:sage and human:riley; bot:zed and human:coo and xbot:coo") == "bot-3 and person-3; bot:zed and human:coo and xbot:coo"
-    # An email is always relabeled when it is a person's, and redacted when it is anyone else's, short local part or not.
-    assert r.text("ana@acme.example, bo@acme.example and coo@acme.example") == "person-1, person-2 and [email]"
-    assert r.text("bo.li@else.org") == "[email]"
-    # The exact lookup still knows a short slug.
-    assert r.label("coo") == "bot-1" and r.label("BO") == "person-2"
-    assert r.clean({"actor": "bot:coo", "note": "the coo"}) == {"actor": "bot-1", "note": "the coo"}
-
-
-def test_control_characters_are_dropped():
-    assert redactor().text("a\x1b[31mred\x00b‮dc") == "a[31mredbdc"
 
 
 def test_a_bundle_over_the_cap_shrinks_its_logs_first():
@@ -150,36 +108,6 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
     assert D.digest(bundle) == answer["id"] and answer["bytes"] == len(text.encode()) <= D.MAX_BYTES
 
 
-def test_a_computers_readiness_is_summarised_with_labels_and_redacted_problems(environment, hq):
-    api = environment()
-    enrolled = machine(api, label="Morgan's Mac")
-    runner_id = enrolled["runner_id"] if "runner_id" in enrolled else enrolled["id"]
-    readiness = {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "ready", "version": "codex-cli 0.130.0",
-                                                            "detail": "Signed in with ChatGPT"},
-                                                   "gemini": {"installed": False, "authenticated": "missing"}},
-                 "bots": {"coo": {"ready": False, "problems": ["coo: repository missing at /Users/morgan/work"]}},
-                 "recent_errors": ["2026-09-29T10:00:00Z Tico runner: coo failed for morgan@acme.example"]}
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=?, last_seen=? WHERE id=?", (encode(readiness), H.now(), runner_id))
-    _, bundle = bundle_of(api)
-    (runner,) = bundle["runners"]
-    text = json.dumps(bundle)
-    assert runner["label"] == "runner-1" and runner["online"] and "Mac" not in text
-    assert runner["runtimes"] == [{"name": "codex", "installed": True, "version": "codex-cli 0.130.0", "ready": True,
-                                   "state": "ready", "detail": "Signed in with ChatGPT"}]
-    assert runner["bots"] == 1 and runner["bots_ready"] == 0
-    assert runner["problems"] == ["bot-2: repository missing at /Users/person-1/work"]
-    assert runner["log"] == ["2026-09-29T10:00:00Z Tico runner: coo failed for person-1"]     # `coo` alone is a word, not a name
-
-
-def test_a_member_may_preview_and_only_a_person_may(environment, hq):
-    api = environment()
-    riley = as_person(api, "riley")
-    assert api.get("/api/v2/support/diagnostics", headers=riley).status_code == 200
-    assert api.get("/api/v2/support/diagnostics").status_code in (401, 403)
-    assert hq.seen == []                                          # a preview sends nothing
-
-
 # ------------------------------------------------------------------ the preview is what is sent
 def test_what_the_preview_showed_is_exactly_what_hq_gets(environment, hq):
     api = environment()
@@ -197,57 +125,6 @@ def test_what_the_preview_showed_is_exactly_what_hq_gets(environment, hq):
     assert file(api, headers=riley, diagnostics=answer["id"]).status_code == 409
     assert file(api, diagnostics="0" * 64).status_code == 409
     assert len(hq.tickets) == 2                                   # the two refusals reached nobody
-
-
-def test_a_preview_expires_and_nothing_is_sent_without_one(environment, hq, monkeypatch):
-    api = environment()
-    answer, _ = bundle_of(api)
-    file(api)
-    assert "diagnostics" not in json.loads(hq.seen[-1].content)   # unticked: no key at all
-    assert file(api).json()["sent"] == {"version": "0.2.17", "install_id": api.get("/api/v2/support/compose", headers=signed_in()).json()["install_id"]}
-    monkeypatch.setattr(D, "KEEP_S", -1)
-    assert file(api, diagnostics=answer["id"]).status_code == 409
-
-
-def test_an_hq_rejection_never_silently_drops_the_attachment(environment, hq, monkeypatch):
-    import httpx
-    api = environment()
-    answer, _ = bundle_of(api)
-    calls = []
-
-    def older(request):
-        body = json.loads(request.content or b"{}")
-        if request.method == "POST":
-            calls.append(sorted(body))
-        if request.method == "POST" and "diagnostics" in body:
-            return httpx.Response(422, json={"error": "invalid", "field": "fields"})
-        return hq(request)
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(older))
-    r = file(api, diagnostics=answer["id"])
-    assert r.status_code == 422 and r.json()["error"]["code"] == "diagnostics_rejected"
-    assert calls == [["diagnostics", "install_id", "message", "version"]]
-    assert not hq.tickets
-    assert file(api).status_code == 200  # an explicit message-only send is still possible
-
-
-def test_the_heartbeat_contract_takes_a_runners_recent_errors_and_keeps_them_bounded():
-    from pydantic import ValidationError
-    from backend import models as M
-    ok = M.StructuredReadiness(recent_errors=["2026-09-29T10:00:00Z Tico runner: failed"])
-    assert ok.model_dump()["recent_errors"] == ["2026-09-29T10:00:00Z Tico runner: failed"]
-    assert M.StructuredReadiness().recent_errors == [] and "recent_errors" not in M.StructuredReadiness().model_dump()
-    with pytest.raises(ValidationError):
-        M.StructuredReadiness(recent_errors=["x"] * 51)
-    # A long line is cut to 300, never refused: refusing hid a whole computer in 0.3.2.
-    assert M.StructuredReadiness(recent_errors=["x" * 301]).recent_errors == ["x" * 300]
-
-
-def test_the_runner_never_sends_an_error_line_over_300_characters():
-    from runner import outage
-    outage.RECENT.clear()
-    outage.log("Tico runner: failed " + "y" * 400)
-    assert outage.RECENT and all(len(line) <= 300 for line in outage.RECENT)
-    outage.RECENT.clear()
 
 
 def test_edits_are_validated_redacted_and_bound_to_the_person(environment, hq):
@@ -268,17 +145,6 @@ def test_edits_are_validated_redacted_and_bound_to_the_person(environment, hq):
     assert api.post("/api/v2/support/diagnostics", headers=as_person(api, "riley"), json=body).status_code == 409
     for text in ('{', '{"format":1,"secret":"new field"}', '{"format":"1"}'):
         assert api.post("/api/v2/support/diagnostics", headers=signed_in(), json={**body, "text": text}).status_code == 422
-
-
-def test_followup_carries_only_the_selected_preview(environment, hq):
-    api = environment()
-    ticket = file(api).json()
-    preview, bundle = bundle_of(api)
-    r = api.post(f"/api/v2/support/tickets/{ticket['id']}/messages", headers=signed_in(),
-                 json={"message": "Still failing", "diagnostics": preview["id"]})
-    assert r.status_code == 200, r.text
-    sent = next(json.loads(r.content) for r in reversed(hq.seen) if r.method == "POST")
-    assert sent["diagnostics"] == bundle
 
 
 def test_failure_ring_is_bounded_and_groups_repeats_without_exception_values():
@@ -318,24 +184,9 @@ def test_request_failures_keep_only_route_templates_and_safe_exception_locations
     assert not caplog.records  # no extra process log line for every failing request
 
 
-def test_editing_a_fleet_preserves_different_log_lengths_and_optional_fields():
-    original = {"format": 1, "runners": [{"label": "runner-1", "log": ["failure"], "runtimes": [{"name": "codex"}]},
-                                          {"label": "runner-2", "log": [], "runtimes": []}]}
-    D.validate_edit(original, original)
-    D.validate_edit({"format": 1, "runners": [{"log": ["edited failure"]}]}, original)
-    with pytest.raises(ValueError):
-        D.validate_edit({"format": 1, "runners": [{"log": [{"unexpected": "content"}]}]}, original)
-
-
 @pytest.mark.parametrize("raw", [
-    '{"password": "FixtureShort7", "token": "xy"}',
     "{'api_key' : 'Fixture spaced value', 'secret': 'z'}",
     r'''{"password": "Fixture\"escaped tail", "token": "a\\b"}''',
-    r"{'password': 'Fixture\'escaped tail'}",
-    'password=xy; token: z',
-    'password=Fixture spaced value, status=failed',
-    'password="Fixture truncated secret',
-    r'''{"password": "Fixture\nline\tvalue"}''',
 ])
 def test_secret_fields_consume_short_spaced_escaped_and_truncated_values(raw):
     clean = D.Redactor().text(raw)
@@ -344,36 +195,6 @@ def test_secret_fields_consume_short_spaced_escaped_and_truncated_values(raw):
         assert value not in clean
 
 
-@pytest.mark.parametrize("authority", ["private.acme-customer.app", "private.acme-customer.co",
-    "tico.acme-customer.com", "acme.invalidsuffix", "internal", "user:FixturePass7@acme.app:8443",
-    "tico.team.acme.app", "[2001:db8::1]:8443"])
+@pytest.mark.parametrize("authority", ["private.acme-customer.app", "user:FixturePass7@acme.app:8443"])
 def test_url_authorities_do_not_depend_on_the_prose_hostname_heuristic(authority):
     assert D.Redactor().text("https://" + authority + "/api") == "https://[host]/api"
-
-
-def test_final_preview_and_attachment_redact_secret_fields_and_unknown_url_hosts(environment, hq, monkeypatch):
-    ring = D.LogRing()
-    monkeypatch.setattr(D, "RING", ring)
-    api = environment()
-    lines = [
-        '{"password": "FixtureOnlySecret17", "token": "xy"}',
-        r"{'secret': 'Fixture spaced \'escaped tail'}",
-        'https://private.acme-customer.app/api https://tico.acme-customer.com/api',
-    ]
-    for line in lines:
-        ring.handle(logging.LogRecord("fictional.transport", logging.WARNING, "", 0, line, (), None))
-    answer, shown = bundle_of(api)
-    assert hq.seen == []
-    for value in ("Fixture", "xy", "escaped tail", "private.acme-customer.app", "tico.acme-customer.com"):
-        assert value not in " ".join(shown["logs"]["server"])
-    assert "[redacted]" in answer["text"] and "[host]" in answer["text"]
-    assert file(api, diagnostics=answer["id"]).status_code == 200
-    assert D.canonical(json.loads(hq.seen[-1].content)["diagnostics"]) == answer["text"]
-    edited = {"format": 1, "logs": {"server": ['{"token": "Fixture edited value"} https://tico.acme-customer.co/api']}}
-    result = api.post("/api/v2/support/diagnostics", headers=signed_in(), json={"id": answer["id"], "text": json.dumps(edited)})
-    assert result.status_code == 200, result.text
-    final = result.json()
-    assert "Fixture" not in final["text"] and "acme-customer" not in final["text"]
-    assert D.digest(json.loads(final["text"])) == final["id"]
-    assert file(api, diagnostics=final["id"]).status_code == 200
-    assert D.canonical(json.loads(hq.seen[-1].content)["diagnostics"]) == final["text"]

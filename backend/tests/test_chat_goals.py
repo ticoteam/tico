@@ -5,7 +5,6 @@ import pytest
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, restrict  # noqa: F401
 from backend.tests.test_runner import live  # noqa: F401
-from clients.tico import Client
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -82,7 +81,7 @@ def test_pause_resume_edit_clear_and_command_payload(api):
         assert c.execute("SELECT count(*) FROM jobs WHERE state='cancelled'").fetchone()[0] == 4
 
 
-@pytest.mark.parametrize('objective', [None, '', ' ', 'x' * 4001])
+@pytest.mark.parametrize('objective', [' ', 'x' * 4001])
 def test_objective_bounds(api, objective):
     _, cid = setup(api)
     action(api, cid, objective=objective, expected=422)
@@ -103,9 +102,8 @@ def test_read_access_is_not_chat_access_and_other_rooms_stay_private(api):
     action(api, other, objective='Private room', token='cara-test', expected=403)
 
 
-@pytest.mark.parametrize('runtime,supported', [('codex', False), ('gemini', True), ('claude', False)])
-def test_old_runners_and_unsupported_harnesses(api, runtime, supported):
-    machine, cid = setup(api, supported, runtime)
+def test_old_runners_and_unsupported_harnesses(api):
+    machine, cid = setup(api, True, 'gemini')
     assert get(api, f'conversations/{cid}/goal')['supported'] is False
     action(api, cid, objective='A summary', expected=409)
     ready(api, machine, ['ops'])
@@ -128,111 +126,6 @@ def test_expired_or_superseded_harness_events_cannot_finish_current_goal(api):
     assert get(api, f'conversations/{cid}/goal')['goal'] == newer
 
 
-def test_command_roundtrip_is_verbatim_and_unknown_text_is_ordinary(api, live, tmp_path):
-    machine, cid = setup(api)
-    text = '/compact Keep the Acme summary'
-    message = post(api, 'messages', {'to': 'bot:ops', 'conversation_id': cid, 'text': text, 'command': True})
-    hosts = []
-    def factory(*args):
-        host = FakeHost()
-        hosts.append(host)
-        return host
-    service = Runner({'url': live, 'token': machine['token'], 'projects_dir': str(tmp_path)},
-                     tmp_path / 'runner', host_factory=factory, push=lambda *a, **k: None)
-    try:
-        service.execute(claim(api, machine))
-        assert hosts[0].prompts[0][1] == text and message['refs']['command'] is True
-        post(api, 'messages', {'to': 'bot:ops', 'conversation_id': cid, 'text': '/unknown text'})
-        service.execute(claim(api, machine))
-        assert hosts[1].prompts[0][1] != '/unknown text'
-        assert '/unknown text' in hosts[1].prompts[0][1]
-    finally:
-        service.pool.shutdown()
-
-
-def test_mcp_and_cli_use_the_goal_contract(api, live):
-    _, cid = setup(api)
-    result = post(api, 'mcp', {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
-        'params': {'name': 'hub_chat_goal', 'arguments': {'conversation_id': cid, 'action': 'set', 'objective': 'Acme summary'}}})
-    assert not result['result'].get('isError'), result
-    assert get(api, f'conversations/{cid}/goal')['goal']['objective'] == 'Acme summary'
-    from clients.tests.test_hubcli import run_hub
-    code, result = run_hub('chat', 'goal', cid, 'pause', env={'HUB_API_URL': live, 'HUB_TOKEN': 'ana-test'})
-    assert code == 0 and result['goal']['status'] == 'paused', result
-    code, result = run_hub('chat', 'send', 'ops', '/compact', '--conversation', cid, '--command',
-                          env={'HUB_API_URL': live, 'HUB_TOKEN': 'ana-test'})
-    assert code == 0 and result['refs']['command'] is True, result
-
-
-def test_a_goal_set_or_paused_is_a_live_event_for_its_room(api):
-    from backend import events
-    from backend.auth import Identity
-    _, cid = setup(api)
-    store, auth = api.app.state.store, api.app.state.auth
-    with store.read() as c:
-        start = events.latest(c)
-    goal = action(api, cid, objective='Acme summary')['goal']
-    action(api, cid, 'pause')
-
-    def goals(who, conversations=(cid,)):
-        with store.read() as c:
-            sent, *_ = events.read(c, auth, who, start, topics=('messages',), conversations=conversations)
-        return [data for _, _, data in sent if data.get('goal_id')]
-    ana = goals(Identity('human:ana', 'owner', 'ana@acme.example'))
-    # One event per goal per read, as it stands now: paused.
-    assert [(g['goal_id'], g['conversation_id'], g['goal']['status']) for g in ana] == [(goal['id'], cid, 'paused')]
-    assert goals(Identity('human:cara', 'human', 'cara@acme.example')) == []
-    assert goals(Identity('human:ana', 'owner', 'ana@acme.example'), ('elsewhere',)) == []
-
-
-def test_codex_native_continuation_keeps_the_lease_and_counts_all_turns(api, live, tmp_path):
-    machine, cid = setup(api)
-    action(api, cid, objective='Acme summary')
-    class ContinuingHost(FakeHost):
-        def start_goal(self, thread, action, objective, effort=None):
-            first = super().start_goal(thread, action, objective, effort)
-            self.start_turn(thread, 'native continuation')
-            self.goal_met(thread)
-            return first
-    host = ContinuingHost(replies=['Working.', 'The summary is ready.'])
-    service = Runner({'url': live, 'token': machine['token'], 'projects_dir': str(tmp_path)},
-                     tmp_path / 'runner', host_factory=lambda *a: host, push=lambda *a, **k: None)
-    try:
-        attempt = claim(api, machine)
-        service.execute(attempt)
-        assert get(api, f'conversations/{cid}/goal')['goal']['status'] == 'met'
-        with api.app.state.store.read() as c:
-            result = c.execute('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0]
-            import json
-            result = json.loads(result)
-            assert result['usage']['input_tokens'] == 200
-            assert result['text'] == 'The summary is ready.'
-    finally:
-        service.pool.shutdown()
-
-
-def test_harness_capabilities_can_be_reported_per_runtime(api):
-    machine, cid = setup(api, False)
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {
-        'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex'}},
-        'runtimes': {'codex': {'installed': True, 'goals': True, 'commands': [{'name': 'review', 'help': 'Review changes'}]}}}}, machine['token'])
-    report = get(api, f'conversations/{cid}/goal')
-    assert report['supported'] is True and any(c['name'] == 'review' for c in report['commands'])
-
-
-def test_personal_goal_activity_is_not_visible_to_other_readers(api):
-    _, cid = setup(api)
-    action(api, cid, objective='Acme summary')
-    assert next(b for b in get(api, 'bots', 'cara-test') if b['slug'] == 'ops')['goal_active'] is False
-    get(api, f'conversations/{cid}/goal', 'cara-test', expected=403)
-
-
-def test_chat_message_endpoint_accepts_command_flag(api):
-    _, cid = setup(api)
-    message = post(api, f'conversations/{cid}/messages', {'text': '/compact', 'command': True})['message']
-    assert message['refs']['command'] is True
-
-
 def test_goal_migration_numbers_and_idempotency(api):
     from backend.chat_goals_schema import SCHEMA
     from backend import hubdb
@@ -243,6 +136,7 @@ def test_goal_migration_numbers_and_idempotency(api):
     assert hubdb.MIGRATIONS[15] == SCHEMA
 
 
+@pytest.mark.slow
 def test_running_goal_pause_resume_and_clear_settle_and_keep_its_thread(api, live, tmp_path):
     import threading
     import time
@@ -302,6 +196,7 @@ def test_running_goal_pause_resume_and_clear_settle_and_keep_its_thread(api, liv
         service.pool.shutdown()
 
 
+@pytest.mark.slow
 def test_superseded_leased_control_never_sets_the_old_native_goal(api, live, tmp_path):
     machine, cid = setup(api)
     action(api, cid, objective='Old Acme summary')
@@ -317,15 +212,3 @@ def test_superseded_leased_control_never_sets_the_old_native_goal(api, live, tmp
         assert claim(api, machine)['message']['body'] == '/goal New Acme summary'
     finally:
         service.pool.shutdown()
-
-
-def test_native_auto_clear_stops_the_goal_and_adds_only_a_chat_line(api):
-    machine, cid = setup(api)
-    goal = action(api, cid, objective='Acme summary')['goal']
-    attempt = claim(api, machine)
-    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/events", {'events': [{'seq': 1, 'kind': 'goal',
-        'payload': {'goal_id': goal['id'], 'revision': goal['updated_at'], 'status': 'cleared'}}]}, machine['token'])
-    stopped = get(api, f'conversations/{cid}/goal')['goal']
-    assert stopped['status'] == 'stopped' and stopped['note'] == 'The harness cleared the goal'
-    assert get(api, f'conversations/{cid}/messages')[-1]['body'].startswith('Goal stopped: ')

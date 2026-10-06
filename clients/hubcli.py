@@ -691,8 +691,6 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it")
-    s.add_argument("--until", dest="wait_until",
-                   help="with --status waiting: when it expects to move (ISO-8601 with timezone); past it, a person is asked")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")

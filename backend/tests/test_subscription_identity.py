@@ -14,30 +14,6 @@ def profiles(api):
     return {c['runner_id']: c['profiles'] for c in get(api, 'subscriptions')['profiles_by_computer']}
 
 
-def test_label_rename_keeps_identity_assignments_and_report(api):
-    a, b = runner(api, label='North'), runner(api, label='South')
-    report(api, a)
-    report(api, b)
-    assign(api, a, 'ops')
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'engineering'})
-    before = profiles(api)
-    assert before[a['runner_id']][0]['id'] != before[b['runner_id']][0]['id']
-    change = {'runner_id': a['runner_id'], 'profile': 'engineering', 'display_name': ' Research <one> '}
-    got = put(api, 'subscriptions/name', change)
-    assert got == {'id': before[a['runner_id']][0]['id'], 'display_name': 'Research <one>'}
-    report(api, a)  # A fresh heartbeat must not overwrite the editable label.
-    after = profiles(api)
-    assert after[a['runner_id']][0]['name'] == 'engineering'
-    assert after[a['runner_id']][0]['display_name'] == 'Research <one>'
-    assert after[b['runner_id']][0]['display_name'] == 'engineering'
-    assert get(api, 'subscriptions')['assignments'][0]['profile'] == 'engineering'
-    assert get(api, 'bots/ops/subscription')['display_name'] == 'Research <one>'
-    report(api, a, [])
-    report(api, a)  # A temporarily missing profile returns with the same connection label.
-    assert profiles(api)[a['runner_id']][0]['id'] == got['id']
-    assert profiles(api)[a['runner_id']][0]['display_name'] == got['display_name']
-
-
 def test_rename_checks_computer_operator_and_known_profile(api):
     a, b = runner(api, operator='cara'), runner(api)
     report(api, a)

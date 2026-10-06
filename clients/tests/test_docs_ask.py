@@ -48,13 +48,6 @@ def test_the_cli_and_the_tools_declare_ask_and_fetch_and_the_server_never_offers
     assert refused["isError"] is False and refused["structuredContent"]["error"] == "private_address"
 
 
-def test_a_person_waits_for_the_completed_run_and_gets_the_latest_correction():
-    partial = {"in_reply_to": "m1", "from_actor": "bot:librarian", "body": "Pair the profile: .", "created": "1"}
-    final = {**partial, "body": "Run `python3 hermes_agent.py pair`, then `/reload-mcp`.", "created": "2"}
-    api = Api("human", [{"messages": [partial], "execution": {"state": "running"}},
-                        {"messages": [partial, final], "execution": {"state": "completed"}}])
-    assert D.ask(api, "Connect Hermes", 30, sleep=lambda s: None)["answer"] == final["body"]
-
 
 def test_timeout_ids_resume_without_sending_a_second_question_and_mcp_waits_are_short():
     api = Api("human", [{"messages": [], "execution": {"state": "queued"}}])

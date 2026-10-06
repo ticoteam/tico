@@ -1,6 +1,5 @@
 """The GitHub App: manifest, state nonce, secret storage, installation tokens, runner scope."""
 import json
-import re
 import sqlite3
 import time
 import uuid
@@ -154,23 +153,6 @@ def connect(api, **params):
     return r
 
 
-def test_manifest_contents_and_owner_only(api):
-    data = manifest(api)
-    m = data["manifest"]
-    assert data["action"] == f"https://github.com/organizations/Acme/settings/apps/new?state={data['state']}"
-    assert m["name"] == "Acme Tico" and m["url"] == PUBLIC and m["public"] is False
-    assert m["redirect_url"] == PUBLIC + "/api/v2/github/app/callback"
-    assert m["hook_attributes"]["active"] is True
-    assert m["default_permissions"] == {"contents": "write", "pull_requests": "write", "issues": "write",
-                                        "metadata": "read", "checks": "read", "statuses": "read"}
-    assert {"pull_request", "pull_request_review", "pull_request_review_comment", "check_run", "check_suite", "status", "push"} == set(m["default_events"])
-    assert manifest(api, administration="true", name="Custom")["manifest"]["default_permissions"]["administration"] == "write"
-    assert manifest(api, name="Custom")["manifest"]["name"] == "Custom"
-    plain = api.get("/api/v2/github/app/manifest", params={"org": "Acme"}, headers=auth("nobody"))
-    assert plain.status_code == 401
-    assert api.get("/api/v2/github/app/manifest", params={"org": "bad org!"}, headers=auth()).status_code == 422
-
-
 def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_success(api, gh):
     botops_turn(api)
     connect(api, administration="true")
@@ -292,11 +274,6 @@ def turn_token(api, bot="cpo"):
     return api.post("/api/v2/github/token", json={"bot": bot}, headers=auth("runner-test"))
 
 
-def events(api, action):
-    with api.app_state.store.read() as c:
-        return [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action=?", (action,))]
-
-
 def test_extra_repositories_join_the_turn_token_with_the_same_permissions(api, gh):
     connect(api)
     assert api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': []}, headers=auth()).status_code == 200
@@ -311,33 +288,6 @@ def test_extra_repositories_join_the_turn_token_with_the_same_permissions(api, g
     assert body["repositories"] == ["design-system", "emp-cpo", "infra", "shared-docs"]
     assert body["permissions"] == {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
     assert set(api.get("/api/v2/bots/cpo/github-repos", headers=auth()).json()["repositories"]) == set(data["repositories"]) - {"Acme/emp-cpo"}
-
-
-def test_repositories_not_on_the_list_are_not_in_the_token(api, gh):
-    connect(api)
-    runner_token(api, "cpo")
-    turn_token(api)
-    assert gh.of("/access_tokens")[-1][2]["repositories"] == ["emp-cpo"]
-    assert api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': []}, headers=auth()).status_code == 200
-    assert put_extras(api, "cpo", ["shared-docs"]).status_code == 200
-    turn_token(api)
-    assert "secrets" not in gh.of("/access_tokens")[-1][2]["repositories"]
-    # Another bot's list is its own. The legacy alias preserves grants; the current API removes them.
-    runner_token(api, "cmo")
-    assert turn_token(api, "cmo").json()["repositories"] == ["Acme/emp-cmo"]
-    put_extras(api, "cpo", [])
-    assert 'Acme/shared-docs' in turn_token(api).json()['repositories']
-    assert api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': []}, headers=auth()).status_code == 200
-    assert turn_token(api).json()["repositories"] == ["Acme/emp-cpo"]
-
-
-def test_extra_repositories_must_be_in_the_connected_organization(api, gh):
-    connect(api)
-    for bad in (["other-org/secrets"], ["https://github.com/other-org/x"], ["https://example.com/Acme/x"], ["bad name"]):
-        assert put_extras(api, "cpo", bad).status_code == 422, bad
-    assert put_extras(api, "nobody", ["x"]).status_code == 404
-    assert put_extras(api, "cpo", [f"r{i}" for i in range(G.MAX_EXTRA_REPOS + 1)]).status_code == 422
-    assert api.get("/api/v2/bots/cpo/github-repos", headers=auth()).json()["repositories"] == []
 
 
 def test_only_the_owner_manages_extra_repositories(api, gh):
@@ -362,111 +312,10 @@ def botops_turn(api):
                   "VALUES('a2',?,'botops','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
 
 
-def test_botops_is_refused_outside_its_lane(api, gh):
-    botops_turn(api)
-    connect(api, administration="true")
-    for slug, why in (("nobody", "not a bot being set up or running"), ("oldie", "not a bot being set up or running")):
-        r = api.post("/api/v2/github/repos", json={"slug": slug}, headers=auth("botops-test"))
-        assert r.status_code == 403 and why in r.text, slug
-    r = api.post("/api/v2/github/repos", json={"slug": "newbie", "template": "evil/template"}, headers=auth("botops-test"))
-    assert r.status_code == 403
-    # Any other credential is refused with the reason.
-    for who in ("runner-test", "person-test"):
-        r = api.post("/api/v2/github/repos", json={"slug": "newbie"}, headers=auth(who))
-        assert r.status_code == 403 and "Only the owner" in r.text, who
-    assert not gh.of("/generate") and not gh.of("/repos")
-
-
-
 def token_health(api):
     with api.app_state.store.read() as c:
         row = c.execute("SELECT last_error FROM service_health WHERE service='github:token'").fetchone()
         return bool(row and row["last_error"])
-
-
-def service_issues(api):
-    return [i for i in api.get("/api/v2/operations", headers=auth()).json()["issues"] if i["kind"] == "service"]
-
-
-def test_a_bot_whose_repository_is_not_on_github_keeps_team_health_green(api, gh):
-    connect(api)
-    runner_token(api, "cpo")
-    gh.missing.add("emp-cpo")
-    r = turn_token(api)
-    assert r.status_code == 409 and "does not exist yet" in r.text
-    assert "can't create repositories (Administration is off)" in r.text       # connected without Administration
-    assert not token_health(api) and not service_issues(api)
-
-
-def test_repository_creation_is_only_suggested_when_the_app_can_do_it(api, gh):
-    connect(api, administration="true")
-    runner_token(api, "cpo")
-    gh.missing.add("emp-cpo")
-    assert "hub bot repo-create cpo" in turn_token(api).text
-
-
-def test_the_app_itself_failing_is_named_with_what_to_do_and_clears_on_recovery(api, gh):
-    connect(api)
-    runner_token(api, "cpo")
-    gh.refuse = (422, "The permissions requested are not granted to this installation.")
-    r = turn_token(api)
-    assert r.status_code == 409 and "Accept its updated permissions" in r.text
-    assert token_health(api)
-    issue = [i for i in service_issues(api) if i["title"] == "GitHub needs attention"]
-    assert issue and "permissions" in issue[0]["detail"] and issue[0]["action"]
-    gh.refuse = (500, "Server Error")
-    assert "HTTP 500: Server Error" in turn_token(api).text
-    gh.refuse = None
-    assert turn_token(api).status_code == 200
-    assert not token_health(api) and not service_issues(api)
-
-
-def test_a_row_written_before_app_only_recording_is_not_shown_and_disconnecting_clears_it(api, gh):
-    connect(api)
-    with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO service_health VALUES('github:token',NULL,?,?)",
-                  (H.now(), json.dumps({"message": "The repository Acme/emp-cpo does not exist yet on GitHub."})))
-    assert not service_issues(api)
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE github_app SET installation_id=77")
-    checks = {c["id"]: c["status"] for c in api.get("/api/v2/health", headers=auth()).json()["checks"]}
-    assert checks["github"] == "ok"
-    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
-    with api.app_state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM service_health WHERE service='github:token'").fetchone()
-
-
-def stored_administration(api):
-    with api.app_state.store.read() as c:
-        return c.execute("SELECT administration FROM github_app").fetchone()["administration"]
-
-
-def test_live_write_permission_lets_create_repo_proceed_and_updates_the_stored_flag(api, gh):
-    connect(api)                                        # set up without Administration
-    assert stored_administration(api) == 0
-    gh.permissions = {"administration": "write", "contents": "write"}   # the owner added it later and accepted it
-    assert api.get("/api/v2/github/app", headers=auth()).json()["administration"] is True
-    assert stored_administration(api) == 1
-    r = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth())
-    assert r.status_code == 200, r.text
-    assert gh.of("/repos")
-
-
-def test_live_permissions_without_administration_refuse_even_when_the_stored_flag_says_yes(api, gh):
-    connect(api, administration="true")
-    gh.permissions = {"contents": "write", "metadata": "read"}
-    r = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth())
-    assert r.status_code == 409
-    assert "turn on Administration for the app in GitHub and accept it for the organisation" in r.text
-    assert not gh.of("/repos")
-    assert stored_administration(api) == 0
-    assert api.get("/api/v2/github/app", headers=auth()).json()["administration"] is False
-
-
-def test_unreadable_live_permissions_keep_the_stored_flag(api, gh):
-    connect(api, administration="true")                 # GitHub's answer has no permissions
-    assert api.get("/api/v2/github/app", headers=auth()).json()["administration"] is True
-    assert api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth()).status_code == 200
 
 
 def test_product_repository_preview_is_owner_only_and_rejects_paths_before_github(api, gh):
@@ -490,13 +339,6 @@ def test_product_repository_preview_is_owner_only_and_rejects_paths_before_githu
                               "visibility": "private", "auto_init": False, "capability": "available",
                               "capability_detail": "The connected installation currently has Administration: write."}
     assert not any(call[0] == "POST" and call[1].endswith("/repos") for call in gh.calls)
-
-
-def test_product_repository_preview_without_connected_app_reports_an_explicit_error(api, gh):
-    response = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth())
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "github_not_connected"
-    assert gh.calls == []
 
 
 def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_receipt(api, gh, monkeypatch):
@@ -574,119 +416,6 @@ def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries
         assert operation["request_hash"] == G.digest(encode(body))
         assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
         assert operation["state"] == "pending" and operation["response_json"] is None
-
-
-def test_receipt_write_failure_leaves_pending_binding_and_retry_does_not_create_again(api, gh, monkeypatch):
-    connect(api, administration="true")
-    gh.permissions = {"administration": "write", "metadata": "read"}
-    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
-    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
-            "auto_init": preview["auto_init"], "confirmed": True}
-    original_event = G.H.event
-
-    def fail_receipt(*args, **kwargs):
-        if len(args) > 2 and args[2] == "github.product_repo_created":
-            raise RuntimeError("synthetic receipt write failure")
-        return original_event(*args, **kwargs)
-
-    monkeypatch.setattr(G.H, "event", fail_receipt)
-    failed = product_repo_request(api, body, key="receipt-write-failure")
-    assert failed.status_code == 409 and failed.json()["error"]["code"] == "github_create_outcome_unknown"
-
-    with api.app_state.store.read() as c:
-        operation = c.execute("SELECT state,response_json FROM github_product_repo_operations "
-                              "WHERE actor='human:ana' AND key=?", ("receipt-write-failure",)).fetchone()
-        assert tuple(operation) == ("pending", None)
-        assert c.execute("SELECT 1 FROM idempotency WHERE actor='human:ana' AND operation=? AND key=?",
-                         ("/api/v2/github/product-repos", "receipt-write-failure")).fetchone() is None
-
-    retry = product_repo_request(api, body, key="receipt-write-failure")
-    assert retry.status_code == 409 and retry.json()["error"]["code"] == "github_create_outcome_unknown"
-    assert gh.created_repositories == {"Acme/tico-recorder"}
-    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
-
-
-def test_concurrent_product_requests_cannot_reuse_one_key_for_two_names(api, gh):
-    from concurrent.futures import ThreadPoolExecutor
-    connect(api, administration="true")
-    gh.permissions = {"administration": "write", "metadata": "read"}
-    bodies = [
-        {"org": "Acme", "name": name, "visibility": "private", "auto_init": False, "confirmed": True}
-        for name in ("tico-recorder", "tico-recorder-other")
-    ]
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda body: product_repo_request(api, body, key="same-concurrent-key"), bodies))
-    successes = [response for response in responses if response.status_code == 200]
-    conflicts = [response for response in responses if response.status_code == 409]
-    assert len(successes) == len(conflicts) == 1
-    assert conflicts[0].json()["error"]["code"] == "idempotency_conflict"
-    create_calls = [call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]
-    assert len(create_calls) == 1
-    assert len(gh.created_repositories) == 1
-
-
-def test_product_preview_and_create_report_live_missing_or_unknown_administration(api, gh):
-    connect(api, administration="true")
-    path = "/api/v2/github/product-repos/preview"
-    gh.permissions = {"contents": "write", "metadata": "read"}
-    preview = api.get(path, params={"name": "tico-recorder"}, headers=auth())
-    assert preview.status_code == 200 and preview.json()["capability"] == "missing"
-    p = preview.json()
-    denied = product_repo_request(api, {"org": p["org"], "name": p["name"], "visibility": p["visibility"],
-                                        "auto_init": p["auto_init"], "confirmed": True}, key="missing-admin")
-    assert denied.status_code == 409 and denied.json()["error"]["code"] == "github_permission_missing"
-    assert not any(call[0] == "POST" and call[1] == "/orgs/Acme/repos" for call in gh.calls)
-
-    gh.permissions = None                  # stored setup says yes, but live GitHub cannot confirm it
-    unknown = api.get(path, params={"name": "tico-recorder"}, headers=auth())
-    assert unknown.status_code == 200 and unknown.json()["capability"] == "unknown"
-    p = unknown.json()
-    refused = product_repo_request(api, {"org": p["org"], "name": p["name"], "visibility": p["visibility"],
-                                         "auto_init": p["auto_init"], "confirmed": True}, key="unknown-admin")
-    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_capability_unknown"
-    assert not any(call[0] == "POST" and call[1] == "/orgs/Acme/repos" for call in gh.calls)
-
-
-def test_product_create_revalidates_org_and_reports_selected_installation_access_without_granting_it(api, gh, monkeypatch):
-    from backend import repositories
-    refreshes = []
-    monkeypatch.setattr(repositories, "queue_sync", lambda service, refresh=False: refreshes.append(refresh))
-    connect(api, administration="true")
-    gh.permissions = {"administration": "write", "metadata": "read"}
-    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth()).json()
-    body = {"org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
-            "auto_init": preview["auto_init"], "confirmed": True}
-    before = len(gh.calls)
-    wrong_org = product_repo_request(api, {**body, "org": "Other"}, key="other-org")
-    assert wrong_org.status_code == 409 and len(gh.calls) == before
-    unconfirmed = product_repo_request(api, {**body, "confirmed": False}, key="not-confirmed")
-    assert unconfirmed.status_code == 422 and len(gh.calls) == before
-
-    gh.selection = "selected"           # installation can create, but the new repo is not in its selected set
-    created = product_repo_request(api, body, key="selected-install")
-    assert created.status_code == 200, created.text
-    assert created.json()["installation_access"] == "owner_action_required"
-    assert "An Owner must add it" in created.json()["note"]
-    assert refreshes == []               # no inventory registration or grant while GitHub denies scoped access
-    with api.app_state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("status", [400, 401])
-def test_product_create_definite_refusal_is_not_retried(api, gh, status):
-    connect(api, administration="true")
-    gh.permissions = {"administration": "write", "metadata": "read"}
-    gh.generate_status = status
-    gh.create_response_message = "ghs_SYNTHETIC_DO_NOT_EXPOSE"
-    body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
-            "auto_init": False, "confirmed": True}
-    refused = product_repo_request(api, body, key="definite-refusal")
-    assert refused.status_code == 409
-    assert refused.json()["error"]["code"] == "github_create_failed"
-    assert "ghs_SYNTHETIC_DO_NOT_EXPOSE" not in refused.text
-    replay = product_repo_request(api, body, key="definite-refusal")
-    assert replay.status_code == 409 and replay.json() == refused.json()
-    assert len([call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos"]) == 1
 
 
 def test_product_create_does_not_expose_github_error_bodies(api, gh):

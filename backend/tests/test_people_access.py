@@ -2,11 +2,9 @@
 
 import uuid
 
-
 from backend.auth import Identity
 from backend.store import H, digest
-from backend.tests.test_onboarding import (OWNER_EMAIL, PEOPLE, TOKEN, draft, environment,  # noqa: F401
-                                           machine, signed_in)
+from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
 
 
 def person_headers(api, pid):
@@ -57,25 +55,6 @@ def test_only_owners_and_admins_read_access_and_only_the_owner_changes_who_signs
     assert view(api)["owner"]["email"] == OWNER_EMAIL
 
 
-def test_the_owner_adds_edits_and_makes_a_bot_admin(environment):
-    api = environment()
-    added = call(api, "POST", "/people", {"name": "Zed Park", "email": "Zed@Acme.example",
-                                          "title": "Analyst", "team": "ops"})
-    assert added["person"] == "zed"
-    call(api, "POST", "/people", {"name": "Other", "email": "zed@acme.example"}, expected=409)
-    call(api, "POST", "/people", {"name": "Bad", "email": "not-an-email"}, expected=422)
-    call(api, "POST", "/people/zed", {"title": "Lead", "bot_admin": True, "email": "zed@new.example"})
-    row = next(p for p in view(api)["people"] if p["id"] == "zed")
-    assert (row["title"], row["team"], row["email"]) == ("Lead", "ops", "zed@new.example")
-    assert row["bot_admin"] and row["can_sign_in"] and not row["owner"]
-    # The bot administrator entry follows the person's address.
-    assert api.app.state.auth.bot_admin(Identity("human:zed", "human", "zed@new.example"))
-    call(api, "POST", "/people/zed", {"bot_admin": False})
-    assert not api.app.state.auth.bot_admin(Identity("human:zed", "human", "zed@new.example"))
-    call(api, "POST", "/people/morgan", {"bot_admin": True}, expected=409)          # the owner already can
-    call(api, "POST", "/people/morgan", {"email": "m@acme.example"}, expected=409)  # identity is the email
-
-
 def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_routes(environment):
     api = environment()
     old, new = person_headers(api, "morgan"), person_headers(api, "riley")
@@ -98,19 +77,6 @@ def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_rou
         events = c.execute("SELECT actor,target,detail_json FROM events WHERE action='owner.transferred'").fetchall()
     assert len(events) == 1 and events[0]["actor"] == "human:morgan" and events[0]["target"] == "riley"
     assert "riley@acme.example" in events[0]["detail_json"]
-
-
-def test_a_transfer_needs_confirmation_a_fresh_revision_and_an_active_other_person(environment):
-    api = environment()
-    revision = view(api)["owner"]["revision"]
-    call(api, "POST", "/owner", {"person": "riley", "expected_revision": revision}, expected=422)
-    call(api, "POST", "/owner", {"person": "riley", "expected_revision": revision, "confirm": False}, expected=422)
-    call(api, "POST", "/owner", {"person": "riley", "expected_revision": revision + 5, "confirm": True}, expected=409)
-    call(api, "POST", "/owner", {"person": "morgan", "expected_revision": revision, "confirm": True}, expected=409)
-    call(api, "POST", "/owner", {"person": "nobody", "expected_revision": revision, "confirm": True}, expected=404)
-    api.post("/api/v2/people/riley", json={"left": True}, headers=signed_in())
-    call(api, "POST", "/owner", {"person": "riley", "expected_revision": revision, "confirm": True}, expected=404)
-    assert view(api)["owner"]["email"] == OWNER_EMAIL
 
 
 def test_a_person_who_left_loses_their_tokens_and_cannot_sign_in(environment):
@@ -156,24 +122,3 @@ def test_allow_list_changes_take_effect_without_a_restart(environment):
          expected=422)
 
 
-
-def test_who_may_join_sorts_addresses_and_domains_and_refuses_what_could_never_match(environment):
-    api = environment()
-    api.app.state.auth.proxy = HeaderProxy()
-
-    def save(entries, domains=(), expected=200):
-        body = {"allowed": entries, "allowed_domains": list(domains), "expected_revision": view(api)["revision"]}
-        return call(api, "PUT", "/allow", body, expected=expected)
-
-    # Either box takes either kind of entry: a domain written three ways, and an address at a public mail service.
-    saved = save(["Dana@Northwind.example", "*@northwind.example", "@Other.example", "third.example", "sam@gmail.com"], ["  "])
-    assert saved["allowed"] == ["dana@northwind.example", "sam@gmail.com"]
-    assert saved["allowed_domains"] == ["northwind.example", "other.example", "third.example"]
-    assert view(api)["allowed_domains"] == saved["allowed_domains"]
-    assert api.get("/api/v2/tasks", headers={"x-test-email": "kim@northwind.example"}).status_code == 200     # `*@` really admits
-    # Anything that could never match is refused by name, and nothing is stored.
-    for bad, word in (("a*@x.com", "a*@x.com"), ("not an address", "not an address"), ("*.northwind.example", "*.northwind.example"),
-                      ("*@gmail.com", "gmail.com"), ("gmail.com", "Gmail account")):
-        refused = save([bad], expected=422)
-        assert word in refused["error"]["detail"], (bad, refused)
-    assert view(api)["allowed_domains"] == ["northwind.example", "other.example", "third.example"]

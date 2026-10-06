@@ -6,7 +6,7 @@ from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, get, post, ready, runner  # noqa: F401
 
 
-@pytest.mark.parametrize("reader", ["ana-test", "ben-test", "bot"])
+@pytest.mark.parametrize("reader", ["ana-test", "ben-test"])
 def test_messages_include_readable_tasks_created_during_the_turn(api, reader):
     as_member(api, "ben@acme.example")
     r = runner(api)
@@ -25,7 +25,7 @@ def test_messages_include_readable_tasks_created_during_the_turn(api, reader):
         # A party files the subtask; ordinary read alone does not permit filing it.
         H.say(c, "bot:ops", "human:ana", "Filed the work.", conversation_id=msg["conversation_id"],
               in_reply_to=msg["id"], refs={"turn_id": attempt["id"], "tasks": [visible["id"], private["id"], child["id"]]})
-    token = attempt["token"] if reader == "bot" else reader
+    token = reader
     for path in ("messages", "snapshot"):
         result = get(api, f"conversations/{msg['conversation_id']}/{path}", token)
         messages = result["messages"] if path == "snapshot" else result

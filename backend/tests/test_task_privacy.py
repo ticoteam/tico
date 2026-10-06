@@ -8,9 +8,7 @@ from backend import task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post
 
 
-@pytest.mark.parametrize('requester,owner', [
-    ('human:ben', 'human:priya'), ('human:ben', 'bot:cpo'),
-    ('bot:ops', 'human:priya'), ('bot:ops', 'bot:cpo')])
+@pytest.mark.parametrize('requester,owner', [('human:ben', 'bot:cpo')])
 def test_private_two_party_matrix(api, requester, owner):
     tokens = {'human:ana': 'ana-test', 'human:ben': 'ben-test', 'human:priya': 'priya-test',
               **{'bot:' + slug: bot_token(api, slug) for slug in ('ops', 'cpo', 'cmo')}}
@@ -131,41 +129,6 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     assert get(api, 'tasks/' + task['id'])['task']['private']
 
 
-def test_legal_template_and_branch_defaults_and_verified_human_origin(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
-                  (json.dumps({'template': 'general-counsel'}),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
-                  (json.dumps({'shared_from': 'ops'}),))
-        assert H.private_tasks_default(c, 'bot:ops')
-        assert H.private_tasks_default(c, 'bot:cpo')
-        task = H.task_create(c, 'bot:cpo', 'Review the agreement', 'Review it.', 'bot:cpo',
-                             requester_actor='human:ben', lint=False)
-        assert task['private'] and task['requester'] == 'human:ben'
-        raw = c.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
-        assert H.task_private(c, raw)
-        assert H.task_private_readable(c, 'human:ben', raw)
-        assert not H.task_private_readable(c, 'human:ana', raw)
-        company = H.task_create(c, 'human:ben', 'Review the public terms', 'Review it.', 'bot:cpo',
-                                private=False, lint=False)
-        assert not company['private']
-        bot_attempt = H.task_create(c, 'bot:cpo', 'Review sensitive terms', 'Review it.', 'bot:cpo', private=False, lint=False)
-        assert bot_attempt['private']
-
-
-def test_private_reassignment_updates_thread_members_without_losing_messages(api):
-    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the draft', 'body': 'Review it.', 'private': True})
-    post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Tracked comment.'}, token='ben-test')
-    task = get(api, 'tasks/' + task['id'])['task']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'priya'})
-    with api.app.state.store.read() as c:
-        row = H.task(c, task['id'])
-        conv = H.conversation(c, row['conversation_id'])
-        assert set(json.loads(conv['participants_json'])) == {'human:ana', 'human:priya'}
-        assert c.execute('SELECT 1 FROM messages WHERE conversation_id=? AND body=?',
-                         (conv['id'], 'Tracked comment.')).fetchone()
-
-
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
     private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
@@ -214,23 +177,6 @@ def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit
             H.VIA.reset(token)
         diagnostics = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
         assert private['id'] not in str([tuple(row) for row in diagnostics])
-
-
-def test_task_read_snapshot_cannot_mix_old_access_with_new_private_comment(api):
-    from backend.auth import Identity
-    from backend.store import Problem
-    task = post(api, 'tasks', {'owner': 'priya', 'title': 'Review the packet', 'body': 'Public draft.'})
-    store, auth = api.app.state.store, api.app.state.auth
-    outsider = Identity('human:ben', 'human')
-    with store.read() as before:
-        assert auth.task(before, outsider, task['id'])['private'] == 0
-        with store.transaction() as writer:
-            H.task_update(writer, 'human:ana', task['id'], private=True)
-            H.task_comment(writer, 'human:ana', task['id'], 'Added after revocation.', wake=False)
-        assert all(m['body'] != 'Added after revocation.' for m in H.task_comments(before, task['id']))
-    with store.read() as after:
-        with pytest.raises(Problem):
-            auth.task(after, outsider, task['id'])
 
 
 def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_path):

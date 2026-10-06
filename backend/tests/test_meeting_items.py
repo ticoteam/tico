@@ -3,13 +3,7 @@
 The task, doc and feature pushes go through the real hub task path, because that is the point of them.
 """
 
-import json
-
-import pytest
-
-from backend import meeting_items as MI
-from backend.store import H
-from backend.tests.test_api import api, get, headers, post   # noqa: F401
+from backend.tests.test_api import api, get, headers   # noqa: F401
 
 
 def record(api, body=None, token="ana-test"):
@@ -81,18 +75,3 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     # A task with no owner is refused rather than guessed.
     bare = add(api, rid, {"section": "task", "text": "Someone should follow up"})["item"]["id"]
     push(api, rid, bare, expected=422)
-
-
-
-def test_feature_categories_accept_team_names_and_keep_legacy_codes():
-    from types import SimpleNamespace
-    named = MI.detail_of("feature", {"side": "Mobile", "app": "Customer portal"})
-    fields = MI.feature_fields(SimpleNamespace(public_url="https://tico.example.com"),
-                              {"id": "meeting", "title": "Planning", "metadata": {}, "created": "2026-10-01"},
-                              {"text": "Support offline search", "quote": "", "quote_ms": None}, named, "Ana")
-    assert fields["labels"] == ["Mobile", "customer portal"]
-    plain = MI.feature_fields(SimpleNamespace(public_url="https://tico.example.com"),
-                              {"id": "meeting", "title": "Planning", "metadata": {}, "created": "2026-10-01"},
-                              {"text": "Support offline search", "quote": "", "quote_ms": None}, {}, "Ana")
-    assert plain["labels"] == []
-    assert MI.detail_of("feature", {"side": "B/F", "app": "CA"}) == {"side": "B/F", "app": "CA"}

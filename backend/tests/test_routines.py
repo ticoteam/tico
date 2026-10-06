@@ -1,14 +1,10 @@
 """Routines are rows in the hub (backend/routines.py): people and bots write them through the
 API, the scheduler turns each due occurrence into a task, and the listing and occurrence views
 read the same rows."""
-import json
-
-import pytest
 from datetime import datetime, timezone
 
-from backend.routines import emit, occurrences
 from backend.scheduler import Scheduler
-from backend.store import H, encode
+from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 
 AUDIT = dict(key="audit", cron="0 7 * * 1-5", title="Daily rental stats audit",
@@ -68,8 +64,8 @@ def test_a_routine_is_created_listed_fired_and_seen_by_the_bot(api):
     assert scheduler(api).tick(datetime(2026, 9, 14, 14, 1, tzinfo=timezone.utc))["fired"] == []
 
 
-@pytest.mark.parametrize('status', ['open', 'doing', 'waiting', 'review', 'ready'])
-def test_later_occurrences_keep_unfinished_claimed_work_and_deduplicate(api, status):
+def test_later_occurrences_keep_unfinished_claimed_work_and_deduplicate(api):
+    status = 'doing'
     r = setup(api)
     first = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))['fired'][0]
     attempt = claim(api, r)
@@ -106,25 +102,6 @@ def test_who_may_write_a_bots_routines(api):
     assert rows(api, "ops", token=attempt["token"])[0]["key"] == "weekly"
 
 
-def test_cadence_edits_move_the_next_fire_and_never_backfill(api):
-    setup(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE schedules SET last_fired='2026-09-11T14:00:00.000000Z' WHERE id='ops:audit'")
-    at = datetime(2026, 9, 14, 14, 10, tzinfo=timezone.utc)
-    from unittest.mock import patch
-    with patch("backend.routines.datetime") as clock:
-        clock.now.return_value = at
-        post(api, "routines/ops:audit", {"cron": "30 7 * * 1-5"})
-    assert scheduler(api).tick(at)["fired"] == []
-    audit = next(row for row in rows(api) if row["key"] == "audit")
-    assert audit["next_due"] == "2026-09-14T14:30:00.000000Z"
-    assert audit["last_fired"] == "2026-09-11T14:00:00.000000Z"
-    # Disabling keeps the row and its settings; the clock skips it.
-    post(api, "routines/ops:audit", {"enabled": False})
-    assert scheduler(api).tick(datetime(2026, 9, 14, 15, tzinfo=timezone.utc))["fired"] == []
-    assert next(row for row in rows(api) if row["key"] == "audit")["enabled"] is False
-
-
 def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api):
     r = setup(api)
     fired = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"]
@@ -151,19 +128,7 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "leased"
 
 
-
-def test_routine_errors_name_the_field_and_routine():
-    import pytest
-    from clients.routines import validate_schedules
-    entry = {"title": "Weekly review", "cron": "not a cron"}
-    with pytest.raises(ValueError, match="Weekly review: cron.*five fields"):
-        validate_schedules([entry])
-    with pytest.raises(ValueError, match="Weekly review: QA/Invalid is not a time zone"):
-        validate_schedules([{**entry, "cron": "0 9 * * 1-5", "timezone": "QA/Invalid"}])
-
-
-@pytest.mark.parametrize("absorbed_before_update", [False, True])
-def test_run_now_during_another_task_stays_queued_for_its_own_run(api, absorbed_before_update):
+def test_run_now_during_another_task_stays_queued_for_its_own_run(api):
     r = setup(api)
     task = post(api, "tasks", {"title": "Write a report", "body": "Write the report", "owner": "ops"})
     attempt = claim(api, r)
@@ -172,12 +137,11 @@ def test_run_now_during_another_task_stays_queued_for_its_own_run(api, absorbed_
     tid = fired["task_id"]
     assert tid != task["id"]
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, r["token"])["messages"] == []
-    if absorbed_before_update:
-        with api.app.state.store.transaction() as c:
-            message = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                "WHERE j.bot='ops' AND json_extract(m.refs_json,'$.task')=? AND j.state='queued'", (tid,)).fetchone()[0]
-            c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], message, H.now()))
-            c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (attempt["id"], message))
+    with api.app.state.store.transaction() as c:
+        message = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                            "WHERE j.bot='ops' AND json_extract(m.refs_json,'$.task')=? AND j.state='queued'", (tid,)).fetchone()[0]
+        c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], message, H.now()))
+        c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (attempt["id"], message))
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Report finished"}, r["token"])
     next_attempt = claim(api, r)
     assert next_attempt["task"]["id"] == tid

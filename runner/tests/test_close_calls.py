@@ -145,8 +145,3 @@ def test_a_pending_activity_close_deleted_leaves_the_queue_and_the_rest_are_stil
     assert worker.tick() == 1                       # the call behind it came in
     assert [p["external_id"] for p in worker.state.close_pending()] == []
     assert hub.posts[-1] == ("imports/sources/close/status", {"state": "ok", "pending": 0, "imported": 1})
-
-
-def test_a_close_failure_is_not_reported_as_a_missing_key():
-    assert issubclass(CC.CloseError, RuntimeError)          # why the old check misread it
-    assert CC.CloseError("Close returned HTTP 500", 500).status == 500

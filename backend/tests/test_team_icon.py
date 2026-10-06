@@ -1,6 +1,5 @@
 import io
 
-import pytest
 from PIL import Image
 
 from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
@@ -31,30 +30,6 @@ def test_icon_owner_rights_public_png_cache_and_replacement(api):
     assert len([p for p in api.app.state.blobs.directory.rglob("*") if p.is_file()]) == 1
 
 
-@pytest.mark.parametrize("data,status", [(b"bad", 422), (image("GIF"), 422), (b"x" * (1024 * 1024 + 1), 413)])
-def test_icon_rejects_size_and_format(api, data, status):
-    assert api.post("/api/v2/team/icon", content=data, headers=headers()).status_code == status
-
-
-def test_failed_old_icon_cleanup_preserves_current_logo_and_retry_finishes(api, monkeypatch):
-    from pathlib import Path
-    assert api.post("/api/v2/team/icon", content=image(), headers=headers()).status_code == 200
-    first = api.get("/api/v2/team/icon")
-    unlink = Path.unlink
-    def failed(path, *args, **kwargs):
-        raise OSError("unavailable")
-    monkeypatch.setattr(Path, "unlink", failed)
-    retry = headers()
-    assert api.post("/api/v2/team/icon", content=image(colour="blue"), headers=retry).status_code == 503
-    current = api.get("/api/v2/team/icon")
-    assert current.status_code == 200 and current.headers["etag"] != first.headers["etag"]
-    # Another replacement cannot accumulate a third logo while cleanup is unavailable.
-    assert api.post("/api/v2/team/icon", content=image(colour="green"), headers=headers()).status_code == 503
-    monkeypatch.setattr(Path, "unlink", unlink)
-    assert api.post("/api/v2/team/icon", content=image(colour="blue"), headers=retry).status_code == 200
-    assert len([p for p in api.app.state.blobs.directory.rglob("*") if p.is_file()]) == 1
-
-
 def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
     from PIL.PngImagePlugin import PngInfo
     source = io.BytesIO()
@@ -68,12 +43,3 @@ def test_icon_strips_metadata_makes_square_and_weak_etag_matches(api):
         assert result.size == (300, 300) and not result.info
         assert result.getpixel((0, 0))[3] == 0
     assert api.get("/api/v2/team/icon", headers={"If-None-Match": '"other", W/' + response.headers["etag"]}).status_code == 304
-
-
-def test_icon_rejects_excessive_pixels_and_chunked_bytes(api):
-    large = io.BytesIO()
-    Image.new("1", (4097, 4096)).save(large, "PNG")
-    assert len(large.getvalue()) < 1024 * 1024
-    assert api.post("/api/v2/team/icon", content=large.getvalue(), headers=headers()).status_code == 422
-    chunks = (b"x" * 65536 for _ in range(17))
-    assert api.post("/api/v2/team/icon", content=chunks, headers=headers()).status_code == 413

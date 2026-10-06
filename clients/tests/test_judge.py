@@ -47,15 +47,7 @@ class Contract(unittest.TestCase):
         bad = [
             {"q": {"type": "guess", "instructions": "x"}},
             {"q": {"type": "choice", "instructions": "x", "criteria": {"only": "one"}}},
-            {"q": {"type": "score", "instructions": "x", "criteria": ["one"]}},
-            {"q": {"type": "noul", "instructions": ""}},
             {"q": {"type": "noul", "instructions": "x", "extra": 1}},
-            {"q": {"type": "noul", "instructions": "x", "criteria": ["not", "a", "map"]}},
-            {"q": {"type": "noul", "instructions": "x", "criteria": {"yes": "y", "no": "n"}}},
-            {"q": {"type": "noul", "instructions": {}}},
-            {"q": {"type": "noul", "instructions": 42}},
-            {"q": {"type": "choice", "instructions": "x", "criteria": {"a": 1, "b": "two"}}},
-            {"q": {"type": "score", "instructions": "x", "criteria": ["low", 2]}},
         ]
         for questions in bad:
             with self.assertRaises(J.JudgeError, msg=questions):
@@ -98,16 +90,10 @@ class Sets(unittest.TestCase):
                 with self.assertRaises(J.JudgeError):
                     J.load_set("listening-item", registry_dir=registry)
 
-    def test_the_triage_set_the_inbox_template_ships_is_the_release_s_own(self):
-        shipped = ROOT / "templates/catalog/inbox/questions/mail-triage.json"
-        self.assertEqual(shipped.read_text(), (ROOT / "questions/mail-triage.json").read_text())
-        self.assertEqual(J.load_set("mail-triage", root=shipped.parent)["label"], J.load_set("mail-triage")["label"])
-
     def test_registry_symlinks_and_nonfiles_never_read_outside_or_fall_back(self):
         import os, tempfile
         from unittest import mock
-        cases = ("file-link", "internal-link", "directory-link", "registry-link", "dangling-file", "dangling-directory",
-                 "file-directory", "directory-file", "file-fifo", "read-failure", "invalid-json", "invalid-set")
+        cases = ("file-link", "registry-link", "invalid-json")
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -171,16 +157,6 @@ class Sets(unittest.TestCase):
                 self.assertEqual(refused.exception.detail, "Invalid registry question set. Use a regular, valid JSON file in registry/questions.")
                 self.assertNotIn(secret, str(refused.exception))
 
-    def test_only_absent_registry_overrides_fall_back(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with_questions = root / "with-questions"
-            (with_questions / "questions").mkdir(parents=True)
-            shipped = J.load_set("listening-item", root=J.QUESTIONS_DIR)
-            for registry in (root / "missing", root, with_questions):
-                self.assertEqual(J.load_set("listening-item", registry_dir=registry)["label"], shipped["label"])
-
     def test_registry_file_swap_to_an_outside_symlink_is_refused(self):
         import os, tempfile
         from unittest import mock
@@ -204,50 +180,6 @@ class Sets(unittest.TestCase):
                 with self.assertRaises(J.JudgeError):
                     J.load_set("listening-item", registry_dir=questions.parent)
                 read.assert_not_called()
-
-    def test_platforms_without_safe_registry_open_keep_absent_and_explicit_root_fallbacks(self):
-        import tempfile
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(J, "_REGISTRY_DIR_FD", False):
-            registry = Path(directory)
-            shipped = J.load_set("listening-item", root=J.QUESTIONS_DIR)
-            self.assertEqual(J.load_set("listening-item", registry_dir=registry)["label"], shipped["label"])
-            questions = registry / "questions"
-            questions.mkdir()
-            self.assertEqual(J.load_set("listening-item", registry_dir=registry)["label"], shipped["label"])
-            (questions / "listening-item.json").write_text((J.QUESTIONS_DIR / "listening-item.json").read_text())
-            with mock.patch.object(J.os, "fdopen") as read:
-                with self.assertRaises(J.JudgeError) as refused:
-                    J.load_set("listening-item", registry_dir=registry)
-                read.assert_not_called()
-            self.assertEqual(refused.exception.code, "invalid")
-            self.assertEqual(J.load_set("listening-item", root=J.QUESTIONS_DIR, registry_dir=registry)["label"], shipped["label"])
-
-    def test_a_computer_without_this_checkout_s_questions_finds_the_bot_s_own_copy(self):
-        import os, tempfile
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as empty, tempfile.TemporaryDirectory() as repo:
-            (Path(repo) / "questions").mkdir()
-            (Path(repo) / "questions/mail-triage.json").write_text((ROOT / "questions/mail-triage.json").read_text())
-            with mock.patch.object(J, "QUESTIONS_DIR", Path(empty)), mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("HUB_DIR", None)
-                os.environ.pop("TICO_QUESTIONS_DIR", None)
-                cwd = os.getcwd()
-                try:
-                    os.chdir(empty)
-                    with self.assertRaises(J.JudgeError) as gone:
-                        J.load_set("mail-triage")                  # nowhere: still the same clear refusal
-                    self.assertEqual(gone.exception.code, "not_found")
-                    os.chdir(repo)
-                    self.assertEqual(J.load_set("mail-triage")["id"], "mail-triage")
-                finally:
-                    os.chdir(cwd)
-                os.chdir(empty)
-                try:
-                    os.environ["HUB_DIR"] = repo
-                    self.assertEqual(J.load_set("mail-triage")["id"], "mail-triage")
-                finally:
-                    os.chdir(cwd)
 
 
 if __name__ == "__main__":

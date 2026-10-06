@@ -141,100 +141,11 @@ def configure(entry, publishing=False):
                                     "company-icons/128x128@2x.png", "company-icons/icon.icns", "company-icons/icon.ico"]},
             "plugins": {"updater": updater}}
     Path("app/company-config.json").write_text(json.dumps(conf), encoding="utf-8")
-    Path("app/company.json").write_text(json.dumps(company_file(entry)), encoding="utf-8")
-
-
-def company_file(entry):
-    """The bundled company.json a generic build reads at start (app/src/config.rs)."""
-    base = url(entry.get("runner_url") or entry["url"])
-    return {"name": entry["app_name"], "hub_url": entry["url"], "slug": entry["slug"],
-            "tray_label": entry.get("tray_label", ""), "identifier": "team.tico.env." + entry["id"],
-            "updater": base + "/download/latest.json"}
-
-
-def run(*command, cwd=None):
-    # Signing and notarization tools print certificate subjects and private paths.
-    with open(os.devnull, "w") as log:
-        subprocess.run(command, cwd=cwd, stdout=log, stderr=log, check=True)
-
-
-def rebrand_mac(entry, source="generic", target="universal-apple-darwin"):
-    """Turn the generic macOS build of this release into the company's app without compiling.
-
-    Patches Info.plist (bundle id, names), adds Contents/Resources/company.json and the icon, re-signs, builds a DMG,
-    notarizes and staples it when Apple credentials exist, and signs a fresh updater archive. Output lands where
-    `pack` looks for bundles."""
-    import plistlib
-    import shutil
-    import tarfile
-    archives = list(Path(source).rglob("*.app.tar.gz"))
-    if len(archives) != 1:
-        raise Invalid("Expected one generic macOS update archive")
-    work = Path("rebrand")
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir()
-    with tarfile.open(archives[0]) as archive:
-        archive.extractall(work, filter="tar")
-    apps = list(work.glob("*.app"))
-    if len(apps) != 1:
-        raise Invalid("Generic macOS archive must contain one app")
-    name = entry["app_name"]
-    app = work / f"{name}.app"
-    apps[0].rename(app)
-    contents = app / "Contents"
-    info_path = contents / "Info.plist"
-    info = plistlib.loads(info_path.read_bytes())
-    info.update({"CFBundleIdentifier": "team.tico.env." + entry["id"], "CFBundleName": name, "CFBundleDisplayName": name})
-    icon_name = info.get("CFBundleIconFile") or "icon.icns"
-    if not icon_name.endswith(".icns"):
-        icon_name += ".icns"
-    info_path.write_bytes(plistlib.dumps(info))
-    (contents / "Resources" / "company.json").write_text(json.dumps(company_file(entry)), encoding="utf-8")
-    iconset = work / "icon.iconset"
-    iconset.mkdir()
-    for size in (16, 32, 128, 256, 512):
-        for scale in (1, 2):
-            suffix = "" if scale == 1 else "@2x"
-            run("sips", "-z", str(size * scale), str(size * scale), "app/company-icon.png",
-                "--setProperty", "format", "png", "--out", str(iconset / f"icon_{size}x{size}{suffix}.png"))
-    run("iconutil", "-c", "icns", str(iconset), "-o", str(contents / "Resources" / icon_name))
-    shutil.rmtree(iconset)
-
-    identity = os.environ.get("APPLE_SIGNING_IDENTITY", "")
-    sign = ["codesign", "--force", "--options", "runtime", "--entitlements", "app/entitlements.plist"]
-    run(*sign, *(["--timestamp", "--sign", identity] if identity else ["--sign", "-"]), str(app))
-
-    version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
-    bundle = Path(f"app/target/{target}/release/bundle")
-    shutil.rmtree(bundle, ignore_errors=True)
-    (bundle / "dmg").mkdir(parents=True)
-    (bundle / "macos").mkdir(parents=True)
-    stage = work / "dmg"
-    stage.mkdir()
-    shutil.copytree(app, stage / app.name, symlinks=True)
-    (stage / "Applications").symlink_to("/Applications")
-    dmg = bundle / "dmg" / f"{name}_{version}_universal.dmg"
-    run("hdiutil", "create", "-volname", name, "-srcfolder", str(stage), "-ov", "-format", "UDZO", str(dmg))
-    if identity:
-        run("codesign", "--force", "--timestamp", "--sign", identity, str(dmg))
-    if identity and os.environ.get("APPLE_ID"):
-        # One submission covers the DMG and the app inside it; both get the ticket stapled.
-        run("xcrun", "notarytool", "submit", str(dmg), "--apple-id", os.environ["APPLE_ID"],
-            "--password", os.environ["APPLE_PASSWORD"], "--team-id", os.environ["APPLE_TEAM_ID"], "--wait")
-        run("xcrun", "stapler", "staple", str(dmg))
-        run("xcrun", "stapler", "staple", str(app))
-    update = bundle / "macos" / f"{name}.app.tar.gz"
-    run("tar", "-czf", str(update.resolve()), app.name, cwd=str(work))
-    # The same updater key as the generic build: the sig sits beside the archive for app_release.classify.
-    run("npx", "--yes", "@tauri-apps/cli@2", "signer", "sign", str(update))
-    if not Path(str(update) + ".sig").exists():
-        raise Invalid("Updater signature was not created")
-    shutil.rmtree(work)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("matrix", "configure", "build", "rebrand", "pack", "unpack", "publish"))
+    parser.add_argument("action", choices=("matrix", "configure", "build", "pack", "unpack", "publish"))
     parser.add_argument("--company")
     parser.add_argument("--target")
     parser.add_argument("--bundles")
@@ -281,8 +192,6 @@ def main(argv=None):
                 artifacts.pack(key(entry), args.target)
             else:
                 artifacts.unpack(key(entry))
-        elif args.action == "rebrand":
-            rebrand_mac(entry)
         elif args.action == "build":
             # Build tools can print derived private paths; suppress their output entirely.
             with open(os.devnull, "w") as log:

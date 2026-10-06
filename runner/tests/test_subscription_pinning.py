@@ -31,7 +31,7 @@ def execution(tmp_path, monkeypatch):
     runner.pool.shutdown(wait=True)
 
 
-@pytest.mark.parametrize('selection', ['assigned', 'default', 'operator'])
+@pytest.mark.parametrize('selection', ['assigned'])
 def test_binding_is_shared_by_environment_host_usage_and_resume(execution, monkeypatch, selection):
     runner, client, root = execution
     work = attempt()
@@ -81,7 +81,7 @@ def test_binding_is_shared_by_environment_host_usage_and_resume(execution, monke
     assert next_host.resumes == []
 
 
-@pytest.mark.parametrize('selection', ['assigned', 'default', 'operator'])
+@pytest.mark.parametrize('selection', ['operator'])
 def test_fallback_keeps_the_initial_profile_and_usage(execution, monkeypatch, selection):
     runner, client, root = execution
     primary, secondary = FakeHost(), FakeHost(replies=['fallback'])

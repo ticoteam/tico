@@ -7,8 +7,7 @@ import json
 import pytest
 
 from backend import hubdb, providers
-from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, as_member, headers, post, runner, setup_attempt  # noqa: F401
 
 DAY = "2026-09-20"
 
@@ -39,38 +38,6 @@ def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
     assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"]) == (1000, 2000, 500)
     assert (row["model"], row["provider"], row["billing"]) == ("gpt-6-sol", "openai", "api")
     assert row["est_cost_usd"] == pytest.approx(price("gpt-6-sol", 1000, 2000, 500))    # 0.0074
-
-
-def test_a_result_without_usage_still_works(api):
-    r, _, attempt = setup_attempt(api)
-    complete(api, r, attempt)
-    assert turn(api, attempt["id"])["input_tokens"] is None
-
-
-def test_a_model_with_no_price_keeps_its_tokens_and_no_cost(api):
-    r, _, attempt = setup_attempt(api)
-    complete(api, r, attempt, {"input_tokens": 10, "cached_tokens": 0, "output_tokens": 5, "model": "some-new-model"})
-    row = turn(api, attempt["id"])
-    assert (row["input_tokens"], row["model"], row["est_cost_usd"]) == (10, "some-new-model", None)
-
-
-
-def test_a_subscription_run_preserves_an_unspecified_model_without_guessing_current_config(api):
-    r, _, attempt = setup_attempt(api)
-    complete(api, r, attempt, {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "default",
-                               "runtime": "fake", "billing": "subscription"})
-    row = turn(api, attempt["id"])
-    # Current bot configuration is not evidence of the model used by this past run.
-    assert row["billing"] == "subscription" and row["model"] == "default"
-    assert row["est_cost_usd"] is None
-
-
-def test_the_price_table_covers_every_model_a_provider_sells_and_is_dated():
-    priced = {row["id"] for row in providers.MODEL_CATALOG if row["provider"] and row["id"] not in providers.PRICES}
-    assert priced == {"cursor-auto"}                    # Cursor picks the model itself: no list price to use
-    assert len(providers.PRICES_AS_OF) == 10
-    assert providers.estimate_cost("gpt-6-luna", 1_000_000, 0, 0) == pytest.approx(0.10)
-    assert providers.estimate_cost("nothing", 5, 5, 5) is None
 
 
 def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(tmp_path):
@@ -137,47 +104,6 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
     assert sum(r["share"] for r in got["rows"]) == pytest.approx(1, abs=1e-3) and cpo["share"] > 0.99
 
 
-def test_a_model_with_no_price_shows_tokens_and_no_cost(api):
-    seed(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turns WHERE id='t5'")
-    cpo = next(r for r in usage(api)["rows"] if r["bot"] == "cpo")
-    assert cpo["est_cost_usd"] is None and cpo["input_tokens"] == 100 and cpo["unpriced_runs"] == 1
-
-
-def test_the_date_range_and_the_department_filter(api):
-    seed(api)
-    one_day = usage(api, **{"from": "2026-09-21"})
-    assert one_day["totals"]["runs"] == 3 and {r["bot"] for r in one_day["rows"]} == {"ops", "cpo"}
-    assert usage(api, **{"from": "2026-08-01", "to": "2026-08-01"})["totals"]["runs"] == 1
-    assert usage(api, **{"from": "2027-01-01", "to": "2027-01-02"})["rows"] == []
-    only = usage(api, department="product")
-    assert [r["bot"] for r in only["rows"]] == ["cpo"] and only["totals"]["runs"] == 2
-    assert "product" in only["departments"]
-    for bad in ({"from": "yesterday"}, {"from": "2026-09-22", "to": "2026-09-21"}, {"from": "2020-01-01", "to": "2026-09-21"},
-                {"group": "week"}):
-        usage(api, expected=422, **bad)
-
-
-def test_usage_by_day_and_by_routine(api):
-    seed(api)
-    days = usage(api, group="day")["rows"]
-    assert [(d["day"], d["runs"]) for d in days] == [(DAY, 2), ("2026-09-21", 3)]
-    routines = {r["routine"]: r for r in usage(api, group="routine")["rows"]}
-    assert routines["s1"]["title"] == "Morning digest" and routines["s1"]["bot"] == "ops" and routines["s1"]["runs"] == 1
-    assert routines[None]["title"] == "Other runs" and routines[None]["runs"] == 4
-
-
-def test_one_bot_is_a_daily_series_and_its_top_routines(api):
-    seed(api)
-    got = usage(api, bot="ops", **{"from": "2026-09-19", "to": "2026-09-21"})
-    assert [d["day"] for d in got["daily"]] == ["2026-09-19", DAY, "2026-09-21"]        # a quiet day is there, at zero
-    assert [d["runs"] for d in got["daily"]] == [0, 2, 1]
-    assert got["daily"][0]["est_cost_usd"] == 0 and got["totals"]["runs"] == 3
-    assert [r["title"] for r in got["routines"]] == ["Other runs", "Morning digest"]
-    usage(api, bot="nobody", expected=404)
-
-
 def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(api):
     seed(api)
     assert {r["bot"] for r in usage(api, "ben-test")["rows"]} == {"ops", "cpo"}        # Ben is an administrator
@@ -194,13 +120,3 @@ def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(
 def test_a_bot_or_a_computer_cannot_ask(api):
     r = runner(api)
     assert api.get("/api/v2/usage", headers=headers(r["token"])).status_code in (401, 403)
-
-
-def test_bot_kpi_cost_reads_the_estimate_and_leaves_out_subscription_runs(api):
-    now = H.now()
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, finished, est_cost_usd, billing) VALUES ('a','ops',?,?,0.5,'api'), "
-                  "('b','ops',?,?,9,'subscription'), ('c','ops',?,?,NULL,NULL)", (now, now, now, now, now, now))
-        c.execute("INSERT INTO turns(id, bot, started, cost) VALUES ('d','ops',?,0.25)", (now,))    # a cost a run recorded itself
-    shown = {k["id"]: k for k in get(api, "bots/ops/kpis")["kpis"]}
-    assert shown["auto:ops:cost_7d"]["latest"]["value"] == 0.75

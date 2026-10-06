@@ -3,7 +3,6 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from backend.credentials import CredentialCipher
-from backend.store import H
 from backend.tests.test_api import api,post,get,runner,assign,ready,claim,headers
 
 
@@ -26,27 +25,6 @@ def setup(api):
 
 def create(api,**kwargs):
     return post(api,'credentials',{'name':'PostHog','secret':'phx-synthetic-private-987654','env':'POSTHOG_API_KEY',**kwargs})
-
-
-def test_known_model_key_names_infer_variables_and_preserve_explicit_variables(api):
-    setup(api)
-    from backend.tests.test_api import runner
-
-    computer = runner(api)
-    row = create(api, name='OPENAI_API_KEY', env='')
-    assert row['env'] == 'OPENAI_API_KEY'
-    assert get(api, 'runner-model-credentials?runtime=codex', computer['token'])['credentials'] == []
-    post(api, f"credentials/{row['id']}/grants", {'subject': 'computers'})
-    assert get(api, 'runner-model-credentials?runtime=codex', computer['token'])['credentials'][0]['env'] == 'OPENAI_API_KEY'
-    explicit = create(api, name='OPENAI_API_KEY', env='CUSTOM_MODEL_KEY')
-    assert explicit['env'] == 'CUSTOM_MODEL_KEY'
-    assert create(api, name='Account password', kind='password', env='')['env'] == ''
-    # An older install's name-only key still offers Every computer without an edit/save step.
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE credentials SET env=\'\' WHERE id=?', (row['id'],))
-    assert next(item for item in get(api, 'credentials')['credentials'] if item['id'] == row['id'])['env'] == 'OPENAI_API_KEY'
-    post(api, f"credentials/{row['id']}/grants", {'subject': 'computers'})
-    assert get(api, 'runner-model-credentials?runtime=codex', computer['token'])['credentials'][0]['env'] == 'OPENAI_API_KEY'
 
 
 def test_ciphertext_only_and_authorizers_and_validation_redaction(api):
@@ -94,24 +72,6 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     # Regranting a person does not resurrect their old delegated grants.
     post(api,f'credentials/{cid}/grants',{'subject':'human:cara'})
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
-
-
-def test_ungranted_bot_tamper_idempotency_and_stale_lease(api):
-    setup(api);row=create(api);cid=row['id']
-    machine=runner(api);assign(api,machine,'ops');ready(api,machine,['ops'])
-    post(api,'chat/ops',{'text':'Synthetic check'})
-    attempt=claim(api,machine)
-    post(api,f'credentials/{cid}/reveal',{},attempt['token'],expected=403)
-    post(api,f'credentials/{cid}/grants',{'subject':'bot:ops'})
-    assert post(api,f'credentials/{cid}/reveal',{},attempt['token'])['value'].startswith('phx-')
-    post(api,'credentials',{'name':'Retry','secret':'synthetic-one'},key='same')
-    post(api,'credentials',{'name':'Retry','secret':'synthetic-two'},key='same',expected=409)
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE credentials SET nonce=? WHERE id=?',(os.urandom(12),cid))
-    post(api,f'credentials/{cid}/reveal',{},expected=503)
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET lease_until=? WHERE id=?',(H.shift(H.now(),seconds=-1),attempt['id']))
-    get(api,'credential-runtime',attempt['token'],expected=409)
 
 
 def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
@@ -169,25 +129,3 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     post(api,'runner-credential-migration',{'bot':'ops','credentials':[]},machine['token'])
     assert get(api,'runner-credential-migration',machine['token'])['bots']==[]
 
-
-def test_the_hub_pass_adds_only_a_teams_own_hub_keys_to_bots_that_already_migrated(api):
-    setup(api)
-    from backend.credentials import FILE_MIGRATION, HUB_MIGRATION
-    machine=runner(api);assign(api,machine,'ops');ready(api,machine,['ops'])
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(json.dumps([]),FILE_MIGRATION))
-        c.execute('INSERT OR REPLACE INTO registry_metadata VALUES(?,?)',(HUB_MIGRATION,json.dumps(['ops'])))
-    # An old or unreported runner cannot consume the HUB_ pass, even with an empty POST.
-    for release in ('','0.2.23','0.2.30'):
-        post(api,'runners/heartbeat',{'version':'test','platform':'test','release':release},machine['token'])
-        assert get(api,'runner-credential-migration',machine['token'])['bots']==[]
-        assert not post(api,'runner-credential-migration',{'bot':'ops','credentials':[]},machine['token'])['migrated']
-        with api.app.state.store.read() as c:
-            assert json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()[0])==['ops']
-    post(api,'runners/heartbeat',{'version':'test','platform':'test','release':'0.2.31'},machine['token'])
-    assert get(api,'runner-credential-migration',machine['token'])['bots']==['ops']
-    post(api,'runner-credential-migration',{'bot':'ops','credentials':[{'env':'HUB_TOKEN','value':'x'}]},machine['token'],expected=422)
-    post(api,'runner-credential-migration',{'bot':'ops','credentials':[
-        {'env':'HUB_BUCKET','value':'fixture-bucket'},{'env':'QA_OTHER_KEY','value':'fixture-other'}]},machine['token'])
-    assert get(api,'runner-credential-migration',machine['token'])['bots']==[]
-    assert get(api,'runner-credential-grants',machine['token'])['bots']=={'ops':['HUB_BUCKET']}

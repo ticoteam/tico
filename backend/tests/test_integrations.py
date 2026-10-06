@@ -7,14 +7,11 @@ and lets only the owner delete one.
 """
 
 import re
-from pathlib import Path
 
 import pytest
-import yaml
 
 from backend import integrations as I
 from backend.config import ROOT
-from backend.tests.test_api import api, headers
 
 PAGES = sorted(p for p in (ROOT / "integrations").glob("*.md") if p.name != "README.md")
 CATALOGS = sorted((ROOT / "integrations" / "queries").glob("*.yaml"))
@@ -23,17 +20,9 @@ CATALOGS = sorted((ROOT / "integrations" / "queries").glob("*.yaml"))
 SHIPPED = {"github", "slack", "mail", "aside", "close-crm", "postgres", "mysql", "mongodb", "sqlite"}
 
 
-def get(api, path, token="ana-test", expected=200):
-    r = api.get("/api/v2/" + path, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
 def test_the_release_ships_only_built_in_services_and_every_page_parses():
     pages, _ = I.load(ROOT / "integrations")
     assert set(pages) == SHIPPED
-    assert {name: pages[name]['title'] for name in ('aside', 'postgres', 'mysql', 'mongodb', 'sqlite')} == {
-        'aside': 'Aside', 'postgres': 'PostgreSQL', 'mysql': 'MySQL and MariaDB', 'mongodb': 'MongoDB', 'sqlite': 'SQLite'}
     with pytest.raises(I.Problem, match='No tool named missing'):
         I.Catalog(ROOT / "integrations").resolve('missing')
 
@@ -47,13 +36,13 @@ def test_a_company_page_adds_a_service_and_replaces_a_shipped_one(tmp_path):
     assert set(pages) == SHIPPED | {"stripe"}
 
 
-@pytest.mark.parametrize("path", CATALOGS, ids=[p.stem for p in CATALOGS])
-def test_every_catalog_parses_with_unique_ids_and_a_page(path):
-    queries = I.parse_queries(path.read_text(), path.name)
-    assert queries and len({q["id"] for q in queries}) == len(queries)
-    assert (ROOT / "integrations" / f"{path.stem}.md").exists()
-    for q in queries:
-        assert q["sql"].strip().lower().startswith(("select", "with")), q["id"]
+def test_every_catalog_parses_with_unique_ids_and_a_page():
+    for path in CATALOGS:
+        queries = I.parse_queries(path.read_text(), path.name)
+        assert queries and len({q["id"] for q in queries}) == len(queries), path.name
+        assert (ROOT / "integrations" / f"{path.stem}.md").exists()
+        for q in queries:
+            assert q["sql"].strip().lower().startswith(("select", "with")), q["id"]
 
 
 FIXTURE_NAMES = re.compile(r"\b(ana|ben|cara|acme|globex|ana-acme)\b", re.I)

@@ -130,6 +130,7 @@ def bot(api):
     return next(b for b in get(api, "bots?include_archived=1") if b["slug"] == "scout")
 
 
+@pytest.mark.slow
 def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, botops, connector):
     # An owner makes a Hermes bot and turns it on; a Hermes bot has no computer to be placed on.
     made = api.post("/api/v2/bots/register", json={"slug": "scout", "display_name": "Scout", "model": "hermes",

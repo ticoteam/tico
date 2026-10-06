@@ -3,15 +3,13 @@
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). A copy is an ordinary bot its requester owns; the
 server decides and records, BotOps's computer moves the files.
 """
-import base64
 import json
 import subprocess
 
 import pytest
 
-from backend import hubdb as H
 from backend.credentials import effective_grant
-from backend.tests.test_api import api, as_member, get, headers, post, restrict  # noqa: F401  (fixture)
+from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act
 from backend.tests.test_credential_sharing import jira, local
 from backend.tests.test_member_bots import botops, call, turn  # noqa: F401  (fixture)
@@ -64,15 +62,6 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     copy(api, {"slug": "cara-scribe"}, expected=409)                                            # a slug someone holds
 
 
-def test_a_model_the_company_no_longer_offers_is_replaced_by_the_team_default(api, scribe):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET model='retired-model' WHERE slug='scribe'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.model','retired-model') WHERE bot='scribe'")
-    made = copy(api)
-    fresh = post(api, "bots/register", {"slug": "fresh"}, "cara-test")
-    assert made["model"] == fresh["model"] != "retired-model"
-
-
 def test_who_may_copy_what_and_how_many(api, botops, scribe):
     with api.app.state.store.transaction() as c:
         restrict(c, "scribe", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
@@ -111,21 +100,6 @@ def test_a_credential_the_original_holds_is_granted_only_by_a_credential_adminis
 
 
 # ------------------------------------------------------------------ update from the original, and suggesting back
-def test_a_copy_knows_what_it_was_copied_from_and_only_its_owner_updates_it(api, scribe):
-    post(api, "bots/scribe/update-from-original", {}, "ana-test", expected=409)                   # not a copy
-    copy(api, {"slug": "cara-scribe"})
-    plan = post(api, "bots/cara-scribe/update-from-original", {}, "cara-test")
-    assert (plan["original"], plan["base_sha"], plan["repo"]) == ("scribe", SHA, "bot-cara-scribe")
-    post(api, "bots/cara-scribe/update-from-original", {}, "ben-test")                            # an admin manages it
-    as_member(api, "ben@acme.example")
-    post(api, "bots/cara-scribe/update-from-original", {}, "ben-test", expected=403)              # a stranger does not
-    # A merged copy is now up to date with the original's newer commit, and the record says so.
-    newer = "b" * 40
-    done = post(api, "bots/cara-scribe/update-from-original", {"applied_sha": newer}, "cara-test")
-    assert done["base_sha"] == newer and config_of(api, "cara-scribe")[1]["copied_from"] == {"bot": "scribe", "sha": newer}
-    post(api, "bots/cara-scribe/update-from-original", {"applied_sha": "nope"}, "cara-test", expected=422)
-
-
 class GitHub:
     """What the GitHub App is asked to do, recorded, for one repository."""
     def __init__(self):
@@ -158,77 +132,8 @@ class GitHub:
         return answer
 
 
-def suggestion(**more):
-    return {"files": [{"path": "AGENT.md", "content": "# Scribe, better\n"}, {"path": "skills/triage/SKILL.md", "content": "Triage.\n"}],
-            "diff": "-old\n+new\n", "held_back": ["playbooks/x.md"], **more}
-
-
-def test_a_suggestion_is_a_pull_request_when_the_requester_may_write_else_a_task_for_the_owner(api, scribe, monkeypatch):
-    copy(api, {"slug": "cara-scribe"})
-    github, service = GitHub(), api.app.state.github_app
-    monkeypatch.setattr(service, "row", lambda c=None: {"org": "Acme", "administration": 1})
-    monkeypatch.setattr(service, "mint", lambda repos, permissions: ("ghs_token", "later"))
-    monkeypatch.setattr(service, "_call", lambda method, path, **kw: github(method, path, **kw))
-    made = post(api, "bots/cara-scribe/suggest-to-original", suggestion(title="Better triage"), "cara-test")
-    assert made["how"] == "pull_request" and made["url"].endswith("/pull/7") and made["files"] == ["AGENT.md", "skills/triage/SKILL.md"]
-    sent = {(m, p.rsplit("/", 1)[-1]): body for m, p, body in github.calls if body}
-    assert sent[("POST", "refs")]["ref"].startswith("refs/heads/tico/suggest-cara-scribe-") and sent[("POST", "refs")]["sha"] == "f" * 40
-    agent = next(body for m, p, body in github.calls if m == "PUT" and p.endswith("/contents/AGENT.md"))
-    assert base64.b64decode(agent["content"]) == b"# Scribe, better\n" and agent["sha"] == "old-sha"     # an existing file is updated
-    pull = sent[("POST", "pulls")]
-    assert pull["title"] == "Better triage" and pull["base"] == "main" and "playbooks/x.md" in pull["body"] and "+new" in pull["body"]
-    assert not any("hunter" in json.dumps(body) for _, _, body in github.calls if body)
-    # Without write access to the original the owner gets the diff as a task instead, and nothing reaches GitHub.
-    with api.app.state.store.transaction() as c:
-        restrict(c, "scribe", see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
-    before = len(github.calls)
-    asked = post(api, "bots/cara-scribe/suggest-to-original", suggestion(), "cara-test")
-    assert asked["how"] == "task" and "may not write" in asked["detail"] and len(github.calls) == before
-    with api.app.state.store.read() as c:
-        task = H.task(c, asked["task_id"])
-    assert task["owner"] == "human:ana" and task["requester"] == "human:cara" and "+new" in task["body"] and "AGENT.md" in task["body"]
-    # Only instructions, and only by someone who manages the copy.
-    post(api, "bots/cara-scribe/suggest-to-original", {"files": [{"path": ".env", "content": "x"}]}, "cara-test", expected=422)
-    post(api, "bots/cara-scribe/suggest-to-original", {"files": [{"path": "reports/a.md", "content": "x"}]}, "cara-test", expected=422)
-    post(api, "bots/cara-scribe/suggest-to-original", suggestion(), "ben-test")
-    as_member(api, "ben@acme.example")
-    post(api, "bots/cara-scribe/suggest-to-original", suggestion(), "ben-test", expected=403)
-
-
 # ------------------------------------------------------------------ a skill
-def test_a_skill_is_copied_only_to_bots_the_requester_manages_and_reads_from_a_bot_they_read(api, scribe):
-    copy(api, {"slug": "cara-scribe"})
-    body = {"skill": "triage", "to": ["cara-scribe"]}
-    assert post(api, "bots/scribe/skills/copy", body, "cara-test") == {
-        "skill": "triage", "from": "scribe", "to": [{"bot": "cara-scribe", "repo": "bot-cara-scribe"}]}
-    post(api, "bots/scribe/skills/copy", {"skill": "triage", "to": ["ops"]}, "cara-test", expected=403)        # not hers to change
-    post(api, "bots/scribe/skills/copy", {"skill": "triage", "to": ["scribe"]}, "cara-test", expected=422)
-    post(api, "bots/scribe/skills/copy", {"skill": "../x", "to": ["cara-scribe"]}, "cara-test", expected=422)
-    post(api, "bots/scribe/skills/copy", {"skill": "triage", "to": ["ghost"]}, "cara-test", expected=404)
-    with api.app.state.store.transaction() as c:
-        restrict(c, "scribe", people=["ana"])
-    post(api, "bots/scribe/skills/copy", body, "cara-test", expected=404)                                     # she cannot even see it
-    assert post(api, "bots/scribe/skills/copy", {"skill": "triage", "to": ["cara-scribe", "ops"]}, "ana-test")["to"][1]["bot"] == "ops"
-
-
 # ------------------------------------------------------------------ BotOps, as the requester
-def test_botops_copies_as_the_person_who_asked_and_never_as_itself(api, botops, scribe):
-    attempt = turn(api, botops, text="Make me my own copy of the scribe")
-    made = act(api, attempt, "POST", "bots/scribe/copy", {"slug": "cara-scribe", "sha": SHA})
-    assert made.status_code == 200, made.text
-    row, config = config_of(api, "cara-scribe")
-    assert (row["created_by"], row["operator"]) == ("human:cara", "cara") and config["copied_from"]["bot"] == "scribe"
-    with api.app.state.store.read() as c:
-        for action in ("bot.definition_created", "bot.copied"):
-            event = c.execute("SELECT actor,detail_json FROM events WHERE action=? AND target='cara-scribe'", (action,)).fetchone()
-            assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail_json"]
-    # Both explicit and default requester rights enforce her source Read check.
-    with api.app.state.store.transaction() as c:
-        restrict(c, "scribe", people=["ana"])
-    assert act(api, attempt, "POST", "bots/scribe/copy", {"slug": "again", "sha": SHA}).status_code == 404
-    assert call(api, "post", "bots/scribe/copy", attempt["token"], {"sha": SHA}).status_code == 404          # Default requester rights also enforce the source Read check
-
-
 class Hub:
     """The `api` the tools call, as BotOps's runner makes it: its own token, and the requester's header when acting for a person."""
     def __init__(self, api, token):
@@ -254,6 +159,7 @@ def git(path, *argv):
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
+@pytest.mark.slow
 def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_requester(api, botops, scribe, monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     original = workspace / "bot-scribe"

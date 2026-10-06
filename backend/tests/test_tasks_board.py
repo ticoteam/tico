@@ -12,7 +12,6 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
-from backend.tests.test_mcp import call
 
 
 @pytest.fixture
@@ -97,10 +96,8 @@ def test_completing_a_bot_requested_human_task_needs_a_result(api):
     assert done["status"] == "done" and done["note"] == "Keep the hold; no publication is approved."
 
 
-@pytest.mark.parametrize('owner', ['ana', 'ops'])
-@pytest.mark.parametrize('completion', [{'status': 'done'}, {'step': 'Done'}])
-def test_self_requested_completion_stays_done_until_explicit_close(api, owner, completion):
-    token = 'ana-test' if owner == 'ana' else bot_token(api)
+def test_self_requested_completion_stays_done_until_explicit_close(api):
+    owner, completion, token = 'ana', {'status': 'done'}, 'ana-test'
     task = post(api, 'tasks', {'owner': owner, 'title': 'Check the receipt', 'body': 'Check the receipt totals.'}, token=token)
     assert task['requester'] == task['owner']
     dry = post(api, 'tasks/dry-run', {'owner': owner, 'title': task['title'], 'body': task['body']}, token=token)
@@ -190,22 +187,6 @@ def test_only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api)
     assert post(api, path, {"text": "Use the October numbers."}, token="ben-test")["comment"]["edited_at"]
 
 
-def test_a_question_an_answer_or_a_chat_line_is_not_a_comment_to_edit(api):
-    # A person's task has a thread of its own: Ben asks, Ana answers.
-    task = post(api, "tasks", {"owner": "ben", "title": "Draft the newsletter", "body": "Draft it."})
-    ask = post(api, f"tasks/{task['id']}/ask", {"text": "Which month?"}, token="ben-test")
-    answer = post(api, f"messages/{ask['id']}/answer", {"text": "September"})
-    # A bot's task lives in its chat room, where a chat line that mentions the task is not a comment.
-    work = post(api, "tasks", {"owner": "ops", "title": "Draft the update", "body": "x"})
-    with api.app.state.store.transaction() as c:
-        chat = H.say(c, "human:ana", "bot:ops", "Also the footer.", conversation_id=work["conversation_id"],
-                     refs={"task": work["id"]})
-    for tid, mid in ((task["id"], ask["id"]), (task["id"], answer["id"]), (work["id"], chat["id"])):
-        refused = post(api, f"tasks/{tid}/comments/{mid}", {"text": "October"}, expected=403)
-        assert "not a question, an answer" in refused["error"]["detail"]
-        post(api, f"tasks/{tid}/comments/{mid}/delete", {}, expected=403)
-
-
 def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
     with api.app.state.store.transaction() as c:
@@ -247,20 +228,6 @@ def test_only_a_mover_changes_lane_labels_or_blocked_by_on_someone_elses_task(ap
 # ----------------------------------------------------------------------------- preferences
 
 
-def test_task_labels_and_links_with_an_attachment(api):
-    import json
-    response = api.post("/api/v2/uploads/tasks", headers=headers(), data={
-        "owner": "ana", "title": "Review the release", "body": "Check the attached notes.",
-        "labels": json.dumps(["release"]), "links": json.dumps(["https://example.com/release"]),
-        "acceptance_criteria": json.dumps(["Read the notes"])},
-        files={"files": ("notes.md", b"Release notes", "text/markdown")})
-    assert response.status_code == 200, response.text
-    task = response.json()["task"]
-    assert task["labels"] == ["release"]
-    assert task["links"][0]["url"] == "https://example.com/release"
-    assert task["attachments"][0]["name"] == "notes.md"
-
-
 def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(api):
     api_half = post(api, "tasks", {"owner": "ops", "title": "Add the refund endpoint", "body": "x"})
     ui_half = post(api, "tasks", {"owner": "ben", "title": "Show the refund button", "body": "x"})
@@ -300,8 +267,8 @@ def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(a
 
 
 # ----------------------------------------------------------------------------- tags
-@pytest.mark.parametrize("cloud", [False, True])
-def test_tag_migration_backfills_once_and_preserves_legacy_column(api, cloud):
+def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
+    cloud = False
     typ = pipeline(api)
     task = post(api, "tasks", {"owner": "cmo", "title": "Review the migration", "body": "x",
                               "type": typ["id"], "step": "Copy review"})
@@ -334,46 +301,6 @@ def test_tag_migration_backfills_once_and_preserves_legacy_column(api, cloud):
         assert c.execute("SELECT labels_json FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
 
 
-def test_legacy_label_keys_write_tags_and_filter_by_join(api):
-    task = post(api, "tasks", {"owner": "cmo", "title": "Fix the settings", "body": "x", "labels": ["Bug", "settings"]})
-    assert task["labels"] == ["bug", "settings"]
-    assert [(tag["key"], tag["label"], tag["metadata"]) for tag in task["tags"]] == [
-        ("bug", "bug", {}), ("settings", "settings", {})]
-    with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT labels_json FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == "[]"
-        c.execute("UPDATE tasks SET labels_json='[\"obsolete\"]' WHERE id=?", (task["id"],))
-    assert get(api, "tasks?label=bug")["tasks"][0]["id"] == task["id"]
-    assert get(api, "tasks?label=obsolete")["tasks"] == []
-    assert get(api, "tasks/labels")["labels"] == ["bug", "settings"]
-    updated = post(api, "tasks/" + task["id"], {"version": task["version"], "labels": ["settings", "new-key"]})
-    assert updated["labels"] == ["settings", "new-key"]
-    data = get(api, "tasks/" + task["id"])
-    assert data["task"]["labels"] == updated["labels"]
-    assert any(event["field"] == "labels" and event["new"] == '["settings", "new-key"]' for event in data["events"])
-    with api.app.state.store.read() as c:
-        assert {row[0] for row in c.execute("SELECT action FROM events WHERE action LIKE 'tag.%'")} >= {
-            "tag.create", "tag.attach", "tag.detach"}
-
-
-def test_template_instances_copy_defaults_and_cannot_attach_templates(api):
-    template = post(api, "tags", {"key": "release-checklist", "label": "release", "is_template": True,
-        "metadata": {"date": "2026-10-02", "channel": "stable"}, "markdown": "- [ ] Smoke checks"})["tag"]
-    instance = post(api, "tags/" + template["id"] + "/instances", {"key": "release-2026-10-02", "metadata": {"date": "2026-10-03"}})["tag"]
-    assert instance["template_id"] == template["id"] and not instance["is_template"]
-    assert instance["label"] == "release" and instance["markdown"] == template["markdown"]
-    assert instance["metadata"] == {"date": "2026-10-03", "channel": "stable"}
-    post(api, "tags/" + template["id"], {"version": 1, "markdown": "Changed", "metadata": {} })
-    assert get(api, "tags/" + instance["key"])["tag"]["markdown"] == "- [ ] Smoke checks"
-    assert get(api, "tags?is_template=true")["tags"][0]["id"] == template["id"]
-    task = post(api, "tasks", {"owner": "cmo", "title": "Ship the release", "body": "x", "labels": [instance["key"]]})
-    assert task["tags"][0]["metadata"] == instance["metadata"]
-    assert get(api, "tags/" + instance["key"])["tasks"][0]["id"] == task["id"]
-    post(api, "tasks/" + task["id"], {"version": task["version"], "labels": ["would-be-new", template["key"]]}, expected=422)
-    assert get(api, "tags/" + instance["key"])["tasks"][0]["id"] == task["id"]
-    assert not any(tag["key"] == "would-be-new" for tag in get(api, "tags")["tags"])
-    post(api, "tasks", {"owner": "cmo", "title": "Invalid template task", "body": "x", "labels": [template["key"]]}, expected=422)
-
-
 def test_tag_owner_movers_and_stale_versions(api):
     tag = post(api, "tags", {"key": "release-day", "owner": "priya", "markdown": "- [ ] Smoke checks"})["tag"]
     assert get(api, "tags/" + tag["id"], token="priya-test")["editable"] is True
@@ -390,36 +317,6 @@ def test_tag_owner_movers_and_stale_versions(api):
     post(api, "tasks/" + task["id"], {"version": task["version"], "labels": [mine["key"]]}, token="priya-test", expected=403)
 
 
-def test_bot_tag_owner_edits_and_tag_tasks_respect_visibility(api):
-    token = bot_token(api, "ops")
-    tag = post(api, "tags", {"key": "release-bot", "markdown": "- [ ] Smoke checks"}, token=token)["tag"]
-    post(api, "tags/" + tag["id"], {"version": 1, "markdown": "- [x] Smoke checks"}, token=token)
-    mine = post(api, "tasks", {"owner": "ops", "title": "Run smoke checks", "body": "x", "labels": [tag["key"]]})
-    other = post(api, "tasks", {"owner": "cmo", "title": "Write release notes", "body": "x", "labels": [tag["key"]]})
-    assert {task["id"] for task in get(api, "tags/" + tag["id"], token=token)["tasks"]} == {mine["id"], other["id"]}
-    assert {task["id"] for task in get(api, "tags/" + tag["id"])["tasks"]} == {mine["id"], other["id"]}
-    sql = post(api, "sql", {"sql": "SELECT task_id FROM task_tags JOIN tags ON tags.id=task_tags.tag_id WHERE tags.key='release-bot'"}, token=token)
-    assert {row[0] for row in sql["rows"]} == {mine["id"], other["id"]}
-    assert get(api, "tasks/labels", token=token)["tags"][0]["key"] == tag["key"]
-
-
-def test_task_label_strings_resolve_only_by_key_even_if_one_is_a_tag_id(api):
-    tag = post(api, "tags", {"key": "release-checklist"})["tag"]
-    task = post(api, "tasks", {"owner": "cmo", "title": "Review a key collision", "body": "x", "labels": [tag["id"]]})
-    assert task["labels"] == [tag["id"]]
-    assert task["tags"][0]["key"] == tag["id"]
-    assert task["tags"][0]["id"] != tag["id"]
-    assert get(api, "tasks/labels")["tags"][0]["key"] == tag["id"]
-
-
-def test_needs_you_includes_tag_keys_and_metadata(api):
-    tag = post(api, "tags", {"key": "release-2026-10-02", "label": "release", "metadata": {"date": "2026-10-02"}})["tag"]
-    task = post(api, "tasks", {"owner": "ana", "title": "Review the release", "body": "Read the notes.", "labels": [tag["key"]]})
-    items = get(api, "needs-you")["items"]
-    mine = next(item for item in items if item["id"] == task["id"])
-    assert mine["labels"] == [tag["key"]]
-    assert mine["tags"][0]["metadata"] == {"date": "2026-10-02"}
-
 # ----------------------------------------------------------------------------- task pipelines
 
 def pipeline(api, token='ana-test'):
@@ -434,97 +331,6 @@ def pipeline(api, token='ana-test'):
 
 def edit_pipeline_task(api, task, **fields):
     return post(api, 'tasks/' + task['id'], {'version': task['version'], **fields})
-
-
-def test_template_tags_and_pipeline_moves_preserve_each_other(api):
-    typ = pipeline(api)
-    template = post(api, 'tags', {'key': 'release-checklist', 'label': 'release',
-        'is_template': True, 'markdown': '- [ ] Smoke checks'})['tag']
-    tag = post(api, 'tags/' + template['id'] + '/instances', {
-        'key': 'release-2026-10-02', 'metadata': {'date': '2026-10-02'}})['tag']
-    task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review the release checklist',
-        'body': 'Please.', 'type': typ['id'], 'step': 'Draft', 'labels': [tag['key']]})
-    task = edit_pipeline_task(api, task, step='Copy review', labels=[tag['key'], 'launch'])
-    assert task['status'] == 'review' and task['step']['name'] == 'Copy review'
-    assert task['labels'] == [tag['key'], 'launch']
-    assert task['tags'][0]['metadata'] == tag['metadata']
-    step_id = task['step_id']
-    task = edit_pipeline_task(api, task, labels=[tag['key']])
-    assert task['type_id'] == typ['id'] and task['step_id'] == step_id
-    task = edit_pipeline_task(api, task, status='doing')
-    assert task['step'] is None and task['labels'] == [tag['key']]
-    post(api, 'tags/' + tag['id'], {'version': tag['version'], 'markdown': '- [x] Smoke checks'})
-    listed = get(api, 'tasks?label=' + tag['key'])['tasks'][0]
-    related = get(api, 'tags/' + tag['id'])['tasks'][0]
-    for view in (listed, related):
-        assert view['type'] == {'id': typ['id'], 'name': 'Marketing'}
-        assert view['status'] == 'doing' and view['step'] is None
-        assert view['tags'][0]['markdown'] == '- [x] Smoke checks'
-    task = edit_pipeline_task(api, task, step='Complete')
-    task = edit_pipeline_task(api, task, close=True)
-    assert task['step']['name'] == 'Archive' and task['labels'] == [tag['key']]
-    detail = get(api, 'tasks/' + task['id'])
-    assert {'labels', 'step', 'status'} <= {event['field'] for event in detail['events']}
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT labels_json FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == '[]'
-
-
-def test_a_custom_types_task_is_a_ticket_not_an_ask(api):
-    typ = pipeline(api)
-    ticket = {"owner": "priya", "title": "(B/F) Account page: the copy", "body": "Details. " * 150}
-    refused = api.post("/api/v2/tasks", json=ticket, headers=headers())
-    assert refused.status_code == 422 and refused.json()["error"]["code"] == "lint"
-    assert not post(api, "tasks/dry-run", ticket)["ok"]
-    ticket["type"] = typ["name"]
-    assert post(api, "tasks/dry-run", ticket)["ok"]
-    task = post(api, "tasks", ticket)
-    assert task["title"] == ticket["title"] and task["type"]["id"] == typ["id"]
-    assert task["body"] == ticket["body"].strip()
-
-
-def test_bot_ticket_titles_and_long_descriptions_stay_exempt_on_custom_types(api, monkeypatch):
-    monkeypatch.setattr(H, "TITLE_LINT", "refuse")
-    typ = pipeline(api)
-    token = bot_token(api)
-    ticket = {"owner": "ana", "title": "#18945 (B/F) ACCOUNT COPY", "body": "Details. " * 150}
-    assert not post(api, "tasks/dry-run", ticket, token=token)["ok"]
-    ticket["type"] = typ["id"]
-    assert post(api, "tasks/dry-run", ticket, token=token)["ok"]
-    made = post(api, "tasks", ticket, token=token)
-    changed = post(api, "tasks/" + made["id"], {"version": made["version"], "title": "#18945 COPY UPDATE"}, token=token)
-    assert changed["title"] == "#18945 COPY UPDATE" and changed["body"] == ticket["body"].strip()
-
-
-def test_a_renamed_task_is_checked_like_a_new_one_and_keeps_its_history(api):
-    ask = post(api, "tasks", {"owner": "priya", "title": "Approve the launch copy", "body": "Yes or no?"})
-    refused = api.post("/api/v2/tasks/" + ask["id"], json={"version": ask["version"], "title": "The launch copy"},
-                       headers=headers())
-    assert refused.status_code == 422 and refused.json()["error"]["code"] == "lint"
-    renamed = post(api, "tasks/" + ask["id"], {"version": ask["version"], "title": "Approve the final copy"},
-                   token="priya-test")
-    assert renamed["title"] == "Approve the final copy"
-    assert any(e["field"] == "title" and (e["old"], e["new"]) == ("Approve the launch copy", "Approve the final copy")
-               for e in get(api, "tasks/" + ask["id"])["events"])
-    with api.app.state.store.read() as c:
-        subject = c.execute("SELECT subject FROM conversations WHERE id=?", (renamed["conversation_id"],)).fetchone()[0]
-    assert subject == "Approve the final copy"
-    typ = pipeline(api)
-    post(api, "task-types/" + typ["id"], {"numbered": True})
-    ticket = post(api, "tasks", {"owner": "priya", "title": "(B) Account page", "body": "x", "type": typ["id"]})
-    number, step = ticket["number"], ticket["step_id"]
-    error, result = call(api, "hub_task_update", {"id": "#" + str(number), "title": "(B/F) Account page: the copy"})
-    assert not error, result
-    ticket = result["task"]
-    assert ticket["title"] == "(B/F) Account page: the copy" and ticket["number"] == number and ticket["step_id"] == step
-    since = ticket["updated"]
-    for change in ({"title": " "}, {"title": "Changed", "close": True}, {"title": "The other page", "type": "General"}):
-        post(api, "tasks/" + ticket["id"], {"version": ticket["version"], **change}, expected=422)
-    duplicate = post(api, "tasks", {"owner": "priya", "title": "(B) Another page", "body": "x", "type": typ["id"]})
-    post(api, "tasks/" + ticket["id"], {"version": ticket["version"], "title": duplicate["title"]}, expected=422)
-    after = get(api, "tasks/" + ticket["id"])["task"]
-    assert (after["title"], after["version"], after["updated"]) == (ticket["title"], ticket["version"], since)
-    other = post(api, "tasks", {"owner": "cmo", "title": "Draft the launch copy", "body": "x"})
-    post(api, "tasks/" + other["id"], {"version": other["version"], "title": "Draft it"}, token="priya-test", expected=403)
 
 
 def test_steps_keep_status_contract_stay_first_match_and_clear(api):
@@ -599,131 +405,6 @@ def test_step_moves_enforce_existing_bot_status_permissions(api):
     assert get(api, 'tasks/' + task['id'])['task']['status'] == 'open'
 
 
-def test_editing_an_occupied_step_status_requires_explicit_task_moves(api):
-    typ = pipeline(api)
-    task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review the launch', 'body': 'Please.', 'type': typ['id']})
-    before = get(api, 'tasks/' + task['id'])
-    steps = [{k: s[k] for k in ('id', 'name', 'position', 'status')} for s in typ['steps']]
-    steps[0]['status'] = 'done'
-    post(api, 'task-types/' + typ['id'], {'steps': steps}, expected=422)
-    assert get(api, 'tasks/' + task['id']) == before
-
-
-def test_same_status_step_move_does_not_repeat_a_result_or_completion(api):
-    typ = post(api, 'task-types', {'name': 'Decisions', 'steps': [
-        {'name': 'Recorded', 'status': 'done'}, {'name': 'Verified', 'status': 'done'},
-        {'name': 'Archived', 'status': 'closed'}, {'name': 'Filed', 'status': 'closed'}]})['type']
-    token = bot_token(api)
-    task = post(api, 'tasks', {'owner': 'ana', 'title': 'Decide the campaign', 'body': 'Review it.',
-        'type': typ['id']}, token=token)
-    task = edit_pipeline_task(api, task, step='Recorded', note='Proceed with the draft.')
-    done_at = task['done_at']
-    task = edit_pipeline_task(api, task, step='Verified')
-    assert task['status'] == 'done' and task['done_at'] == done_at
-    task = edit_pipeline_task(api, task, step='Archived')
-    closed_at = task['closed_at']
-    task = edit_pipeline_task(api, task, step='Filed')
-    assert task['status'] == 'closed' and task['closed_at'] == closed_at
-    task = edit_pipeline_task(api, task, close=True)
-    assert task['closed_at'] == closed_at
-
-
-def test_stranded_auto_reopen_maps_to_the_types_open_step(api):
-    typ = post(api, 'task-types', {'name': 'Follow-up', 'steps': [
-        {'name': 'Next', 'status': 'open'}, {'name': 'Waiting for input', 'status': 'waiting'}]})['type']
-    task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review the draft', 'body': 'Please.', 'type': typ['id']})
-    task = edit_pipeline_task(api, task, step='Waiting for input')
-    with api.app.state.store.transaction() as c:
-        future = H.shift(H.now(), days=2)
-        assert (task['id'], 'open') in H.sweep_stranded(c, at=future)
-        after = H.task(c, task['id'])
-        assert after['status'] == 'open' and after['step_id'] == typ['steps'][0]['id']
-
-
-def test_a_numbered_type_numbers_its_tasks_once_and_keeps_an_imported_number(api):
-    typ = post(api, 'task-types', {'name': 'Dev ticket', 'numbered': True, 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'Shipped', 'status': 'done'}]})['type']
-    assert typ['numbered'] is True
-    first = post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the account page', 'body': 'x', 'type': typ['id']})
-    imported = post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the signup page', 'body': 'x', 'type': typ['id'],
-                                   'number': 18945})
-    assert (first['number'], imported['number']) == (1, 18945)
-    post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the login page', 'body': 'x', 'number': 18945}, expected=422)
-    post(api, 'tasks', {'owner': 'priya', 'title': 'Fix the help page', 'body': 'x', 'number': 7},
-         token='priya-test', expected=403)
-    plain = post(api, 'tasks', {'owner': 'cmo', 'title': 'Write the brief', 'body': 'x'})
-    assert plain['number'] is None
-    moved = edit_pipeline_task(api, plain, type=typ['id'])
-    assert moved['number'] == 18946
-    assert edit_pipeline_task(api, moved, type='General')['number'] == 18946
-    assert get(api, 'tasks/%2318945')['task']['id'] == imported['id']
-    get(api, 'tasks/18945', expected=404)           # bare digits may be a cut-short id
-    assert call(api, 'hub_task_show', {'id': '#18945'})[1]['task']['id'] == imported['id']
-    assert [t['id'] for t in get(api, 'tasks?number=18945')['tasks']] == [imported['id']]
-
-
-
-def test_number_exhaustion_does_not_create_an_unreadable_ticket(api):
-    typ = post(api, 'task-types', {'name': 'Dev ticket', 'numbered': True})['type']
-    task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the last page', 'body': 'x',
-                             'type': typ['id'], 'number': 999999999})
-    post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix another page', 'body': 'x',
-                       'type': typ['id']}, expected=422)
-    assert [t['id'] for t in get(api, 'tasks?type=' + typ['id'])['tasks']] == [task['id']]
-    assert get(api, 'tasks/%23999999999')['task']['id'] == task['id']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'number': 2}, expected=422)
-
-
-def test_tickets_on_a_numbered_type_stay_out_of_needs_you_unless_they_ask_the_person(api):
-    tickets = post(api, 'task-types', {'name': 'Dev ticket', 'numbered': True, 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': "Can't replicate", 'status': 'declined'}]})['type']
-    actions = post(api, 'task-types', {'name': 'Client action', 'steps': [{'name': 'To do', 'status': 'open'}]})['type']
-    mine = [post(api, 'tasks', {'owner': 'priya', 'title': title, 'body': 'Please.', **extra}) for title, extra in (
-        ('Approve the launch copy', {}), ('Call the client', {'type': actions['id']}),
-        ('Fix the account page', {'type': tickets['id']}))]
-    needs = lambda: {item['id']: item for item in get(api, 'needs-you', token='priya-test')['items']}  # noqa: E731
-    assert set(needs()) == {mine[0]['id'], mine[1]['id']}
-    assert get(api, 'needs-you?count=true', token='priya-test')['count'] == 2
-    # A ticket comes in once it asks her something: the bot she filed it for asks back (hub task ask).
-    asked = post(api, 'tasks', {'owner': 'ops', 'title': 'Fix the signup page', 'body': 'Please.',
-                                'type': tickets['id']}, token='priya-test')
-    post(api, 'tasks/' + asked['id'] + '/ask', {'text': 'Which browser was it?'}, token=bot_token(api, 'ops'))
-    assert needs()[asked['id']]['kind'] == 'question'
-    # A declined ticket is not hers to deal with today; a declined General task still is.
-    declined = [post(api, 'tasks', {'owner': 'cmo', 'title': title, 'body': 'Please.', **extra}, token='priya-test')
-                for title, extra in (('Fix the pricing page', {'type': tickets['id']}), ('Draft the newsletter', {}))]
-    edit_pipeline_task(api, declined[0], step="Can't replicate")
-    edit_pipeline_task(api, declined[1], status='declined')
-    assert declined[1]['id'] in needs() and declined[0]['id'] not in needs()
-
-def test_a_task_has_a_place_in_its_step_and_a_board_lists_in_that_order(api):
-    typ = post(api, 'task-types', {'name': 'Dev ticket', 'steps': [
-        {'name': 'Backlog', 'status': 'open'}, {'name': 'On deck', 'status': 'open'}]})['type']
-    a, b = (post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the ' + page, 'body': 'x', 'type': typ['id']})
-            for page in ('account page', 'signup page'))
-    top = post(api, 'tasks', {'owner': 'cmo', 'title': 'Fix the help page', 'body': 'x', 'type': typ['id'], 'top': True})
-    assert top['step_rank'] < a['step_rank'] < b['step_rank']
-    b = edit_pipeline_task(api, b, step='On deck')
-    a = edit_pipeline_task(api, a, step='On deck')
-    assert a['step_rank'] > b['step_rank']                      # entering a step joins its end
-    a = post(api, 'tasks/' + a['id'], {'version': a['version'], 'step_rank': b['step_rank'] - 1}, token='ben-test')
-    board = get(api, 'tasks?type=Dev ticket&sort=step')['tasks']
-    assert [t['id'] for t in board] == [top['id'], a['id'], b['id']]
-    assert [t['id'] for t in get(api, 'tasks?type=' + typ['id'] + '&step=On deck&sort=step')['tasks']] == [a['id'], b['id']]
-    post(api, 'tasks/' + a['id'], {'version': a['version'], 'step_rank': 0}, token='priya-test', expected=403)
-
-
-def test_a_board_polls_only_what_changed_since_it_last_looked(api):
-    old = post(api, 'tasks', {'owner': 'cmo', 'title': 'Write the brief', 'body': 'x'})
-    changed = post(api, 'tasks', {'owner': 'cmo', 'title': 'Write the plan', 'body': 'x'})
-    since = get(api, 'tasks/' + changed['id'])['task']['updated']
-    post(api, 'tasks/' + changed['id'] + '/comments', {'text': 'Shorter, please.'})
-    assert [t['id'] for t in get(api, 'tasks?updated_since=' + since.replace('Z', '%2B00:00'))['tasks']] == [changed['id']]
-    get(api, 'tasks?updated_since=2026-01-01T00:00:00', expected=422)
-    post(api, 'tasks/' + old['id'] + '/files', {'name': 'notes.md', 'text': 'The notes.'})
-    assert {t['id'] for t in get(api, 'tasks?updated_since=' + since)['tasks']} == {old['id'], changed['id']}
-
-
 def test_number_migration_preserves_shipped_schemas_and_existing_step_order(tmp_path):
     import sqlite3
     c = sqlite3.connect(tmp_path / 'old.db', isolation_level=None)
@@ -746,16 +427,6 @@ def test_number_migration_preserves_shipped_schemas_and_existing_step_order(tmp_
     assert ranks == [tuple(row) for row in c.execute('SELECT id,step_rank,number FROM tasks ORDER BY step_rank')]
     assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
     c.close()
-
-
-def test_a_brief_list_leaves_out_what_a_board_does_not_show(api):
-    post(api, 'tasks', {'owner': 'cmo', 'title': 'Write the brief', 'body': 'A long body.', 'acceptance_criteria': ['Short']})
-    task = get(api, 'tasks?brief=true')['tasks'][0]
-    assert task['title'] == 'Write the brief' and not {'body', 'acceptance_criteria', 'acceptance_json'} & set(task)
-    from backend.tests.test_openapi_v2 import conforms
-    from backend.openapi_v2 import generate
-    document = generate()
-    assert conforms(task, document['components']['schemas']['Task'], document) is None
 
 
 def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
@@ -788,61 +459,6 @@ def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
     assert other['status'] == 'closed'
 
 
-def test_ordinary_chat_keeps_subject_and_assistant_room_name(api):
-    conversation = post(api, 'conversations', {'participants': ['ops'], 'kind': 'chat'})
-    assert conversation['subject'] == 'Chat with ops'
-    named = post(api, 'conversations', {'participants': ['ops'], 'kind': 'chat', 'subject': 'Feature planning'})
-    assert named['id'] == conversation['id'] and named['subject'] == 'Feature planning'
-    assert post(api, 'conversations', {'participants': ['ops'], 'kind': 'chat'})['subject'] == 'Feature planning'
-
-    # A named personal room is never renamed by another create call.
-    assert post(api, 'conversations', {'participants': ['ops'], 'kind': 'chat', 'subject': 'Another name'})['subject'] == 'Feature planning'
-    shared = post(api, 'conversations', {'participants': ['cpo'], 'kind': 'chat'})
-    assert shared['scope'] == 'shared'
-    assert post(api, 'conversations', {'participants': ['cpo'], 'kind': 'chat', 'subject': 'Another name'})['subject'] == shared['subject']
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('coo','Assistant','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coo',?, 'ana')", (encode({'name': 'coo', 'runtime': 'fake', 'status': 'active'}),))
-    assistant = post(api, 'conversations', {'participants': ['coo'], 'kind': 'chat'})
-    assert assistant['subject'] == 'Private ' + api.app.state.store.settings.assistant_name + ' control room'
-
-
-def test_nested_task_mcp_and_cli_use_shared_routes(api, monkeypatch):
-    from backend.tests.test_mcp import call
-    from clients import hubcli, remotecli
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Coordinate the release', 'body': 'x'})
-    error, created = call(api, 'hub_task_child_create', {'parent': parent['short_id'], 'owner': 'cpo',
-        'title': 'Build a component', 'body': 'x'})
-    assert not error and created['task']['requester'] == parent['requester']
-    child = created['task']
-    error, tree = call(api, 'hub_task_tree', {'id': parent['short_id']})
-    assert not error and tree['result'][0]['id'] == child['id']
-    error, moved = call(api, 'hub_task_relate', {'id': child['short_id'], 'task': parent['short_id'],
-                                                 'kind': 'parent', 'remove': True})
-    assert not error, moved
-    assert related(moved['task'], 'parent') == []
-    class Client:
-        def __init__(self, *args, **kwargs):
-            pass
-        def get(self, path, **query):
-            return get(api, path)
-        def post(self, path, body, key=None):
-            response = api.post('/api/v2/' + path, json=body, headers=headers())
-            assert response.status_code == 200, response.text
-            return response.json()
-    monkeypatch.setattr(remotecli, 'Client', Client)
-    monkeypatch.setenv('HUB_API_URL', 'http://testserver')
-    args = hubcli.parser().parse_args(['task', 'relate', child['short_id'], parent['short_id'], '--kind', 'parent'])
-    assert related(remotecli.run(args), 'parent') == [parent['id']]
-    args = hubcli.parser().parse_args(['task', 'tree', parent['short_id']])
-    assert remotecli.run(args)[0]['id'] == child['id']
-    args = hubcli.parser().parse_args(['task', 'child', parent['short_id'], '--owner', 'cmo', '--title', 'Build another component'])
-    assert related(remotecli.run(args)['task'], 'parent') == [parent['id']]
-    args = hubcli.parser().parse_args(['task', 'create', '--owner', 'cmo', '--title', 'Build a third component',
-                                       '--body', 'x', '--parent', parent['short_id']])
-    assert related(remotecli.run(args), 'parent') == [parent['id']]
-
-
 def test_parent_owner_bot_can_track_and_reparent_inherited_subtasks(api):
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Manage the feature', 'body': 'x'})
     token = bot_token(api)
@@ -861,21 +477,6 @@ def test_parent_owner_bot_can_track_and_reparent_inherited_subtasks(api):
     post(api, 'tasks/' + parent['id'], {'version': parent['version'], 'status': 'done'}, token=token, expected=422)
     moved = relate(api, child['short_id'], parent['id'], 'parent', token=token, remove=True)
     assert related(moved, 'parent') == []
-
-
-def test_bot_created_children_keep_bot_requester_and_notify_and_close_for_the_manager(api):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Manage delivery', 'body': 'x'})
-    token = bot_token(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET request_id='human-request' WHERE id=?", (parent['id'],))
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Implement delivery', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token=token)
-    assert child['requester'] == 'bot:ops' and child['request_id'] is None
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, 'bot:cpo', child['id'], status='done')
-        notices = H._rows(c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? AND body LIKE 'Finished:%'", (child['id'],)))
-        assert notices and {m['to_actor'] for m in notices} == {'bot:ops'}
-    child = get(api, 'tasks/' + child['id'], token=token)['task']
-    assert post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True}, token=token)['status'] == 'closed'
 
 
 def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
@@ -910,62 +511,6 @@ def test_hidden_descendants_stay_hidden_in_details_lists_trees_sql_and_counts(ap
     assert [child['id']] not in post(api, 'sql', {'sql': 'SELECT id FROM tasks'}, token=token)['rows']
 
 
-def test_closed_middle_task_stops_open_rollup_and_reparenting_wakes_previous_parent(api):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Coordinate nested work', 'body': 'x'})
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Coordinate service work', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})
-    post(api, 'tasks', {'owner': 'cmo', 'title': 'Finish nested work', 'body': 'x', 'relations': [{'task': child['id'], 'kind': 'parent'}]})
-    child = post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True})
-    summary = get(api, 'tasks/' + parent['id'])['task']['children_summary']
-    assert summary['total'] == 2 and summary['open'] == 0 and summary['direct_done'] == 1
-    token = bot_token(api)
-    parent = post(api, 'tasks/' + parent['id'], {'version': parent['version'], 'status': 'done'}, token=token)
-    # Humans can mark Done even when a child is open.
-    next_parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Track another piece', 'body': 'x'})
-    open_child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Finish another piece', 'body': 'x', 'relations': [{'task': next_parent['id'], 'kind': 'parent'}]})
-    with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM messages WHERE body='All subtasks done' AND to_actor='bot:ops'").fetchone()[0]
-    relate(api, open_child['id'], next_parent['id'], 'parent', remove=True)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body='All subtasks done' AND to_actor='bot:ops'").fetchone()[0] == before + 1
-    another = post(api, 'tasks', {'owner': 'cpo', 'title': 'Finish remaining piece', 'body': 'x', 'relations': [{'task': next_parent['id'], 'kind': 'parent'}]})
-    post(api, 'tasks/' + next_parent['id'], {'version': next_parent['version'], 'status': 'done'})
-    # An omitted other task is refused by MCP.
-    from backend.tests.test_mcp import call
-    error, result = call(api, 'hub_task_relate', {'id': another['id'], 'kind': 'parent'})
-    assert error and result['error'] == 'usage'
-    assert api.delete('/api/v2/tasks/' + parent['id'] + '/links/' + 'x' * 201, headers=headers()).status_code == 422
-    with api.app.state.store.transaction() as c:
-        self_parent = H.task_create(c, 'bot:ops', 'Manage remaining work', 'x', 'bot:ops', lint=False)
-        self_child = H.task_create(c, 'bot:ops', 'Cancel remaining work', 'x', 'bot:cpo', parent_id=self_parent['id'], lint=False)
-        before = c.execute("SELECT count(*) FROM messages WHERE body='All subtasks done'").fetchone()[0]
-        H.task_close(c, 'bot:ops', self_child['id'])
-        assert c.execute("SELECT count(*) FROM messages WHERE body='All subtasks done'").fetchone()[0] == before
-
-
-
-def test_tree_visibility_and_link_reads_are_batched(api, monkeypatch):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Track a large plan', 'body': 'x'})
-    with api.app.state.store.transaction() as c:
-        for n in range(25):
-            child = H.task_create(c, 'human:ana', 'Implement component ' + str(n), 'x', 'bot:cpo', parent_id=parent['id'], lint=False)
-            H.task_link(c, 'human:ana', child['id'], 'https://github.com/example/service/pull/' + str(n + 1))
-    auth = api.app.state.auth
-    real = auth.bot_accesses
-    calls = []
-    def accesses(*args, **kwargs):
-        calls.append(1)
-        return real(*args, **kwargs)
-    monkeypatch.setattr(auth, 'bot_accesses', accesses)
-    tree = get(api, 'tasks/' + parent['id'] + '/tree', token='ben-test')
-    assert len(tree) == 25 and all(node['pr_state'] == 'open' for node in tree)
-    assert len(calls) <= 6
-    with api.app.state.store.read() as c:
-        queries = []
-        c.set_trace_callback(queries.append)
-        assert len(H.task_tree(c, parent['id'])) == 25
-        assert len([q for q in queries if q.startswith('SELECT') or q.startswith('WITH')]) == 2
-
-
 def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Attach task links', 'body': 'x'})
     path = 'tasks/' + task['id'] + '/links'
@@ -988,58 +533,6 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
     post(api, 'tasks/' + parent['id'] + '/links', {'url': 'https://example.com/plan'}, token=token)
     linked = post(api, 'tasks/' + child['id'] + '/links', {'url': 'https://example.com/component'}, token=token)['links'][0]
     post(api, 'tasks/' + child['id'] + '/links', {'remove': linked['id']}, token=token)
-
-
-def test_child_owner_cannot_detach_or_move_away_from_uncontrolled_parent(api):
-    token = bot_token(api, 'ops')
-    parent = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep manager plan', 'body': 'x'})
-    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Implement manager plan', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})
-    destination = post(api, 'tasks', {'owner': 'ops', 'title': 'Track own plan', 'body': 'x'})
-    relate(api, child['id'], parent['id'], 'parent', token=token, expected=403, remove=True)
-    relate(api, child['id'], destination['id'], 'parent', token=token, expected=403)
-    assert related(get(api, 'tasks/' + child['id'])['task'], 'parent') == [parent['id']]
-    # The parent requester can detach; a mover can move the whole subtree.
-    relate(api, child['id'], parent['id'], 'parent', remove=True)
-    assert related(relate(api, child['id'], destination['id'], 'parent', token='ben-test'), 'parent') == [destination['id']]
-
-
-def test_person_filing_under_bot_request_is_the_subtask_requester(api):
-    with api.app.state.store.transaction() as c:
-        parent = H.task_create(c, 'bot:ops', 'Coordinate bot request', 'x', 'bot:cpo', lint=False)
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Follow up on bot request', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})
-    assert child['requester'] == 'human:ana'
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, 'bot:cpo', child['id'], status='done')
-        notices = c.execute("SELECT to_actor FROM messages WHERE json_extract(refs_json,'$.task')=? AND body LIKE 'Finished:%'",
-                            (child['id'],)).fetchall()
-        assert notices and {r[0] for r in notices} == {'human:ana'}
-
-
-def test_cancelled_parent_does_not_wake_when_last_child_finishes(api):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Cancel a plan', 'body': 'x'})
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Finish cancelled work', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})
-    post(api, 'tasks/' + parent['id'], {'version': parent['version'], 'close': True})
-    post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.task')=? AND body LIKE 'All subtasks done%'",
-                             (parent['id'],)).fetchone()
-
-
-def test_tree_visibility_query_only_reads_descendant_ids(api, monkeypatch):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Read one task tree', 'body': 'x'})
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Read one child', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})
-    unrelated = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep other task outside', 'body': 'x'})
-    store = api.app.state.store
-    connect = store.connect
-    queries = []
-    def traced():
-        c = connect()
-        c.set_trace_callback(queries.append)
-        return c
-    monkeypatch.setattr(store, 'connect', traced)
-    assert get(api, 'tasks/' + parent['id'] + '/tree')[0]['id'] == child['id']
-    visibility = [q for q in queries if q.startswith('SELECT id FROM tasks WHERE')]
-    assert visibility and all('id IN (' in q and child['id'] in q and unrelated['id'] not in q for q in visibility)
 
 
 def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(api):

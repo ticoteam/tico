@@ -193,7 +193,12 @@ def create_app(settings=None):
             app.state.github_app.repository_stop.set()
             if demo_task:
                 await demo_task
-            await timing_task
+            # The lag probe sleeps half a second at a time; cancel it rather than wait out the sleep.
+            timing_task.cancel()
+            try:
+                await timing_task
+            except asyncio.CancelledError:
+                pass
             if scheduler_task:
                 await scheduler_task
             if directory_task:
@@ -2315,7 +2320,7 @@ def create_app(settings=None):
                 raise Problem("not_found", "Unknown goal", 404)
             if body.close:
                 if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
-                                               body.labels, body.waiting_on, body.wait_until, body.rank,
+                                               body.labels, body.waiting_on, body.rank,
                                                body.goal_id, body.type, body.step, body.step_rank, body.number, body.private)):
                     raise Problem("close", "Close and edit are separate operations", 422)
                 note = body.note or ""

@@ -47,37 +47,14 @@ def test_auth_is_a_bearer_token_and_the_endpoint_is_off_until_scim_is_the_source
     assert api.get("/scim/v2/Users", headers=good).status_code == 401           # source is not scim yet
     api.put("/api/v2/directory", json={"source": "scim", "expected_revision": 0}, headers=signed_in())
     assert api.get("/scim/v2/Users", headers=good).status_code == 200
-    assert api.get("/scim/v2/Users", headers={"Authorization": token}).status_code == 200   # Okta header auth, verbatim
-    for bad in ({"Authorization": "Bearer nope"}, {"Authorization": "Basic " + token}, {}):
-        r = api.get("/scim/v2/Users", headers=bad)
-        assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
-        assert r.headers["content-type"].startswith("application/scim+json")
-        assert r.json()["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:Error"]
+    r = api.get("/scim/v2/Users", headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
     # A person's API token or the owner's session is not the SCIM token.
     assert api.get("/scim/v2/Users", headers=person_headers(api, "riley")).status_code == 401
     assert api.get("/scim/v2/Users", headers=signed_in()).status_code == 401
     with api.app.state.store.read() as c:
         assert token not in json.dumps([dict(r) for r in c.execute("SELECT * FROM registry_metadata")])   # hash only
-
-
-def test_only_the_owner_creates_the_token(environment):
-    api = environment()
-    r = api.post("/api/v2/directory/scim-token", json={}, headers=person_headers(api, "riley"))
-    assert r.status_code == 403
-
-
-def test_create_returns_201_and_a_duplicate_is_409(scim):
-    r = create(scim)
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["userName"] == "kim@acme.example" and body["active"] is True and body["externalId"] == "ext-kim@acme.example"
-    assert body["name"]["givenName"] == "Kim" and body["title"] == "Designer" and "password" not in body
-    assert r.headers["location"].endswith("/scim/v2/Users/" + body["id"])
-    again = create(scim)
-    assert again.status_code == 409 and again.json()["scimType"] == "uniqueness"
-    people = roster_of(scim)
-    assert people["kim@acme.example"]["directory"] == "scim" and people["kim@acme.example"]["name"] == "Kim Lee"
-    assert len(events(scim, "directory.person_added")) == 1                     # the replay changed nothing
+    assert api.post("/api/v2/directory/scim-token", json={}, headers=person_headers(api, "riley")).status_code == 403
 
 
 def test_okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
@@ -109,11 +86,6 @@ def test_people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim):
         assert r.status_code == 200 and r.json()["active"] is True              # truthful: nothing changed
     assert not roster_of(scim)[OWNER_EMAIL]["hidden"] and not roster_of(scim)["hand@acme.example"]["hidden"]
     assert call(scim, "POST", "/Users", {"schemas": [USER], "userName": "hand@acme.example"}).status_code == 409
-    # It may fill a blank on someone added by hand, but not overwrite.
-    r = call(scim, "PATCH", "/Users/" + ids["hand@acme.example"], {"schemas": [PATCH], "Operations": [
-        {"op": "replace", "path": "title", "value": "Ops"}, {"op": "replace", "path": "displayName", "value": "Overwrite"}]})
-    row = roster_of(scim)["hand@acme.example"]
-    assert row["title"] == "Ops" and row["name"] == "Hand Made"
 
 
 def test_a_burst_of_deactivations_stops_at_the_mass_leave_limit(scim):

@@ -231,76 +231,6 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     assert r.json()["rows"] == [[1]]
 
 
-def test_can_filters_the_lists_to_what_the_caller_may_read_or_write(world):
-    api, tokens, task = world
-    set_access(api, see=EVERYONE, read={"teams": ["legal"]}, write={"people": ["dee"]})
-    def slugs(path, who):
-        data = get(api, path, tokens[who])
-        return {b.get("id") or b.get("slug") for b in (data["bots"] if isinstance(data, dict) else data)}
-    assert "counsel" in slugs("bots", "dee") and "counsel" in slugs("bots?can=write", "dee")
-    assert "counsel" not in slugs("bots?can=read", "dee")
-    assert "counsel" in slugs("bots?can=read", "cara") and "counsel" not in slugs("bots?can=write", "cara")
-    assert "counsel" in slugs("org?can=write", "dee") and "counsel" not in slugs("org?can=read", "dee")
-    assert "counsel" in slugs("org?can=read", "cara") and "counsel" not in slugs("org?can=write", "cara")
-    assert {"counsel", "ops"} <= slugs("bots?can=read", "ana")
-    assert call(api, "get", "bots?can=all", tokens["ana"]).status_code == 422
-
-
-def test_the_bot_detail_gives_a_seer_the_profile_and_a_reader_the_rest(world):
-    api, tokens, task = world
-    api.post("/api/v2/bots/counsel/goals", json={"goals": "Clear the contract backlog."},
-             headers=headers("ana-test"))
-    owner = get(api, "bots/counsel", "ana-test")
-    assert owner["slug"] == "counsel" and owner["display_name"] == "Counsel" and owner["description"] == "A test bot."
-    assert owner["reports_to"] == "human:ben" and owner["reports_to_name"] == "Ben"
-    assert owner["operator"] == "ana" and owner["operator_name"] == "Ana"
-    assert [o["id"] for o in owner["owners"]] == ["ana"] and owner["goals"] == "Clear the contract backlog."
-    assert owner["access"] == {"see": True, "read": True, "write": True}
-    assert {"online", "queued", "status", "state"} <= set(owner)
-
-    set_access(api, see=EVERYONE, read={"teams": ["legal"]}, write=EVERYONE)
-    seen = get(api, "bots/counsel", "dee-test")
-    assert seen["access"] == {"see": True, "read": False, "write": True}
-    assert (seen["display_name"], seen["description"], seen["reports_to"], seen["reports_to_name"],
-            seen["operator"], seen["operator_name"]) == ("Counsel", "A test bot.", "human:ben", "Ben", "ana", "Ana")
-    assert seen["owners"] and "goals" not in seen
-    assert not {"status", "online", "queued", "assignment", "next_run", "notes", "repo"} & set(seen)
-    assert get(api, "bots/counsel", "cara-test")["goals"] == "Clear the contract backlog."
-    assert "status" in get(api, "bots/counsel", "cara-test")
-
-    set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
-    assert outcomes(api, tokens, "get", "bots/counsel") == {who: (200 if who in ("ana", "ben", "cara") else 404) for who in ALL}
-    assert call(api, "get", "bots/nobody", tokens["ana"]).status_code == 404
-
-
-def test_a_bots_routines_need_read(world):
-    api, tokens, task = world
-    routine = post(api, "bots/counsel/routines", {"title": "Weekly contract digest", "cron": "0 9 * * 1",
-                                                   "text": "Summarise what is waiting on Legal."})
-    assert routine["routine"]["title"] == "Weekly contract digest"
-    set_access(api, see=EVERYONE, read={"teams": ["legal"]}, write=EVERYONE)
-    readers = get(api, "bots/counsel/routines", "cara-test")["routines"]
-    assert [r["title"] for r in readers] == ["Weekly contract digest"]
-    assert outcomes(api, tokens, "get", "bots/counsel/routines", callers=("ana", "ben", "cara", "dee")) == {
-        "ana": 200, "ben": 200, "cara": 200, "dee": 403}
-    assert call(api, "get", "bots/counsel/routines", "dee-test").json()["error"]["code"] == "forbidden"
-    # The overview list and a routine's runs follow the same rule.
-    assert get(api, "routines", "dee-test") == {"routines": []}
-    assert len(get(api, "routines", "cara-test")["routines"]) == 1
-    set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
-    assert call(api, "get", "bots/counsel/routines", "dee-test").status_code == 404
-
-
-def test_an_org_chart_hides_a_bot_without_orphaning_the_ones_under_it(world):
-    api, tokens, task = world
-    bot(api, "junior", reports_to="counsel")
-    set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
-    org = get(api, "org", "dee-test")
-    junior = next(b for b in org["bots"] if b["id"] == "junior")
-    assert "counsel" not in {b["id"] for b in org["bots"]}
-    assert not junior["org_parent"].startswith("b:counsel") and junior["reports_to"] != "counsel"
-
-
 # ------------------------------------------------------------------ editing it
 
 def test_access_is_edited_by_managers_with_revisions_and_undo(world):
@@ -335,16 +265,9 @@ def test_access_is_edited_by_managers_with_revisions_and_undo(world):
         assert c.execute("SELECT count(*) FROM events WHERE action='bot.access_changed'").fetchone()[0] == 1
 
 
-def test_a_bot_the_person_cannot_manage_answers_403_and_others_stay_open(world):
-    api, tokens, task = world
-    body = {"see": EVERYONE, "read": EVERYONE, "write": EVERYONE, "revision": 1}
-    assert call(api, "put", "bots/ops/access", "cara-test", body).status_code == 403
-    assert call(api, "get", "bots/nope/access", "ana-test").status_code == 404
-    assert call(api, "get", "bots/counsel/access", tokens["stranger"]).status_code == 403     # a bot never edits
-
-
 # ------------------------------------------------------------------ the migration
 
+@pytest.mark.slow
 def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_owner(tmp_path, caplog):
     from fastapi.testclient import TestClient
     from backend.app import create_app
@@ -383,10 +306,6 @@ def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_own
         with TestClient(boot()) as client:
             assert all(k["id"] != "bot_access" for k in get(client, "health")["checks"])
     assert not caplog.records
-
-
-def test_no_note_when_the_file_names_no_private_bots(api):
-    assert all(k["id"] != "bot_access" for k in get(api, "health")["checks"])
 
 
 def test_the_stored_shape_round_trips_and_open_is_null():

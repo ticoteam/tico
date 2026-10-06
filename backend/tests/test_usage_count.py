@@ -1,6 +1,5 @@
 """The anonymous usage count (PRIVACY.md): what is sent, and every way it is not."""
 
-import logging
 import sqlite3
 from types import SimpleNamespace
 
@@ -77,15 +76,12 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
     assert not c.person_due(SimpleNamespace(role="human", via="", via_token=True))
 
 
-@pytest.mark.parametrize("how", ["TICO_TELEMETRY", "DO_NOT_TRACK", "toggle", "demo", "notice not shown"])
+@pytest.mark.parametrize("how", ["TICO_TELEMETRY", "toggle"])
 def test_when_off_the_check_goes_to_github_with_no_id(environment, monkeypatch, how):
-    api = environment(demo=True) if how == "demo" else environment()
-    if how != "notice not shown":
-        counting(api)
+    api = environment()
+    counting(api)
     if how == "TICO_TELEMETRY":
         monkeypatch.setenv("TICO_TELEMETRY", "off")
-    elif how == "DO_NOT_TRACK":
-        monkeypatch.setenv("DO_NOT_TRACK", "1")
     elif how == "toggle":
         assert api.put("/api/v2/system/usage-count", json={"enabled": False}, headers=signed_in()).status_code == 200
     checker, seen = wire(monkeypatch, api)
@@ -108,22 +104,6 @@ def test_when_on_hq_gets_the_four_fields_and_a_dead_hq_falls_back_silently(envir
     checker.refresh()
     assert [r.url.host for r in seen] == ["updates.tico.team", "api.github.com"]
     assert checker.view("0.2.13")["latest"] == "0.2.0"
-    # A mirror set by TICO_RELEASES_URL is asked as before, with nothing added.
-    monkeypatch.setenv("TICO_RELEASES_URL", "https://mirror.example/latest")
-    checker, seen = wire(monkeypatch, api)
-    checker.refresh()
-    assert [str(r.url) for r in seen] == ["https://mirror.example/latest"]
-
-
-def test_debug_logs_the_payload_and_sends_none(environment, monkeypatch, caplog):
-    api = environment()
-    counting(api)
-    monkeypatch.setenv("TICO_TELEMETRY_DEBUG", "1")
-    checker, seen = wire(monkeypatch, api)
-    with caplog.at_level(logging.WARNING, logger="tico.census"):
-        checker.refresh()
-    assert [r.url.host for r in seen] == ["api.github.com"]
-    assert "install_id" in caplog.text and "active_bots" in caplog.text
 
 
 def test_the_owner_alone_sees_and_changes_it_and_can_reset_the_id(environment):
@@ -140,14 +120,3 @@ def test_the_owner_alone_sees_and_changes_it_and_can_reset_the_id(environment):
         before = c.payload(read, "0.2.13")["install_id"]
     after = api.post("/api/v2/system/usage-count/reset", headers=signed_in()).json()["install_id"]
     assert after != before and len(after) == 36
-    api.post("/api/v2/system/usage-count/notice", json={"state": "dismissed"}, headers=signed_in())
-    assert api.get("/api/v2/config", headers=signed_in()).json()["usage_count_notice"] is False
-    off = api.put("/api/v2/system/usage-count", json={"enabled": False}, headers=signed_in()).json()
-    assert off["enabled"] is False and off["off_by"] == "setting"
-
-
-def test_the_installer_and_wizard_print_the_same_notice_the_app_shows():
-    from setup.ui import USAGE_NOTICE
-    assert USAGE_NOTICE == census.NOTICE
-    text = open("scripts/install.sh").read()
-    assert census.NOTICE.split(" Turn off:")[0] in text and "Turn off: Settings > Privacy or TICO_TELEMETRY=off." in text

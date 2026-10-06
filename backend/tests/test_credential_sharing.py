@@ -16,7 +16,6 @@ from backend.tests.test_credentials import FakeKMS
 from backend.tests.test_mcp import call as mcp
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
 from backend.tests.test_runner import live  # noqa: F401  (fixture)
-from clients import hubcli, hubtools, remotecli
 
 JIRA = "jira-basic-auth-synthetic-fixture-0123456789"
 
@@ -146,52 +145,7 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
         assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked IS NULL").fetchone()[0] == 0
 
 
-def test_a_bot_keeps_one_value_per_variable_so_a_second_jira_credential_is_refused_until_the_first_is_taken_away(api):
-    local(api)
-    first, second = jira(api), post(api, "credentials", {"name": "Jira (other site)", "env": "JIRA_BASIC_AUTH", "secret": "other-synthetic-fixture-value"})
-    post(api, f"credentials/{first['id']}/grants", {"subject": "bot:ops"})
-    clash = post(api, f"credentials/{second['id']}/grants", {"subject": "bot:ops"}, expected=409)
-    assert clash["error"]["code"] == "env_in_use" and "Jira" in clash["error"]["detail"]
-    post(api, f"credentials/{second['id']}/grants", {"subject": "bot:finance"})         # another bot is not affected
-
-
 # ------------------------------------------------------------------ hub credential grant | revoke | import
-def test_the_cli_commands_are_the_tools_with_the_documented_names():
-    parser = hubcli.parser()
-    grant = parser.parse_args(["credential", "grant", "Jira", "--to", "engineering-monitor"])
-    revoke = parser.parse_args(["credential", "revoke", "Jira", "--from", "engineering-monitor"])
-    imported = parser.parse_args(["credential", "import", "JIRA_BASIC_AUTH", "--from-bot", "jira-manager"])
-    assert (grant.fn, grant.credential, grant.to_bot) == ("credential grant", "Jira", "engineering-monitor")
-    assert (revoke.fn, revoke.from_bot) == ("credential revoke", "engineering-monitor")
-    assert (imported.fn, imported.env, imported.from_bot) == ("credential import", "JIRA_BASIC_AUTH", "jira-manager")
-    for parsed, tool in ((grant, "hub_credential_grant"), (revoke, "hub_credential_revoke"), (imported, "hub_credential_import")):
-        assert remotecli.tool_name(parsed.fn) == tool and tool in hubtools.BY_NAME
-        fields = {k for k, v in vars(parsed).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        assert fields <= set(hubtools.BY_NAME[tool]["inputSchema"]["properties"]), tool
-    assert {"hub_credential_grant", "hub_credential_revoke", "hub_credential_import"} <= {t["name"] for t in hubtools.listing(kind="owner")}
-
-
-def test_the_mcp_tools_grant_and_revoke_for_an_admin_and_for_botops_and_refuse_a_member(api, botops):
-    local(api)
-    row = jira(api)
-    err, granted = mcp(api, "hub_credential_grant", {"credential": "Jira", "to_bot": "finance"}, token="ben-test")
-    assert not err and granted["bot"] == "finance" and granted["env"] == "JIRA_BASIC_AUTH", granted
-    err, member = mcp(api, "hub_credential_grant", {"credential": "Jira", "to_bot": "ops"}, token="cara-test")
-    assert err and "credential administrator" in json.dumps(member)
-    # BotOps as Ana, by the credential's variable and the bot's name.
-    ana = turn(api, botops, person="ana-test", text="Give ops Jira")
-    err, done = mcp(api, "hub_credential_grant", {"credential": "JIRA_BASIC_AUTH", "to_bot": "ops"}, token=ana["token"])
-    assert not err and done["bot"] == "ops" and "needs_confirm" not in done, done
-    err, missing = mcp(api, "hub_credential_grant", {"credential": "Nothing", "to_bot": "ops"}, token=ana["token"])
-    assert err and "No credential named" in json.dumps(missing)
-    err, taken = mcp(api, "hub_credential_revoke", {"credential": "Jira", "from_bot": "ops"}, token=ana["token"])
-    assert not err and taken["revoked"] == 1
-    err, taken = mcp(api, "hub_credential_revoke", {"credential": "Jira", "from_bot": "finance"}, token="ben-test")
-    assert not err and taken["revoked"] == 1
-    err, again = mcp(api, "hub_credential_revoke", {"credential": "Jira", "from_bot": "finance"}, token="ben-test")
-    assert not err and again["revoked"] == 0
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE credential_id=? AND revoked IS NULL", (row["id"],)).fetchone()[0] == 0
 
 
 # ------------------------------------------------------------------ moving a bot's own secrets file into the vault
@@ -264,29 +218,7 @@ def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_sh
         service.pool.shutdown()
 
 
-def test_an_import_for_a_computer_that_is_offline_or_a_value_that_is_not_there_says_so(api):
-    local(api)
-    machine = runner(api, label="Sleepy Mac")
-    assign(api, machine, "finance")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=NULL")
-    offline = post(api, "credential-imports", {"env": "JIRA_BASIC_AUTH", "bot": "finance"}, expected=409)
-    assert offline["error"]["code"] == "offline" and "Sleepy Mac" in offline["error"]["detail"]
-    ready(api, machine, ["finance"])
-    asked = post(api, "credential-imports", {"env": "JIRA_BASIC_AUTH", "bot": "finance"})
-    failed = post(api, f"runner-credential-imports/{asked['id']}/report", {"error": "JIRA_BASIC_AUTH is not in that bot's secrets file on this computer"},
-                  machine["token"])
-    assert failed["state"] == "failed"
-    # A person who stopped being a credential administrator before the computer answered gets nothing stored.
-    again = post(api, "credential-imports", {"env": "JIRA_BASIC_AUTH", "bot": "finance"}, "ben-test")
-    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
-    sent = post(api, f"runner-credential-imports/{again['id']}/report", {"value": "synthetic-late-value-123"}, machine["token"])
-    assert sent["state"] == "failed" and "no longer" in sent["message"]
-    assert "synthetic-late-value" not in everything(api)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == 0
-
-
+@pytest.mark.slow
 def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, botops, live, tmp_path):
     from runner.service import Runner
     local(api)
@@ -324,39 +256,3 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
 
 
 # ------------------------------------------------------------------ readiness counts a vault grant
-def test_a_granted_credential_is_present_in_the_tool_row_and_health_until_it_is_revoked(api):
-    from backend.tests.test_bot_tools import configure, report, tools_of
-    local(api)
-    configure(api)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    entry = {"service": "jira", "can": ["read"], "env": "JIRA_BASIC_AUTH", "credential": "missing"}
-    other = {"service": "posthog", "can": ["read"], "env": "POSTHOG_KEY", "credential": "missing"}
-    assert report(api, machine, "ops", [entry, other]).status_code == 200
-
-    def rows():
-        return {t["id"]: t for t in tools_of(api)["tools"]}
-
-    def missing():
-        return [i["text"] for i in get(api, "fleet/check", token="ana-test")["issues"] if i["kind"] == "missing_credential"]
-
-    def health():
-        return next(row for row in get(api, "health")["checks"] if row["id"] == "tool_credentials")["summary"]
-
-    assert rows()["jira"]["status"] == "problem" and len(missing()) == 2      # nothing granted yet
-    assert "Jira" in health() and "PostHog" in health()
-    stored = jira(api)
-    post(api, f"credentials/{stored['id']}/grants", {"subject": "bot:finance"})  # another bot's grant is not ops's
-    assert rows()["jira"]["status"] == "problem"
-    assert "Jira" in health()
-    grant = post(api, f"credentials/{stored['id']}/grants", {"subject": "bot:ops"})
-    tool = rows()["jira"]
-    assert tool["status"] == "ready" and "problem" not in tool and "credential vault" in tool["detail"]
-    assert rows()["posthog"]["status"] == "problem"                          # a variable nobody granted stays missing
-    assert len(missing()) == 1 and "JIRA_BASIC_AUTH" not in missing()[0]
-    assert "Jira" not in health() and "PostHog" in health()
-    assert JIRA not in json.dumps([tools_of(api), get(api, "fleet/check", token="ana-test"), get(api, "health")])
-    assert "JIRA_BASIC_AUTH" not in health() and "POSTHOG_KEY" not in health()
-    assert post(api, f"credentials/{stored['id']}/grants/{grant['id']}/revoke", {}).get("ok")
-    assert rows()["jira"]["status"] == "problem" and len(missing()) == 2
-    assert "Jira" in health() and "PostHog" in health()

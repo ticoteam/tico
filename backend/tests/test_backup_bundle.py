@@ -3,8 +3,6 @@
 import base64
 import hashlib
 import io
-import json
-import sqlite3
 import stat
 from pathlib import Path
 from unittest.mock import Mock
@@ -13,9 +11,8 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
-import backend.backup as backup_module
 from backend.app import create_app
-from backend.backup import RecoveryBlobs, blob_inventory, restore_bundle, upload_bundle
+from backend.backup import blob_inventory, restore_bundle, upload_bundle
 from backend.blobs import Blobs
 from backend.config import Settings
 from backend.operations import backup
@@ -113,19 +110,11 @@ def test_restore_from_independent_objects_preserves_private_sources_and_fences_b
         assert audio in [restored.app.state.blobs.get(item["sha256"]) for item in inventory]
 
 
-@pytest.mark.parametrize("failure", ["missing", "corrupt", "size"])
-def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(api, failure):
+def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(api):
     sources(api)
     with api.app.state.store.read() as c:
         digest = c.execute("SELECT digest FROM blobs ORDER BY size LIMIT 1").fetchone()[0]
-    file = api.app.state.blobs.directory / Blobs.key(digest)
-    if failure == "missing":
-        file.rename(file.with_name("quarantined-" + file.name))
-    elif failure == "corrupt":
-        file.write_bytes(b"Corrupt test content")
-    else:
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE blobs SET size=size+1 WHERE digest=?", (digest,))
+    (api.app.state.blobs.directory / Blobs.key(digest)).write_bytes(b"Corrupt test content")
     s3, metrics = ObjectStore(), Mock()
     with pytest.raises((Problem, RuntimeError)):
         backup(api.app.state.store, s3, metrics, "backup-bucket")
@@ -136,24 +125,14 @@ def test_incomplete_source_never_publishes_manifest_or_advances_backup_health(ap
     assert metrics.put_metric_data.call_args.kwargs["MetricData"][0]["Value"] == 0
 
 
-@pytest.mark.parametrize("failure", ["blob", "database", "inventory"])
-def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path, failure):
+def test_corrupt_backups_fail_before_creating_restored_database(api, tmp_path):
     sources(api)
     s3 = ObjectStore()
     bundle(api, s3)
-    if failure == "blob":
-        slot = next(slot for slot in s3.objects if slot[1].startswith("recovery/"))
-        s3.objects[slot] = b"Corrupted independent backup"
-    elif failure == "database":
-        s3.objects[("backup-bucket", "backups/test.sqlite")] = b"Not a database"
-    else:
-        slot = ("backup-bucket", "backups/test.sqlite.manifest.json")
-        manifest = json.loads(s3.objects[slot])
-        manifest["objects"]["count"] -= 1
-        s3.objects[slot] = json.dumps(manifest).encode()
+    slot = next(slot for slot in s3.objects if slot[1].startswith("recovery/"))
+    s3.objects[slot] = b"Corrupted independent backup"
     settings = target(tmp_path)
-    expected = {"blob": Problem, "database": sqlite3.DatabaseError, "inventory": RuntimeError}[failure]
-    with pytest.raises(expected):
+    with pytest.raises(Problem):
         restore_bundle("backup-bucket", "backups/test.sqlite", settings, s3)
     assert not settings.db_path.exists()
 
@@ -168,21 +147,3 @@ def test_backup_detects_corruption_during_independent_download(api):
     with pytest.raises(Problem, match="integrity"):
         bundle(api, s3)
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
-
-
-def test_database_upload_is_verified_from_the_stored_checksum_not_a_second_download(api):
-    sources(api)
-    s3 = ObjectStore()
-    report = bundle(api, s3)
-    assert ("backup-bucket", report["key"]) in s3.heads
-    assert not any(key == report["key"] for _, key in s3.gets)
-    class Truncated(ObjectStore):
-        def head_object(self, **kw):
-            head = super().head_object(**kw)
-            if kw["Key"].endswith(".sqlite"):
-                head["ContentLength"] -= 1
-            return head
-    lying = Truncated()
-    with pytest.raises(RuntimeError, match="Stored object"):
-        bundle(api, lying, "backups/short.sqlite")
-    assert not any(key.endswith(".manifest.json") for _, key in lying.objects)

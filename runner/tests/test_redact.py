@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
+
 from runner import redact
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
@@ -103,6 +105,7 @@ class Turn(unittest.TestCase):
         self.assertEqual(published, [(True, ["blob.bin"])])
         self.assertEqual(len(pushes), 1)
 
+    @pytest.mark.slow
     def test_a_commit_that_holds_the_secret_is_not_pushed(self):
         def act():
             (self.repo / "state.md").write_text(f"token is {SECRET}\n")

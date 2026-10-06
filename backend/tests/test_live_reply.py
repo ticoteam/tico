@@ -19,33 +19,6 @@ def running(api, msg):
     return get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
 
 
-def test_separate_messages_are_joined_with_a_blank_line(api):
-    r, msg, aid = start(api)
-    send_events(api, r, aid, [
-        ("delta", {"text": "keep the bot ", "delta_kind": "text"}), ("delta", {"text": "planned.", "delta_kind": "text"}),
-        ("message", {"text": "keep the bot planned.", "final": False}),
-        ("delta", {"text": "I've filed ", "delta_kind": "text"}), ("delta", {"text": "the build", "delta_kind": "text"}),
-        ("message", {"text": "I've filed the build", "final": False}),
-        ("message", {"text": "I've filed the build", "final": True})])
-    x = running(api, msg)
-    assert x["text"] == "keep the bot planned.\n\nI've filed the build"
-    assert [(p["kind"], p["text"]) for p in x["parts"]] == [("reply", "keep the bot planned."), ("reply", "I've filed the build")]
-    assert all(p["at"] for p in x["parts"])
-
-
-def test_deltas_inside_one_message_are_not_split(api):
-    r, msg, aid = start(api)
-    send_events(api, r, aid, [("delta", {"text": t, "delta_kind": "text"}) for t in ("Hel", "lo, ", "wor", "ld")])
-    x = running(api, msg)
-    assert x["text"] == "Hello, world" and [p["text"] for p in x["parts"]] == ["Hello, world"]
-    # The message that ends it holds the same words, and changes nothing.
-    send_events(api, r, aid, [("message", {"text": "Hello, world", "final": False})], first=5)
-    assert running(api, msg)["text"] == "Hello, world"
-    # A model's thinking is not the reply.
-    send_events(api, r, aid, [("delta", {"text": "hmm", "delta_kind": "thought"})], first=6)
-    assert running(api, msg)["text"] == "Hello, world"
-
-
 def test_a_tool_is_one_short_label_and_never_its_arguments(api):
     r, msg, aid = start(api)
     secret = "hunter2-token"
@@ -95,13 +68,3 @@ def test_a_follow_up_says_which_run_took_it_and_the_reply_lists_both(api):
     with api.app.state.store.read() as c:
         stored = json.loads(c.execute("SELECT refs_json FROM messages WHERE from_actor='bot:ops'").fetchone()[0])
     assert stored["answers"] == [first["id"], follow["id"]] and stored["run"] == {"job_id": starter_job, "attempt_id": aid}
-
-
-def test_the_snapshot_live_events_point_to_carries_the_same_fields(api):
-    # A page following GET /api/v2/events reads the snapshot again when its conversation changes.
-    r, first, aid = start(api)
-    send_events(api, r, aid, [("message", {"text": "One.", "final": False}), ("message", {"text": "Two.", "final": False})])
-    snapshot = get(api, f"conversations/{first['conversation_id']}/snapshot")
-    assert snapshot["execution"]["text"] == "One.\n\nTwo."
-    assert snapshot["messages"][0]["run"]["state"] == "started_run"
-    assert "goal" in snapshot

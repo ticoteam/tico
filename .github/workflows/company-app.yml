@@ -1,8 +1,4 @@
 # Company values come only from a private repository secret. This workflow never publishes to GitHub.
-# Two stages, called separately by release.yml:
-#   build    Windows and Linux still compile per company (scripts/company_apps.py build), beside the generic build.
-#   publish  macOS rebrands this run's generic build (no compile: company.json, icon, Info.plist, re-sign, notarize),
-#            then all three platforms are published to the company's feed.
 name: Company desktop app
 on:
   workflow_call:
@@ -10,19 +6,18 @@ on:
       company:
         required: true
         type: string
-      stage:
-        required: true
-        type: string
 permissions:
   contents: read
   id-token: write
 jobs:
   build:
-    if: inputs.stage == 'build'
     strategy:
       fail-fast: false
       matrix:
         include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            bundles: app,dmg
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
@@ -44,6 +39,8 @@ jobs:
         shell: bash
         run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       # Restores the generic desktop build's cache (dependencies and the Tauri CLI) and never saves: branded
       # build output must not reach a cache a public build could restore. The app crate itself always recompiles,
       # since its build script reruns when the company identity in the environment changes.
@@ -62,41 +59,8 @@ jobs:
       - name: Configure private company app
         shell: bash
         run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
-      - name: Build private company app
-        shell: bash
-        run: python scripts/company_apps.py build --company '${{ inputs.company }}' --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
-      - name: Encrypt company bundles
-        shell: bash
-        run: python scripts/company_apps.py pack --company '${{ inputs.company }}' --target '${{ matrix.target }}'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: company-${{ inputs.company }}-${{ matrix.target }}
-          path: out/bundles.enc
-          retention-days: 1
-          if-no-files-found: error
-
-  # The generic macOS build of this run (app.yml uploads app-universal-apple-darwin), rebranded in a few minutes.
-  rebrand-mac:
-    if: inputs.stage == 'publish'
-    runs-on: macos-latest
-    env:
-      TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Artifact encryption dependency
-        run: python -m pip install "$(grep '^cryptography==' backend/requirements.txt)"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: app-universal-apple-darwin
-          path: generic
-      - name: Configure private company app
-        run: python scripts/company_apps.py configure --company '${{ inputs.company }}'
       - name: Apple signing identity
+        if: runner.os == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -112,6 +76,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
           rm certificate.p12
       - name: Apple signing and notarization, only when the secrets exist
+        if: runner.os == 'macOS'
         env:
           IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           ID: ${{ secrets.APPLE_ID }}
@@ -119,25 +84,27 @@ jobs:
           TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           # An empty APPLE_SIGNING_IDENTITY makes the bundler try to sign with nothing; only a
-          # real identity goes into the environment. Without one, the rebrand signs ad hoc.
+          # real identity goes into the environment. Without one, tauri.conf.json signs ad hoc.
           [ -n "$IDENTITY" ] && echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
           [ -n "$ID" ] && echo "APPLE_ID=$ID" >> "$GITHUB_ENV"
           [ -n "$PASSWORD" ] && echo "APPLE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
           [ -n "$TEAM" ] && echo "APPLE_TEAM_ID=$TEAM" >> "$GITHUB_ENV"
           true
-      - name: Rebrand the generic macOS app
-        run: python scripts/company_apps.py rebrand --company '${{ inputs.company }}'
+      - name: Build private company app
+        shell: bash
+        run: python scripts/company_apps.py build --company '${{ inputs.company }}' --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
       - name: Encrypt company bundles
-        run: python scripts/company_apps.py pack --company '${{ inputs.company }}' --target universal-apple-darwin
+        shell: bash
+        run: python scripts/company_apps.py pack --company '${{ inputs.company }}' --target '${{ matrix.target }}'
       - uses: actions/upload-artifact@v4
         with:
-          name: company-${{ inputs.company }}-universal-apple-darwin
+          name: company-${{ inputs.company }}-${{ matrix.target }}
           path: out/bundles.enc
           retention-days: 1
           if-no-files-found: error
 
   publish:
-    needs: rebrand-mac
+    needs: build
     runs-on: ubuntu-latest
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}

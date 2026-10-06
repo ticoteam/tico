@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Release checks.
 
-    python scripts/release_checks.py            # the full Python and browser suites (the per-PR gate), under 300 s
-    python scripts/release_checks.py --release  # the release gate: only what the suites cannot test, under 300 s
+    python scripts/release_checks.py            # the default Python and core browser suites (the per-PR gate), under 300 s
+    python scripts/release_checks.py --release  # the release gate: the opt-in tests and the whole product, under 300 s
 
-Every PR runs the full suite against main before it merges, so a release does not run it again. `--release`
-builds the candidate images once and runs the whole-product checks against them at the same time:
-docker/smoke.sh, docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install the previous
-release, upgrade to the candidate, roll back a migrating update). The journey starts installing the previous
-release while the images build. Each check gets its own Docker names and smoke a free host port, so they run
+Every PR runs the default suites against main before it merges, so a release does not run them again. `--release`
+runs what the default leaves out (`pytest -m slow` and `node scripts/ui-tests.cjs --all`) while it builds the candidate
+images once, then runs the whole-product checks against them at the same time: docker/smoke.sh,
+docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install the previous release, upgrade to the
+candidate, roll back a migrating update). The journey starts installing the previous release while the images build. Each check gets its own Docker names and smoke a free host port, so they run
 side by side; two release checks must not run at once, since the journey's candidate tags are fixed.
 
 Use the test environment's Python to invoke this script. Existing pytest and TICO_UI_JOBS settings still
-select concurrency for the full suite; no tests are filtered out.
+select concurrency for the default suites.
 """
 import argparse
 import os
@@ -98,7 +98,10 @@ def release(args):
 
     journey_env = {**base_env, 'TICO_JOURNEY_IMAGES_READY': str(ready)}
     journey_cmd = ['bash', 'scripts/journey-test.sh', '--release'] + (['--previous', args.previous] if args.previous else [])
-    checks = [Check('journey', journey_cmd, logs, journey_env)]   # installs the previous release while the images build
+    checks = [Check('journey', journey_cmd, logs, journey_env),   # installs the previous release while the images build
+              Check('slow-python', [sys.executable, '-m', 'pytest', '-q', '-m', 'slow'], logs,
+                    {**base_env, 'TICO_PYTHON': sys.executable}),
+              Check('all-browser', ['node', 'scripts/ui-tests.cjs', '--all'], logs, {**base_env, 'TICO_PYTHON': sys.executable})]
 
     builds = [Check(f'build-{target}', ['docker', 'build', '-q', '--target', target,
                                         '--build-arg', f'TICO_VERSION={CANDIDATE}', '--build-arg', f'TICO_COMMIT={commit}',

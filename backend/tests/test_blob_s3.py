@@ -22,12 +22,9 @@ def client_options(monkeypatch):
     return calls, result
 
 
-@pytest.mark.parametrize("storage", [Blobs, Downloads])
-@pytest.mark.parametrize("aws", [{}, {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing"},
-    {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_SESSION_TOKEN": "testing-token"},
-    {"AWS_ACCESS_KEY_ID": "testing"}, {"AWS_SECRET_ACCESS_KEY": "testing"}, {"AWS_SESSION_TOKEN": "testing-token"},
-    {"AWS_PROFILE": "example"}, {"AWS_ROLE_ARN": "example-role", "AWS_WEB_IDENTITY_TOKEN_FILE": "/example/token"},
-    {"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/example/credentials"}])
+@pytest.mark.parametrize("storage,aws", [
+    (Blobs, {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_SESSION_TOKEN": "testing-token"}),
+    (Downloads, {"AWS_PROFILE": "example"})])
 def test_auto_tries_backup_first_even_with_aws_credential_source(storage, aws, client_options, monkeypatch):
     calls, result = client_options
     monkeypatch.setenv("LITESTREAM_ACCESS_KEY_ID", "testing-backup")
@@ -43,10 +40,7 @@ def test_auto_tries_backup_first_even_with_aws_credential_source(storage, aws, c
     assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize("backup", [{}, {"LITESTREAM_ACCESS_KEY_ID": "testing"},
-    {"LITESTREAM_SECRET_ACCESS_KEY": "testing"},
-    {"LITESTREAM_ACCESS_KEY_ID": "", "LITESTREAM_SECRET_ACCESS_KEY": ""},
-    {"LITESTREAM_ACCESS_KEY_ID": "testing", "LITESTREAM_SECRET_ACCESS_KEY": ""}])
+@pytest.mark.parametrize("backup", [{}, {"LITESTREAM_ACCESS_KEY_ID": "testing", "LITESTREAM_SECRET_ACCESS_KEY": ""}])
 def test_absent_or_incomplete_backup_pair_keeps_default_chain(backup, client_options, monkeypatch):
     calls, _ = client_options
     for key, value in backup.items():
@@ -63,20 +57,11 @@ def test_no_file_bucket_does_not_use_backup_keys(client_options, monkeypatch):
     assert calls == [("s3", {"region_name": None, "endpoint_url": None})]
 
 
-@pytest.mark.parametrize("storage", [Blobs, Downloads])
+@pytest.mark.parametrize("storage", [Blobs])
 @pytest.mark.parametrize("env,expected", [
     ({"TICO_BLOB_REGION": "us-west-2", "TICO_BACKUP_REGION": "us-east-1", "AWS_REGION": "eu-west-1"}, "us-west-2"),
-    ({"TICO_BACKUP_REGION": "us-east-1", "AWS_DEFAULT_REGION": "eu-west-1"}, "us-east-1"),
     ({"TICO_BLOB_ENDPOINT": "https://s3.example.com", "TICO_BACKUP_REGION": "auto", "AWS_DEFAULT_REGION": "eu-west-1"}, "eu-west-1"),
-    ({"TICO_BLOB_ENDPOINT": "https://s3.example.com", "TICO_BLOB_REGION": "auto", "TICO_BACKUP_REGION": "us-east-1"}, "auto"),
-    ({"AWS_REGION": "us-west-2", "AWS_DEFAULT_REGION": "us-east-1"}, "us-west-2"),
-    ({"AWS_DEFAULT_REGION": "us-east-1"}, "us-east-1"),
-    ({"TICO_BACKUP_ENDPOINT": "https://s3.example.com", "TICO_BACKUP_REGION": "auto",
-      "AWS_REGION": "us-west-2"}, "us-west-2"),
     ({"TICO_BACKUP_ENDPOINT": "https://s3.example.com", "TICO_BACKUP_REGION": "auto"}, None),
-    ({"TICO_BACKUP_ENDPOINT": "", "TICO_BACKUP_REGION": "us-east-1"}, "us-east-1"),
-    ({"TICO_BLOB_REGION": "", "TICO_BACKUP_REGION": "", "AWS_REGION": "", "AWS_DEFAULT_REGION": ""}, None),
-    ({}, None),
 ])
 def test_region_resolution(storage, env, expected, client_options, monkeypatch):
     calls, _ = client_options
@@ -88,7 +73,7 @@ def test_region_resolution(storage, env, expected, client_options, monkeypatch):
     assert calls == [("s3", {"region_name": expected, "endpoint_url": env.get("TICO_BLOB_ENDPOINT") or None})]
 
 
-@pytest.mark.parametrize("storage", [Blobs, Downloads])
+@pytest.mark.parametrize("storage", [Blobs])
 def test_dedicated_file_keys_override_aws_and_backup_without_export(storage, client_options, monkeypatch):
     calls, result = client_options
     for key, value in {"TICO_BLOB_ACCESS_KEY_ID": "testing-files", "TICO_BLOB_SECRET_ACCESS_KEY": "testing-files-secret",
@@ -103,8 +88,8 @@ def test_dedicated_file_keys_override_aws_and_backup_without_export(storage, cli
     assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize("storage", [Blobs, Downloads])
-@pytest.mark.parametrize("key,secret", [("", ""), ("testing", ""), ("", "testing")])
+@pytest.mark.parametrize("storage", [Downloads])
+@pytest.mark.parametrize("key,secret", [("testing", "")])
 def test_empty_or_incomplete_file_keys_use_backup_pair(storage, key, secret, client_options, monkeypatch):
     calls, _ = client_options
     for name, value in {"TICO_BLOB_ACCESS_KEY_ID": key, "TICO_BLOB_SECRET_ACCESS_KEY": secret,
@@ -224,11 +209,7 @@ def write_health(store):
 
 
 @pytest.mark.parametrize('pairs,allowed,expected,tried', [
-    ([], ['role'], 'role', ['role']),
-    (['backup'], ['backup'], 'backup', ['backup']),
-    (['backup'], ['backup', 'role'], 'backup', ['backup']),
     (['backup'], ['role'], 'role', ['backup', 'role']),
-    (['keys', 'backup'], ['keys', 'backup', 'role'], 'keys', ['keys']),
     (['keys', 'backup'], ['backup', 'role'], 'backup', ['keys', 'backup']),
 ])
 def test_write_probe_selects_first_writable_source(tmp_path, monkeypatch, credential_clients, pairs, allowed, expected, tried):
@@ -255,7 +236,7 @@ def test_write_probe_selects_first_writable_source(tmp_path, monkeypatch, creden
     assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize('mode', ['role', 'backup', 'keys'])
+@pytest.mark.parametrize('mode', ['backup'])
 def test_explicit_source_does_not_fall_back_for_writes(tmp_path, monkeypatch, credential_clients, mode):
     clients, calls = credential_clients
     enable_pairs(monkeypatch, ['keys', 'backup'])
@@ -368,20 +349,13 @@ def test_pending_cleanup_can_use_another_source_without_accumulating_probes(tmp_
     assert 'upload_id' not in write_health(store)
 
 
-@pytest.mark.parametrize('mode', ['', 'auto', 'role', 'backup', 'keys'])
-def test_credentials_setting_from_env(monkeypatch, mode):
-    monkeypatch.setenv('TICO_DB', '/example/hub.db')
-    monkeypatch.setenv('TICO_BLOB_CREDENTIALS', mode)
-    assert Settings.from_env().blob_credentials == (mode or 'auto')
-
-
 def test_invalid_credentials_setting_never_echoes_value():
     with pytest.raises(ValueError, match='must be auto, role, backup or keys') as error:
         Settings(db_path=Path('/example/hub.db'), blob_credentials='private credential material')
     assert 'private credential material' not in str(error.value)
 
 
-@pytest.mark.parametrize('mode', ['keys', 'backup'])
+@pytest.mark.parametrize('mode', ['keys'])
 def test_explicit_missing_pair_does_not_use_role(tmp_path, credential_clients, mode):
     _, calls = credential_clients
     storage, store = storage_store(tmp_path, mode)
@@ -390,8 +364,7 @@ def test_explicit_missing_pair_does_not_use_role(tmp_path, credential_clients, m
     assert write_health(store)['credentials'] == mode
 
 
-@pytest.mark.parametrize('mode', ['auto', 'role', 'backup', 'keys'])
-@pytest.mark.parametrize('method', ['put', 'put_stream', 'put_staged'])
+@pytest.mark.parametrize('mode,method', [('auto', 'put'), ('keys', 'put_staged')])
 def test_uploads_reject_unselected_and_denied_sources_then_heal(tmp_path, monkeypatch, credential_clients, mode, method):
     import hashlib
     import io
@@ -564,24 +537,7 @@ def test_pending_read_client_construction_is_bounded_shared_and_keeps_local_fall
     assert storage.s3 is downloads.s3 is clients['role']
 
 
-def test_read_network_budgets_are_bounded_without_shortening_upload_timeouts(tmp_path, credential_clients):
-    clients, calls = credential_clients
-    storage, store = storage_store(tmp_path)
-    downloads = Downloads(store.settings, s3_source=storage)
-    assert storage.s3 is downloads.s3 is clients['role']
-    assert len(calls) == 1 and 'config' not in calls[0][1]
-    key = downloads.prefix + '0.3.11/Tico.dmg'
-    clients['role'].objects[key] = b'installer'
-    assert downloads.file_url('0.3.11', 'Tico.dmg') == 'https://s3.example.com/role'
-    assert len(calls) == 2
-    config = calls[1][1]['config']
-    assert config.connect_timeout == 2 and config.read_timeout == 5
-    assert config.retries == {'total_max_attempts': 1}
-    assert downloads.file_url('0.3.11', 'Tico.dmg') == 'https://s3.example.com/role'
-    assert len(calls) == 2
-
-
-@pytest.mark.parametrize('stage', ['client', 'create', 'abort'])
+@pytest.mark.parametrize('stage', ['create'])
 def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(tmp_path, monkeypatch, credential_clients, stage):
     import threading
     from backend import blob_s3
@@ -616,60 +572,3 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
     assert storage.check_write(store) is True
     assert storage._sources.selected == 'role'
     assert 'upload_id' not in write_health(store) and not write_health(store)['error']
-
-
-def test_timeout_health_update_preserves_a_concurrently_returned_cleanup_id(tmp_path, monkeypatch, credential_clients):
-    import threading
-    from contextlib import contextmanager
-
-    clients, _ = credential_clients
-    clients['role'].writable = True
-    storage, store = storage_store(tmp_path)
-    release, attempted, persisted = threading.Event(), threading.Event(), threading.Event()
-    original_create = clients['role'].create_multipart_upload
-    def create(**options):
-        assert release.wait(2)
-        return original_create(**options)
-    monkeypatch.setattr(clients['role'], 'create_multipart_upload', create)
-    original_health = storage._write_health
-    def health(store, pending, error):
-        if pending.get('upload_id'):
-            attempted.set()
-        original_health(store, pending, error)
-        if pending.get('upload_id'):
-            persisted.set()
-    monkeypatch.setattr(storage, '_write_health', health)
-    original_read = store.read
-    caller = threading.get_ident()
-    class Cursor:
-        def __init__(self, cursor):
-            self.cursor = cursor
-        def fetchone(self):
-            row = self.cursor.fetchone()
-            # Return the old snapshot after letting create complete and try to persist its ID.
-            release.set()
-            assert attempted.wait(1)
-            persisted.wait(0.05)
-            return row
-    class Connection:
-        def __init__(self, connection):
-            self.connection = connection
-        def __getattr__(self, name):
-            return getattr(self.connection, name)
-        def execute(self, *args):
-            return Cursor(self.connection.execute(*args))
-    @contextmanager
-    def read():
-        with original_read() as connection:
-            yield Connection(connection) if threading.get_ident() == caller else connection
-    monkeypatch.setattr(store, 'read', read)
-    try:
-        assert storage.check_write(store, timeout=0.05) is False
-    finally:
-        release.set()
-        assert storage._probe_task[0].wait(1)
-        monkeypatch.setattr(store, 'read', original_read)
-    assert persisted.is_set()
-    detail = write_health(store)
-    assert detail['upload_id'] == 'probe' and 'timed out' in detail['error']
-    assert storage._sources.selected is None

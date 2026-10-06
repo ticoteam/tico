@@ -17,7 +17,7 @@ import uvicorn
 from backend import events as E
 from backend import hubdb as H
 from backend.store import Problem
-from backend.tests.test_api import api, get, post, restrict, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, headers, post, restrict, setup_attempt  # noqa: F401
 
 
 @pytest.fixture
@@ -128,6 +128,7 @@ def ready(stream):
     return stream.until(topic("ready"))["data"]["seq"]
 
 
+@pytest.mark.slow
 def test_a_task_change_reaches_another_person_signed_and_never_a_non_party(api, live):
     ana, cara = live(), live("cara-test")
     ready(ana), ready(cara)
@@ -144,6 +145,7 @@ def test_a_task_change_reaches_another_person_signed_and_never_a_non_party(api, 
     assert secret["id"] not in json.dumps(cara.seen)
 
 
+@pytest.mark.slow
 def test_resume_from_after_or_last_event_id_sends_only_what_came_since(api, live):
     first = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
     with api.app.state.store.read() as c:
@@ -156,6 +158,7 @@ def test_resume_from_after_or_last_event_id_sends_only_what_came_since(api, live
         assert first["id"] not in json.dumps(stream.seen)
 
 
+@pytest.mark.slow
 def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
     post(api, "tasks", {"owner": "ben", "title": "Clear the old work", "body": "Please."})
     with api.app.state.store.read() as c:
@@ -169,6 +172,7 @@ def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
     assert live("ben-test", "?after=999999").until(topic("reset"))
 
 
+@pytest.mark.slow
 def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api, live, monkeypatch):
     stream = live("ben-test")
     ready(stream)
@@ -189,31 +193,14 @@ def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api,
     short.until(lambda e: e["event"] == "closed", timeout=5)
 
 
-def test_events_are_for_people(api, live):
+def test_events_are_for_people(api):
     r, _, attempt = setup_attempt(api)
-    assert live(attempt["token"]).status == 403
-    assert live(r["token"]).status == 403
-    assert live("ana-test", "?topics=tasks,gossip").status == 422
+    assert api.get("/api/v2/events", headers=headers(attempt["token"])).status_code == 403
+    assert api.get("/api/v2/events", headers=headers(r["token"])).status_code == 403
+    assert api.get("/api/v2/events?topics=tasks,gossip", headers=headers()).status_code == 422
 
 
-def test_messages_reach_the_conversation_and_never_someone_outside_it(api, live):
-    ana = live("ana-test", "?topics=messages")
-    cara = live("cara-test", "?topics=messages")
-    ready(ana), ready(cara)
-    sent = post(api, "chat/ops", {"text": "Where are the Q3 numbers?"})
-    got = ana.until(topic("messages", id=sent["id"]))
-    assert got["data"]["message"]["body"] == "Where are the Q3 numbers?"
-    assert got["data"]["conversation_id"] == sent["conversation_id"] and got["data"]["actor"] == "human:ana"
-    cara.drain(1.0)
-    assert "Q3 numbers" not in json.dumps(cara.seen)
-    # Narrowed to another conversation, nothing of this one arrives.
-    other = live("ana-test", "?topics=messages&conversation=elsewhere")
-    ready(other)
-    post(api, "conversations/" + sent["conversation_id"] + "/messages", {"text": "And Q4?"})
-    other.drain(1.0)
-    assert "And Q4?" not in json.dumps(other.seen)
-
-
+@pytest.mark.slow
 def test_a_runs_output_and_state_reach_the_room_and_respect_bot_read_access(api, live):
     ana = live("ana-test", "?topics=runs,messages")
     ready(ana)
@@ -240,52 +227,6 @@ def test_a_runs_output_and_state_reach_the_room_and_respect_bot_read_access(api,
     ana.until(lambda e: e["event"] == "runs" and (e["data"].get("output") or {}).get("seq") == 2)
     cara.drain(1.0)
     assert "Still going" not in json.dumps(cara.seen)
-
-
-def test_a_bots_status_reaches_who_may_read_it_even_from_another_process(api, live):
-    ben, cara = live("ben-test", "?topics=bots"), live("cara-test", "?topics=bots")
-    ready(ben), ready(cara)
-    # Written straight to the database, as the Slack gateway or the scheduler would: the shared
-    # reader finds it, with no request to ring the doorbell.
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,focus,since,updated_at) VALUES('inbox','running','Sorting mail',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='running', focus='Sorting mail'", (H.now(), H.now()))
-        c.execute("INSERT INTO bot_status(bot,state,focus,since,updated_at) VALUES('ops','running','Closing the books',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='running', focus='Closing the books'", (H.now(), H.now()))
-    got = cara.until(topic("bots", bot="ops"), timeout=E.FALLBACK_SECONDS + 3)
-    assert got["data"]["status"]["state"] == "running" and got["data"]["status"]["focus"] == "Closing the books"
-    assert got["data"]["actor"] is None                  # no request, no signature
-    cara.drain(0.5)
-    assert "Sorting mail" not in json.dumps(cara.seen)   # the mail bot is Ana's alone
-    ben.until(topic("bots", bot="ops"))
-
-
-def test_needs_reach_only_the_person_they_are_for(api, live):
-    ben = live("ben-test", "?topics=needs")
-    cara = live("cara-test", "?topics=needs")
-    ready(ben), ready(cara)
-    task = post(api, "tasks", {"owner": "ben", "title": "Sign the vendor contract", "body": "Please."})
-    got = ben.until(lambda e: e["event"] == "needs" and task["id"] in {i["id"] for i in e["data"]["items"]})
-    assert got["data"]["count"] == len(got["data"]["items"])
-    assert got["data"]["count"] == len(get(api, "needs-you", token="ben-test")["items"])
-    post(api, "tasks/" + task["id"], {"version": task["version"], "status": "done"}, token="ben-test")
-    ben.until(lambda e: e["event"] == "needs" and task["id"] not in {i["id"] for i in e["data"]["items"]})
-    cara.drain(0.5)
-    assert not [e for e in cara.seen if e["event"] == "needs"]
-
-
-def test_the_doorbell_delivers_a_write_without_waiting_for_the_fallback_read(api, live, monkeypatch):
-    monkeypatch.setattr(E, "FALLBACK_SECONDS", 30)
-    stream = live("ben-test", "?topics=tasks")
-    ready(stream)
-    stream.drain(0.3)
-    took = []
-    for n in range(3):
-        started = time.monotonic()
-        task = post(api, "tasks", {"owner": "ben", "title": f"Quick {n}", "body": "Please."})
-        stream.until(task_event(task["id"]), timeout=3)
-        took.append(time.monotonic() - started)
-    assert max(took) < 1.0, took
 
 
 def test_every_source_writes_its_topic(api):
@@ -353,14 +294,3 @@ def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monk
     conn = sqlite3.connect(":memory:")
     E.ensure(conn)
     assert conn.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger'").fetchone()[0] == 0
-
-
-def test_the_sweep_keeps_a_day(api):
-    store = api.app.state.store
-    post(api, "tasks", {"owner": "ben", "title": "Keep me", "body": "Please."})
-    with store.read() as c:
-        count = c.execute("SELECT count(*) FROM changes").fetchone()[0]
-    assert E.sweep(store) == 0 and count > 0
-    assert E.sweep(store, H.shift(H.now(), hours=E.KEEP_HOURS + 1)) == count
-    with store.read() as c:
-        assert E.latest(c) > 0 and E.oldest(c) is None

@@ -11,11 +11,15 @@ none are left: read `skills/tico-tickets/SKILL.md` before filing, picking or mer
 bot's own work is tasks, never issues.
 
 ## Tests
-`python3 -m pytest -q` (parallel by default) runs the Python suite; `npm run test:ui` runs the browser
-scripts in `ui/tests/` a few at a time (Playwright, needs `npm ci`). Tests run locally; GitHub Actions does not run tests. A full local run (pytest plus UI) must
-stay under 5 minutes; `python scripts/release_checks.py` runs both and records time and load (the per-PR gate); `--release` runs only the Docker whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: write tests while building if they help, then keep
-only the ones that guard a security or privacy boundary, data safety, or a core contract, and delete the
-rest. Adding tests that push the run past 5 minutes means cutting something else. `evals/botops/run.py` scores a real BotOps
+`python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked
+`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cjs`). Tests run
+locally; GitHub Actions does not run tests. The default Python suite stays under about 60 seconds and the whole
+default run (pytest plus core UI) under 2 minutes; `python scripts/release_checks.py` runs both and records time and
+load (the per-PR gate). `--release` runs the opt-in rest (`pytest -m slow`, `ui-tests.cjs --all`) and the Docker
+whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
+privacy or permission boundary, migrations and data safety, or a core task/run flow, one or two per rule; no tests
+of wording or docs, no exhaustive parametrizations. Real git, Docker, servers or long timers go behind
+`@pytest.mark.slow`. Adding a test that slows the default run means cutting another. `evals/botops/run.py` scores a real BotOps
 against a dev install with a real model, on demand only; `backend/tests/test_botops_evals.py` is its scripted layer.
 
 ## Conventions

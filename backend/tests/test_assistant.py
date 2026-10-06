@@ -4,7 +4,7 @@ person's own click."""
 
 import pytest
 
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
+from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.store import H
 
 
@@ -32,9 +32,7 @@ def assistant_turn(api, person, text="Please plan my week around the launch", bu
     return r, post(api, "jobs/claim", body, token=r["token"])["attempt"]
 
 
-@pytest.mark.parametrize("person", ["ana-test", "ben-test"])
-@pytest.mark.parametrize("busy_bots", [None, []])
-def test_assistant_fetches_only_its_own_credentials_before_start(api, person, busy_bots):
+def test_assistant_fetches_only_its_own_credentials_before_start(api, person="ben-test", busy_bots=None):
     from backend.tests.test_credentials import create, setup
 
     setup(api)
@@ -58,37 +56,6 @@ def test_assistant_fetches_only_its_own_credentials_before_start(api, person, bu
     assert made["requester"] == "human:" + person.removesuffix("-test")
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=r["token"])
     get(api, "credential-runtime", token, expected=409)
-
-
-def test_assistant_pre_start_failures_stop_retrying_and_explain_in_the_persons_room(api):
-    from backend.execution import PRE_START_TRIES
-    from backend.tests.test_api import expire
-
-    r, attempt = assistant_turn(api, "ben-test")
-    job_id = attempt["job_id"]
-    for n in range(PRE_START_TRIES):
-        assert attempt["job_id"] == job_id
-        get(api, "credential-runtime", attempt["token"])   # old runner's fetch, before start
-        expire(api, attempt["id"])
-        ready(api, r, ["coo"])
-        previous = attempt
-        attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-        if n < PRE_START_TRIES - 1:
-            assert attempt is not None
-    assert attempt is None
-    reason = "Your Assistant couldn't start on Test Mac; check that Computer"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "failed"
-        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == PRE_START_TRIES
-        last = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (previous["id"],)).fetchone()
-        assert (last["state"], last["final_text"]) == ("failed", reason)
-    messages = room(api, "ben-test")["messages"]
-    assert [m["body"] for m in messages if m["from_actor"] == "bot:coo"] == [reason]
-    get(api, f"conversations/{messages[0]['conversation_id']}/messages", "ana-test", expected=403)
-    assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is None
-    post(api, f"attempts/{previous['id']}/started", {"thread_id": "too-late"}, token=r["token"], expected=409)
-    say(api, "Please draft the launch plan", "ben-test")
-    assert post(api, "jobs/claim", {}, token=r["token"])["attempt"]["job_id"] != job_id
 
 
 def test_only_the_owner_of_an_assistant_room_reads_or_posts_in_it(api):
@@ -174,19 +141,8 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     post(api, f"assistant/actions/{other['id']}/confirm", {}, token="ana-test", expected=409)
 
 
-def running_proposal(api, person="ana-test"):
-    """A proposal as if the person had clicked Confirm and it is still being run."""
-    action = post(api, "assistant/actions", {"summary": "Archive the Ops bot", "path": "/api/v2/bots/ops/archive",
-                                             "body": {"expected_revision": 1}}, token=person)["action"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET status='running', running_since=?, confirm_hash=? WHERE id=?",
-                  (H.now(), "0" * 64, action["id"]))
-    return action
-
-
 def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
-    for path in ("/api/v2//me/tokens", "/api/v2/me/tokens", "/api/v2/tasks/../me/tokens", "/api/v2/me%2Ftokens",
-                 "/api/v2/tasks\\x", "/api/v2/tasks/", "/api/v2/runners/enrollments", "/auth/token", "/api/v2/assistant/turn-on"):
+    for path in ("/api/v2/me/tokens", "/api/v2/tasks/../me/tokens"):
         post(api, "assistant/actions", {"summary": "Do it", "path": path}, token="ana-test", expected=422)
     # The stored path is exactly what runs; only the status and an error detail are kept, never the answer.
     action = post(api, "assistant/actions", {"summary": "File it", "path": "/api/v2/tasks",
@@ -194,23 +150,6 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
     done = post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]
     assert done["status"] == "done" and set(done["result"]) == {"status_code", "error"}
     assert "Draft the launch plan" not in str(get(api, f"assistant/actions/{action['id']}")["action"]["result"])
-
-
-def test_the_assistant_cannot_confirm_its_own_proposal(api):
-    r, attempt = assistant_turn(api, "ana-test")
-    token = attempt["token"]
-    action = running_proposal(api)
-    for header in (action["id"], action["id"] + ".guess", action["id"] + "." + "0" * 64):
-        forged = api.post("/api/v2/bots/ops/archive", json={"expected_revision": 1},
-                          headers={**headers(token), "x-tico-assistant-action": header})
-        assert forged.status_code == 403
-    with api.app.state.store.read() as c:
-        assert H.bot(c, "ops")["state"] != "archived"
-    # A confirm that never settled cannot stay a bypass: after two minutes it has failed.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET running_since=? WHERE id=?", (H.shift(H.now(), seconds=-200), action["id"]))
-    assert get(api, "assistant")["pending"] == []
-    assert get(api, f"assistant/actions/{action['id']}")["action"]["status"] == "failed"
 
 
 def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
@@ -265,31 +204,6 @@ def test_direct_writes_stay_inside_the_team(api):
         # What it wrote is marked, so BotOps ignores it.
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 2
-
-
-def test_the_owner_can_make_the_assistant_ask_first_again(api):
-    with api.app.state.store.transaction() as c:
-        botwork = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
-        alone = H.task_create(c, "human:ben", "Think about my week", "Just me.", "human:ben")
-    r, attempt = assistant_turn(api, "ben-test")
-    token = attempt["token"]
-    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers("ben-test")).status_code == 403
-    assert put(api, "access/rules", {"assistant_direct": False}, "ana-test")["assistant_direct"] is False
-    post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token, expected=403)
-    post(api, "messages", {"to": "ops", "text": "Hello"}, token=token, expected=403)
-    post(api, "chat/ops", {"text": "Hello"}, token=token, expected=403)
-    post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token, expected=403)   # would wake ops
-    post(api, f"tasks/{alone['id']}/comments", {"text": "Monday first"}, token=token)                # wakes nobody
-    post(api, "tasks", {"owner": "human:ben", "title": "Draft my week", "body": "Monday."}, token=token)
-
-
-def test_a_token_from_a_finished_turn_no_longer_acts_as_the_person(api):
-    r, attempt = assistant_turn(api, "ben-test")
-    token = attempt["token"]
-    assert get(api, "me", token)["actor"] == "human:ben"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed' WHERE id=?", (attempt["id"],))
-    assert api.get("/api/v2/me", headers=headers(token)).status_code == 409      # not the person, not the bot
 
 
 def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation(api):

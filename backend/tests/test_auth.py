@@ -12,9 +12,14 @@ from backend.tests.test_api import api
 LOCAL_TOKEN = "local-owner-bearer-token-32chars!!"
 
 
+_KEY = []
+
+
 @pytest.fixture
 def signing(api):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    if not _KEY:                                    # RSA key generation is slow; one key serves the module
+        _KEY.append(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+    key = _KEY[0]
     auth = api.app.state.auth
     auth.settings.access_issuer = "https://test.cloudflareaccess.com"
     auth.settings.access_audience = "expected-app-audience"

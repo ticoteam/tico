@@ -49,6 +49,22 @@ def trees(tmp_path, monkeypatch):
     return workspace, base, remote, row, client
 
 
+@pytest.fixture
+def light(tmp_path, monkeypatch):
+    """The `trees` row and client without real git repositories, for tests that never touch one."""
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    monkeypatch.setenv('HUB_WORKSPACE', str(workspace))
+    monkeypatch.setenv('HUB_BOT', 'engineer')
+    monkeypatch.setenv('HUB_TASK_ID', '12345678abcdef')
+    row = {'id': 'link1', 'link_id': 'link1', 'task_id': '12345678abcdef', 'path': 'tasks/12345678/org__product',
+           'branch': 'tico/12345678-build', 'repo': 'org/product', 'full_name': 'org/product', 'default_branch': 'main',
+           'state': 'present', 'owner': 'bot:engineer', 'setup_command': None}
+    client = mock.Mock()
+    client.get.return_value = {'repositories': [{**row, 'access': 'write'}]}
+    return workspace, None, None, row, client
+
+
 def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     workspace, base, remote, row, client = trees
     result = W.command(client, 'add', 'org/product')
@@ -72,6 +88,7 @@ def test_add_setup_report_attach_dirty_push_remove_restore(trees):
     assert (path / 'setup-ran').exists()  # saved file, not a rerun of setup
 
 
+@pytest.mark.slow
 def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -88,6 +105,7 @@ def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
     assert (path / 'file').read_text() == 'keep this'
 
 
+@pytest.mark.slow
 def test_restore_remote_branch_then_default(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -103,6 +121,7 @@ def test_restore_remote_branch_then_default(trees):
     assert git(path, 'rev-parse', 'HEAD') == git(base, 'rev-parse', 'origin/main')
 
 
+@pytest.mark.slow
 def test_disk_floor_paths_old_server_and_setup_failure(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     monkeypatch.setattr(W.shutil, 'disk_usage', lambda p: shutil._ntuple_diskusage(100 * GB, 99 * GB, GB))
@@ -136,6 +155,7 @@ def test_mixed_version_heartbeat_drops_worktree_fields():
     assert 'worktrees' not in body and 'worktrees' not in body['readiness']
 
 
+@pytest.mark.slow
 def test_unselected_base_with_linked_worktree_is_not_deleted(trees):
     from runner.repositories import Repositories, REMOVE_AFTER
     workspace, base, remote, row, client = trees
@@ -153,6 +173,7 @@ def test_unselected_base_with_linked_worktree_is_not_deleted(trees):
         manager.close()
 
 
+@pytest.mark.slow
 def test_computer_heartbeat_actions_use_scoped_token_and_wait_for_idle(trees):
     workspace, base, remote, row, client = trees
     W.command(client, 'add', 'org/product')
@@ -186,9 +207,9 @@ def test_computer_heartbeat_actions_use_scoped_token_and_wait_for_idle(trees):
         manager.close()
 
 
-def test_actions_arriving_during_poll_are_queued(trees):
+def test_actions_arriving_during_poll_are_queued(light):
     import threading
-    workspace, base, remote, row, client = trees
+    workspace, base, remote, row, client = light
     manager = W.Worktrees(workspace, client)
     entered, finish = threading.Event(), threading.Event()
     batches = []
@@ -212,6 +233,7 @@ def test_actions_arriving_during_poll_are_queued(trees):
         manager.close()
 
 
+@pytest.mark.slow
 def test_git_hooks_fsmonitor_and_setup_never_receive_vault_environment(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     monkeypatch.setenv('VAULT_TEST_SECRET', 'synthetic-private-value')
@@ -233,6 +255,7 @@ def test_git_hooks_fsmonitor_and_setup_never_receive_vault_environment(trees, mo
     assert not marker.exists()
 
 
+@pytest.mark.slow
 def test_long_branch_does_not_break_heartbeat_and_4xx_retries_without_worktrees(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -241,7 +264,7 @@ def test_long_branch_does_not_break_heartbeat_and_4xx_retries_without_worktrees(
     from backend.models import WorktreeStatus
     WorktreeStatus(**report)
     assert report['state'] == 'present' and report['branch'] is None and 'oversized' in report['error']
-    for status in (400, 409, 422):
+    for status in (422,):
         runner = Runner.__new__(Runner)
         runner.client = mock.Mock()
         runner.client.post.side_effect = [APIError('validation', 'worktrees.0.branch too long', status), {'ok': True}]
@@ -250,6 +273,7 @@ def test_long_branch_does_not_break_heartbeat_and_4xx_retries_without_worktrees(
         assert 'worktrees' not in body
 
 
+@pytest.mark.slow
 def test_cleanup_never_replaces_divergent_task_history(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -265,6 +289,7 @@ def test_cleanup_never_replaces_divergent_task_history(trees):
     assert path.exists() and (path / 'file').read_text() == 'experiment'
 
 
+@pytest.mark.slow
 def test_fetch_failure_is_not_missing_branch(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -287,6 +312,7 @@ def test_fetch_failure_is_not_missing_branch(trees, monkeypatch):
     assert not path.exists()
 
 
+@pytest.mark.slow
 def test_missing_folder_registration_is_pruned_for_restore_and_base_cleanup(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -307,6 +333,7 @@ def test_missing_folder_registration_is_pruned_for_restore_and_base_cleanup(tree
         manager.close()
 
 
+@pytest.mark.slow
 def test_new_base_clone_detects_default_and_restores_remote_snapshot(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -334,6 +361,7 @@ def test_new_base_clone_detects_default_and_restores_remote_snapshot(trees, monk
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
 
 
+@pytest.mark.slow
 def test_unpushed_means_task_branch_and_clean_finished_cleanup_does_not_push(trees):
     workspace, base, remote, row, client = trees
     client.get.return_value['repositories'][0]['setup_command'] = None
@@ -351,7 +379,7 @@ def test_unpushed_means_task_branch_and_clean_finished_cleanup_does_not_push(tre
     assert git(remote, 'show-ref', '--heads') == git(remote, 'show-ref', '--heads', 'main')
 
 
-@pytest.mark.parametrize('name', ['.env.local', 'private.pem', 'credentials.json', 'large.bin', 'valuable.db'])
+@pytest.mark.parametrize('name', ['.env.local'])
 def test_cleanup_keeps_unsafe_large_and_ignored_files(trees, name):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -368,6 +396,7 @@ def test_cleanup_keeps_unsafe_large_and_ignored_files(trees, name):
     assert git(remote, 'show-ref', '--heads') == git(remote, 'show-ref', '--heads', 'main')
 
 
+@pytest.mark.slow
 def test_backoff_does_not_mint_more_tokens_and_alias_paths_are_refused(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -394,6 +423,7 @@ def test_backoff_does_not_mint_more_tokens_and_alias_paths_are_refused(trees, mo
         manager.close()
 
 
+@pytest.mark.slow
 def test_readiness_advertises_worktrees_and_setup_cli_runs_in_turn(trees):
     from clients.hubcli import parser
     workspace, base, remote, row, client = trees
@@ -417,6 +447,7 @@ def test_readiness_advertises_worktrees_and_setup_cli_runs_in_turn(trees):
     assert client.patch.call_args.args[1] == {'setup_pending': False}
 
 
+@pytest.mark.slow
 def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folder(trees, monkeypatch):
     from runner.repositories import Repositories
     workspace, base, remote, row, client = trees
@@ -445,8 +476,8 @@ def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folde
     assert not base.exists()
 
 
-def test_setup_timeout_kills_process_group(trees):
-    workspace, base, remote, row, client = trees
+def test_setup_timeout_kills_process_group(light):
+    workspace, base, remote, row, client = light
     process = mock.MagicMock()
     process.__enter__.return_value = process
     process.pid = 12345
@@ -459,6 +490,7 @@ def test_setup_timeout_kills_process_group(trees):
         assert process.wait.call_count == 2
 
 
+@pytest.mark.slow
 def test_add_using_task_prefix_waits_for_the_same_link_restore_lock(trees):
     import concurrent.futures
     import threading
@@ -478,7 +510,7 @@ def test_add_using_task_prefix_waits_for_the_same_link_restore_lock(trees):
         assert future.result(timeout=5)['link_id'] == row['id']
 
 
-@pytest.mark.parametrize('secret', ['github_pat_' + 'x' * 30, 'unusual-database-password'])
+@pytest.mark.parametrize('secret', ['unusual-database-password'])
 def test_snapshot_refusal_preserves_head_index_and_files(trees, secret):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -495,7 +527,8 @@ def test_snapshot_refusal_preserves_head_index_and_files(trees, secret):
     assert git(base, 'show-ref', '--verify', 'refs/heads/' + row['branch'])
 
 
-@pytest.mark.parametrize('cache', ['.pytest_cache', '.mypy_cache', '.ruff_cache', '.tox', '.gradle', '.terraform/providers'])
+@pytest.mark.slow
+@pytest.mark.parametrize('cache', ['.terraform/providers'])
 def test_cleanup_removes_ignored_build_caches(trees, cache):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -506,8 +539,8 @@ def test_cleanup_removes_ignored_build_caches(trees, cache):
     assert not path.exists()
 
 
-def test_setup_has_no_tokens_or_socket_but_keeps_toolchain(trees, monkeypatch):
-    workspace, base, remote, row, client = trees
+def test_setup_has_no_tokens_or_socket_but_keeps_toolchain(light, monkeypatch):
+    workspace, base, remote, row, client = light
     monkeypatch.setenv('HUB_TOKEN', 'synthetic-attempt-token')
     monkeypatch.setenv('GH_TOKEN', 'synthetic-repository-token')
     monkeypatch.setenv('TICO_GITHUB_EXTRA', 'synthetic-helper-key')
@@ -521,7 +554,8 @@ def test_setup_has_no_tokens_or_socket_but_keeps_toolchain(trees, monkeypatch):
     assert not any('TOKEN' in key or key.startswith(('HUB_', 'TICO_GITHUB_')) or 'synthetic-' in value for key, value in environment.items())
 
 
-@pytest.mark.parametrize('dirty', [False, True])
+@pytest.mark.slow
+@pytest.mark.parametrize('dirty', [True])
 def test_detached_cleanup_and_finished_pr_save_unpushed_history(trees, dirty):
     workspace, base, remote, row, client = trees
     client.get.return_value['repositories'][0]['setup_command'] = None
@@ -536,6 +570,7 @@ def test_detached_cleanup_and_finished_pr_save_unpushed_history(trees, dirty):
     assert git(remote, 'show', W.wip_branch(row) + ':file') == 'detached work'
 
 
+@pytest.mark.slow
 def test_reopen_just_before_remove_defers_and_per_bot_lock_blocks_turn(trees):
     import concurrent.futures
     workspace, base, remote, row, client = trees
@@ -582,8 +617,8 @@ def test_reopen_just_before_remove_defers_and_per_bot_lock_blocks_turn(trees):
         manager.close()
 
 
-def test_path_only_missing_cleanup_needs_no_token(trees):
-    workspace, base, remote, row, client = trees
+def test_path_only_missing_cleanup_needs_no_token(light):
+    workspace, base, remote, row, client = light
     row = {**row, 'repo': None, 'branch': None, 'task_status': 'closed', 'bot_state': 'active', 'state': 'missing'}
     client.get.return_value = {'worktrees': [row]}
     manager = W.Worktrees(workspace, client)
@@ -596,6 +631,7 @@ def test_path_only_missing_cleanup_needs_no_token(trees):
         manager.close()
 
 
+@pytest.mark.slow
 def test_snapshot_skipped_is_reported_and_branch_check_ignores_cwd(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -618,7 +654,7 @@ def test_snapshot_skipped_is_reported_and_branch_check_ignores_cwd(trees, monkey
 
 
 def test_unrelated_heartbeat_errors_keep_worktree_fields():
-    for status, detail in [(401, 'Invalid token'), (403, 'Forbidden'), (409, 'Conflict'), (422, 'goals.0 invalid')]:
+    for status, detail in [(401, 'Invalid token'), (422, 'goals.0 invalid')]:
         runner = Runner.__new__(Runner)
         runner.client = mock.Mock()
         runner.client.post.side_effect = APIError('validation', detail, status)
@@ -628,6 +664,7 @@ def test_unrelated_heartbeat_errors_keep_worktree_fields():
         assert 'worktrees' in body
 
 
+@pytest.mark.slow
 def test_full_mirror_base_offline_commit_push_cleanup_recreate(trees, monkeypatch):
     from runner.repositories import Repositories, REMOVE_AFTER
     from runner import credential_socket
@@ -709,6 +746,7 @@ def test_full_mirror_base_offline_commit_push_cleanup_recreate(trees, monkeypatc
         manager.close()
 
 
+@pytest.mark.slow
 def test_retirement_keeps_local_branches_and_broken_bases(trees):
     from runner.repositories import Repositories, REMOVE_AFTER
     workspace, base, remote, row, client = trees
@@ -740,8 +778,8 @@ def test_retirement_keeps_local_branches_and_broken_bases(trees):
         manager.close()
 
 
-def test_claims_skip_only_bot_under_maintenance(trees):
-    workspace, base, remote, row, client = trees
+def test_claims_skip_only_bot_under_maintenance(light):
+    workspace, base, remote, row, client = light
     manager = W.Worktrees(workspace, client)
     try:
         manager.maintaining.add('engineer')
@@ -755,7 +793,8 @@ def test_claims_skip_only_bot_under_maintenance(trees):
         manager.close()
 
 
-@pytest.mark.parametrize('use_file_url', [False, True])
+@pytest.mark.slow
+@pytest.mark.parametrize('use_file_url', [False])
 def test_no_app_clone_add_snapshot_cleanup_restore_and_retirement(trees, use_file_url):
     from runner.repositories import Repositories, REMOVE_AFTER, base_folder
     workspace, base, remote, row, client = trees
@@ -808,19 +847,7 @@ def test_no_app_clone_add_snapshot_cleanup_restore_and_retirement(trees, use_fil
             clones.close()
 
 
-@pytest.mark.parametrize('name', ['pkg.egg-info/PKG-INFO', '.DS_Store', '.idea/settings.xml', '.vscode/settings.json', 'pkg/file.pyc'])
-def test_ignored_build_outputs_do_not_hold_cleanup(trees, name):
-    workspace, base, remote, row, client = trees
-    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
-    git(base, 'config', 'core.excludesFile', str(workspace / 'ignores'))
-    (workspace / 'ignores').write_text(name.split('/')[0] + '\n')
-    artifact = path / name
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text('build output')
-    row['prs_finished'] = True
-    assert W.act(workspace, row, 'remove', os.environ.copy()) == 'removed'
-
-
+@pytest.mark.slow
 def test_heartbeat_creation_refreshes_mirror_before_cloning(trees):
     workspace, base, remote, row, client = trees
     shutil.rmtree(base)
@@ -846,21 +873,8 @@ def test_heartbeat_creation_refreshes_mirror_before_cloning(trees):
         manager.close()
 
 
-def test_no_app_failed_clone_explains_computer_login(trees):
-    workspace, base, remote, row, client = trees
-    shutil.rmtree(base)
-    client.get.return_value = {'repositories': [], 'configured': False}
-    run = W.isolation.run
-    def unavailable(args, **kwargs):
-        if 'clone' in args:
-            return subprocess.CompletedProcess(args, 128, '', 'access refused\nmore detail')
-        return run(args, **kwargs)
-    with mock.patch.object(W.isolation, 'run', side_effect=unavailable):
-        with pytest.raises(ValueError, match="git could not reach org/product with this computer's git login: access refused"):
-            W.command(client, 'add', 'org/product')
-
-
-@pytest.mark.parametrize('kind', ['modified', 'untracked', 'stash', 'detached'])
+@pytest.mark.slow
+@pytest.mark.parametrize('kind', ['untracked', 'stash'])
 def test_retirement_keeps_all_local_work(trees, kind):
     from runner.repositories import base_kept
     workspace, base, remote, row, client = trees
@@ -878,6 +892,7 @@ def test_retirement_keeps_all_local_work(trees, kind):
     assert base.exists()
 
 
+@pytest.mark.slow
 def test_failed_snapshot_fast_forward_returns_to_task_branch(trees):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])

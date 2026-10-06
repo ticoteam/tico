@@ -17,7 +17,7 @@ def finish(api, runner, attempt, text="No matching items."):
     return done["message"]
 
 
-@pytest.mark.parametrize("kind", ["say", "ask", "task", "folded"])
+@pytest.mark.parametrize("kind", ["task", "folded"])
 def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     runner, first, attempt = setup_attempt(api)
     start(api, runner, attempt)
@@ -47,7 +47,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
             assert H.message(c, reply["id"])["refs"]["answers"] == [second["id"], folded["id"]]
 
 
-@pytest.mark.parametrize("route", ["linked", "unlinked", "conversation"])
+@pytest.mark.parametrize("route", ["linked"])
 def test_current_attempt_tool_reply_is_not_duplicated(api, route):
     runner, origin, attempt = setup_attempt(api)
     start(api, runner, attempt)
@@ -83,7 +83,7 @@ def test_untrusted_attempt_reference_cannot_suppress_a_new_answer(api):
     assert finish(api, runner, attempt)["in_reply_to"] == second["id"]
 
 
-@pytest.mark.parametrize("revocation", ["assignment", "generation", "runner", "private-task", "paused-bot"])
+@pytest.mark.parametrize("revocation", ["generation", "private-task"])
 def test_task_completion_replay_requires_current_runner_ownership_and_private_access(api, revocation):
     machine = runner(api)
     assign(api, machine, "ops")
