@@ -2077,7 +2077,8 @@ def create_app(settings=None):
                 for row in rows:
                     for field in ("body", "acceptance_criteria", "acceptance_json"):
                         row.pop(field, None)
-            return {"tasks": rows, "next_offset": next_offset}
+            # Task views are JSON-ready; render here without another recursive walk on the event loop.
+            return JSONResponse({"tasks": rows, "next_offset": next_offset})
 
     # ------------------------------------------------------------------ quiet notes
     def note_view(row, c):
