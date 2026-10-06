@@ -84,6 +84,13 @@
 .bubble.bot.reply .md{max-width:none}
 .bubble.bot.reply .md>:first-child{margin-top:0}
 .bubble.bot.reply .md>:last-child{margin-bottom:0}
+.commit-exclusions{margin-top:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font-size:13px}
+.commit-exclusions summary{padding:7px 10px;cursor:pointer;color:var(--muted)}
+.commit-exclusions summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:7px}
+.commit-exclusions ul{margin:0;padding:2px 12px 9px 30px}
+.commit-exclusions li{padding:3px 0;overflow-wrap:anywhere}
+.commit-exclusions code{font-family:var(--mono);overflow-wrap:anywhere}
+.commit-exclusions li span{display:block;color:var(--muted);font-size:12px}
 .conv-act .conv-ev .md{max-width:none;font-size:13px;color:var(--muted)}
 .conv-note{padding:5px 0;font-size:12.5px}
 .thinking{display:flex;align-items:center;gap:8px;padding:7px 0;color:var(--muted);font-size:13px}

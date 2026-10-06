@@ -171,6 +171,67 @@ async function liveReply(browser) {
   await page.evaluate(()=>{document.execCommand=()=>{window.copiedMessage=document.activeElement.value;return true;};});
   await page.keyboard.press('Space');
   assert.equal(await page.evaluate(()=>window.copiedMessage),raw,'legacy clipboard copies raw text');
+
+  const noticeFixture = async message => page.evaluate(m=>{
+    V2C.messages=[m];
+    v2ChatRender(V2C);
+  },message);
+  const hostilePath='<img src=x onerror="alert(1)">.md';
+  const body='Finished the review.\n\nleft out of the commit: '+hostilePath+' (contains a secret)\n\nleft out of the commit: notes.txt (contains a secret)\n\nnot pushed: a commit made this turn contains a secret';
+  await noticeFixture({id:'notice-structured',from_actor:'bot:ops',kind:'say',body,created:now,
+    refs:{turn_id:'a-notice',run:{job_id:'j-notice',attempt_id:'a-notice'},commit_exclusions:[
+      {path:hostilePath,reason:'contains a secret'},{path:'notes.txt',reason:'contains a secret'}]}});
+  const noticeBubble=page.locator('#conv-thread .bubble');
+  const disclosure=noticeBubble.locator('details.commit-exclusions');
+  assert.equal(await disclosure.count(),1,'multiple exclusions share one disclosure');
+  assert.equal(await disclosure.evaluate(el=>el.open),false,'exclusion details start collapsed');
+  assert.match(await noticeBubble.innerText(),/Finished the review\./,'ordinary answer remains visible');
+  assert.match(await noticeBubble.innerText(),/not pushed: a commit made this turn contains a secret/,'not-pushed warning stays visible');
+  assert.match(await noticeBubble.innerText(),/2 files excluded from commit/,'summary reports the file count');
+  const summary=page.getByRole('button',{name:'2 files excluded from commit'});
+  assert.equal(await summary.count(),1,'native summary is exposed as a keyboard-operable control');
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await disclosure.evaluate(el=>el.open),true,'Enter expands exclusion details');
+  await page.waitForFunction(()=>V2C.openCommitExclusions.has('notice-structured'));
+  await page.evaluate(()=>v2ChatRender(V2C));
+  const refreshedBubble=page.locator('#conv-thread .bubble');
+  assert.equal(await refreshedBubble.locator('details.commit-exclusions').evaluate(el=>el.open),true,'an ordinary live refresh preserves expansion');
+  const refreshedDisclosure=refreshedBubble.locator('details.commit-exclusions');
+  assert.equal(await refreshedDisclosure.locator('code').nth(0).innerText(),hostilePath,'hostile filename is shown as escaped text');
+  assert.equal(await refreshedDisclosure.locator('img').count(),0,'filename cannot inject HTML');
+  await page.keyboard.press('Space');
+  assert.equal(await refreshedDisclosure.evaluate(el=>el.open),false,'Space collapses exclusion details');
+  await page.waitForFunction(()=>!V2C.openCommitExclusions.has('notice-structured'));
+  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,
+    value:{writeText:async text=>{window.copiedMessage=text;}}}));
+  await refreshedBubble.getByRole('button',{name:'Copy message',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.copiedMessage),body,'copy preserves the original transcript text');
+
+  const oldNotice='left out of the commit: old/report.md (contains a secret)';
+  await noticeFixture({id:'notice-legacy',from_actor:'bot:ops',kind:'say',body:'Older answer.\n\n'+oldNotice,created:now,
+    refs:{turn_id:'old-attempt',run:{job_id:'old-job',attempt_id:'old-attempt'}}});
+  const legacyBubble=page.locator('#conv-thread .bubble');
+  assert.equal(await legacyBubble.locator('details.commit-exclusions').evaluate(el=>el.open),false,'historical bot-run suffix is collapsed');
+  assert.match(await legacyBubble.innerText(),/Older answer\./);
+  assert.doesNotMatch(await legacyBubble.innerText(),/old\/report\.md/);
+
+  await noticeFixture({id:'notice-only',from_actor:'bot:ops',kind:'say',body:oldNotice,created:now,
+    refs:{turn_id:'only-attempt',run:{job_id:'only-job',attempt_id:'only-attempt'}}});
+  const onlyBubble=page.locator('#conv-thread .bubble');
+  assert.equal(await onlyBubble.locator('.md').count(),0,'notice-only reply does not leave an empty answer block');
+  assert.equal(await onlyBubble.locator('details.commit-exclusions').count(),1);
+
+  await noticeFixture({id:'human-example',from_actor:'human:ana',kind:'say',body:'Example: '+oldNotice,created:now,refs:{}});
+  const humanBubble=page.locator('#conv-thread .bubble');
+  assert.equal(await humanBubble.locator('details.commit-exclusions').count(),0,'human examples never collapse');
+  assert.match(await humanBubble.innerText(),/left out of the commit: old\/report\.md/);
+
+  await noticeFixture({id:'bot-quote',from_actor:'bot:ops',kind:'say',body:'The exact text is:\n\n'+oldNotice+'\n\nKeep it visible.',created:now,
+    refs:{turn_id:'quote-attempt',run:{job_id:'quote-job',attempt_id:'quote-attempt'}}});
+  const quoteBubble=page.locator('#conv-thread .bubble');
+  assert.equal(await quoteBubble.locator('details.commit-exclusions').count(),0,'quoted or non-terminal prose remains visible');
+  assert.match(await quoteBubble.innerText(),/left out of the commit: old\/report\.md/);
   assert.deepEqual(errors,[]);
   console.log('chat live reply and keyboard copy: ok');
 }

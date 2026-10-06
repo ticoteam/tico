@@ -2,6 +2,7 @@
 import pytest
 
 from backend.store import H, encode
+from backend.execution import commit_exclusion_notices
 from backend.tests.test_api import api, setup_attempt, post, get, ready, claim, runner, assign, headers
 
 
@@ -15,6 +16,35 @@ def finish(api, runner, attempt, text="No matching items."):
     done = post(api, path, body, runner["token"], key="completion")
     assert post(api, path, body, runner["token"], key="completion") == done
     return done["message"]
+
+
+def test_commit_exclusion_metadata_is_added_to_reply_refs_without_changing_transcript(api):
+    runner, origin, attempt = setup_attempt(api)
+    start(api, runner, attempt)
+    text = "Finished the report.\n\nleft out of the commit: reports/<fixture>.md (contains a secret)"
+    exclusions = [{"path": "reports/<fixture>.md", "reason": "contains a secret"}]
+    created = finish(api, runner, attempt, text)
+    reply = next(message for message in get(api, f"conversations/{origin['conversation_id']}/messages")
+                 if message["id"] == created["id"])
+    assert reply["body"] == text
+    assert reply["refs"]["turn_id"] == attempt["id"]
+    assert reply["refs"]["run"]["attempt_id"] == attempt["id"]
+    assert reply["refs"]["commit_exclusions"] == exclusions
+
+
+def test_commit_exclusion_recognition_requires_exact_terminal_runner_notices():
+    first = "left out of the commit: reports/a.md (contains a secret)"
+    second = "left out of the commit: private notes.txt (contains a secret)"
+    assert commit_exclusion_notices("Answer.\n\n" + first + "\n\n" + second +
+                                   "\n\nnot pushed: a commit made this turn contains a secret") == [
+        {"path": "reports/a.md", "reason": "contains a secret"},
+        {"path": "private notes.txt", "reason": "contains a secret"},
+    ]
+    assert commit_exclusion_notices("An example:\n\n" + first + "\n\nPlease preserve the quote.") == []
+    assert commit_exclusion_notices("left out of the commit: prose (contains a secret) with punctuation.") == []
+    assert commit_exclusion_notices("Answer.\n\n\n" + first) == [
+        {"path": "reports/a.md", "reason": "contains a secret"},
+    ]
 
 
 @pytest.mark.parametrize("kind", ["say", "ask", "task", "folded"])

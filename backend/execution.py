@@ -1,6 +1,7 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
 import json
+import re
 import secrets
 import sqlite3
 
@@ -36,6 +37,23 @@ AWAKE_SETTLE = 120
 # A claim arrives four times a second; contact is recorded at most this often so the rule costs
 # one write a minute on an idle machine rather than four a second.
 CONTACT_EVERY = 10
+COMMIT_EXCLUSION = re.compile(r"^left out of the commit: ([^\r\n]+) \(contains a secret\)$")
+COMMIT_NOT_PUSHED = "not pushed: a commit made this turn contains a secret"
+
+
+def commit_exclusion_notices(text):
+    """Recognize only the runner's exact trailing exclusion paragraphs in an authenticated completion."""
+    paragraphs = re.split(r"\n{2,}", text or "")
+    if paragraphs and paragraphs[-1] == COMMIT_NOT_PUSHED:
+        paragraphs.pop()
+    notices = []
+    while paragraphs:
+        match = COMMIT_EXCLUSION.fullmatch(paragraphs[-1])
+        if not match:
+            break
+        notices.insert(0, {"path": match.group(1), "reason": "contains a secret"})
+        paragraphs.pop()
+    return notices
 
 
 def queued_task_sql():
@@ -1115,6 +1133,9 @@ class Execution:
                 "WHERE i.attempt_id=? AND m.conversation_id=? ORDER BY m.rowid", (aid, msg["conversation_id"]))]
             refs = {**(H.message(c, reply["id"]).get("refs") or {}),
                     "run": {"job_id": row["job_id"], "attempt_id": aid}, "answers": handled}
+            exclusions = commit_exclusion_notices(body.text)
+            if exclusions:
+                refs["commit_exclusions"] = exclusions
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), reply["id"]))
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text, encode(body.model_dump()), aid))
