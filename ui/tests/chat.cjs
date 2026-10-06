@@ -175,6 +175,8 @@ async function liveReply(browser) {
 
   const noticeFixture = async message => page.evaluate(m=>{
     V2C.messages=[m];
+    V2C.execution=null;
+    V2C.live=null;
     v2ChatRender(V2C);
   },message);
   const hostilePath='<img src=x onerror="alert(1)">.md';
@@ -189,8 +191,8 @@ async function liveReply(browser) {
   assert.match(await noticeBubble.innerText(),/Finished the review\./,'ordinary answer remains visible');
   assert.match(await noticeBubble.innerText(),/not pushed: a commit made this turn contains a secret/,'not-pushed warning stays visible');
   assert.match(await noticeBubble.innerText(),/2 files excluded from commit/,'summary reports the file count');
-  const summary=page.getByRole('button',{name:'2 files excluded from commit'});
-  assert.equal(await summary.count(),1,'native summary is exposed as a keyboard-operable control');
+  const summary=disclosure.locator('summary');
+  assert.equal(await summary.innerText(),'2 files excluded from commit','native summary has an accessible text label');
   await summary.focus();
   await page.keyboard.press('Enter');
   assert.equal(await disclosure.evaluate(el=>el.open),true,'Enter expands exclusion details');
@@ -201,6 +203,7 @@ async function liveReply(browser) {
   const refreshedDisclosure=refreshedBubble.locator('details.commit-exclusions');
   assert.equal(await refreshedDisclosure.locator('code').nth(0).innerText(),hostilePath,'hostile filename is shown as escaped text');
   assert.equal(await refreshedDisclosure.locator('img').count(),0,'filename cannot inject HTML');
+  await summary.focus();
   await page.keyboard.press('Space');
   assert.equal(await refreshedDisclosure.evaluate(el=>el.open),false,'Space collapses exclusion details');
   await page.waitForFunction(()=>!V2C.openCommitExclusions.has('notice-structured'));
