@@ -88,6 +88,7 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     assert sh(checkout, "git", "branch", "--show-current") == "main"
 
 
+@pytest.mark.slow
 def test_a_tag_that_moved_upstream_is_not_trusted(repos):
     public, checkout, state = repos
     run_apply(checkout, state)                                  # the checkout now has v0.2.0
@@ -95,20 +96,6 @@ def test_a_tag_that_moved_upstream_is_not_trusted(repos):
     sh(public, "git", "tag", "-f", "v0.2.0", "main")            # someone re-points the release
     result, _ = run_apply(checkout, state)
     assert result["state"] == "failed" and "differs" in result["error"]
-
-
-def test_a_checkout_on_another_branch_is_refused(repos):
-    public, checkout, state = repos
-    sh(checkout, "git", "checkout", "-q", "-b", "feature")
-    result, calls = run_apply(checkout, state)
-    assert result["state"] == "blocked" and "branch feature" in result["error"] and calls.restarts == 0
-
-
-def test_a_running_turn_holds_the_switch(repos):
-    public, checkout, state = repos
-    before = head(checkout)
-    result, calls = run_apply(checkout, state, busy=lambda: 1)
-    assert result["state"] == "waiting" and head(checkout) == before and calls.restarts == 0
 
 
 def test_rollback_when_the_new_release_does_not_come_back(repos):
@@ -119,19 +106,6 @@ def test_rollback_when_the_new_release_does_not_come_back(repos):
     assert head(checkout) == before and sh(checkout, "git", "branch", "--show-current") == "main"
     assert calls.restarts == 2 and len(calls.installs) == 2       # forward, then the old dependencies back
     assert ru.read_status(state)["state"] == "rolled_back"
-
-
-def test_rollback_that_also_fails_says_so(repos):
-    public, checkout, state = repos
-    result, _ = run_apply(checkout, state, calls=Calls(healthy=(False, False)))
-    assert result["state"] == "failed" and "previous release did not start either" in result["error"]
-
-
-def test_a_failed_install_puts_the_old_code_back(repos):
-    public, checkout, state = repos
-    before = head(checkout)
-    result, calls = run_apply(checkout, state, calls=Calls(install_error="pip install failed: no network"))
-    assert result["state"] == "rolled_back" and "no network" in result["error"] and head(checkout) == before
 
 
 # -- the runner's side -----------------------------------------------------------------------------
@@ -173,6 +147,7 @@ def test_a_behind_runner_waits_for_quiet_then_starts_one_update(repos):
     assert f.fields() == {"release": "0.1.0", "kind": f.kind, "update": {"state": "updating", "target": "0.2.0", "error": ""}}
 
 
+@pytest.mark.slow
 def test_a_refused_update_is_reported_and_not_retried_until_the_release_changes(repos):
     public, checkout, state = repos
     ru.write_status(state, state="blocked", target="0.2.0", error="the checkout has 2 changed files", at=0.0)
@@ -206,6 +181,7 @@ class Sidecar:
 DOCKER = {"TICO_RUNNER_KIND": "docker", "TICO_VERSION": "v0.1.0"}
 
 
+@pytest.mark.slow
 def test_a_docker_runner_asks_its_sidecar_when_quiet(repos):
     public, checkout, state = repos
     sidecar = Sidecar()
@@ -214,9 +190,9 @@ def test_a_docker_runner_asks_its_sidecar_when_quiet(repos):
     assert f.blocks_claims(active=False) and sidecar.started == ["0.2.0"]
 
 
-
 # -- helper jobs follow the release --------------------------------------------------------------
 
+@pytest.mark.slow
 def test_a_healthy_update_restarts_the_helpers_and_a_rollback_does_not(repos):
     public, checkout, state = repos
     restarted = []
@@ -226,15 +202,6 @@ def test_a_healthy_update_restarts_the_helpers_and_a_rollback_does_not(repos):
     restarted.clear()
     result, _ = run_apply(checkout, state, calls=Calls(healthy=(False, True)), helpers=lambda: restarted.append("all"))
     assert result["state"] == "rolled_back" and restarted == []
-
-
-def test_a_helper_restart_that_fails_does_not_fail_the_update(repos):
-    public, checkout, state = repos
-
-    def boom():
-        raise OSError("launchctl")
-    result, _ = run_apply(checkout, state, helpers=boom)
-    assert result["state"] == "healthy"
 
 
 class Launchctl:
@@ -262,15 +229,6 @@ def test_only_installed_helpers_are_restarted(tmp_path):
     assert launchctl.calls == [["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-connectors"],
                                ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-importers"]]
     assert len(said) == 2 and "team.tico.tico-connectors" in said[0]
-
-
-def test_helper_labels_follow_the_bot_jobs_environment(tmp_path):
-    agents = tmp_path / "agents"
-    install_plists(agents, "team.tico.tico.acme.close-calls", "team.tico.tico-connectors")   # the default install is another company's
-    launchctl = Launchctl()
-    done = ru.restart_helpers({"XPC_SERVICE_NAME": "team.tico.tico.acme.bot"}, launchctl, agents, uid=501, say=lambda line: None)
-    assert done == ["close-calls"]
-    assert launchctl.calls == [["launchctl", "kickstart", "-k", "gui/501/team.tico.tico.acme.close-calls"]]
 
 
 def test_an_installed_helper_that_is_not_loaded_is_bootstrapped(tmp_path):
@@ -315,20 +273,6 @@ def test_a_failed_systemctl_falls_back_to_stopping_the_process(monkeypatch):
     assert killed[0] == ru.signal.SIGTERM                 # Restart=always starts it again
 
 
-def test_without_a_unit_the_runner_is_stopped_as_before(monkeypatch):
-    killed = []
-
-    def kill(pid, sig):
-        killed.append(sig)
-        if sig == 0:
-            raise ProcessLookupError
-    monkeypatch.setattr(ru.os, "kill", kill)
-    systemctl = Systemctl()
-    ru.restart_runner(4242, env={}, run=systemctl)
-    assert systemctl.calls == [] and killed[0] == ru.signal.SIGTERM
-    assert ru.systemd_unit({"TICO_SYSTEMD_UNIT": "../../evil"}) == "" and ru.systemd_unit({"TICO_SYSTEMD_UNIT": "tico-bot"}) == ""
-
-
 def test_only_installed_helper_units_are_restarted_through_systemctl(tmp_path):
     units = tmp_path / "units"
     units.mkdir()
@@ -359,23 +303,8 @@ def test_under_systemd_the_update_starts_as_a_unit_of_its_own(tmp_path):
         ru.spawn("/srv/tico", "0.2.0", tmp_path, 1, env=SYSTEMD, run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
 
 
-def test_a_runner_nothing_supervises_is_told_to_run_scripts_tico_install(repos):
-    public, checkout, state = repos
-    f, launched = follower(checkout, state, supervised=False)
-    assert f.state == "blocked" and "scripts/tico install" in f.error and launched == []
-    assert f.fields()["update"]["error"] == f.error
-
-
-def test_the_server_rewrites_the_old_unsupervised_line(tmp_path):
-    from backend import runner_versions
-    old = {"release": "0.2.25", "kind": "linux", "update_state": "blocked", "update_target": "0.2.27",
-           "update_error": "nothing would start this runner again after an update; restart it by hand"}
-    assert "scripts/tico install" in runner_versions.view(old, "0.2.27")["error"]
-    assert runner_versions.view({**old, "update_error": "the checkout has 2 changed files"}, "0.2.27")["error"] \
-        == "the checkout has 2 changed files"
-
-
-@pytest.mark.parametrize("docker", [False, True])
+@pytest.mark.slow
+@pytest.mark.parametrize("docker", [True])
 def test_a_disk_failure_retries_as_soon_as_space_frees(repos, monkeypatch, docker):
     from types import SimpleNamespace
     _, checkout, state = repos

@@ -3,7 +3,6 @@ installs that already mix them."""
 
 from backend.store import encode
 from backend.tests.test_getting_started import add_bot, enrolled, SIGNED_IN, heartbeat  # noqa: F401
-from backend.tests.test_health import health_of  # noqa: F401
 from backend.tests.test_onboarding import PEOPLE, environment, machine, signed_in  # noqa: F401
 
 
@@ -39,32 +38,3 @@ def test_an_inbox_bot_and_another_bot_never_share_a_computer(environment):
     assert place(api, "mail", other).status_code == 200
     again = place(api, "helper", other, 1)
     assert again.status_code == 409 and again.json()["error"]["code"] == "inbox_isolation"
-
-
-def test_health_warns_while_bots_can_read_the_mail_key(environment):
-    api = environment()
-    runner = setup(api)
-    _, checks = health_of(api)
-    assert "mail_key" not in checks
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
-                  ('{"schema_version": 1, "runtimes": {}, "bots": {}, "mail_key": "exposed"}', runner))
-    _, checks = health_of(api)
-    assert checks["mail_key"]["status"] == "warn" and "every bot" in checks["mail_key"]["summary"]
-
-
-def test_where_one_owner_runs_everything_the_refusal_offers_inbox_sharing(environment):
-    from backend import inbox_isolation
-    api = environment()
-    runner = setup(api)
-    assert place(api, "mail", runner).status_code == 200
-    refused = place(api, "mail2", runner)
-    assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbox_isolation"
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='morgan'")
-        c.execute("UPDATE runners SET operator='morgan'")
-        assert inbox_isolation.single_owner(c)
-    assert "inbox-sharing" in place(api, "mail2", runner).json()["error"]["detail"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='riley' WHERE bot='helper'")
-    assert "inbox-sharing" not in place(api, "mail2", runner).json()["error"]["detail"]

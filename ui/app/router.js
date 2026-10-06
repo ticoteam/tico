@@ -79,6 +79,7 @@ function route() {
   else if (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) pageCompanyDocs();
   else if (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/')) pageIntegrations();
   else if (S.route === '#/runs') pageRuns();
+  else if (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?')) pageLearnings();
   else if (S.route === '#/usage') pageUsage();
   else location.hash = UPDATES;         // unknown or empty routes land on Updates, home
   window.syncLibrarianRail?.();

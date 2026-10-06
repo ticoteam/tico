@@ -8,7 +8,7 @@
 // Tico asks the bots one at a time (backend/updates.py). This page is built to be snappy:
 // the last feed paints at once from this tab's cache, reads are marked as cards are seen and sent
 // in small batches, and a reply shows the moment it is sent. j / k move, r replies, u flips read,
-// o opens the bot (desktop).
+// o opens the bot, ← / → turn a week's slides (desktop).
 let UPD = null;
 const UPD_CACHE = kind => 'tico.updates.' + kind;
 function updCacheRead(kind) {
@@ -102,7 +102,7 @@ function updCard(u, i, state) {
       <div class="upd-meta"><a href="#/bot/${encodeURIComponent(u.bot)}" class="upd-name" data-upd-bot>${empName(u.bot)}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated || u.created))}</span>${u.read ? '' : '<span class="upd-dot" aria-label="Unread"></span>'}</div>
-      ${body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
+      ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
       <div class="upd-actions">
         <button type="button" class="upd-act" data-upd-reply><span class="nav-icon" aria-hidden="true">chat_bubble</span>${u.replies ? u.replies : 'Reply'}</button>
         <button type="button" class="upd-act" data-upd-toggle>${u.read ? 'Mark unread' : 'Mark read'}</button>
@@ -114,6 +114,67 @@ function updCard(u, i, state) {
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
         <div class="muted upd-hint">Goes to ${esc(botDisplayName(u.bot))}'s chat too.</div></div>` : ''}
     </div></article>`;
+}
+// A week in review is five slides, swiped left to right (scroll-snap), with arrows and dots for a mouse
+// and ← / → on the selected card. Older weeks posted as bullets show their bullets.
+const UPD_SLIDES = [['goal', 'Goal'], ['kpis', 'KPIs'], ['done', 'Done last week'], ['focus', 'Focus next week'], ['blockers', 'Biggest blockers']];
+function updKpiTile(k, tracked) {
+  const num = v => v !== '' && v != null && Number.isFinite(Number(v));
+  const value = tracked
+    ? (k.value != null && k.fresh !== false ? kpiNum(k.value, k.unit) : 'no data')
+    : (num(k.value) ? kpiNum(Number(k.value), k.unit || '') : [k.value, k.unit].filter(Boolean).join(' '));
+  const series = tracked ? k.spark : k.series;
+  return `<li class="upd-kpi">
+      <span class="upd-kpi-name">${tracked ? gdot(k.status) : ''}${esc(k.name)}</span>
+      <span class="upd-kpi-val tnum">${esc(value)}</span>
+      ${(series || []).length > 1 ? kpiSpark(series, tracked ? k.status : 'gray', 132, 28) : ''}
+      ${k.target_label ? `<span class="upd-kpi-sub">${esc(k.target_label)}</span>` : ''}
+      ${k.note ? `<span class="upd-kpi-sub">${esc(k.note)}</span>` : ''}</li>`;
+}
+function updSlide(key, s) {
+  const list = (items, none) => items?.length ? `<ul>${items.map(b => `<li>${safeMd(b, {shortLinks: true})}</li>`).join('')}</ul>` : `<p class="muted">${none}</p>`;
+  if (key === 'goal') return `<p class="upd-goal">${esc(s.goal || '')}</p>`;
+  if (key === 'kpis') {
+    const tiles = [...(s.tracked || []).map(k => updKpiTile(k, true)), ...(s.kpis || []).map(k => updKpiTile(k, false))];
+    return tiles.length ? `<ul class="upd-kpis">${tiles.join('')}</ul>` : '<p class="muted">No KPIs yet.</p>';
+  }
+  return list(s[key], key === 'blockers' ? 'Nothing blocking.' : 'None.');
+}
+function updDeck(u, state) {
+  const at = state.slide?.[u.id] || 0;
+  return `<div class="upd-deck" data-upd-deck>
+      <div class="upd-track" tabindex="-1" aria-roledescription="carousel" aria-label="Week in review">
+        ${UPD_SLIDES.map(([key, label], i) => `<section class="upd-slide md" aria-roledescription="slide" aria-label="${i + 1} of ${UPD_SLIDES.length}: ${label}">
+          <h3 class="upd-slide-h">${label}</h3>${updSlide(key, u.slides)}</section>`).join('')}
+      </div>
+      <div class="upd-deck-nav">
+        <button type="button" class="upd-deck-btn" data-upd-step="-1" aria-label="Previous slide"${at ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">chevron_left</span></button>
+        ${UPD_SLIDES.map(([, label], i) => `<button type="button" class="upd-deck-dot" data-upd-go="${i}" aria-label="${label}" title="${label}"${i === at ? ' aria-current="true"' : ''}></button>`).join('')}
+        <button type="button" class="upd-deck-btn" data-upd-step="1" aria-label="Next slide"${at < UPD_SLIDES.length - 1 ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">chevron_right</span></button>
+      </div></div>`;
+}
+function updDeckGo(deck, i, smooth = true) {
+  const track = deck.querySelector('.upd-track');
+  i = Math.max(0, Math.min(UPD_SLIDES.length - 1, i));
+  track.scrollTo({left: i * track.clientWidth, behavior: smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto'});
+}
+function updDeckMark(deck, state) {
+  const track = deck.querySelector('.upd-track');
+  const i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+  const id = deck.closest('[data-upd]')?.dataset.upd;
+  if (id) (state.slide ||= {})[id] = i;
+  deck.querySelectorAll('[data-upd-go]').forEach((d, n) => d.toggleAttribute('aria-current', n === i));
+  deck.querySelector('[data-upd-step="-1"]').disabled = i === 0;
+  deck.querySelector('[data-upd-step="1"]').disabled = i === UPD_SLIDES.length - 1;
+}
+function updDecksBind(state) {
+  for (const deck of document.querySelectorAll('#upd-feed [data-upd-deck]')) {
+    const track = deck.querySelector('.upd-track');
+    const at = state.slide?.[deck.closest('[data-upd]').dataset.upd];
+    if (at) track.scrollLeft = at * track.clientWidth;      // a re-render keeps the slide you were on
+    let t = null;
+    track.addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(() => updDeckMark(deck, state), 60); }, {passive: true});
+  }
 }
 function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
@@ -132,6 +193,7 @@ function updRender(state) {
   if (!items.length) html += '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b><span class="muted">The bots report in one at a time each morning.</span></div>';
   if (data.next_before) html += '<button type="button" class="ghost upd-more" data-upd-more>Load older</button>';
   feed.innerHTML = html;
+  updDecksBind(state);
   const allRead = $('#upd-allread'); if (allRead) allRead.hidden = !items.some(u => !u.read);   // nothing to mark, no button
   updWatch(state);
 }
@@ -222,6 +284,12 @@ function updBind(state) {
     const card = ev.target.closest('[data-upd]');
     if (ev.target.closest('[data-upd-more]')) { void updLoad(state, true); return; }
     if (!card || ev.target.closest('[data-upd-bot], a, textarea, form')) return;
+    const deck = ev.target.closest('[data-upd-deck]');
+    if (deck) {
+      const go = ev.target.closest('[data-upd-go], [data-upd-step]');
+      if (go) updDeckGo(deck, go.dataset.updGo != null ? Number(go.dataset.updGo) : (state.slide?.[card.dataset.upd] || 0) + Number(go.dataset.updStep));
+      return;
+    }
     const id = card.dataset.upd;
     if (ev.target.closest('[data-upd-reply]')) return void updOpen(state, id, true);
     if (ev.target.closest('[data-upd-toggle]')) return void updToggle(state, id);
@@ -253,6 +321,10 @@ function updBind(state) {
     else if (ev.key === 'u' && cur) { ev.preventDefault(); void updToggle(state, cur.id); }
     else if (ev.key === 'o' && cur) { ev.preventDefault(); location.hash = '#/bot/' + encodeURIComponent(cur.bot); }
     else if (ev.key === 'Enter' && cur) { ev.preventDefault(); void updOpen(state, cur.id); }
+    else if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && cur?.slides) {
+      const deck = document.querySelector(`#upd-feed [data-upd="${CSS.escape(cur.id)}"] [data-upd-deck]`);
+      if (deck) { ev.preventDefault(); updDeckGo(deck, (state.slide?.[cur.id] || 0) + (ev.key === 'ArrowRight' ? 1 : -1)); }
+    }
   };
   document.addEventListener('keydown', state.keys);
 }

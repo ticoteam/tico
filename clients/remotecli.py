@@ -102,7 +102,7 @@ def run(args, who=None):
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
     if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "tool list", "tool learn", "tool add", "tool update", "tool remove",
-              "update create", "update list", "update show", "update mark-read", "update reply", "update settings",
+              "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
               "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
@@ -113,7 +113,7 @@ def run(args, who=None):
                 more["enabled"] = bool(args.enable)
             return via_tool(client, args, **more)
         return via_tool(client, args)
-    if fn in ("task child create", "task tree", "task reparent"):
+    if fn in ("task child create", "task tree"):
         return via_tool(client, args)
     if args.cmd == "chat":
         return via_tool(client, args)
@@ -175,7 +175,8 @@ def run(args, who=None):
     if args.cmd == "service-key":
         # A person's own shell (hubtools.SHELL_ONLY): a new key is shown to them, never to an agent's context.
         if fn == "service-key create":
-            return client.post("service-keys", {"label": args.label}, key=os.environ.get("HUB_OPERATION_ID"))
+            return client.post("service-keys", {"label": args.label, "scope": getattr(args, "scope", "tasks")},
+                               key=os.environ.get("HUB_OPERATION_ID"))
         if fn == "service-key revoke":
             return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]
@@ -290,7 +291,9 @@ def run(args, who=None):
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
             payload = {"owner": target(args.owner), "title": args.title, "body": body,
-                       "due": args.due, "parent_id": args.parent, "goal_id": getattr(args, "goal", None) or None}
+                       "due": args.due, "goal_id": getattr(args, "goal", None) or None}
+            if args.parent:
+                payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
             for field in ("type", "step", "number"):
@@ -342,6 +345,8 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/restore", {})
         if sub == "link":
             return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title})
+        if sub == "relate":
+            return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]
@@ -393,8 +398,6 @@ def run(args, who=None):
                 for field in ("title", "type", "step", "step_rank", "number"):
                     if getattr(args, field, None) is not None:
                         body[field] = getattr(args, field)
-                if args.blocked_by is not None:
-                    body["blocked_by"] = args.blocked_by
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
             return post("tasks/" + args.id, body)

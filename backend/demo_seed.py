@@ -388,7 +388,8 @@ class Builder:
                     bodies = D.UPDATES[bot]["weekly" if kind == "weekly" else "daily"]
                     body = bodies[(6 - back) % len(bodies)]
                     self.clock.at = at
-                    posted.append((updates.post(c, bot, body, kind=kind, day=day.isoformat()), at))
+                    slides = D.WEEKLY_SLIDES.get(bot) if kind == "weekly" else None
+                    posted.append((updates.post(c, bot, body, kind=kind, day=day.isoformat(), slides=slides), at))
             # Everything older than yesterday is read; the last day's stays unread so the page has a badge.
             edge = self.now - timedelta(hours=30)
             for row, at in posted:

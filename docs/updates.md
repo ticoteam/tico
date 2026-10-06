@@ -148,6 +148,14 @@ sidecar. The last update's outcome is kept in `.updater-status.json` so the new 
 Settings still reach the server through the explicit `environment:` list in `compose.yaml`, not `env_file: .env`, which
 would also pass credentials that belong to other services (such as `CLOUDFLARE_TUNNEL_TOKEN`) into the server.
 
+### Updating from another install
+
+Besides the owner's **Update now**, an [update key](service-keys.md#update-keys) made by the owner can check for, start and
+follow an update through the same routes and the same updater, and do nothing else. A Release Manager on one install uses
+one key per install to roll a release out to all of them, canary first ([Releasing](releasing.md#the-release-managers-rollout)).
+`GET /api/v2/system/update` answers with `computers`, the online computers counted by state, so the caller can see them
+follow the server.
+
 ## Moving a hand-managed install onto the updater
 
 An install run with its own `compose.override.yaml` can use **Update now**. The override may keep its environment,

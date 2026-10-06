@@ -60,6 +60,7 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         image: [tico, tico-runner, tico-updater]
     permissions:
@@ -92,5 +93,10 @@ jobs:
           fi
           sources=()
           for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
-          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          # The registry sometimes drops the manifest upload; retry instead of failing the release.
+          for attempt in 1 2 3 4; do
+            timeout 120 docker buildx imagetools create "${tags[@]}" "${sources[@]}" && exit 0
+            echo "imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
+          done
+          exit 1
       - run: docker buildx imagetools inspect "ghcr.io/ticoteam/${{ matrix.image }}:${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}"

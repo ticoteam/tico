@@ -84,6 +84,8 @@ class Identity:
     confirmed: bool = False
     # Acting for a human does not grant a bot membership in that human's private tasks.
     task_actor: str = ""
+    # A service key's scope (backend/service_keys.py ROUTES): "tasks" or "update"; empty for everyone else.
+    scope: str = ""
 
 
 def standing(c, pid):
@@ -329,23 +331,23 @@ class Auth:
                         token_label=str(row["label"] or ""))
 
     def identity_from_service_key(self, c, token, path, method):
-        """Another system's service key (backend/service_keys.py), on the one route it may use.
+        """Another system's service key (backend/service_keys.py), on the routes of its scope.
 
         It is no person and no bot: anywhere else it is refused here, before any route could take
         its unfamiliar role for one with more reach. A revoked key is refused like an unknown one."""
-        row = c.execute("SELECT id,label,last_used,revoked_at FROM service_keys WHERE key_hash=?",
+        row = c.execute("SELECT id,label,last_used,revoked_at,scope FROM service_keys WHERE key_hash=?",
                         (digest(token),)).fetchone()
         if not row or row["revoked_at"]:
             raise Problem("identity", "Invalid credential", 401)
-        if (method, path) != ("POST", service_keys.INBOUND_PATH):
-            raise Problem("forbidden", "A service key only files tasks, with POST " + service_keys.INBOUND_PATH, 403)
+        if not service_keys.allowed(row["scope"], method, path):
+            raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)
         now = H.now()
         if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
             try:
                 c.execute("UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
             except sqlite3.Error:
                 pass
-        return Identity("service:" + row["id"], "service", token_label=str(row["label"]))
+        return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
     def assistant_principal(self, c, attempt):
         """The person an assistant chat turn acts for, as that person and nobody more, or None.
@@ -936,7 +938,7 @@ class Auth:
 
         number = re.fullmatch(r"#(\d{1,18})", ident)
         if number:
-            rows = readable(H._rows(c.execute("SELECT id,title,owner,requester,parent_id FROM tasks WHERE number=? AND ("
+            rows = readable(H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE number=? AND ("
                                               + visible + ")", (int(number.group(1)),))))
             if rows:
                 return rows[0]["id"]
@@ -944,7 +946,7 @@ class Auth:
 
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(H._rows(c.execute(
-                "SELECT id,title,owner,requester,parent_id FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
+                "SELECT id,title,owner,requester FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
                 "ORDER BY created LIMIT 50", (len(ident), ident.lower()))))
             if len(rows) == 1:
                 return rows[0]["id"]
@@ -954,7 +956,7 @@ class Auth:
                                                              for r in rows[:10])), 409)
         if len(ident) >= 34:
             near = []
-            for row in H._rows(c.execute("SELECT id,title,owner,requester,parent_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
+            for row in H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE length(id) BETWEEN ? AND ? "
                                          "AND (" + visible + ")", (len(ident) - 2, len(ident) + 2))):
                 distance = _edit_distance(ident.lower(), row["id"], 2)
                 if distance is not None:

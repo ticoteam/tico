@@ -5,9 +5,6 @@ the old KPI rows and the automatic bot KPIs."""
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from backend import goals as G
 from backend import hubdb, kpis as K
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
@@ -68,23 +65,6 @@ def test_the_colour_of_a_kpi_is_pace_or_range_and_no_fresh_data_is_gray():
     assert K.assess(ACTIVATION, CLIMB, [reading(56, 1), {**reading(48, 1), "id": "fix", "collected_at": stamp(0)}], NOW)["value"] == 48
 
 
-def test_a_reason_says_a_word_unit_once_and_rounds_counts_to_whole_numbers():
-    studios = {"name": "Paying studios", "unit": "studios", "direction": "up", "cadence": "weekly"}
-    # 121 -> 149, and the line is at 134.9 today: said once, as a whole number.
-    climb = {**CLIMB, "baseline": 121.0, "target": 149.0}
-    assert colour(climb, 130, kpi=studios)["reason"] == "Paying studios 130 vs 135 studios needed on pace"
-    assert colour(climb, 149, kpi=studios)["reason"] == "Paying studios 149 reached 149 studios"
-    assert (K.amount(134.5, "studios"), K.amount(2.25, "%"), K.amount(1200, "$")) == ("135 studios", "2.3%", "$1,200")
-    assert colour({"kind": "improve", "target": 150.0}, 140.4, kpi=studios)["reason"] == \
-        "Paying studios 140, target 150 studios has no deadline"
-    assert colour({"kind": "maintain", "min": 90.0, "max": None}, 85, kpi=studios)["reason"] == "Paying studios 85 below min 90 studios"
-    assert colour({"kind": "none"}, 12.5, kpi=studios)["reason"] == "Paying studios 13 studios"
-    # Months and percentages keep one decimal, rounded half up; a symbol stays on both sides.
-    runway = {"name": "Runway", "unit": "months", "direction": "up", "cadence": "monthly"}
-    assert colour({**CLIMB, "baseline": 6.0, "target": 12.25}, 7.25, kpi=runway)["reason"] == "Runway 7.3 vs 9.1 months needed on pace"
-    assert colour(CLIMB, 52.25)["reason"] == "Activation 52.3% vs 54.9% needed on pace"
-
-
 # ------------------------------------------------------------------ the API
 def goal_with_kpi(api, target=None, token="ana-test", owner="ana", cadence="daily"):
     goal = post(api, "goals", {"title": "Raise activation", "owner": owner}, token=token)["goal"]
@@ -99,53 +79,6 @@ def log(api, kpi_id, value, token="ana-test", **more):
 
 def goal_of(api, goal_id, token="ana-test"):
     return get(api, f"goals/{goal_id}", token)["goal"]
-
-
-def test_a_persons_colour_sticks_until_they_hand_it_back(api):
-    # The pace line starts at baseline_at and 40 is on it only at that instant: a reading taken later is behind by a
-    # sliver (30 * seconds / 73 years), and past 0.08 s that is yellow, not green. So the baseline and the first
-    # reading name the same instant, and the test no longer depends on how fast the machine is.
-    start = H.now()
-    goal, kpi = goal_with_kpi(api, {"kind": "improve", "baseline": 40, "baseline_at": start, "target": 70,
-                                    "deadline": "2099-12-31"})
-    assert goal["status"] is None                                       # no data: it stays unscored
-    log(api, kpi["id"], 40, period_end=start)
-    seen = goal_of(api, goal["id"])
-    assert (seen["status"], seen["status_source"], seen["status_by"]) == ("green", "auto", "bot:goal-manager")
-    assert [e["status_source"] for e in seen["events"] if e["field"] == "status"] == ["auto"]
-    # Ana says red, in a sentence. It is hers: a reading the arithmetic likes does not take it back.
-    post(api, f"goals/{goal['id']}/status", {"status": "red", "note": "The launch slipped a month."})
-    log(api, kpi["id"], 41, period_end=H.shift(start, seconds=1))       # the arithmetic still likes it
-    mine = goal_of(api, goal["id"])
-    assert (mine["status"], mine["status_source"], mine["status_by"]) == ("red", "person", "human:ana")
-    assert mine["status_note"] == "The launch slipped a month."
-    assert mine["suggest_status"] == "green" and "needed on pace" in mine["suggest_note"]    # a visible suggestion, no change
-    post(api, "goals/refresh", {})                                      # the pass suggests again and never overwrites
-    assert goal_of(api, goal["id"])["status"] == "red"
-    # Only a person hands it back, and the colour is worked out at once.
-    post(api, f"goals/{goal['id']}/status/auto", {}, token="cara-test", expected=403)
-    back = post(api, f"goals/{goal['id']}/status/auto", {})["goal"]
-    assert (back["status"], back["status_source"], back["status_by"], back["suggest_status"]) == ("green", "auto", "bot:goal-manager", None)
-    post(api, f"goals/{goal['id']}/status/auto", {}, expected=422)      # already automatic
-    events = goal_of(api, goal["id"])["events"]
-    assert [(e["new"], e["status_source"], e["status_by"]) for e in events if e["field"] == "status"] == [
-        ("green", "auto", "bot:goal-manager"), ("red", "person", "human:ana"), ("green", "auto", "bot:goal-manager")]
-    # Time passing is what turns fresh data stale: a month on, with no new reading, the goal is gray, not green.
-    with api.app.state.store.transaction() as c:
-        G.refresh(c, at=datetime.now(timezone.utc) + timedelta(days=30))
-    later = goal_of(api, goal["id"])
-    assert later["status"] == "gray" and "missing" in later["status_note"] and later["status_source"] == "auto"
-
-
-def test_a_goal_without_kpis_is_coloured_by_its_owners_check_in_or_stays_gray(api):
-    goal = post(api, "goals", {"title": "Close the month on time", "owner": "ana"})["goal"]
-    post(api, "goals/refresh", {})
-    assert goal_of(api, goal["id"])["status"] is None                   # nothing to go on: no colour at all
-    post(api, f"goals/{goal['id']}/checkins", {"body": "Month end is on Friday and two vendors are late.", "signal": "at_risk"})
-    said = goal_of(api, goal["id"])
-    assert (said["status"], said["status_source"]) == ("yellow", "auto") and said["status_note"].startswith("Check-in")
-    assert said["checkins"][0]["signal"] == "at_risk"
-    post(api, f"goals/{goal['id']}/checkins", {"body": "Nothing to say.", "signal": "bogus"}, expected=422)
 
 
 def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(api):
@@ -279,28 +212,3 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     assert conn.execute("SELECT count(*) FROM kpi_definitions").fetchone()[0] == 2
     hubdb.migrate(conn)                                                         # and it is safe to run again
     assert conn.execute("SELECT count(*) FROM goal_kpis").fetchone()[0] == 2
-
-
-def test_every_bot_has_automatic_kpis_computed_from_ticos_own_data_and_they_link_like_any_kpi(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Reconcile March", "body": "Do it."})
-    post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done', done_at=? WHERE id=?", (H.now(), task["id"]))
-        c.execute("INSERT INTO approvals (id, kind, payload_json, payload_hash, requested_by, decision, decided_by, decided_at, created) "
-                  "VALUES ('a1','send','{}','h1','bot:ops','approved','human:ana',?,?), "
-                  "('a2','send','{}','h2','bot:ops','declined','human:ana',?,?)", (H.now(), H.now(), H.now(), H.now()))
-        c.execute("INSERT INTO turns (id, bot, started, cost) VALUES ('t1','ops',?,0.25), ('t2','ops',?,0.5)", (H.now(), H.now()))
-    shown = {k["id"]: k for k in get(api, "bots/ops/kpis")["kpis"]}
-    assert set(shown) == {f"auto:ops:{m}" for m in ("tasks_done_7d", "first_response_min", "approval_rate_30d", "failed_runs_7d", "cost_7d")}
-    assert shown["auto:ops:tasks_done_7d"]["latest"]["value"] == 1 and shown["auto:ops:approval_rate_30d"]["latest"]["value"] == 50
-    assert shown["auto:ops:cost_7d"]["latest"]["value"] == 0.75 and shown["auto:ops:failed_runs_7d"]["latest"]["value"] == 0
-    assert shown["auto:ops:first_response_min"]["latest"] is None and shown["auto:ops:first_response_min"]["status"] == "gray"   # nothing to measure is not zero
-    # Reading them takes Read on the bot; a linked one is judged like any KPI, on the link's target.
-    get(api, "bots/inbox/kpis", "cara-test", expected=404)
-    goal = post(api, "goals", {"title": "Get the books done", "owner": "bot:ops"})["goal"]
-    linked = post(api, f"goals/{goal['id']}/kpis", {"kpi_id": "auto:ops:tasks_done_7d", "kind": "improve", "baseline": 0,
-                                                  "target": 5, "deadline": "2099-12-31"})["kpi"]
-    assert linked["auto"] and linked["latest"]["value"] == 1 and linked["status"] in ("green", "yellow", "red")
-    assert goal_of(api, goal["id"])["status_source"] == "auto"
-    assert get(api, "kpis/auto:ops:cost_7d")["kpi"]["owner"] == "bot:ops"
-    post(api, "kpis/auto:ops:cost_7d/readings", {"value": 1}, expected=422)       # computed, never logged

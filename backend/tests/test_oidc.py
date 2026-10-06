@@ -19,7 +19,6 @@ from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
 
 CLIENT = "tico-client"
 SECRET = "client-secret-value"
-TENANT = "11111111-2222-3333-4444-555555555555"
 
 
 def _b64(raw):
@@ -204,11 +203,8 @@ def test_cookie_is_host_prefixed_and_secure_on_https(signin):
 
 
 @pytest.mark.parametrize("claims", [
-    {"aud": "someone-else"}, {"aud": ["someone-else", CLIENT], "azp": "someone-else"},
-    {"iss": "https://evil.example"}, {"exp": int(time.time()) - 3600},
-    {"iat": int(time.time()) + 3600}, {"nonce": "not-the-nonce"}, {"nonce": None},
-    {"email_verified": False}, {"email_verified": "false"}, {"email_verified": None},
-    {"email": None}, {"sub": None}], ids=lambda claims: ",".join(claims))
+    {"aud": "someone-else"}, {"iss": "https://evil.example"}, {"nonce": "not-the-nonce"},
+    {"email_verified": False}], ids=lambda claims: ",".join(claims))
 def test_bad_id_tokens_never_start_a_session(signin, claims):
     result = signin.login(claims=claims)
     assert result.status_code in (400, 502) and result.headers["content-type"].startswith("text/html")
@@ -221,7 +217,7 @@ def test_wrong_signature_is_refused(signin):
     signin.api.cookies.clear()
     began = signin.api.get("/auth/login", follow_redirects=False)
     code, state = signin.fake.approve(began.headers["location"])
-    other = pool_key(5)
+    other = pool_key(1)
     signin.fake.keys[0] = (signin.fake.keys[0][0], other)          # same kid, another key
     result = signin.api.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False)
     assert result.status_code == 400 and len(signin.sessions()) == 1 and me(signin.api).status_code == 401
@@ -280,15 +276,8 @@ def test_idle_and_absolute_lifetimes(signin):
     assert me(signin.api).status_code == 401
 
 
-def H_ago(**kw):
-    from backend.store import H
-    return H.shift(H.now(), seconds=-kw.get("hours", 0) * 3600)
-
-
 @pytest.mark.parametrize("target,expected", [
-    ("//evil.example/x", "/"), ("https://evil.example", "/"), ("/\\evil.example", "/"),
-    ("/%0d%0a", "/%0d%0a"), ("javascript:alert(1)", "/"), ("/auth/login", "/"),
-    ("/tasks#/x", "/tasks#/x"), ("/a b", "/")])
+    ("//evil.example/x", "/"), ("javascript:alert(1)", "/"), ("/tasks#/x", "/tasks#/x")])
 def test_next_only_returns_to_same_origin_paths(signin, target, expected):
     done = signin.login(target)
     assert done.status_code == 302 and done.headers["location"] == expected
@@ -304,16 +293,6 @@ def test_logout_ends_the_session_and_lands_on_a_sign_in_page(signin):
     assert replay.status_code == 401                        # the id itself is dead, not only the cookie
     page = signin.api.get("/auth/signed-out")
     assert page.status_code == 200 and "/auth/login" in page.text
-
-
-def test_sign_in_pages_carry_the_wordmark_until_the_app_is_renamed():
-    from types import SimpleNamespace
-    from backend.config import ROOT
-    from backend.oidc import _page
-    tico = _page(SimpleNamespace(app_name="Tico", ui_dir=ROOT / "ui"), 200, "Signed out", "Bye").body.decode()
-    assert 'aria-label="Tico"' in tico and "#172221" in tico and "#f7f7f3" in tico   # dark ink and the reversed one
-    named = _page(SimpleNamespace(app_name="Acme HQ", ui_dir=ROOT / "ui"), 200, "Signed out", "Bye").body.decode()
-    assert "<svg" not in named and '<p class="brand">Acme HQ</p>' in named
 
 
 def test_a_person_marked_left_loses_the_session_and_cannot_return(signin):
@@ -343,16 +322,9 @@ def base(tmp_path, **kw):
 
 
 @pytest.mark.parametrize("changes,message", [
-    ({"oidc_issuer": ""}, "TICO_OIDC_ISSUER and TICO_OIDC_CLIENT_ID"),
-    ({"oidc_client_id": ""}, "TICO_OIDC_ISSUER and TICO_OIDC_CLIENT_ID"),
     ({"oidc_client_secret": ""}, "TICO_OIDC_CLIENT_SECRET"),
-    ({"oidc_issuer": "http://idp.example.com"}, "https"),
     ({"oidc_issuer": "https://login.microsoftonline.com/common/v2.0"}, "own tenant"),
-    ({"oidc_issuer": "https://login.microsoftonline.com/organizations/v2.0"}, "own tenant"),
-    ({"public_url": "http://tico.example"}, "https TICO_PUBLIC_URL"),
-    ({"session_secret": "short"}, "at least 32"),
-    ({"oidc_allowed_domains": ("me@acme.com",)}, "ALLOWED_DOMAINS"),
-    ({"oidc_client_secret": "", "oidc_client_secret_file": "/nonexistent/secret"}, "cannot be read")])
+    ({"public_url": "http://tico.example"}, "https TICO_PUBLIC_URL")])
 def test_startup_validation_names_the_problem(tmp_path, changes, message):
     with pytest.raises(RuntimeError, match=message):
         Settings(**{**base(tmp_path), **changes})

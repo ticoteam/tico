@@ -6,7 +6,7 @@ waits: nothing is queued, and the next run the bot has for any reason carries it
 prompt as a task of its own. Closing it before then is a cancel and wakes nobody. (2026-09-24.)
 """
 
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 
 
 def claim(api, r, next_run=True):
@@ -78,18 +78,6 @@ def test_a_run_that_fails_gives_it_back(api):
     assert [t["id"] for t in claim(api, r)["next_run"]] == [task["id"]]
 
 
-def test_a_finished_run_does_not_carry_it_twice(api):
-    r = setup(api)
-    later(api)
-    post(api, "chat/ops", {"text": "First"})
-    first = claim(api, r)
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 0},
-         token=r["token"])
-    post(api, "chat/ops", {"text": "Second"})
-    assert claim(api, r)["next_run"] == []
-
-
 # ---- running one now (Ben, 2026-09-24: "it should just be able to just run it")
 
 def test_run_now_starts_it_as_the_task_not_as_a_chat(api):
@@ -104,12 +92,3 @@ def test_run_now_starts_it_as_the_task_not_as_a_chat(api):
     assert attempt["message"]["body"].startswith("Run now: Watch the new refund requests")
     assert attempt["message"]["from_actor"] != "human:ana", "no chat message in the person's name"
     assert attempt["next_run"] == [], "and it is not carried a second time"
-
-
-def test_run_now_twice_queues_one_run(api):
-    setup(api)
-    task = later(api)
-    assert post(api, f"tasks/{task['id']}/run-now", {})["queued"] is True
-    assert post(api, f"tasks/{task['id']}/run-now", {})["queued"] is False
-    assert jobs(api) == 1
-

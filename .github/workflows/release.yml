@@ -1,24 +1,145 @@
 # A pushed version tag becomes a GitHub release: the CHANGELOG section as notes and the one-line installer (install.sh with this tag baked in, the compose bundle, SHA256SUMS).
-# The desktop app is built for the same tag first: if it fails, no release is published, so no server offers the update.
-# See docs/releasing.md.
+# The server release is published the moment the Docker workflow's images for the tag exist; it never waits for desktop builds.
+# The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
+# desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
+# and a desktop failure leaves the server release in place. See docs/releasing.md.
 name: Release
 
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+  workflow_dispatch:   # run from a tag to rebuild its desktop apps (a new company, a failed build)
+    inputs:
+      desktop:
+        description: Build the desktop apps even if the shell did not change
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build the notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          python3 scripts/changelog_notes.py "$version" > dist/notes.md
+      - name: Build the installer and its compose bundle
+        run: |
+          python3 scripts/build_install_bundle.py --version "$GITHUB_REF_NAME" --output dist/install
+          shellcheck -s sh dist/install/install.sh
+          grep -q "TICO_VERSION_BAKED='$GITHUB_REF_NAME'" dist/install/install.sh
+      # The Docker workflow builds the images from the same tag; an installer that runs before they exist fails on pull.
+      - name: Wait for the images of this tag
+        run: |
+          for image in tico tico-runner tico-updater; do
+            for _ in $(seq 1 360); do
+              docker buildx imagetools inspect "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME" >/dev/null 2>&1 && continue 2
+              sleep 5
+            done
+            echo "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME was not published within 30 minutes" >&2
+            exit 1
+          done
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "The $GITHUB_REF_NAME release already exists."; exit 0; }
+          flags=()
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/install/install.sh "dist/install/tico-bundle-$GITHUB_REF_NAME.tar.gz" dist/install/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --notes-file dist/notes.md --verify-tag "${flags[@]}"
+
+  # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
+  desktop-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+      previous: ${{ steps.diff.outputs.previous }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}
+        run: |
+          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" \
+            | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          build=true
+          if [ "$FORCE" != true ] && [ -n "$previous" ] \
+             && git diff --quiet "$previous" "$GITHUB_SHA" -- app scripts/app_release.py scripts/company_apps.py \
+                  .github/workflows/app.yml .github/workflows/company-app.yml \
+             && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx latest.json; then
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Desktop build: $build (previous release $previous)"
+
   desktop:
+    needs: desktop-changes
+    if: needs.desktop-changes.outputs.build == 'true'
     uses: ./.github/workflows/app.yml
     secrets: inherit
     permissions:
       contents: read
       id-token: write
+
+  # Adds the desktop files and latest.json to the already published release: new builds, or the previous release's
+  # files carried forward. latest.json goes last, so a desktop updater never sees a manifest whose files are missing.
+  desktop-assets:
+    needs: [release, desktop-changes, desktop]
+    if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.desktop-changes.outputs.build == 'true'
+        with:
+          pattern: app-*
+          path: dist/desktop
+          merge-multiple: true
+      - name: Build the desktop updater manifest
+        if: needs.desktop-changes.outputs.build == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          flags=()
+          [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
+          [ -n "$APPLE_ID" ] && flags+=(--notarized)
+          python3 scripts/app_release.py --github --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
+            --output dist/desktop/latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/desktop
+      # The app keeps its earlier version, so installed apps see no update; the files sit on this release so the
+      # download links and the hub's download page find them on the release they look at.
+      - name: Carry the previous release's desktop files forward
+        if: needs.desktop-changes.outputs.build != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
+        run: |
+          mkdir -p dist/desktop
+          gh release download "$PREVIOUS" --dir dist/desktop --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+            --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
+          sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
+      - name: Add the desktop files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find dist/desktop -type f ! -name latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/desktop/latest.json --clobber
+
   company-matrix:
-    needs: desktop
+    needs: desktop-changes
+    if: needs.desktop-changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,8 +154,10 @@ jobs:
           # Use a secret: variables can be printed in the runner's pre-step env banner.
           TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
         run: python3 scripts/company_apps.py matrix
+  # Company apps build beside the generic one, not after it. When the shell did not change, each company's bucket
+  # keeps its current latest.json, so installed company apps stay on their version.
   companies:
-    needs: [desktop, company-matrix]
+    needs: company-matrix
     if: needs.company-matrix.outputs.enabled == 'true'
     strategy:
       fail-fast: false
@@ -46,55 +169,3 @@ jobs:
     permissions:
       contents: read
       id-token: write
-  release:
-    needs: desktop
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: app-*
-          path: dist/desktop
-          merge-multiple: true
-      - name: Build the desktop updater manifest
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-        run: |
-          flags=()
-          [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
-          [ -n "$APPLE_ID" ] && flags+=(--notarized)
-          python scripts/app_release.py --github --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
-            --output dist/desktop/latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/desktop
-      - name: Build the notes
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          python scripts/changelog_notes.py "$version" > dist/notes.md
-      - name: Build the installer and its compose bundle
-        run: |
-          python scripts/build_install_bundle.py --version "$GITHUB_REF_NAME" --output dist/install
-          shellcheck -s sh dist/install/install.sh
-          grep -q "TICO_VERSION_BAKED='$GITHUB_REF_NAME'" dist/install/install.sh
-      # The Docker workflow builds the images from the same tag; an installer that runs before they exist fails on pull.
-      - name: Wait for the images of this tag
-        run: |
-          for image in tico tico-runner tico-updater; do
-            for _ in $(seq 1 90); do
-              docker buildx imagetools inspect "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME" >/dev/null 2>&1 && continue 2
-              sleep 20
-            done
-            echo "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME was not published within 30 minutes" >&2
-            exit 1
-          done
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          flags=()
-          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/install/install.sh "dist/install/tico-bundle-$GITHUB_REF_NAME.tar.gz" dist/install/SHA256SUMS dist/desktop/* \
-            --title "$GITHUB_REF_NAME" --notes-file dist/notes.md --verify-tag "${flags[@]}"

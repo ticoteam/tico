@@ -7,7 +7,7 @@ on:
     branches: [main]
     paths: ["app/**", "scripts/app_release.py", ".github/workflows/app.yml"]
   workflow_dispatch:
-  workflow_call:    # every version tag (release.yml): a failed desktop build fails the release
+  workflow_call:    # a version tag whose shell changed (release.yml); the server release never waits for it
 
 permissions:
   contents: read
@@ -42,9 +42,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # Shared with company-app.yml, which restores this cache (never saves into it): compiled dependencies and the
+      # installed Tauri CLI, so only the app crate recompiles.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: app
+          shared-key: desktop
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |

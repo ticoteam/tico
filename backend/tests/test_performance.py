@@ -1,8 +1,7 @@
 """The 2026-09-25 performance pass: the page is revalidated, not re-sent; the chat stream's cheap
 mark moves with what its snapshot shows; the goal tree is two queries, not two per goal."""
 
-from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def test_the_page_and_its_files_are_revalidated_and_the_api_is_never_stored(api):

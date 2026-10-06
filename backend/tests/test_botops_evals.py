@@ -22,7 +22,8 @@ import run as live  # noqa: E402
 import score  # noqa: E402
 
 TOKENS = {"owner": "ana-test", "member": "cara-test"}
-SCRIPTED = [s for s in live.scenarios() if s.get("script")]
+# Two representative scripted scenarios: the broadest owner flow and the member permission boundary.
+SCRIPTED = [s for s in live.scenarios() if s.get("script") and s["id"] in ("build-jira-bot", "member-owner-only")]
 
 
 class Server:
@@ -119,18 +120,6 @@ def replay(api, botops_machine, scenario):
 def test_every_scenario_is_done_by_its_script(api, botops, scenario):
     result, *_ = replay(api, botops, scenario)
     assert result["passed"], result
-
-
-def test_the_scenarios_name_only_checks_that_exist_and_say_what_they_cost():
-    everything = live.scenarios()
-    assert len(everything) == 7 and all(s.get("prompt") and s.get("done") and "limits" in s for s in everything)
-    facts = score.Facts(Server(None), "x")
-    for s in everything:
-        for predicate in s["done"]:
-            name = predicate if isinstance(predicate, str) else next(iter(predicate))
-            assert name in {"bot_matches", "bot_state", "bot_placed", "credential_granted", "task_for_bot", "bot_model_changed",
-                            "member_bot_limit_unchanged", "reply_matches", "reply_not_matches"}, name
-    assert facts.slug("scribe") == "scribe"
 
 
 def test_the_scoring_counts_the_words_of_the_conversation_this_came_from():

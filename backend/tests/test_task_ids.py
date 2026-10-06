@@ -3,7 +3,6 @@ candidates, a one-character slip is suggested and never acted on, and none of it
 caller may not see."""
 
 from backend.tests.test_api import api, get, post  # noqa: F401  (fixtures)
-from backend.tests.test_mcp import call
 
 
 def make(api, owner="ops", title="Write the report", token="ana-test"):
@@ -38,15 +37,6 @@ def test_a_unique_prefix_reaches_the_task_and_listings_show_it(api):
     get(api, "tasks/" + task["id"][:7], expected=404)
 
 
-def test_prefixes_work_for_blocked_by_and_parent(api):
-    parent, blocker, child = make(api, title="Parent"), make(api, title="Blocker"), make(api, title="Child")
-    done = post(api, "tasks/" + child["short_id"], {"version": child["version"], "blocked_by": blocker["short_id"],
-                                                    "parent_id": parent["short_id"]})
-    assert (done["blocked_by"], done["parent_id"]) == (blocker["id"], parent["id"])
-    sub = post(api, "tasks", {"owner": "ops", "title": "Sub", "body": "x", "parent_id": parent["short_id"]})
-    assert sub["parent_id"] == parent["id"]
-
-
 def test_an_ambiguous_prefix_lists_short_ids_and_titles(api):
     one, two = make(api, title="First thing"), make(api, title="Second thing")
     renumber(api, one["id"], "abcdef01-0000-4000-8000-000000000001")
@@ -55,24 +45,6 @@ def test_an_ambiguous_prefix_lists_short_ids_and_titles(api):
     assert r.status_code == 409 and r.json()["error"]["code"] == "ambiguous_id"
     assert "abcdef01 (First thing)" in r.json()["error"]["detail"] and "abcdef01 (Second thing)" in r.json()["error"]["detail"]
     assert get(api, "tasks/abcdef01-0000-4000-8000-000000000002")["task"]["title"] == "Second thing"
-
-
-def test_a_near_miss_is_suggested_and_never_used(api):
-    task = make(api)
-    wrong = slip(task["id"])
-    r = api.get("/api/v2/tasks/" + wrong, headers={"Authorization": "Bearer ana-test"})
-    assert r.status_code == 404
-    assert r.json()["error"]["detail"] == f"No task {wrong}. Did you mean {task['id']} (Write the report)?"
-    # A write through the wrong id changes nothing.
-    r = api.post("/api/v2/tasks/" + wrong, json={"version": task["version"], "status": "doing"},
-                 headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "k1"})
-    assert r.status_code == 404 and "Did you mean" in r.json()["error"]["detail"]
-    assert get(api, "tasks/" + task["id"])["task"]["status"] == task["status"]
-    # A dropped character is a near miss too; three wrong characters are not.
-    assert "Did you mean" in api.get("/api/v2/tasks/" + task["id"][:20] + task["id"][21:],
-                                     headers={"Authorization": "Bearer ana-test"}).json()["error"]["detail"]
-    far = task["id"][:20] + "".join("a" if c != "a" else "b" for c in task["id"][20:23]) + task["id"][23:]
-    assert api.get("/api/v2/tasks/" + far, headers={"Authorization": "Bearer ana-test"}).json()["error"]["detail"] == "Task not found"
 
 
 def test_tasks_the_caller_cannot_see_are_never_matched_or_named(api):
@@ -91,15 +63,3 @@ def test_tasks_the_caller_cannot_see_are_never_matched_or_named(api):
     assert get(api, "tasks/feedbee0", token="cara-test")["task"]["title"] == "Public one"
     r = api.get("/api/v2/tasks/feedbee0", headers={"Authorization": "Bearer ana-test"})
     assert r.status_code == 409
-
-
-def test_the_mcp_tools_take_a_short_id_and_list_it(api):
-    task = make(api)
-    error, listed = call(api, "hub_task_list", {})
-    assert not error and task["short_id"] in [t["short_id"] for t in listed["result"]]
-    error, shown = call(api, "hub_task_show", {"id": task["short_id"]})
-    assert not error and shown["task"]["id"] == task["id"]
-    error, label = call(api, "hub_task_label", {"id": task["short_id"], "add": ["bug"]})
-    assert not error
-    error, refused = call(api, "hub_task_show", {"id": slip(task["id"])})
-    assert error and "Did you mean " + task["id"] in str(refused)

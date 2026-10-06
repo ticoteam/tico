@@ -24,7 +24,14 @@ const COMMANDS = [
 async function open(browser, viewport, touch = false, {empty = false, messages = null, goal = null, theme = '', supported = true, readiness = {ready: true, goals: true}} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(touch ? {hasTouch: true, isMobile: true} : {})});
   if (theme) await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-  const api = {errors: [], goalPosts: [], sends: [], created: [], goal, streamGoal: null, page, room: !empty};
+  const api = {errors: [], goalPosts: [], sends: [], created: [], goal, streamGoal: null, page, room: !empty, held: []};
+  const tick = setInterval(() => {
+    const g = api.streamGoal, route = api.held.at(-1);
+    if (!g || !route) return;
+    api.streamGoal = null; api.goal = g; api.held = [];
+    route.fulfill({contentType: 'text/event-stream', body: `id: 1\nevent: messages\ndata: ${JSON.stringify({seq: 1, conversation_id: 'c1', goal_id: g.id, goal: g})}\n\n`}).catch(() => {});
+  }, 50);
+  page.on('close', () => clearInterval(tick));
   page.on('pageerror', e => api.errors.push(e.message));
   const now = () => new Date().toISOString();
   await page.route('**/*', async route => {
@@ -47,10 +54,8 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     if (p === '/api/v2/conversations')
       return json({conversations: url.searchParams.get('chat_with') && api.room ? [room] : []});
     if (p.endsWith('/snapshot')) return json({messages: messages || (empty && !api.created.length ? [] : [{id: 'm0', from_actor: 'bot:ops', body: 'Ready when you are.', created: '2026-10-01T09:00:00Z'}]), execution: null});
-    if (p.endsWith('/watch')) {
-      const g = api.streamGoal; api.streamGoal = null;
-      return route.fulfill({contentType: 'text/event-stream', body: 'retry: 200\n\n' + (g ? `event: goal\ndata: ${JSON.stringify({type: 'goal', goal: g})}\n\n` : '')});
-    }
+    // Live events (ui/app/live.js): held open; a goal the stream reports goes out as the change it is, on the newest one.
+    if (p === '/api/v2/events') { api.held.push(route); return; }
     if (p === '/api/v2/conversations/c1/goal') {
       if (req.method() === 'GET') return json({goal: api.goal, supported, commands: supported ? COMMANDS : COMMANDS.filter(c => c.name !== 'goal')});
       const body = req.postDataJSON(); api.goalPosts.push(body);

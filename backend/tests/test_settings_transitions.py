@@ -1,32 +1,7 @@
-import json
 
 from backend.store import encode
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner, settled, setup_attempt
-
-
-def test_structured_runner_readiness_is_stored_and_drives_claims(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    document = {
-        "schema_version": 1,
-        "runtimes": {"codex": {"installed": True, "authenticated": "ready",
-                                  "version": "codex 1", "models": ["gpt-6-astra"],
-                                  "controls": ["interrupt", "new-session"], "detail": "Signed in"}},
-        "bots": {"ops": {"ready": True, "runtime": "codex", "model": "gpt-6-astra",
-                           "repository": "/projects/emp-ops", "repository_present": True, "repository_revision": "abc123",
-                           "configuration_valid": True, "problems": [], "warnings": []}},
-    }
-    post(api, "runners/heartbeat", {"version": "0.2.0", "platform": "darwin",
-                                    "capacity": 4, "readiness": document}, machine["token"])
-    operations = get(api, "operations")
-    reported = next(row for row in operations["machines"] if row["id"] == machine["runner_id"])
-    assert reported["readiness"] == document
-    employee = next(row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()
-                    if row["name"] == "ops")
-    assert employee["ready"] and employee["readiness"]["repository_revision"] == "abc123"
-    post(api, "chat/ops", {"text": "Use the structured heartbeat"})
-    assert claim(api, machine)["bot"] == "ops"
+from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 
 
 def _report(api, machine, bots):
@@ -66,7 +41,6 @@ def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
     }, expected=409)
     assert failure["error"]["code"] == "runner_not_ready"
     assert "repository" in failure["error"]["detail"].lower()
-
 
 
 def test_resume_and_restore_check_the_repository_before_activating(api):

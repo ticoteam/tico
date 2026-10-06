@@ -22,6 +22,19 @@ const SHOTS = process.env.TASKS_SHOTS || '';
 const NOW = Date.now();
 const at = minutes => new Date(NOW - minutes * 60000).toISOString();
 const inDays = days => new Date(NOW + days * 86400000).toISOString();
+// The mock server keeps each task's parent (`_parent`) and blockers (`_blocked`) and answers with `relations`, as the
+// hub does: by kind, each {id, title, status, owner, direction}; a task's subtasks are its children, not relations.
+function withRelations(task, tasks) {
+  const brief = (x, direction) => ({id: x.id, title: x.title, status: x.status, owner: x.owner, direction});
+  const byId = id => tasks.find(x => x.id === id);
+  const relations = {};
+  const add = (kind, row) => { if (row) (relations[kind] ||= []).push(row); };
+  if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent), 'out'));
+  for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id), 'in'));
+  for (const x of tasks) if ((x._blocked || []).includes(task.id)) add('blocks', brief(x, 'out'));
+  const {_parent, _blocked, ...rest} = task;
+  return {...rest, relations};
+}
 function fixtures() {
   const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:engineer', requester: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
@@ -36,7 +49,7 @@ function fixtures() {
     t('t-refund', 'Choose a refund policy for annual plans', {owner: 'human:ana', requester: 'bot:support', status: 'open', updated: at(300), labels: ['billing'],
       ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?')}),
     t('t-access', 'Review Engineer access to the billing repo', {owner: 'human:ana', requester: 'bot:botops', status: 'open', updated: at(60 * 26)}),
-    t('t-terms', 'Approve the new checkout terms', {owner: 'human:ana', requester: 'bot:engineer', status: 'open', parent_id: 't-checkout', updated: at(150)}),
+    t('t-terms', 'Approve the new checkout terms', {owner: 'human:ana', requester: 'bot:engineer', status: 'open', _parent: 't-checkout', updated: at(150)}),
     t('t-onboard', 'Sign off the onboarding email sequence', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated: at(200), labels: ['email'], due: inDays(1)}),
     t('t-deck', 'Review the launch deck', {owner: 'human:ana', requester: 'human:sam', status: 'open', updated: at(400), labels: ['launch']}),
     // Needs Sam
@@ -47,21 +60,21 @@ function fixtures() {
     t('t-inbox', 'Migrate the support inbox to the new helpdesk', {owner: 'bot:support', requester: 'bot:botops', status: 'waiting', updated: at(480), labels: ['support'],
       note: 'Waiting on Sam to export the old ticket archive (about 12k tickets) before the import can start.'}),
     t('t-checkout', 'Ship the checkout redesign', {owner: 'bot:engineer', requester: 'human:ana', status: 'waiting', updated: at(60 * 22), labels: ['checkout'],
-      blocked_by: 't-idem', blocker: {id: 't-idem', title: 'Add idempotency keys to the payments API', status: 'doing'}, pr_state: 'changes_requested',
+      _blocked: ['t-idem'], pr_state: 'changes_requested',
       children_summary: {total: 4, done: 1, direct_total: 4, direct_done: 1}, parts: {total: 4, done: 1}, links: [pr('acme/web', 412, 'Checkout redesign behind a flag')]}),
     // a bot's parked task: its date is when it looks again, not a deadline
     t('t-changelog', 'Publish the September changelog', {owner: 'bot:writer', requester: 'bot:botops', status: 'waiting', updated: at(900), note: 'Waiting for the 0.3 release tag.', due: inDays(2)}),
     // Doing (two are subtasks of the waiting checkout; one is a subtask of the newsletter)
-    t('t-idem', 'Add idempotency keys to the payments API', {parent_id: 't-checkout', updated: at(40), labels: ['payments', 'backend', 'api'], pr_state: 'failing', links: [pr('acme/api', 88, 'Idempotency keys for charges')]}),
-    t('t-summary', 'Checkout summary step', {parent_id: 't-checkout', status: 'review', updated: at(180), pr_state: 'open', links: [pr('acme/web', 415, 'Summary step')]}),
+    t('t-idem', 'Add idempotency keys to the payments API', {_parent: 't-checkout', updated: at(40), labels: ['payments', 'backend', 'api'], pr_state: 'failing', links: [pr('acme/api', 88, 'Idempotency keys for charges')]}),
+    t('t-summary', 'Checkout summary step', {_parent: 't-checkout', status: 'review', updated: at(180), pr_state: 'open', links: [pr('acme/web', 415, 'Summary step')]}),
     t('t-triage', 'Triage new bug reports from the widget', {owner: 'bot:support', requester: 'bot:botops', updated: at(20), labels: ['bugs']}),
     t('t-digest', 'Weekly metrics digest', {owner: 'bot:analyst', requester: 'human:sam', status: 'open', updated: at(10)}),
     t('t-rotate', 'Rotate the staging database credentials', {owner: 'bot:botops', requester: 'bot:botops', updated: at(70), labels: ['security']}),
     t('t-news', 'Draft the October newsletter', {owner: 'bot:writer', requester: 'human:ana', updated: at(360), labels: ['newsletter'], parts: {total: 1, done: 0}}),
-    t('t-img', 'Pick the newsletter header image', {owner: 'bot:writer', requester: 'human:ana', parent_id: 't-news', updated: at(380)}),
+    t('t-img', 'Pick the newsletter header image', {owner: 'bot:writer', requester: 'human:ana', _parent: 't-news', updated: at(380)}),
     t('t-flaky', 'Fix the flaky login test on CI', {requester: 'bot:botops', updated: at(60 * 47), pr_state: 'merged', labels: ['ci'], links: [pr('acme/web', 409, 'Stabilise the login test', 'merged')]}),
     // Done
-    t('t-receipt', 'Checkout receipt email copy', {parent_id: 't-checkout', owner: 'bot:writer', status: 'done', done_at: at(240), updated: at(240)}),
+    t('t-receipt', 'Checkout receipt email copy', {_parent: 't-checkout', owner: 'bot:writer', status: 'done', done_at: at(240), updated: at(240)}),
     t('t-sso', 'Turn on SSO for the admin console', {status: 'done', done_at: at(60 * 30), updated: at(60 * 30), pr_state: 'merged'}),
     t('t-faq', 'Refresh the billing FAQ', {owner: 'bot:support', status: 'closed', closed_at: at(60 * 70), updated: at(60 * 70)}),
   ];
@@ -120,12 +133,22 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const donePage = url.searchParams.get('sort') === 'finished';
       if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
       const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || rows.length);
-      return json({tasks: donePage ? rows.slice(offset, offset + limit) : rows,
+      return json({tasks: (donePage ? rows.slice(offset, offset + limit) : rows).map(x => withRelations(x, tasks)),
         next_offset: donePage && rows.length > offset + limit ? offset + limit : null});
     }
     if (p === '/api/v2/tasks' && method === 'POST') { posts.push({p, body: req.postDataJSON()}); return json({task: {id: 't-new', ...req.postDataJSON()}}); }
     const tree = p.match(/^\/api\/v2\/tasks\/([^/]+)\/tree$/);
-    if (tree) return json(tasks.filter(x => x.parent_id === tree[1]).map(x => ({...x, children: []})));
+    if (tree) return json(tasks.filter(x => x._parent === tree[1]).map(x => ({...withRelations(x, tasks), children: []})));
+    const rel = p.match(/^\/api\/v2\/tasks\/([^/]+)\/relations$/);
+    if (rel && method === 'POST') {
+      const id = decodeURIComponent(rel[1]), task = tasks.find(x => x.id === id), body = req.postDataJSON();
+      posts.push({p, body});
+      if (body.kind === 'parent') task._parent = body.remove ? undefined : body.task;
+      else if (body.kind === 'blocked_by') task._blocked = body.remove ? (task._blocked || []).filter(x => x !== body.task) : [...(task._blocked || []), body.task];
+      else if (body.kind === 'blocks') { const other = tasks.find(x => x.id === body.task);
+        other._blocked = body.remove ? (other._blocked || []).filter(x => x !== id) : [...(other._blocked || []), id]; }
+      return json({task: withRelations(task, tasks)});
+    }
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (one) {
       const id = decodeURIComponent(one[1]), task = tasks.find(x => x.id === id);
@@ -137,13 +160,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         if (fields.owner && !fields.owner.includes(':')) fields.owner = 'bot:' + fields.owner;   // as the server resolves a bot's name
         Object.assign(task, fields, {version: task.version + 1});
         if (close) task.status = 'closed';
-        for (const k of ['blocked_by', 'parent_id', 'due']) if (fields[k] === '') delete task[k];
-        if ('blocked_by' in fields) task.blocker = fields.blocked_by ? {id: fields.blocked_by, title: tasks.find(x => x.id === fields.blocked_by)?.title} : null;
+        if (fields.due === '') delete task.due;
         if (fields.type) { const type = types.find(x => x.id === fields.type); task.type_id = fields.type; task.type = type ? {id: type.id, name: type.name} : null; }
         if ('step' in fields) { const step = types.flatMap(x => x.steps).find(s => s.id === fields.step); task.step_id = fields.step || null; task.step = step || null; if (step) task.status = step.status; }
-        return json({task});
+        return json({task: withRelations(task, tasks)});
       }
-      return json({task, children: tasks.filter(x => x.parent_id === id), parent: tasks.find(x => x.id === task.parent_id) || null,
+      return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
         comments: [{id: 'm1', kind: 'say', from_actor: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created: at(90), refs: {}}],
         events: [{id: 'e1', ts: at(60), actor: 'bot:engineer', field: 'status', old: 'open', new: 'doing'}], messages: []});
     }
@@ -556,13 +578,15 @@ async function properties(browser) {
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Due', 'Add due date'], ['Tags', 'checkout'],
-    ['Part of', 'Add parent'], ['Blocked by', 'Add idempotency keys to the payments API']]);
+    ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
   assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
   assert.equal(await peek.locator('.tmodal-head .tchip-blocked').innerText(), 'blocked');
   assert.equal(await page.locator('[data-task-key="tt-checkout"] > .task-status').count(), 0);
-  assert.match(await props.locator('[data-prop-row="blocked"]').innerText(), /Blocked by/);
+  // Blockers, and every other relation but the parent, are in Related, by kind.
+  assert.deepEqual(await peek.locator('.task-related .trel').evaluateAll(gs => gs.map(g => [g.querySelector('.trel-k').textContent,
+    [...g.querySelectorAll('.tlink .linkish')].map(b => b.textContent.trim())])), [['Blocked by', ['Doing Add idempotency keys to the payments API']]]);
   // The header: status · owner · position · age · … · ✕. No unexplained arrows.
   assert.equal(await peek.locator('.tmodal-head button').count(), 2);
   assert.match(await peek.locator('.tmodal-head .peek-pos').innerText(), /^\d+ \/ \d+$/);
@@ -570,7 +594,7 @@ async function properties(browser) {
   const top = await props.boundingBox(), main = await peek.locator('.tmodal-main').boundingBox();
   assert.ok(top.y < main.y, 'properties first in the peek');
   assert.equal(await peek.locator('.tmodal-main select, [data-task-props] select, [data-modal-task], .tcontrols').count(), 0, 'no boxed form, no Done/Close links');
-  assert.equal(await peek.locator('.task-ask').count(), 0, 'the blocker is a property, not a second box');
+  assert.equal(await peek.locator('.task-ask').count(), 0, 'the blocker is in Related, not a second box');
   // Status: a small menu; ↑/↓ and Enter pick, the list's j/k wait while it is open, and the row keeps the focus after saving.
   await props.locator('[data-prop="status"]').focus();
   await page.keyboard.press('Enter');
@@ -613,18 +637,29 @@ async function properties(browser) {
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop-row="tags"]')?.textContent.includes('urgent'));
   assert.deepEqual(taskWrites(posts).at(-1).body.labels, ['checkout', 'urgent']);
-  // Part of: a task picker with a find box; × clears. Blocked by: clear.
+  // Part of: a task picker with a find box; × clears. A blocker: × in Related.
   await props.locator('[data-prop="parent"]').click();
   await page.keyboard.type('newsletter');
   await page.keyboard.press('ArrowDown');
   assert.match(await page.evaluate(() => document.activeElement.textContent), /Draft the October newsletter/);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop-row="parent"] [data-open-task="tt-news"]')?.textContent.includes('Draft the October newsletter'));
-  assert.equal(taskWrites(posts).at(-1).body.parent_id, 't-news');
-  await props.locator('[data-prop-row="blocked"]').hover();
-  await props.locator('[data-prop-clear="blocked"]').click();
-  await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="blocked"]')?.textContent.includes('Add blocker'));
-  assert.equal(taskWrites(posts).at(-1).body.blocked_by, '');
+  assert.deepEqual(posts.at(-1), {p: '/api/v2/tasks/t-checkout/relations', body: {task: 't-news', kind: 'parent'}});
+  await peek.locator('.task-related [data-drop-rel]').click();
+  await page.waitForFunction(() => !document.querySelector('#task-peek .task-related .trel'));
+  // The blocker row is the other task's: it is taken off from that end.
+  assert.deepEqual(posts.at(-1), {p: '/api/v2/tasks/t-idem/relations', body: {task: 't-checkout', kind: 'blocks', remove: true}});
+  // + asks which kind, then finds the task.
+  await peek.locator('[data-related-add]').click();
+  assert.deepEqual(await peek.locator('.prop-pop [data-prop-pick]').evaluateAll(bs => bs.map(b => b.textContent.trim())),
+    ['Related', 'Blocked by', 'Blocks', 'Duplicate of', 'Follow-up of']);
+  await peek.locator('.prop-pop [data-prop-pick="blocked_by"]').click();
+  await peek.locator('.prop-pop [data-prop-pick="t-rotate"]').waitFor();
+  await page.keyboard.type('rotate');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#task-peek .task-related .trel')?.textContent.includes('Rotate the staging'));
+  assert.deepEqual(posts.at(-1), {p: '/api/v2/tasks/t-checkout/relations', body: {task: 't-rotate', kind: 'blocked_by'}});
   // A change made elsewhere: the save is refused, the server's value shows, with a short line. Never the stale value.
   Object.assign(tasks.find(x => x.id === 't-checkout'), {status: 'doing', version: 42});
   await props.locator('[data-prop="status"]').click();
@@ -870,7 +905,8 @@ async function phone(browser) {
   assert.equal(await page.locator('#task-bulk').isHidden(), true);
   // The peek is a full-screen modal sheet; Back closes it and stays on Tasks. Long titles wrap or end in "…".
   const long = 'Ship the checkout redesign with the new summary step, saved carts and the receipts email for every region';
-  Object.assign(tasks.find(x => x.id === 't-checkout'), {title: long, blocker: {id: 't-idem', title: 'Add idempotency keys to the payments API so a retried charge never bills a customer twice'}});
+  Object.assign(tasks.find(x => x.id === 't-checkout'), {title: long, _blocked: ['t-idem']});
+  Object.assign(tasks.find(x => x.id === 't-idem'), {title: 'Add idempotency keys to the payments API so a retried charge never bills a customer twice'});
   await page.evaluate(() => tasksLoad(TASKS_ST));
   await page.locator('[data-task-key="tt-checkout"] .tl-title', {hasText: 'saved carts'}).waitFor();
   await page.locator('[data-task-key="tt-checkout"] .tl-title').click();
@@ -881,7 +917,7 @@ async function phone(browser) {
   await page.locator('#task-peek .task-comments .tcomment').first().waitFor();
   assert.equal(await page.locator('#task-peek').evaluate(d => d.scrollWidth <= d.clientWidth + 1), true, 'no sideways scroll in the sheet');
   assert.ok((await page.locator('#task-peek .tmodal-title').boundingBox()).height > 30, 'a long title wraps');
-  assert.equal(await page.locator('#task-peek [data-prop-row="blocked"] .prop-txt').evaluate(t => getComputedStyle(t).textOverflow), 'ellipsis');
+  assert.equal(await page.locator('#task-peek .task-related .tlink').evaluate(t => getComputedStyle(t).textOverflow), 'ellipsis');
   const head = await page.locator('#task-peek .tmodal-head button').evaluateAll(bs => bs.map(b => Math.round(b.getBoundingClientRect().height)));
   assert.ok(head.every(h => h >= 40), 'header buttons are 40px tap targets: ' + head);
   // Properties stack full-width.
@@ -968,7 +1004,9 @@ async function recheckLists(browser) {
   await page.keyboard.press('Escape');
   await page.locator('[data-task-key="tt-idem"] .tl-title').click();
   await peekTitle(page, 'Add idempotency keys');
-  await peek.locator('[data-prop="blocked"]').click();
+  await peek.locator('[data-related-add]').click();
+  await peek.locator('.prop-pop [data-prop-pick="blocked_by"]').click();
+  await peek.locator('.prop-pop [data-prop-pick="t-rotate"]').waitFor();
   const blockers = await peek.locator('.prop-pop [data-prop-pick]').evaluateAll(bs => bs.map(b => b.dataset.propPick));
   assert.ok(!blockers.includes('t-checkout') && !blockers.includes('t-idem'), 'the task it blocks, and itself, are left out');
   await page.keyboard.press('Escape');

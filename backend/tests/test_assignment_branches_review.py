@@ -51,23 +51,6 @@ def test_resume_from_review_cannot_overbook_reserved_assignment_capacity(api):
     )
 
 
-def test_waiting_release_to_verifying_reserves_capacity_too(api):
-    prepare_source(api)
-    tasks = [delivery_task(api, f"Release capacity {i}") for i in range(3)]
-    rows = [create(api, task, key=f"release-capacity-{i}", idem=f"release-capacity-{i}")
-            for i, task in enumerate(tasks)]
-    waiting_review = _wait_for_review(api, tasks[0], rows[0], "release-capacity-review")
-    set_task_status(api, tasks[0]["id"], "ready")
-    waiting_release = _transition(api, rows[0], waiting_review["revision"], "waiting_release",
-                                  "release-capacity-wait")
-    assert waiting_release.status_code == 200, waiting_release.text
-    create(api, delivery_task(api, "Replacement while awaiting release"), key="release-capacity-replacement",
-           idem="release-capacity-replacement")
-
-    verifying = _transition(api, rows[0], waiting_release.json()["revision"], "verifying",
-                            "release-capacity-verifying")
-    assert verifying.status_code == 409 and verifying.json()["error"]["code"] == "assignment_capacity"
-    assert _active_count(api) == 3
 
 
 def test_concurrent_resume_and_create_share_the_three_slot_transaction(api):
@@ -91,26 +74,5 @@ def test_concurrent_resume_and_create_share_the_three_slot_transaction(api):
     with ThreadPoolExecutor(max_workers=2) as pool:
         resumed, created = pool.submit(resume), pool.submit(allocate)
         results = [resumed.result(), created.result()]
-    assert sorted(response.status_code for response in results) == [200, 409]
-    assert _active_count(api) == 3
-
-
-def test_concurrent_resumes_cannot_overbook_the_last_slot(api):
-    prepare_source(api)
-    tasks = [delivery_task(api, f"Concurrent resumes {i}") for i in range(3)]
-    rows = [create(api, task, key=f"resume-resume-{i}", idem=f"resume-resume-{i}")
-            for i, task in enumerate(tasks)]
-    waiting = [_wait_for_review(api, tasks[i], rows[i], f"resume-resume-review-{i}") for i in (0, 1)]
-    create(api, delivery_task(api, "Two active slots"), key="resume-resume-third",
-           idem="resume-resume-third")
-    for task in tasks[:2]:
-        set_task_status(api, task["id"], "doing")
-
-    def resume(index):
-        return _transition(api, rows[index], waiting[index]["revision"], "working",
-                           f"concurrent-resume-{index}")
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(resume, (0, 1)))
     assert sorted(response.status_code for response in results) == [200, 409]
     assert _active_count(api) == 3

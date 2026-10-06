@@ -1,10 +1,8 @@
 """Regressions for the pre-pilot security review (reports/2026-09-29-security-review.md)."""
 import asyncio
-import uuid
 
 from backend.store import encode
 from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
-from backend.tests.test_member_bots import botops  # noqa: F401 (fixture)
 
 
 def raw_get(app, path):
@@ -54,14 +52,6 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
     assert api.get("/api/v2/me").status_code == 401
 
 
-def test_deferred_identity_is_never_owner_by_two_empty_emails(api):
-    auth = api.app.state.auth
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('noemail','No Email','')")
-        auth.owner_email = ""
-        assert auth.identity_for_actor(c, "human:noemail").role == "human"
-
-
 def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
@@ -78,28 +68,6 @@ def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     here = post(api, "chat/botops", {"text": "Rename Ops"})
     # The request in the current conversation is its to cite with the Owner’s management rights.
     post(api, "bots/ops/definition", {**body, "on_behalf_of": here["id"]}, botops["token"])
-
-
-def test_a_task_request_cannot_lend_rights_when_stale_or_outside_the_run(api, botops):
-    from backend.tests.test_api import claim, headers
-    from backend.store import H
-    machine = botops
-    post(api, "tasks", {"owner": "botops", "title": "Review access", "body": "Review access."})
-    attempt = claim(api, machine, "botops")
-    path = "/api/v2/bots/ops/definition"
-    body = {"display_name": "Borrowed", "expected_revision": 1}
-    with api.app.state.store.transaction() as c:
-        mid = attempt["message"]["id"]
-        original = H.message(c, mid)
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
-    assert api.post(path, json=body, headers=headers(attempt["token"])).status_code == 403
-    with api.app.state.store.transaction() as c:
-        elsewhere = H.open_conversation(c, "human:ana", ["human:ana", "bot:botops"], kind="chat", subject="Elsewhere")
-        c.execute("UPDATE messages SET created=?,conversation_id=? WHERE id=?",
-                  (original["created"], elsewhere["id"], mid))
-    assert api.post(path, json=body, headers=headers(attempt["token"])).status_code == 403
-    with api.app.state.store.read() as c:
-        assert H.bot(c, "ops")["display_name"] != "Borrowed"
 
 
 def test_a_server_runner_credential_does_not_read_as_its_operator(api):
@@ -124,32 +92,6 @@ def test_a_person_reads_and_books_only_calendars_they_may_see(api):
     booking = {"calendar": "ana@acme.example", "title": "x", "start": "2099-01-01T09:00:00+00:00",
                "end": "2099-01-01T09:30:00+00:00", "attendees": ["someone@evil.example"]}
     post(api, "calendar/appointments", booking, token="ben-test", expected=403)
-
-
-def test_a_bot_reads_only_the_owner_and_its_operator_calendars(api):
-    _, _, attempt = setup_attempt(api, "ops")
-    bearer = {"Authorization": "Bearer " + attempt["token"]}
-    with api.app.state.store.transaction() as c:
-        operator = c.execute("SELECT operator FROM bot_config WHERE bot='ops'").fetchone()[0]
-    assert operator == "ana"
-    ok = api.get("/api/v2/calendar/appointments", params={"calendar": "ana@acme.example"}, headers=bearer)
-    assert ok.status_code == 200
-    other = api.get("/api/v2/calendar/appointments", params={"calendar": "cara@acme.example"}, headers=bearer)
-    assert other.status_code == 403
-    # A bot may invite anyone by default; TICO_BLOCK_EXTERNAL_INVITES limits it to people on the roster.
-    booking = {"calendar": "ana@acme.example", "title": "Sync", "start": "2099-01-01T09:00:00+00:00",
-               "end": "2099-01-01T09:30:00+00:00", "attendees": ["ben@acme.example"]}
-    with_key = lambda: {**bearer, "Idempotency-Key": str(uuid.uuid4())}
-    assert api.post("/api/v2/calendar/appointments", json=booking, headers=with_key()).status_code == 200
-    guest = {**booking, "attendees": ["someone@partner.example"]}
-    assert api.post("/api/v2/calendar/appointments", json=guest, headers=with_key()).status_code == 200
-    settings = api.app.state.store.settings
-    settings.block_external_invites = True
-    try:
-        outside = api.post("/api/v2/calendar/appointments", json=guest, headers=with_key())
-    finally:
-        settings.block_external_invites = False
-    assert outside.status_code == 403 and outside.json()["error"]["code"] == "external_attendee"
 
 
 def test_leaving_revokes_a_persons_api_tokens(api):

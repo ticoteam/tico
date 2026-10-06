@@ -56,6 +56,8 @@ async function show(page) {
     await r.fulfill({contentType: 'application/json', body: JSON.stringify({files: n === 1 ? old : data.files})});
    });
    await show(page); await reached.promise;
+   // A change to the task arrives on the live stream while the first read is still out: the files are read again.
+   await page.evaluate(() => taskChatLive(TASK_CHAT));
    await page.locator('#task-modal [data-tf-file="f-notes"] .tf-meta', {hasText: 'v2'}).waitFor({timeout: 12000});
    await page.locator('#task-modal [data-tf-file="f-notes"]').click();
    await page.locator('#task-modal [data-tf-view]', {hasText: 'Receipt check version 2.'}).waitFor();

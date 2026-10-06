@@ -29,7 +29,13 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads merged pull requests and releases; drafts notes on the task; never creates a release or a tag"
+    note: "reads merged pull requests and releases; drafts notes on the task; with a write grant, pushes the approved release tag (playbooks/rollout.md); never creates a release"
+# For the rollout (playbooks/rollout.md), one entry per install in knowledge/rollout.json, uncommented when its key is granted:
+#  - service: tico-updates
+#    identity: "the update key of the other install (hub service-key create --scope update)"
+#    can: [update]
+#    env: TICO_UPDATE_KEY_OTHER
+#    note: "checks for, starts and follows an update of that install after the owner approves the release; nothing else"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
 # thing between this bot and a public comment is its declared access and.claude/settings.json, which deny every write
 # verb. It stays read only; requested changes need granted write access.

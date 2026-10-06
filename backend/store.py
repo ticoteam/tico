@@ -118,11 +118,11 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used TEXT, expires_at TEXT, revoked_at TEXT);
--- Service keys (backend/service_keys.py): another system's credential for one route, as a hash, and
--- the task each (key, that system's own key for the work) pair names.
+-- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
+-- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL,
- created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT);
+ created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT, scope TEXT NOT NULL DEFAULT 'tasks');
 CREATE TABLE IF NOT EXISTS service_key_tasks(
  key_id TEXT NOT NULL REFERENCES service_keys(id), external_key TEXT NOT NULL,
  task_id TEXT NOT NULL REFERENCES tasks(id), created TEXT NOT NULL, PRIMARY KEY(key_id, external_key));
@@ -559,6 +559,10 @@ class Store:
             c.executescript(_runner_versions.SCHEMA)
             from . import files as _files
             c.executescript(_files.SCHEMA)
+            from . import memory_history as _memory_history
+            c.executescript(_memory_history.SCHEMA)
+            from . import learnings as _learnings
+            c.executescript(_learnings.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
             from . import bot_tools as _bot_tools
@@ -834,7 +838,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=29").fetchone():
                     # The tasks board: a lane picks the
                     # pipeline, a rank is the place in the owner's queue, labels stand in for
-                    # projects, blocked_by points at the task in the way. task_links and
+                    # projects (blockers are task_relations rows now, migration 60). task_links and
                     # preferences are created above. A comment tagged `quiet` never queues a
                     # turn (same explicit trigger replacement as migration 11).
                     columns = {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
@@ -844,8 +848,6 @@ class Store:
                         c.execute("ALTER TABLE tasks ADD COLUMN rank REAL")
                     if "labels_json" not in columns:
                         c.execute("ALTER TABLE tasks ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'")
-                    if "blocked_by" not in columns:
-                        c.execute("ALTER TABLE tasks ADD COLUMN blocked_by TEXT")
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
                     # day one looks like yesterday: every open task keeps its creation order
                     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
@@ -888,8 +890,6 @@ class Store:
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
                               "lane,COALESCE(closed_at,done_at,updated,created) DESC,id DESC) "
                               "WHERE status IN ('done','closed')")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_id)")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_blocked_by ON tasks(blocked_by)")
                     c.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
                     c.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
                     c.execute("INSERT INTO cloud_migrations VALUES(33,?)", (H.now(),))
@@ -1015,10 +1015,22 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
                     H._apply(c, H.WAITING_ON_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
+                    # Every task-to-task relationship in task_relations; tasks.parent_id and
+                    # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
+                    from . import task_relations as _task_relations
+                    _task_relations.migrate(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
                 ensure_task_trash(c)
+                # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
+                # the trash: an older release reads the table as before and never sees the column.
+                H.add_column(c, "service_keys", "scope", "TEXT NOT NULL DEFAULT 'tasks'")
+                # The change log live events are read from (backend/events.py); idempotent.
+                from .events import ensure as ensure_changes
+                ensure_changes(c)
                 c.execute("""CREATE TRIGGER IF NOT EXISTS repository_new_bot_default
                     AFTER INSERT ON bot_config
                     WHEN json_extract(NEW.config_json,'$.repo_access_mode') IS NULL
@@ -1175,7 +1187,7 @@ class Store:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = identity.actor + (":" + identity.attempt_id if identity.role == "bot" else "")
-        refusal = None
+        refusal = logged = None
         with self.transaction() as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
@@ -1230,17 +1242,23 @@ class Store:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)
                 return result
+            # Who made the changes this write logs (backend/events.py).
+            from . import events as changes
             c.execute("SAVEPOINT domain_write")
+            since = changes.mark(c)
             try:
                 result = fn(c)
+                logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
+                logged = None                   # rolled back with the write
                 refusal = refused(c, identity, exc)
                 result = {"_refusal": {"code": refusal.code, "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
                                        "status": refusal.status}}
             if not is_poll(operation, result):
                 c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                           (principal, operation, key, hashed, encode(result), H.now()))
+        self.ring(logged)
         if refusal:
             raise refusal
         return result
@@ -1248,19 +1266,31 @@ class Store:
     def write(self, identity, fn):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
         identity check under the write lock, and the same all-or-nothing refusal."""
-        refusal = None
+        refusal = logged = None
         with self.transaction() as c:
             from .auth import validate_identity
             validate_identity(c, identity)
+            # Who made the changes this write logs (backend/events.py).
+            from . import events as changes
             c.execute("SAVEPOINT domain_write")
+            since = changes.mark(c)
             try:
                 result = fn(c)
+                logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
+                logged = None                   # rolled back with the write
                 refusal = refused(c, identity, exc)
+        self.ring(logged)
         if refusal:
             raise refusal
         return result
+
+    def ring(self, seq):
+        """After a commit that logged changes: wake the open event streams (backend/events.py)."""
+        if seq:
+            from .events import bell
+            bell(self).ring(seq)
 
     def enqueue_existing(self):
         with self.transaction() as c:

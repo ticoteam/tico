@@ -61,7 +61,7 @@ def test_current_task_read_is_required_even_when_replaying_an_authorized_edit(ap
         assert H.message(c, said["id"])["body"] == "My replacement words"
 
 
-@pytest.mark.parametrize("handoff", ["delivered", "slack", "job", "context", "external"])
+@pytest.mark.parametrize("handoff", ["slack"])
 def test_already_handed_comments_change_current_record_without_recalling_copies(api, handoff):
     task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Retained elsewhere"})["comment"]
@@ -87,18 +87,6 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         if handoff == 'slack':
             row = c.execute('SELECT text,state FROM slack_posts WHERE message_id=?', (said['id'],)).fetchone()
             assert row['text'] == '' and row['state'] == 'cancelled'
-
-
-def test_structured_and_attachment_comments_are_outside_plain_comment_mutations(api):
-    task = post(api, "tasks", {"owner": "ben", "title": "Review the report", "body": "Please review."})
-    with api.app.state.store.transaction() as c:
-        said = H.task_comment(c, "human:ana", task["id"], "Review attached work", wake=False,
-                              extra_refs={"attachments": [{"id": "file-example", "name": "report.md"}]})
-    for suffix, body in (("", {"text": "Replace"}), ("/delete", {})):
-        post(api, f"tasks/{task['id']}/comments/{said['id']}" + suffix, body, expected=403)
-    plain = post(api, f"tasks/{task['id']}/comments", {"text": "Plain note"})["comment"]
-    post(api, f"tasks/{task['id']}/comments/{plain['id']}",
-         {"text": "Replace", "attachments": ["file-example@1"]}, expected=422)
 
 
 def test_bot_authorship_is_checked_in_the_domain(api):

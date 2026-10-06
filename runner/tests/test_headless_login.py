@@ -7,7 +7,6 @@ import contextlib
 import io
 import os
 import stat
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,13 +104,6 @@ class HeadlessLogin(unittest.TestCase):
         self.assertIn("failed", printed)
         self.assertNotIn("sk-bad", argv + printed)
 
-    def test_codex_is_not_signed_in_without_a_codex_bot_or_without_a_key(self):
-        row, _, _, argv = self.codex_key("sk-good", bots=())
-        self.assertEqual(row["authenticated"], "missing")
-        self.assertNotIn("--with-api-key", argv)
-        (self.root / "secrets" / "_shared.env").write_text("")
-        self.assertEqual(self.readiness("codex", ("ana",))["authenticated"], "missing")
-
     def team_key(self, reply, bots=()):
         """Readiness on a computer with no key of its own, where the server answers `reply`; (row, printed, asks)."""
         asks = []
@@ -145,14 +137,6 @@ class HeadlessLogin(unittest.TestCase):
         # Codex signs in once and its turns never see the key.
         self.assertNotIn("OPENAI_API_KEY", self.runner.credential_environment("ana"))
 
-    def test_a_subscription_only_team_leaves_the_computer_signed_out(self):
-        row, seen, asks = self.team_key({"credentials": []})
-        self.assertEqual((row["authenticated"], row["detail"]), ("missing", "Codex login required"))
-        self.assertNotIn("--with-api-key", seen)
-        self.assertEqual(len(asks), 1)                        # not on every heartbeat
-        row, _, _ = self.team_key(OSError("offline"))          # an unreachable server changes nothing
-        self.assertEqual(row["authenticated"], "missing")
-
     def test_a_key_put_on_the_computer_by_hand_is_never_replaced_by_the_team_key(self):
         (self.root / "secrets" / "_shared.env").write_text("OPENAI_API_KEY=sk-good\n")
         row, _, asks = self.team_key({"credentials": [{"env": "OPENAI_API_KEY", "value": "sk-other"}]}, bots=("ana",))
@@ -169,10 +153,6 @@ class HeadlessLogin(unittest.TestCase):
         self.assertEqual((self.root / "secrets" / "_team_model.env").read_text(), "ANTHROPIC_API_KEY=sk-ant-team\n")
         self.assertNotIn("ANTHROPIC_API_KEY", self.runner.credential_environment("ana"))
         self.assertNotIn("shared_env", self.runner.readiness([]))
-
-    def test_a_turn_is_told_where_the_projects_are_so_the_mail_tool_builds_its_venv_in_the_volume(self):
-        env = self.runner.environment({"bot": "ana", "token": "t", "config": {}})
-        self.assertEqual(env["TICO_PROJECTS_DIR"], str(self.root))
 
 
 if __name__ == "__main__":

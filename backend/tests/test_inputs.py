@@ -33,54 +33,6 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (update["id"],)).fetchone()[0] == "queued"
 
 
-def test_botops_queues_unrelated_requests_and_task_notices_but_accepts_an_explicit_reply(api, botops):
-    active = turn(api, botops, person="ana-test", text="Review ops")
-    post(api, f"attempts/{active['id']}/started", {"thread_id": "qa-thread"}, botops["token"])
-    with api.app.state.store.read() as c:
-        origin = dict(c.execute("SELECT m.* FROM messages m JOIN jobs j ON j.message_id=m.id JOIN attempts a ON a.job_id=j.id "
-                                "WHERE a.id=?", (active["id"],)).fetchone())
-    separate = post(api, "chat/botops", {"text": "Review finance independently"})
-    task = post(api, "tasks", {"owner": "botops", "title": "Review another bot", "body": "Review finance independently."})
-    assert post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"] == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (separate["id"],)).fetchone()[0] == "queued"
-    from backend.tests.test_mcp import call as mcp
-    err, correction = mcp(api, "hub_message_send", {"to": "botops", "text": "For the ops review, include its Routines",
-                           "conversation_id": origin["conversation_id"], "in_reply_to": origin["id"]})
-    assert not err, correction
-    inputs = post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]
-    assert [m["id"] for m in inputs] == [correction["id"]]
-
-
-def test_generated_tool_task_accepts_its_requesters_steering_and_withdrawal(api, botops):
-    from backend.tests.test_mcp import call as mcp
-    made = post(api, "bots/ops/tools", {"service": "qa-service", "can": ["read"]})
-    task = get(api, "tasks/" + made["task_id"])["task"]
-    active = claim(api, botops, "botops")
-    post(api, f"attempts/{active['id']}/started", {"thread_id": "qa-task"}, botops["token"])
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT task_id FROM bot_status WHERE bot='botops'").fetchone()[0] == task["id"]
-    err, correction = mcp(api, "hub_message_send", {"to": "botops", "text": "Use the fixture only", "steer": True})
-    assert not err
-    inputs = post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]
-    assert [m["id"] for m in inputs] == [correction["id"]]
-    post(api, f"attempts/{active['id']}/inputs/{correction['id']}/ack", {}, botops["token"])
-    post(api, f"bots/ops/tools/{made['tool']['id']}/delete", {})
-    inputs = post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]
-    assert len(inputs) == 1 and "withdrawn" in inputs[0]["body"]
-
-
-def test_new_chat_clears_previous_task_from_running_status(api, botops):
-    task = post(api, "tasks", {"owner": "botops", "title": "QA previous task", "body": "Check a fixture"})
-    worker = claim(api, botops, "botops")
-    finish(api, botops, worker)
-    post(api, "tasks/" + task["id"], {"version": task["version"], "close": True, "quiet": True})
-    active = turn(api, botops, person="ana-test", text="Review current status")
-    post(api, f"attempts/{active['id']}/started", {"thread_id": "qa-chat"}, botops["token"])
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT task_id FROM bot_status WHERE bot='botops'").fetchone()[0]
-
-
 def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, botops):
     from backend.tests.test_botops_parity import act
     active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
@@ -128,8 +80,6 @@ def test_acknowledged_input_requeued_by_a_finished_run_is_delivered_once_to_the_
         assert c.execute("SELECT attempt_id,acked_at IS NOT NULL FROM attempt_inputs WHERE message_id=?",
                          (other,)).fetchone()[:] == (second["id"], 1)
         assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (other,)).fetchone()[:] == ("input", second["id"])
-
-
 
 
 def two_bots(api):

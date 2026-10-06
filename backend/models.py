@@ -95,13 +95,22 @@ Lane = Literal["company", "product"]
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
+RelationKind = Literal["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"]
+
+
+class TaskRelationRef(Contract):
+    """The new task `kind` the other: `parent` files it under `task`, `blocked_by` makes it wait on it."""
+    task: ID
+    kind: RelationKind = "related"
+
+
 class TaskCreate(Contract):
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
     due: str | None = None
-    parent_id: ID | None = None
+    relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
@@ -137,9 +146,7 @@ class TaskUpdate(Contract):
     close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
-    blocked_by: str | None = Field(default=None, max_length=64)     # "" clears
     waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
-    parent_id: str | None = Field(default=None, max_length=64)      # "" clears
     rank: float | None = None
     type: ID | None = None
     step: str | None = Field(default=None, max_length=200)   # "" clears the step
@@ -245,6 +252,14 @@ class TaskLink(Contract):
     url: str | None = Field(default=None, max_length=2000)
     title: str | None = Field(default=None, max_length=200)
     remove: ID | None = None
+
+
+class TaskRelation(Contract):
+    """`{id} kind {task}`: parent (task is its parent), blocks, blocked_by, related, duplicate_of,
+    follow_up (it was split off or followed up from task)."""
+    task: ID
+    kind: RelationKind = "related"
+    remove: bool = False
 
 
 class Preference(Contract):
@@ -1495,10 +1510,35 @@ class HarnessActionReport(Contract):
     message: str = Field(default="", max_length=500)
 
 
+class UpdateKpi(Contract):
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    value: Annotated[str, Field(min_length=1, max_length=40)] | float
+    unit: Annotated[str, Field(max_length=20)] | None = None
+    series: list[float] | None = Field(default=None, max_length=60)
+    note: Annotated[str, Field(max_length=300)] | None = None
+
+
+class UpdateSlides(Contract):
+    """A week in review's slides; the word limits are the linter's, so a long one is refused with how to fix it."""
+    goal: Annotated[str, Field(max_length=1000)] = ""
+    kpis: list[UpdateKpi] = Field(default_factory=list, max_length=20)
+    done: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=20)
+    focus: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=20)
+    blockers: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=20)
+
+
 class UpdatePost(Contract):
-    body: Annotated[str, Field(min_length=1, max_length=20_000)]
+    body: Annotated[str, Field(max_length=20_000)] = ""                # a daily's bullets
     headline: Annotated[str, Field(max_length=300)] | None = None     # ignored: an update is its bullets
     kind: Literal["daily", "weekly"] | None = None
+    slides: UpdateSlides | None = None                                 # a week in review
+    day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None   # only a day Tico asked to redo
+
+
+class UpdateRedo(Contract):
+    kind: Literal["daily", "weekly"] = "weekly"
+    day: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    bots: list[Annotated[str, Field(max_length=80)]] | None = Field(default=None, max_length=200)
 
 
 class UpdateRead(Contract):
@@ -1525,8 +1565,9 @@ class PersonalTokenCreate(Contract):
 
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
-    task it files."""
+    task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
     label: str = Field(min_length=1, max_length=80)
+    scope: Literal["tasks", "update"] = "tasks"
 
 
 class InboundTask(Contract):

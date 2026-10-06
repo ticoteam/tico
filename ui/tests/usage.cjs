@@ -66,10 +66,10 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await page.goto('https://tico-ui.test/#/updates');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
 
-    // The account menu has Usage next to Runs.
+    // The account menu lists Usage after Runs (Learnings may sit between them).
     await page.locator('#account').click();
     const items = await page.locator('#account-menu a:not([hidden])').evaluateAll(els => els.map(e => e.dataset.nav));
-    assert.ok(items.indexOf('usage') === items.indexOf('runs') + 1 && items.includes('usage'), 'Usage follows Runs: ' + items);
+    assert.ok(items.includes('usage') && items.indexOf('usage') > items.indexOf('runs'), 'Usage follows Runs: ' + items);
     await page.locator('#account-menu a[data-nav=usage]').click();
     await page.locator('.use-row').first().waitFor();
 

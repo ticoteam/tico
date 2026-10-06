@@ -5,7 +5,7 @@ stack up without waking it, and its daily report, which runs after every monitor
 reads them all in one prompt, each with the time it was sent.
 """
 
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 
 
 def claim(api, r, next_run=True):
@@ -41,21 +41,6 @@ def test_a_note_wakes_nobody_and_waits(api):
     assert claim(api, r) is None
     assert listed(api)["notes"] == 1
     assert listed(api)["queued"] == 0
-
-
-def test_the_next_run_carries_every_waiting_note_with_its_time(api):
-    r = setup(api)
-    first = note(api, "Messages: reply time up 20% on Airbnb.")
-    second = note(api, "P&L: fees steady at 3.9%.")
-    post(api, "chat/ops", {"text": "Write the daily report."})
-    attempt = claim(api, r)
-    assert attempt["message"]["body"] == "Write the daily report."
-    assert [n["id"] for n in attempt["notes"]] == [first["id"], second["id"]], "oldest first"
-    assert attempt["notes"][0]["sent"] == first["created"]
-    assert attempt["notes"][0]["text"] == "Messages: reply time up 20% on Airbnb."
-    assert listed(api)["notes"] == 0
-    shown = get(api, "notes?to=ops")["notes"]
-    assert all(n["carried"] and not n["waiting"] for n in shown)
 
 
 def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):

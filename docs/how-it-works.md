@@ -32,7 +32,7 @@ Words are defined in the [Glossary](glossary.md).
   `quarantined`.
 - **Task** — a unit of work with a requester, an owner (bot or human), a title, a body and a
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
-  request first), an optional parent and an optional `blocked_by`. States: `open`, `doing`,
+  request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
   product lane). The owner marks it `done`; only the requester (or any human) closes it. Every
   task has a comment thread, on the record with the author.

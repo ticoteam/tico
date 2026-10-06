@@ -31,7 +31,13 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
      body: '- Drafted the October content plan', created: iso(-26 * hour), updated: iso(-26 * hour), read: true, replies: 0},
   ];
   const weekly = [{id: 'w-seo', bot: 'seo', kind: 'weekly', day: day(0), headline: 'Week: 4 pages shipped, rankings up on 2 of 3 goals',
-    body: '- Shipped four pages this week\n- Organic signups are on track', created: iso(-hour), updated: iso(-hour), read: false, replies: 0}];
+    body: '- Shipped four pages this week\n- Organic signups are on track', created: iso(-hour), updated: iso(-hour), read: false, replies: 0,
+    slides: {goal: 'Grow organic signups to 400 a month; at 310 and on pace.',
+             tracked: [{name: 'Organic signups', unit: 'signups', value: 310, spark: [240, 262, 281, 310], status: 'green', target_label: '400 by Dec 31', fresh: true}],
+             kpis: [{name: 'Pages shipped', value: '4', series: [1, 2, 2, 4]}],
+             done: ['Shipped four landing pages', 'Linked them from six older posts'], focus: ['Pitch the checklist to three newsletters'], blockers: []}},
+    {id: 'w-cmo', bot: 'cmo', kind: 'weekly', day: day(-7 * 86400e3), headline: 'Old bullets', body: '- An older week, posted as bullets',
+     created: iso(-170 * hour), updated: iso(-170 * hour), read: true, replies: 0}];
   const threads = {'u-fin': [{id: 'm1', from_actor: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created: iso(-2 * hour)},
                              {id: 'm2', from_actor: 'bot:finance', body: 'Will do.', created: iso(-hour)}]};
   const feed = (kind, unread) => {
@@ -139,6 +145,25 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.locator('[data-upd-kind="weekly"]').click();
     await page.waitForFunction(() => location.hash === '#/updates?kind=weekly' && document.querySelector('[data-upd="w-seo"]'));
     assert.match(await page.locator('[data-upd="w-seo"] .upd-pill').innerText(), /Week in review/);
+    // A week in review is five slides, one in view; the arrow, a dot or ← / → turns them. An older week shows its bullets.
+    const deck = page.locator('[data-upd="w-seo"] [data-upd-deck]');
+    assert.deepEqual(await deck.locator('.upd-slide-h').allInnerTexts(), ['Goal', 'KPIs', 'Done last week', 'Focus next week', 'Biggest blockers']);
+    assert.equal(await deck.locator('.upd-kpi').count(), 2);
+    assert.equal(await deck.locator('.upd-kpi .kspark polyline').count(), 2, 'each KPI with a series draws its line');
+    const shown = () => deck.locator('[data-upd-go][aria-current]').getAttribute('data-upd-go');
+    assert.equal(await shown(), '0');
+    await deck.locator('[data-upd-step="1"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="1"]')?.hasAttribute('aria-current'));
+    if (shots) await page.screenshot({path: path.join(shots, 'updates-weekly-slides.png')});
+    await deck.locator('[data-upd-go="4"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="4"]')?.hasAttribute('aria-current'));
+    assert.match(await deck.locator('.upd-slide').nth(4).innerText(), /Nothing blocking/);
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.keyboard.press('j');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="3"]')?.hasAttribute('aria-current'));
+    assert.equal(await page.locator('[data-upd="w-cmo"] [data-upd-deck]').count(), 0);
+    assert.match(await page.locator('[data-upd="w-cmo"] .upd-body').innerText(), /posted as bullets/);
     // Snappy: coming back to Daily paints from this tab's cache before the network answers, and the
     // unread one (AI CMO, marked unread above) now comes first.
     await page.evaluate(() => { location.hash = '#/updates'; });
@@ -166,12 +191,25 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const card = await p.locator('#upd-feed .upd-card').first().boundingBox();
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
     if (shots) { await p.waitForTimeout(200); await p.screenshot({path: path.join(shots, 'updates-phone.png')}); }
+    // A week's slides fit the phone and swipe sideways inside the card.
+    await p.evaluate(() => { location.hash = '#/updates?kind=weekly'; });
+    const track = p.locator('[data-upd="w-seo"] .upd-track');
+    await track.waitFor();
+    const deckBox = await track.boundingBox();
+    assert(deckBox.x >= 8 && deckBox.x + deckBox.width <= 390 - 8, 'the slides fit the phone with a gutter');
+    assert(await track.evaluate(el => el.scrollWidth >= el.clientWidth * 4.9), 'five slides side by side');
+    if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-weekly.png')});
+    await track.evaluate(el => el.scrollTo({left: el.clientWidth * 2}));
+    await p.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="2"]')?.hasAttribute('aria-current'));
+    if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-weekly-done.png')});
+    await p.evaluate(() => { location.hash = '#/updates'; });
+    await p.locator('[data-upd="u-seo"]').waitFor();
     await p.locator('#mobile-more').click();
     await p.locator('body.drawer').waitFor();
     assert.equal(await p.locator('.side-scroll [data-nav="tasks"]').isVisible(), true, 'Tasks is in More');
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
-    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, cached paint, and on a phone Updates in the bottom bar with Tasks in More.');
+    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Updates in the bottom bar with Tasks in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

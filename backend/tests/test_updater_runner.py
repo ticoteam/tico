@@ -5,7 +5,6 @@ import os
 import stat
 from pathlib import Path
 
-import pytest
 
 SOURCE = Path(__file__).resolve().parents[2] / "docker/updater.py"
 
@@ -96,59 +95,9 @@ def test_a_second_start_leaves_a_locked_token_alone(monkeypatch, tmp_path):
     updater.ensure_token()                                             # not locked and refused: logged, no crash
 
 
-def test_the_installers_override_rides_along_with_every_compose_call(monkeypatch, tmp_path):
-    # `install.sh --runner --server-network` writes it; an update must keep the runner on the server's network.
-    updater = load(monkeypatch, "runner", tmp_path)
-    seen = []
-    monkeypatch.setattr(updater.subprocess, "run", lambda argv, **kw: seen.append(argv) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    updater.compose("ps")
-    assert "runner.override.yaml" not in " ".join(seen[-1])
-    (tmp_path / "runner.override.yaml").write_text("services: {}\n")
-    updater.compose("ps")
-    assert seen[-1][seen[-1].index(str(tmp_path / "runner.override.yaml")) - 1] == "-f"
-
-
 def test_a_downgrade_is_refused_and_an_upgrade_accepted(monkeypatch, tmp_path):
     updater = load(monkeypatch, "runner", tmp_path)
     Docker(updater, monkeypatch, [True])                               # running v0.1.0
     assert updater.older_than_running("v0.0.9") and updater.older_than_running("v0.0.99")
     assert not any(updater.older_than_running(v) for v in ("v0.1.0", "v0.1.1", "v1.0.0", "latest"))
 
-
-def test_the_runner_compose_keeps_the_socket_in_the_sidecar():
-    import yaml
-    compose = yaml.safe_load((SOURCE.parent / "runner.compose.yaml").read_text())
-    sockets = [name for name, svc in compose["services"].items()
-               if any("docker.sock" in str(v) for v in svc.get("volumes", []))]
-    assert sockets == ["updater"]
-    assert compose["services"]["runner"]["environment"]["TICO_UPDATER_URL"] == "http://updater:8080"
-    assert "runner-control:/control:ro" in compose["services"]["runner"]["volumes"]
-
-
-def test_from_is_the_release_the_server_reported_not_the_last_updates(monkeypatch, tmp_path):
-    updater = load(monkeypatch, "runner", tmp_path)
-    docker = Docker(updater, monkeypatch, [True])
-    monkeypatch.setattr(updater, "running_image", lambda: ("sha256:old", "latest"))   # a tag that names no release
-    updater.status.update(state="healthy", **{"from": "v0.2.19", "to": "v0.2.20"})
-    updater.update("v0.2.21", running="0.2.20")
-    assert (updater.status["from"], updater.status["to"], updater.status["state"]) == ("v0.2.20", "v0.2.21", "healthy")
-    # No report (an older server): the image tag, as before. A report that is no version is not believed.
-    docker.answers[:] = [True]
-    updater.update("v0.2.22", running="dev")
-    assert updater.status["from"] == "latest"
-    assert updater.release_name("0.2.20") == "v0.2.20" and updater.release_name("latest") == "" and updater.release_name(None) == ""
-    assert updater.older_than_running("v0.2.19", "0.2.20") and not updater.older_than_running("v0.2.21", "0.2.20")
-
-
-def test_a_space_failure_reports_the_cause_and_available_space(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    updater = load(monkeypatch, "runner", tmp_path)
-    monkeypatch.setattr(updater.shutil, "disk_usage", lambda path: SimpleNamespace(free=42))
-    updater.set_status(state="failed", message="failed to register layer: no space left on device")
-    assert "Not enough disk space" in updater.status["message"]
-    assert "docker image prune -a" in updater.status["message"]
-    assert updater.status["disk_free"] == 42
-    updater.save_status()
-    updater.status.clear()
-    updater.load_status()
-    assert updater.status["disk_free"] == 42

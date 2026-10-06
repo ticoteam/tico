@@ -59,30 +59,12 @@ async function whileLoading(browser) {
 }
 async function afterHashNav(browser) {
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-  // Observe real EventSource delivery, and hold the current snapshot until the stale one is checked.
-  await page.addInitScript(() => {
-    window.fixtureSnapshots = [];
-    const NativeEventSource = window.EventSource;
-    window.EventSource = class extends NativeEventSource {
-      constructor(...args) {
-        super(...args);
-        this.addEventListener('snapshot', event => {
-          const phase = JSON.parse(event.data).fixture_phase;
-          window.fixtureSnapshots.push(phase);
-          if (phase === 'lagging') void window.fixtureLaggingDelivered();
-        });
-      }
-    };
-  });
-  const errors = [], sends = [];
+  const errors = [], sends = [], served = [], streams = [];
   page.on('pageerror', e => errors.push(e.message));
   const now = () => new Date().toISOString();
-  let server = [{id: 'old', from_actor: 'bot:botops', body: 'Welcome back', created: '2026-01-01T00:00:00Z'}], laggingDelivered = false, sentAt = 0;
-  await page.exposeFunction('fixtureLaggingDelivered', () => { laggingDelivered = true; });
+  let server = [{id: 'old', from_actor: 'bot:botops', body: 'Welcome back', created: '2026-01-01T00:00:00Z'}], sentAt = 0;
   let releaseCurrent;
   const currentHeld = new Promise(done => releaseCurrent = done);
-  let releaseSend, initialWatches = 0;
-  const sendHeld = new Promise(done => releaseSend = done);
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -96,24 +78,18 @@ async function afterHashNav(browser) {
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/conversations')
       return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
-    if (p.endsWith('/snapshot')) return json({messages: server.slice(), execution: null});
-    if (p.endsWith('/watch')) {
-      // Each connection opens with a snapshot. The first one after the send was built just before it landed.
-      if (!sentAt && initialWatches++ >= 2) await sendHeld;
-      // Sending replaces the EventSource. Its cancelled request may consume a response
-      // without delivering it, so advance only after the browser observes the stale snapshot.
-      const lagging = sentAt && !laggingDelivered;
-      const phase = sentAt ? lagging ? 'lagging' : 'current' : 'initial';
+    if (p === '/api/v2/events') { streams.push(route); return; }          // held until the test sends a change
+    if (p.endsWith('/snapshot')) {
+      // The first snapshot read after the send was built just before the message landed.
+      const phase = sentAt ? served.includes('lagging') ? 'current' : 'lagging' : 'initial';
       if (phase === 'current') await currentHeld;
-      const body = 'retry: 50\nevent: snapshot\ndata: ' + JSON.stringify({messages: lagging ? server.slice(0, 1) : server.slice(),
-        execution: null, fixture_phase: phase}) + '\n\n';
-      return route.fulfill({contentType: 'text/event-stream', body});
+      served.push(phase);
+      return json({messages: phase === 'lagging' ? server.slice(0, 1) : server.slice(), execution: null});
     }
     if (p === '/api/v2/chat/botops') {
       sends.push(route.request().postDataJSON().text);
       const message = {id: 'm1', from_actor: 'human:ana', body: sends[0], created: now()};
       server = [...server, message]; sentAt = Date.now();
-      releaseSend();
       return json({conversation: {id: 'c1'}, message});
     }
     return json({});
@@ -123,17 +99,23 @@ async function afterHashNav(browser) {
   await page.evaluate(() => { location.hash = '#/bot/botops'; });
   const box = page.locator('#chat-composer textarea');
   await box.waitFor();
-  await page.waitForFunction(() => window.fixtureSnapshots.filter(phase => phase === 'initial').length >= 2);
+  await page.waitForFunction(() => V2C?.loaded && V2C.liveOff);
   const text = 'Please set up a bot for our support inbox. '.repeat(6).slice(0, 250);
   await box.click(); await box.pressSequentially(text);
   assert.equal(await box.inputValue(), text, 'everything typed is in the box');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
   assert.deepEqual(sends, [text], 'Return sends it once');
-  await page.waitForFunction(() => window.fixtureSnapshots.includes('lagging'));
+  while (!served.includes('lagging')) await page.waitForTimeout(50);
+  await page.waitForTimeout(200);
   assert.match(await page.locator('#conv-thread').innerText(), /Please set up a bot/, 'the sent message stays in the chat');
+  // The message's change arrives on the live stream; the snapshot read it causes lists it.
   releaseCurrent();
-  await page.waitForFunction(() => window.fixtureSnapshots.includes('current'));
+  while (!streams.length) await page.waitForTimeout(50);
+  await streams.at(-1).fulfill({contentType: 'text/event-stream', body: 'id: 5\nevent: messages\ndata: ' +
+    JSON.stringify({seq: 5, id: 'm1', conversation_id: 'c1'}) + '\n\n'});
+  while (!served.includes('current')) await page.waitForTimeout(50);
+  await page.waitForTimeout(200);
   const thread = await page.locator('#conv-thread').innerText();
   assert.equal((thread.match(/Please set up a bot/g) || []).length > 0, true);
   assert.equal(await page.locator('#conv-thread .bubble.you').count(), 1, 'listed once, not twice');

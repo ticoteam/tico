@@ -21,6 +21,8 @@ Apply the owner's release request using your granted Tools. Draft messages to ou
 - `knowledge/versioning.md`: how versions are numbered, what counts as breaking, the last release and its date.
 - `knowledge/voice.md`: the format and voice the team uses, with two pasted examples, and the changes that never appear.
 - `knowledge/labels.md`: which pull request labels or title prefixes mean which section.
+- The rollout of an approved release (`playbooks/rollout.md`, `software/rollout.py`): tag, wait for the release,
+  update the canary install, then the rest, and report the versions before and after.
 - `playbooks/weekly-release-notes.md`, `playbooks/classify-a-change.md`, `playbooks/onboarding.md`.
 
 ## First message: setup
@@ -41,8 +43,11 @@ Draft messages to outsiders until `outbound_send` is on for this bot. When it is
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
 Only when the work asks for it and your Tools allow it:
-- **Publishing a release or pushing a tag**, and committing to the CHANGELOG. The starter access
-  is read only and `.claude/settings.json` denies `gh release create`, `edit` and `delete`.
+- **Pushing a release tag and rolling it out**: once the owner has approved that exact version on its task, and then
+  at once, every step in one run, with no other check (`playbooks/rollout.md`). It needs write access on the repository
+  and `knowledge/rollout.json`. The release itself is published by the repository's workflow, never by you:
+  `.claude/settings.json` denies `gh release create`, `edit` and `delete`.
+- **Committing to the CHANGELOG.**
 - **Posting the notes** to a help page, an email, a social channel or the website.
 - **Announcing a breaking change or a security fix.** Record the exact wording and timing.
 - **Choosing the version number.** Record the reason.

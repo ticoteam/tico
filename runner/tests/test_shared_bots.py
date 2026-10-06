@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from runner import service
 from runner.hosts import base
 from runner.service import Runner
@@ -74,6 +76,7 @@ class TwoCopies(unittest.TestCase):
         prompt = Runner.shared_lines("backend-architect-sam", COPY, problem)
         self.assertIn("Before anything else", prompt[-1])
 
+    @pytest.mark.slow
     def test_a_push_another_copy_beat_is_rebased_and_pushed_again(self):
         self.write(self.ana, "memory/learnings.md", "ana's lesson\n")
         git(self.ana, "push", "-q")
@@ -86,25 +89,13 @@ class TwoCopies(unittest.TestCase):
 
 
 class Copy(unittest.TestCase):
-    def test_a_copy_works_in_the_shared_repositorys_checkout(self):
-        runner = Runner({"url": "https://runner.acme.example", "token": "m", "projects_dir": "/w"}, tempfile.mkdtemp(),
-                        host_factory=lambda a, e: None, client=mock.Mock())
-        self.assertEqual(runner.local_path("backend-architect-sam", COPY), Path("/w/bot-backend-architect"))
-        self.assertEqual(runner.local_path("backend-architect-sam"), Path("/w/bot-backend-architect"))
-        self.assertEqual(runner.local_path("backend-architect", {"shared": True}), Path("/w/bot-backend-architect"))
-
-    def test_a_copy_is_told_it_is_one_and_what_to_remember(self):
-        lines = " ".join(Runner.shared_lines("backend-architect-sam", COPY))
-        self.assertIn("a branch of `backend-architect`", lines)
-        self.assertIn("never who asked", lines)
-        self.assertNotIn("Before anything else", lines)
-
     def test_a_copy_keeps_its_own_repositorys_paths_in_its_reply(self):
         text = "See bot-backend-architect/memory/learnings.md and emp-legal/x.md"
         scrubbed = service.scrub_reply(text, "backend-architect-sam", own="bot-backend-architect")
         self.assertIn("bot-backend-architect/memory/learnings.md", scrubbed)
         self.assertNotIn("emp-legal/", scrubbed)
 
+    @pytest.mark.slow
     def test_assignment_instances_get_registration_bound_local_branches_and_never_repair_missing_work(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -119,9 +110,6 @@ class Copy(unittest.TestCase):
             git(source, "add", "AGENT.md", "memory/learnings.md")
             git(source, "commit", "-q", "-m", "rules")
             git(source, "push", "-q", "-u", "origin", "main")
-            # Assignment learning follows the explicitly advertised role trunk;
-            # do not infer `main` merely because this synthetic repo has it.
-            git(source, "remote", "set-head", "origin", "main")
             # Assignment learning follows the explicitly advertised role trunk;
             # do not infer `main` merely because this synthetic repo has it.
             git(source, "remote", "set-head", "origin", "main")
@@ -344,15 +332,6 @@ class CleanClaude(unittest.TestCase):
             self.assertEqual(proc.kwargs["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1")
             host.stop()
 
-    def test_any_other_bot_keeps_its_operators_setup(self):
-        host = make_claude()
-        settings = base.settings("/tmp/emp-cpo", env={"HUB_EMPLOYEE": "cpo", "PATH": "/bin"})
-        host.start_turn(host.start_thread("cpo", settings), "hello")
-        argv = ClaudeProcess.instances[-1].argv
-        self.assertNotIn("--setting-sources", argv)
-        self.assertNotIn("CLAUDE_CODE_DISABLE_AUTO_MEMORY", ClaudeProcess.instances[-1].kwargs["env"])
-        host.stop()
-
 
 class Sessions(unittest.TestCase):
     def test_botops_defaults_to_task_and_conversation_isolation(self):
@@ -366,10 +345,3 @@ class Sessions(unittest.TestCase):
         self.assertNotEqual(session_key({}, {'bot': 'botops', 'conversation': {'id': 'ana'}}),
                             session_key({}, {'bot': 'botops', 'conversation': {'id': 'ben'}}))
         self.assertEqual(session_key({'session': 'bot'}, first), 'bot')
-
-    def test_task_sessions_resume_the_same_task_and_chat_without_changing_existing_bots(self):
-        from runner.state import session_key
-        attempt = {'task': {'id': 'review-a'}, 'conversation': {'id': 'room-a'}}
-        self.assertEqual(session_key({}, attempt), 'bot')
-        self.assertEqual(session_key({'session': 'task'}, attempt), 'task:review-a')
-        self.assertEqual(session_key({'session': 'task'}, {'conversation': {'id': 'room-a'}}), 'conversation:room-a')

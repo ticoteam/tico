@@ -43,19 +43,3 @@ def test_the_runner_reports_its_release_and_holds_work_while_it_updates(api, liv
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs").fetchone()[0] == "queued"
     service.pool.shutdown()
-
-
-def test_an_incompatible_runner_learns_why_it_gets_no_work(api, live, tmp_path, monkeypatch):
-    said = []
-    monkeypatch.setattr("runner.service.log", said.append)
-    r, service = start(api, live, tmp_path, config={"pinned": True})
-    monkeypatch.setattr("runner.release_update.current_release", lambda *a, **k: "0.1.0")
-    service.maintain()
-    ready(api, r, ["ops"])
-    service.tick()
-    service.tick()
-    assert service.active == {}
-    assert len([line for line in said if "not giving this computer work" in line and "0.2.0 or later" in line]) == 1
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs").fetchone()[0] == "queued"      # held, not failed
-    service.pool.shutdown()

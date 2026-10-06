@@ -1,11 +1,13 @@
-"""Service keys: what another system holds to file, update and close tasks, and nothing else.
+"""Service keys: what another system holds to reach a few routes of this install, and nothing else.
 
-A product backend has to put work in front of a person when something happens there (a weekly
-report is ready for its account manager to review) and take it away when the work is done there.
-A person's own token would carry everything that person may do. A service key reaches one route,
-POST /api/v2/inbound/tasks, and `Auth.authenticate` refuses it everywhere else. It is stored as a
-hash, shown once, and lasts until it is revoked; the owner and the bot administrators make, list
-and revoke keys.
+A key has one scope. A `tasks` key (the default) lets a product backend put work in front of a person
+when something happens there (a weekly report is ready for its account manager to review) and take it
+away when the work is done there: one route, POST /api/v2/inbound/tasks. An `update` key lets a release
+bot on another install update this one: check for updates, start an update to a named release and read
+how it stands (the owner's "Update now", UPDATE_ROUTES). A person's own token would carry everything
+that person may do; `Auth.authenticate` refuses a key on every route outside its scope. It is stored as a
+hash, shown once, and lasts until it is revoked; the owner and the bot administrators make, list and
+revoke keys, and only the owner makes an `update` key, since only the owner updates the install.
 
 The route is an upsert of the work as the other system sees it now. The pair (service key, that
 system's own `key` for the work) names one task, so a call never depends on an earlier one: the
@@ -25,7 +27,23 @@ from .store import H, Problem, digest
 
 PREFIX = "tico_sk_"
 INBOUND_PATH = "/api/v2/inbound/tasks"
-FIELDS = ("id", "label", "created", "created_by", "last_used", "revoked_at", "revoked_by")
+UPDATE_PATH = "/api/v2/system/update"
+# The (method, path) pairs each scope reaches. /healthz needs no key at all.
+ROUTES = {
+    "tasks": {("POST", INBOUND_PATH)},
+    "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
+}
+FIELDS = ("id", "label", "scope", "created", "created_by", "last_used", "revoked_at", "revoked_by")
+
+
+def allowed(scope, method, path):
+    return (method, path) in ROUTES.get(scope or "tasks", set())
+
+
+def refusal(scope):
+    if scope == "update":
+        return "An update key only checks for updates, starts one and reads its status (" + UPDATE_PATH + ")"
+    return "A service key only files tasks, with POST " + INBOUND_PATH
 
 
 def _admin(auth, who):
@@ -43,11 +61,13 @@ def listing(c, auth, who):
 def create(c, auth, who, body):
     """Mint a key and return its plaintext, the one time it is shown."""
     _admin(auth, who)
+    if body.scope == "update" and who.role != "owner":
+        raise Problem("forbidden", "Only the owner makes an update key: only the owner updates this install", 403)
     key, key_id, now = PREFIX + secrets.token_urlsafe(30), H.new_id(), H.now()
-    c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by) VALUES(?,?,?,?,?)",
-              (key_id, body.label, digest(key), now, who.actor))
-    H.event(c, who.actor, "service_key.create", key_id, {"label": body.label})
-    return {"id": key_id, "key": key, "label": body.label, "created": now}
+    c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by,scope) VALUES(?,?,?,?,?,?)",
+              (key_id, body.label, digest(key), now, who.actor, body.scope))
+    H.event(c, who.actor, "service_key.create", key_id, {"label": body.label, "scope": body.scope})
+    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created": now}
 
 
 def revoke(c, auth, who, key_id):
@@ -182,6 +202,6 @@ def install_service_keys(app, store, auth, mutate):
         """No Idempotency-Key: the pair is the idempotency, and a stored answer replayed after a
         later call for the same work would undo that call."""
         who = request.state.identity
-        if who.role != "service":
+        if who.role != "service" or who.scope != "tasks":
             raise Problem("forbidden", "This route takes a service key: Authorization: Bearer " + PREFIX + "...", 403)
         return store.write(who, lambda c: upsert(c, auth, who, body))

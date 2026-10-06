@@ -51,7 +51,7 @@ On Docs, matching internal, linked and manual docs appear at once
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
-`GET /api/v2/conversations/{id}/watch`. Each human has one private docs conversation with the Librarian
+`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the conversation's snapshot). Each human has one private docs conversation with the Librarian
 (`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s room: only they can read it, and the owner and
 administrators cannot. **New chat** starts a fresh conversation, so the Librarian remembers only what is on screen.
 **Previous conversations** lists your saved Docs chats. Pick one to reopen it and continue where you left off;

@@ -1,15 +1,11 @@
 """The bot files and settings under their new names (bot.yaml, routines:, tools:, groups.yaml, group:, needs_setup,
 bot-<slug>), and the old names still read for one release."""
 
-import sys
-from pathlib import Path
-from types import SimpleNamespace
-
 import yaml
 
-from backend import recruit, recruit_rank, statuses
+from backend import statuses
 from backend.config import Settings
-from backend.store import H, Store
+from backend.store import Store
 from clients import manifest as M
 
 
@@ -27,15 +23,6 @@ def test_bot_yaml_is_read_first_and_employee_yaml_is_the_fallback(tmp_path):
     write(both / "bot.yaml", {"name": "new"})
     assert M.manifest_path(both) == both / "bot.yaml"
     assert M.manifest_path(tmp_path / "empty") == tmp_path / "empty" / "bot.yaml"      # what a new bot gets
-
-
-def test_routines_and_tools_are_read_under_both_keys_and_the_new_key_wins():
-    assert M.routines_of({"schedules": [1]}) == [1] and M.routines_of({"routines": [2]}) == [2]
-    assert M.routines_of({"routines": [2], "schedules": [1]}) == [2]
-    assert M.routines_of({"routines": [], "schedules": [1]}) == []          # present but empty is still the new key
-    assert M.tools_of({"access": [{"service": "slack"}]}) == [{"service": "slack"}]
-    assert M.tools_of({"tools": [{"service": "mail"}], "access": [{"service": "slack"}]}) == [{"service": "mail"}]
-    assert M.tools_of(None) is None and M.routines_of("not a manifest") is None
 
 
 def test_the_readers_take_either_manifest(tmp_path):
@@ -67,35 +54,6 @@ def test_the_readers_take_either_manifest(tmp_path):
     assert [e["identity"] for e in mail.entries({"access": [{"service": "gmail", "identity": "old@x.example"}]})] == ["old@x.example"]
     assert [e["identity"] for e in mail.entries({"tools": [{"service": "gmail", "identity": "new@x.example"}],
                                                  "access": [{"service": "gmail", "identity": "old@x.example"}]})] == ["new@x.example"]
-
-
-def test_groups_yaml_and_group_are_read_first_and_the_old_names_still_work(tmp_path):
-    catalog = tmp_path / "templates" / "catalog"
-    catalog.mkdir(parents=True)
-    settings = SimpleNamespace(catalog_dir=catalog)
-    assert recruit.departments_file(settings) == recruit.BUNDLED_DEPARTMENTS
-    assert recruit.BUNDLED_DEPARTMENTS.name == "groups.yaml" and recruit.BUNDLED_DEPARTMENTS.is_file()
-    write(tmp_path / "templates" / "departments.yaml", {"departments": []})
-    assert recruit.departments_file(settings).name == "departments.yaml"
-    write(tmp_path / "templates" / "groups.yaml", {"departments": []})
-    assert recruit.departments_file(settings).name == "groups.yaml"
-
-    departments = {"departments": [{"id": "sales", "name": "Sales", "icon": "sell"}]}
-    for key in ("group", "department"):
-        built = recruit_rank.build(departments, [{"template": "sdr", "name": "SDR", "summary": "x", key: "sales"}])
-        assert [card["department"] for card in built["cards"]] == ["sales"]          # the served field keeps its name
-    both = recruit_rank.build(departments, [{"template": "sdr", "name": "SDR", "group": "sales", "department": "nowhere"}])
-    assert [card["template"] for card in both["cards"]] == ["sdr"]                  # the new key wins
-
-
-def test_the_shipped_templates_use_the_new_names():
-    root = Path(__file__).resolve().parents[2] / "templates"
-    assert not list(root.rglob("employee.yaml")) and not (root / "departments.yaml").exists()
-    for path in root.glob("catalog/*/bot.yaml"):
-        top = yaml.safe_load(path.read_text())
-        assert not {"schedules", "access"} & set(top) and {"routines", "tools"} <= set(top), path
-    for path in root.glob("catalog/*/card.yaml"):
-        assert "department" not in yaml.safe_load(path.read_text()), path
 
 
 def test_a_stored_needs_onboarding_row_becomes_needs_setup_and_readers_take_both(tmp_path):

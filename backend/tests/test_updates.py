@@ -5,12 +5,12 @@ message in the bot's chat."""
 from datetime import datetime, timezone
 
 from backend import updates
-from backend.store import H
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
 MORNING = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)      # Tuesday 06:00 Pacific
 FRIDAY = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)
 NIGHT = datetime(2026, 9, 29, 10, 0, tzinfo=timezone.utc)        # 03:00 Pacific, before the queue
+BEFORE_FIVE = datetime(2026, 10, 5, 10, 0, tzinfo=timezone.utc)  # Monday 03:00 Pacific: no queue of its own yet
 
 
 def out(c):
@@ -60,34 +60,38 @@ def test_a_bot_posts_once_a_day_and_each_person_has_their_own_read_state(api):
     assert get(api, "updates")["unread"] == 0
 
 
-def test_an_update_is_one_to_five_plain_bullets_or_it_is_refused(api):
-    """Ana, 2026-09-27: "No title, no sections ... I just want my 1-5 bullets", "Never send me task
-    ids", shorter again; refused with how to write it, never a quarantine."""
+SLIDES = {"goal": "Grow organic signups to 400 a month; at 310 and on pace.",
+          "kpis": [{"name": "Signups", "value": "310", "series": [240, 262, 281, 310], "note": "Two new pages ranked."}],
+          "done": ["Shipped four landing pages", "- Linked them from six older posts"],
+          "focus": ["Pitch the checklist to three newsletters"], "blockers": []}
+
+
+def test_a_week_in_review_is_five_slides_and_an_owner_can_have_last_week_redone(api):
+    """Owner, 2026-10-05: the weekly is a few swipeable slides: Goal, KPIs, done last week, focus next
+    week, biggest blockers; and last week's can be run again in the new shape."""
     r, msg, attempt = setup_attempt(api, "ops")
     bot = {"Authorization": "Bearer " + attempt["token"]}
-    send = lambda body, n: api.post("/api/v2/updates", json={"body": body}, headers={**bot, "Idempotency-Key": f"k-{n}"})
-    bad = {
-        "sections": "**Done**\n- Drafted the checklist\n**Next**\n- Publish it",
-        "title": "Big day\n- Drafted the checklist",
-        "label": "- **Done**: drafted the checklist",
-        "task id": "- Closed task 3233ce3a for Legal",
-        "uuid": "- Finished bb68f3ce-12c1-45f3-aac3-fd159e2be06e",
-        "six bullets": "\n".join(f"- Shipped part {n}" for n in range(6)),
-        # Past both the daily and the (Friday) weekly limits, so the test passes on any day.
-        "long bullet": "- " + " ".join(["word"] * 45),
-        "too many words": "\n".join("- " + " ".join(["word"] * 38) for _ in range(5)),
-    }
-    for n, (name, body) in enumerate(bad.items()):
-        refused = send(body, n)
-        assert refused.status_code == 422, (name, refused.text)
-        assert "one to five bullets in plain English" in refused.json()["error"]["detail"], name
-    assert "task id" in send(bad["task id"], 90).json()["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert H.bot(c, "ops")["state"] == "active", "a writing correction never quarantines"
-        assert not c.execute("SELECT 1 FROM updates").fetchone()
-    good = "- Published the checklist page and linked it from six posts\n- Pitching it to three host newsletters next\n" \
-           "- Merged PR #618; [the addendum](https://hub.acme.example/#/task/bb68f3ce-12c1-45f3-aac3-fd159e2be06e) is signed"
-    ok = send(good, 99)
+    send = lambda body, n: api.post("/api/v2/updates", json=body, headers={**bot, "Idempotency-Key": f"w-{n}"})
+    ok = send({"kind": "weekly", "slides": SLIDES}, 3)
     assert ok.status_code == 200, ok.text
-    assert ok.json()["update"]["headline"] == "Published the checklist page and linked it from six posts"
-    assert updates.lint("\n".join("- " + " ".join(["word"] * 30) for _ in range(5)), "weekly") is None, "the week may run longer"
+    week = ok.json()["update"]
+    assert week["slides"]["done"] == ["Shipped four landing pages", "Linked them from six older posts"]
+
+    friday = "2026-10-02"
+    back = send({"kind": "weekly", "slides": SLIDES, "day": friday}, 4)
+    assert back.status_code == 422, "a bot never back-dates a post on its own"
+    post(api, "updates/redo", {"day": friday}, token="ben-test", expected=403)
+    asked = post(api, "updates/redo", {"day": friday, "bots": ["ops"]})
+    assert asked["bots"] == ["ops"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")      # its run is over, so it is free
+        assert updates.dispatch(c, BEFORE_FIVE) == "ops", "a redo of a past day is sent like today's requests"
+        request = c.execute("SELECT m.body FROM update_queue q JOIN messages m ON m.id=q.message_id "
+                            "WHERE q.state='sent' AND q.redo=1").fetchone()["body"]
+    assert "with day 2026-10-02" in request
+    redone = send({"kind": "weekly", "slides": SLIDES, "day": friday}, 5)
+    assert redone.status_code == 200 and redone.json()["update"]["day"] == friday, redone.text
+    with store.transaction() as c:
+        updates.dispatch(c, BEFORE_FIVE)
+        assert c.execute("SELECT state FROM update_queue WHERE bot='ops' AND day=?", (friday,)).fetchone()[0] == "posted"

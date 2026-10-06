@@ -136,6 +136,13 @@ class Scheduler:
                 updates.dispatch(c, at)
         except Exception as exc:
             failures.append({"updates": type(exc).__name__})
+        # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
+        # in a background thread, so the decision model's calls never hold the write lock.
+        try:
+            from . import learnings
+            learnings.nightly(self.store, at)
+        except Exception as exc:
+            failures.append({"learnings": type(exc).__name__})
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.
@@ -144,6 +151,8 @@ class Scheduler:
                 c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
             sweep_idempotency(self.store, stamp(at))
             sweep_mail(self.store, stamp(at))
+            from . import events
+            events.sweep(self.store, stamp(at))            # live events keep a day
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).

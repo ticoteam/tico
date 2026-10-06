@@ -17,7 +17,8 @@ def outcome(conn, record, actor='', owner=False):
     if not task or not (owner or actor and actor in (task['owner'],task['requester'])):
         return dict(base, status='sent', summary='Sent; the task outcome is unavailable to this account.')
     task = dict(task)
-    children = [dict(t) for t in conn.execute('SELECT id,title,status,owner,requester FROM tasks WHERE parent_id=? ORDER BY created', (task_id,))
+    children = [dict(t) for t in conn.execute("SELECT id,title,status,owner,requester FROM tasks WHERE id IN (SELECT from_task FROM task_relations "
+                "WHERE kind='parent' AND to_task=?) ORDER BY created", (task_id,))
                 if owner or actor and actor in (t['owner'], t['requester'])]
     # Quote the actual latest task note, never synthesize completion from a delivery receipt.
     note = task.get('note') or ''

@@ -4,7 +4,7 @@ A person's question (`POST /api/v2/docs/ask`) goes to one private docs room per 
 (`rooms.DOCS_ROOM`, scope personal, owner_actor the person), the same machinery as the Assistant's
 room: only they read it, the owner and administrators included (`Auth.conversation`). The response
 carries the instant search results, so the page shows matches at once, and the room id, so it can
-stream the Librarian's answer from `/api/v2/conversations/{id}/watch`.
+follow the Librarian's answer on `/api/v2/events` (backend/events.py).
 
 The Librarian acts as itself, never as the person. It only reads docs (`hub doc ...`) and fetches
 public links on its own computer (`hub doc fetch`), so nothing it does needs a person's identity and

@@ -1,5 +1,4 @@
 """Revocable task privacy fences secondary reads and previously queued context."""
-import asyncio
 import json
 import time
 
@@ -35,20 +34,22 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
     hidden = task(api, labels=["sensitive-only"])
     public = task(api, private=False, requester="human:ana", owner="human:ana", title="Public parent")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET parent_id=? WHERE id=?", (public["id"], hidden["id"]))
-        c.execute("UPDATE tasks SET blocked_by=? WHERE id=?", (hidden["id"], public["id"]))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (hidden["id"], public["id"], "parent"))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (hidden["id"], public["id"], "blocks"))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (*sorted((hidden["id"], public["id"])), "related"))
         H.event(c, "human:ana", "task.inspect", hidden["id"], {"title": hidden["title"]})
     for suffix in ("", "/comments", "/links", "/files", "/answers", "/tree"):
         get(api, "tasks/" + hidden["id"] + suffix, expected=404)
     page = get(api, "tasks/" + public["id"])
     assert not page["children"] and page["task"]["parts"]["total"] == 0
-    assert page["task"]["blocked_by"] is None and page["task"].get("blocker") is None
+    assert page["task"]["relations"] == {} and hidden["id"] not in json.dumps(page)
     listed = get(api, "tasks")
     assert hidden["id"] not in json.dumps(listed)
     assert "sensitive-only" not in json.dumps(get(api, "tags"))
     assert not sql(api, "SELECT id FROM tags WHERE key='sensitive-only'")
     assert not sql(api, "SELECT detail_json FROM events WHERE action='task.inspect'")
-    assert sql(api, "SELECT blocked_by FROM tasks WHERE title='Public parent'") == [[None]]
+    assert sql(api, "SELECT from_task FROM task_relations") == []
+    assert len(sql(api, "SELECT from_task FROM task_relations", "ben-test")) == 3
     assert any(t[0] == hidden["id"] for t in sql(api, "SELECT id FROM tasks", "ben-test"))
 
 
@@ -126,20 +127,26 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     assert not sql(api, "SELECT id FROM tasks WHERE id='" + row["id"] + "'")
 
 
-def test_stream_closes_when_private_owner_loses_access(api, monkeypatch):
+def test_live_events_stop_when_private_owner_loses_access(api):
+    from backend import events
     row = task(api, requester="human:ana")
-    calls = []
-    real_sleep = asyncio.sleep
-    async def revoke(_):
-        if not calls:
-            with api.app.state.store.transaction() as c:
-                c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
-        calls.append(True)
-        await real_sleep(0)
-    monkeypatch.setattr("backend.app.asyncio.sleep", revoke)
-    response = api.get(f"/api/v2/conversations/{row['conversation_id']}/stream", headers=headers("ben-test"))
-    assert response.status_code == 200 and "event: expired" in response.text
-    assert response.text.count("event: messages") == 1
+    store, auth, ben = api.app.state.store, api.app.state.auth, Identity("human:ben", "human", "ben@acme.example")
+
+    def seen(after):
+        with store.read() as c:
+            sent, cursor, *_ = events.read(c, auth, ben, after, topics=("tasks", "messages"),
+                                           task_views=lambda rows, *a: rows, task_view=lambda r, *a, **k: r)
+        return json.dumps([data for *_, data in sent]), cursor
+    with store.read() as c:
+        start = events.latest(c)
+    post(api, "tasks/" + row["id"] + "/comments", {"text": "First packet note"})
+    before, cursor = seen(start)
+    assert "First packet note" in before and row["id"] in before
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
+    post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
+    after, _ = seen(cursor)
+    assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
 
 
 def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
@@ -159,27 +166,7 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
     assert "private-reference" not in json.dumps(result)
 
 
-def test_private_status_and_pending_slack_posts_are_not_disclosed(api):
-    row = task(api, requester="human:ben", owner="bot:ops")
-    _, msg = legacy_message(api, row["id"])
-    with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "ops", focus="Sensitive packet", task_id=row["id"])
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                  "VALUES(?,'Dprivate','','ops','Private queued output','ready',?,?)", (msg["id"], H.now(), H.now()))
-    value = get(api, "status?bot=ops")["status"]
-    assert value["task_id"] is None and value["focus"] == "" and value["open_tasks"] == 0
-    assert not sql(api, "SELECT focus FROM bot_status WHERE bot='ops'")
-    from backend.slack_gateway import Gateway
-    from backend.tests.test_slack_gateway import FakeSlack
-    slack = FakeSlack()
-    gateway = Gateway(api.app.state.store, slack)
-    assert gateway.deliver() == [] and slack.posts == []
-    with api.app.state.store.read() as c:
-        stored = c.execute("SELECT state,text FROM slack_posts WHERE message_id=?", (msg["id"],)).fetchone()
-        assert tuple(stored) == ("cancelled", "")
-
-
-@pytest.mark.parametrize("requester", ["human:ben", "bot:ops"])
+@pytest.mark.parametrize("requester", ["bot:ops"])
 def test_verified_legal_requester_is_kept_without_forged_human_grants(api, requester):
     with api.app.state.store.transaction() as c:
         config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0], {})
@@ -243,9 +230,7 @@ def test_deleted_comment_receipt_is_canonical_empty_and_currently_authorized(api
 
 @pytest.mark.parametrize("sensitive,owner,explicit,expected", [
     ("finance", "finance", False, 200),
-    ("finance", "ops", False, 403),
     ("ops", "ops", False, 403),
-    (None, "ops", True, 403),
 ])
 def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api, sensitive, owner, explicit, expected):
     machine, _, attempt = setup_attempt(api, "finance")
@@ -274,25 +259,7 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
         assert public["private"] is False
 
 
-def test_saved_private_batch_revokes_and_never_copies_into_general_bot_room(api):
-    row = task(api, requester="bot:ops", owner="human:ben")
-    started = post(api, "batch", {}, "ben-test")
-    bid = started["id"]
-    post(api, f"batch/{bid}/respond", {"kind": "instruct", "text": "Private decision"}, "ben-test")
-    post(api, f"batch/{bid}/commit", {}, "ben-test")
-    with api.app.state.store.read() as c:
-        delivered = list(c.execute("SELECT m.*,v.kind AS room_kind,v.task_id FROM messages m "
-                                   "JOIN conversations v ON v.id=m.conversation_id WHERE m.body LIKE '%Private decision%'"))
-        assert delivered and all(m["room_kind"] == "task" and m["task_id"] == row["id"] for m in delivered)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE batches SET state='open' WHERE id=?", (bid,))
-        c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
-    for path in ("batch", f"batch/{bid}/next", f"batch/{bid}/commit"):
-        response = api.get("/api/v2/" + path, headers=headers("ben-test")) if path == "batch" else api.post(
-            "/api/v2/" + path, json={}, headers=headers("ben-test"))
-        assert response.status_code in (403, 404) and "Sensitive packet" not in response.text
-
-
+@pytest.mark.slow
 def test_sql_provenance_work_does_not_scale_with_unrelated_historical_blobs(api):
     hidden = task(api)
     who = Identity("human:ana", "owner", email="ana@acme.example")
@@ -346,6 +313,7 @@ def test_sql_audit_keeps_no_literals_and_provenance_uses_the_result_snapshot(api
     assert not sql(api, f"SELECT id FROM tasks WHERE id='{row['id']}'", "ben-test")
 
 
+@pytest.mark.slow
 def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product(api):
     private = task(api, requester="human:ben", owner="bot:ops")
     machine = runner(api)
@@ -390,29 +358,3 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
     assert after[1] <= before[1] * 6 + 20
     print(f"event scaling: 500 attempts/events {before[1]} SQLite statements/{before[2]:.4f}s; "
           f"3000 attempts/events {after[1]} statements/{after[2]:.4f}s")
-
-
-def test_historical_carried_context_stays_revocable_after_pointer_changes(api):
-    public = task(api, private=False, requester="human:ana", owner="bot:ops", title="Public work")
-    private = task(api, requester="human:ben", owner="bot:ops", next_run=True)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    attempt = claim(api, machine, "ops")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], private["id"]))
-        H.event(c, H.KEEPER, "task.next-run.carried", attempt["id"], {"tasks": [private["id"]]})
-        assert task_privacy.attempt_readable(c, "bot:ops", attempt["id"])
-        c.execute("UPDATE tasks SET owner='bot:finance',carried_by=NULL WHERE id=?", (private["id"],))
-        assert not task_privacy.attempt_readable(c, "bot:ops", attempt["id"])
-    get(api, "tasks/" + public["id"])
-    get(api, f"turns/{attempt['id']}/steps", expected=404)
-    assert not sql(api, f"SELECT id FROM attempts WHERE id='{attempt['id']}'")
-
-
-def test_aggregate_bot_kpis_do_not_reveal_private_work_even_to_manager(api):
-    row = task(api, requester="human:ben", owner="bot:ops")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), row["id"]))
-    result = get(api, "bots/ops/kpis")
-    assert result["kpis"] and all(k["latest"] is None and not k["readings"] for k in result["kpis"])

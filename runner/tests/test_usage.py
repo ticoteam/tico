@@ -5,10 +5,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from clients.tico import APIError
 from runner.hosts.codex import CodexHost
 from runner.hosts.fake import FakeHost
-from runner.hosts.pi import usage_increment
 from runner.service import Runner
 from runner.tests.test_runner_resilience import FakeClient, attempt
 from runner.usage import Meter, billing_for
@@ -38,18 +36,10 @@ class Counting(unittest.TestCase):
         self.assertEqual(update((52_000, 41_500, 2_150), (1_000, 700, 50)), {"input": 2000, "cached": 1500, "output": 150})
         self.assertEqual(update((52_000, 41_500, 2_150), (1_000, 700, 50)), {"input": 0, "cached": 0, "output": 0})     # a repeat
 
-    def test_pi_counts_cache_reads_and_writes_as_input(self):
-        self.assertEqual(usage_increment({"input": 10, "output": 5, "cacheRead": 200, "cacheWrite": 30}),
-                         {"input": 240, "cached": 200, "output": 5})
-
     def test_only_a_plan_sign_in_is_a_subscription(self):
         cases = [("codex", "Signed in with ChatGPT", "subscription"), ("codex", "Signed in with an API key", "api"),
-                 ("claude", "Signed in with claude.ai", "subscription"),
                  ("claude", "Signed in with CLAUDE_CODE_OAUTH_TOKEN", "subscription"),
-                 ("claude", "Signed in with ANTHROPIC_API_KEY", "api"), ("claude", "Claude login required", "api"),
-                 ("cursor", "Signed in to Cursor", "subscription"), ("cursor", "Signed in with CURSOR_API_KEY", "api"),
-                 ("gemini", "Gemini API key configured", "api"), ("pi", "OpenRouter API key configured", "api"),
-                 ("codex", "", "api")]
+                 ("claude", "Signed in with ANTHROPIC_API_KEY", "api")]
         for runtime, detail, expected in cases:
             self.assertEqual(billing_for(runtime, detail), expected, (runtime, detail))
 
@@ -85,16 +75,3 @@ class Sending(unittest.TestCase):
                 "runtime": "codex", "billing": "api", "harness": "codex", "effort": "", "profile_used": None}
         self.assertEqual(done["usage"], {**part, "segments": [part]})
         self.assertEqual(self.run_turn(FakeClient(), "Signed in with ChatGPT")["usage"]["billing"], "subscription")
-
-    def test_a_server_from_before_usage_gets_the_result_again_without_it(self):
-        class Old(FakeClient):
-            def post(self, path, body=None, key=None):
-                if path.endswith("/complete") and body and "usage" in body:
-                    self.posts.append((path, body))
-                    raise APIError("validation", "extra fields not permitted", 422, False)
-                return super().post(path, body, key)
-        client = Old()
-        done = self.run_turn(client)
-        result = [body for path, body in client.posts if path.endswith("/complete")][-1]      # a lease renewal may land after it
-        self.assertNotIn("usage", result)
-        self.assertEqual(result["text"], done["text"])

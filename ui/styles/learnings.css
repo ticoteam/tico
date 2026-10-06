@@ -1,0 +1,53 @@
+/* ui/styles/learnings.css — The Learnings page (ui/app/learnings.js): a dense rail of nights, then one night. */
+.lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:100%}
+.lrn-rail{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;overflow:auto}
+.lrn-rail h3,.lrn-grp>h3{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}
+.lrn-n{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+.lrn-n:hover{background:var(--hover)}
+.lrn-n.on{background:var(--surface2)}
+.lrn-n .c{font-variant-numeric:tabular-nums;color:var(--muted)}
+.lrn-night{padding:18px 28px 48px;max-width:920px;min-width:0}
+.lrn-head h2{font-size:17px;margin:0;font-weight:600}
+.lrn-head p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.lrn-grp{margin-top:24px}
+.lrn-grp>h3{display:flex;align-items:center;gap:7px;margin:0 0 4px}
+.lrn-grp>h3 .nav-icon{font-size:16px}
+.lrn-subj{border-top:1px solid var(--line)}
+.lrn-subj:last-child{border-bottom:1px solid var(--line)}
+.lrn-subj summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:22px 150px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 4px;border-radius:6px;font-size:13px}
+.lrn-subj summary::-webkit-details-marker{display:none}
+.lrn-subj summary:hover{background:var(--surface)}
+.lrn-subj .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrn-subj .nm a{color:var(--ink)}
+.lrn-subj .first{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
+.lrn-subj .more{display:inline-flex;align-items:center;gap:2px;color:var(--muted);font-size:12px;white-space:nowrap}
+.lrn-subj[open] .more .nav-icon{transform:rotate(180deg)}
+.lrn-sq{width:22px;height:22px;border-radius:6px;display:inline-grid;place-items:center;background:var(--surface2);color:var(--muted);font-size:11px;font-weight:600}
+.lrn-body{padding:0 4px 12px 36px}
+.lrn-body .saw{font-size:12px;color:var(--muted);margin:-2px 0 8px}
+.lrn-entry{padding:10px 0;border-top:1px dashed var(--line)}
+.lrn-entry:first-of-type{border-top:0;padding-top:2px}
+.lrn-entry .t{font-weight:500;margin-bottom:4px;font-size:13px}
+.lrn-entry .kv{display:grid;grid-template-columns:62px minmax(0,1fr);gap:6px 10px;font-size:12.5px}
+.lrn-entry .k{color:var(--muted)}
+.lrn-entry .v{min-width:0;color:var(--g7)}
+.lrn-entry .where{color:var(--muted);font:11.5px var(--mono)}
+.lrn-entry .src a,.lrn-entry .src span{color:var(--g7);display:inline-flex;align-items:center;gap:4px}
+.lrn-entry .src .nav-icon{font-size:14px;color:var(--muted)}
+.lrn-entry q{color:var(--muted);font-style:italic}
+.lrn-diff{margin:6px 0 0;padding:6px 0;border:1px solid var(--line);border-radius:7px;background:var(--surface);font:11.5px/1.55 var(--mono);overflow:auto}
+.lrn-diff>span{display:block;padding:0 12px;white-space:pre}
+.lrn-diff .add{background:var(--ok-bg);color:var(--ok)}
+.lrn-diff .del{background:var(--fail-bg);color:var(--fail)}
+.lrn-diff .hunk{color:var(--muted)}
+@media (max-width:760px){
+  .lrn{grid-template-columns:1fr}
+  .lrn-rail{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px 16px}
+  .lrn-rail h3{display:none}
+  .lrn-n{min-width:120px}
+  .lrn-night{padding:16px}
+  .lrn-subj summary{grid-template-columns:22px minmax(0,1fr) auto}
+  .lrn-subj .first{grid-column:2/-1;white-space:normal}
+  .lrn-body{padding-left:4px}
+  .lrn-entry .kv{grid-template-columns:1fr}
+}

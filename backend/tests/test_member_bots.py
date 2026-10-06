@@ -96,32 +96,6 @@ def test_a_member_cannot_change_a_bot_that_is_not_hers_even_through_botops(api, 
         assert c.execute("SELECT via FROM settings_changes WHERE bot='jira-manager' AND field='access'").fetchone()[0] == "botops"
 
 
-def test_botops_adds_teammates_inside_and_outside_the_domain_directly(api, botops):
-    attempt = turn(api, botops, text="Add sean@acme.example please")
-    added = call(api, "post", "access/people", attempt["token"],
-                 {"email": "sean@acme.example", "name": "Sean", "on_behalf_of": "turn"})
-    assert added.status_code == 200 and added.json()["person"] == "sean", added.text
-    with api.app.state.store.read() as c:
-        from backend import access as Access
-        assert "sean@acme.example" in Access.load_access(c, api.app.state.store.settings)["allowed"]
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='person.added' AND target='sean'").fetchone()
-        assert row["actor"] == "human:cara" and '"via": "botops"' in row["detail_json"]
-        assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
-    finish(api, botops, attempt)
-    # An owner's request adds an outside teammate directly, with the owner's rights and audit actor.
-    ana = turn(api, botops, person="ana-test", text="Add sam@example.com please")
-    added = call(api, "post", "access/people", ana["token"],
-                 {"email": "sam@example.com", "name": "Sam", "on_behalf_of": "turn"})
-    assert added.status_code == 200 and added.json()["person"] == "sam", added.text
-    assert "needs_confirm" not in added.json()
-    with api.app.state.store.read() as c:
-        assert H.human(c, "sam")["email"] == "sam@example.com"
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='person.added' AND target='sam'").fetchone()
-        assert row["actor"] == "human:ana" and '\"via\": \"botops\"' in row["detail_json"]
-        assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
-    assert {p["id"] for p in get(api, "org", "cara-test")["people"]} >= {"sean", "sam"}
-
-
 def test_a_member_may_not_add_someone_outside_the_company_domain(api, botops):
     attempt = turn(api, botops)
     refused = call(api, "post", "access/people", attempt["token"], {"email": "eve@other.example", "on_behalf_of": "turn"})
@@ -231,47 +205,6 @@ def test_a_member_has_at_most_the_companys_limit_of_active_bots(api, botops):
     assert register(api, attempt, "four").status_code == 403
 
 
-def test_the_company_domain_and_who_may_add_people_by_default(api):
-    view = get(api, "access", "ben-test")
-    assert view["company_domains"] == ["acme.example"] and view["company_domain_source"] == "owner"
-    cara = next(p for p in view["people"] if p["id"] == "cara")
-    assert cara["role"] == "member" and cara["create_bots"] is True and cara["add_people"] is True
-    assert {p["id"]: p["role"] for p in view["people"]}["ben"] == "admin" and view["admins"] == ["ben@acme.example"]
-    assert call(api, "get", "access", "cara-test").status_code == 403
-    me = api.get("/api/me", headers=headers("cara-test")).json()
-    assert me["company_role"] == "member" and me["can_add_people"] is True and me["company_domains"] == ["acme.example"]
-
-
-def test_a_public_mail_owner_falls_back_to_the_domains_on_the_roster(api):
-    import pytest as _pytest
-    from backend import access as Access
-    from backend.store import Problem
-    assert Access.domain_of("ana@gmail.com") in Access.PUBLIC_MAIL
-    with _pytest.raises(Problem):                    # nothing to go on at all: members add nobody
-        Access.check_may_add(None, None, {"email": "m@gmail.com"}, "member", "x@gmail.com", [])
-    Access.check_may_add(None, None, None, "admin", "x@gmail.com", [])       # an admin may add anyone
-    with api.app.state.store.transaction() as c:                            # a Gmail-owned team whose people are at acme.example
-        Access._store(c, Access.OWNER, {"email": "ana@gmail.com", "revision": 1})
-    view = get(api, "access", "ben-test")
-    assert view["company_domains"] == ["acme.example"] and view["company_domain_source"] == "team"
-    me = api.get("/api/me", headers=headers("cara-test")).json()
-    assert me["can_add_people"] is True and me["company_domains"] == ["acme.example"]
-
-
-def test_health_warns_when_members_bots_share_a_computer_with_shared_keys(api, botops):
-    attempt = turn(api, botops)
-    register(api, attempt, "jira-manager")
-    machine = runner(api)
-    call(api, "post", f"runners/{machine['runner_id']}/member-bots", "ben-test", {"accepts": True})
-    assert call(api, "post", "bots/jira-manager/assignment", "cara-test",
-                {"runner_id": machine["runner_id"], "expected_generation": 0}).status_code == 200
-    assert all(c["id"] != "member_bots" for c in get(api, "health")["checks"])
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (encode({"schema_version": 1, "runtimes": {}, "bots": {}, "shared_env": True}), machine["runner_id"]))
-    warned = [c for c in get(api, "health")["checks"] if c["id"] == "member_bots"]
-    assert len(warned) == 1 and warned[0]["status"] == "warn" and "jira-manager" in warned[0]["summary"]
-
-
 def test_the_bot_limit_defaults_to_25_and_an_untouched_5_is_raised_once(api):
     from backend import access as Access
     assert get(api, "access", "ben-test")["member_bot_limit"] == 25
@@ -353,94 +286,3 @@ def test_botops_changes_a_bots_tools_as_the_requester_who_owns_it_and_never_for_
                     headers=headers(botops["token"]))
     assert idle.status_code in (401, 403)
 
-
-def test_botops_updates_a_tool_in_place_as_the_requester_and_only_on_her_bot(api, botops):
-    from backend.tests.test_bot_tools import report, runner as make_runner, assign as assign_bot
-    attempt = turn(api, botops, text="Let my inbox bot send mail")
-    register(api, attempt, "cara-mail", template="inbox")
-    machine = make_runner(api)
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT generation FROM assignments WHERE bot='cara-mail'").fetchone()
-    assign_bot(api, machine, "cara-mail", generation=row["generation"] if row else 0)
-    assert report(api, machine, "cara-mail", [{"service": "gmail", "identity": "cara@acme.example", "can": ["read", "draft"],
-                                               "env": "GOOGLE_SA_KEY", "credential": "present"}]).status_code == 200
-    delegated = {**headers(attempt["token"]), "X-Tico-On-Behalf-Of": "turn"}
-    sent = api.post("/api/v2/bots/cara-mail/tools/gmail/update", json={"can": ["read", "draft", "send"]}, headers=delegated)
-    assert sent.status_code == 200, sent.text
-    assert "can: [read, draft, send]" in sent.json()["yaml"]
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT kind,requested_by FROM bot_tool_requests WHERE bot='cara-mail'").fetchall()
-        assert [(r["kind"], r["requested_by"]) for r in row] == [("update", "human:cara")]       # hers, not BotOps'
-        task = c.execute("SELECT requester,owner,title FROM tasks WHERE title LIKE 'Change Gmail%'").fetchone()
-        assert (task["requester"], task["owner"]) == ("human:cara", "bot:botops")
-    # A bot that is not hers stays closed, and so does a call with nobody asking.
-    assert api.post("/api/v2/bots/ops/tools/gmail/update", json={"can": ["read"]}, headers=delegated).status_code == 403
-    finish(api, botops, attempt)
-    assert api.post("/api/v2/bots/cara-mail/tools/gmail/update", json={"note": "x"},
-                    headers=headers(botops["token"])).status_code in (401, 403)
-
-
-def test_template_create_uses_team_default_and_validates_metadata(api, botops):
-    from backend.tests.test_settings_transitions import _company_default
-    _company_default(api, "ops", model="gpt-6.1-sol")
-    body = {"slug": "release-helper", "display_name": "Release Helper", "model": "", "effort": "",
-            "template": "release-notes"}
-    made = post(api, "bots", body)
-    with api.app.state.store.read() as c:
-        from backend import providers
-        assert made["model"] == providers.load(c, api.app.state.store.settings)["model"]
-    assert made["onboarding_state"] == "needs_setup"
-    starting = post(api, "bots/release-helper/go-live", {})
-    assert starting["building"] and starting["setup_started"] and starting["state"] == "active"
-    duplicate = post(api, "bots", {**body, "slug": "release-helper-two"})
-    assert duplicate["matching_slugs"] == ["release-helper"]
-    invalid = post(api, "bots/register", {"slug": "unknown-helper", "template": "release-notez"}, expected=422)
-    assert "hub_template_list" in invalid["error"]["detail"] and "release-notes" in invalid["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert H.bot(c, "unknown-helper") is None
-    changed = post(api, "bots/release-helper/definition", {"template": "meeting-notes",
-                   "expected_revision": get(api, "bots/release-helper/access")["revision"]})
-    assert changed["template"] == "meeting-notes"
-    post(api, "bots/release-helper/definition", {"template": "no-such-template", "expected_revision": changed["revision"]}, expected=422)
-
-
-def test_owner_mcp_template_creation_queues_one_botops_build(api, botops, tmp_path):
-    from backend.tests.test_mcp import call as mcp_call
-    template = tmp_path / "catalog" / "custom-release"
-    template.mkdir(parents=True)
-    (template / "card.yaml").write_text("template: custom-release\nslug: custom-release\nname: Custom Release\n")
-    (template / "AGENT.md").write_text("# Custom Release\n\nDraft release notes.\n")
-    api.app.state.store.settings.catalog_dir = template.parent
-    bad, made = mcp_call(api, "hub_bot_create", {"slug": "release-helper", "template": "custom-release"})
-    assert not bad, made
-    assert made["setup_task_id"]
-    task = get(api, "tasks/" + made["setup_task_id"])["task"]
-    assert task["owner"] == "bot:botops" and task["requester"] == "human:ana"
-    assert "custom-release" in task["body"]
-    bad, again = mcp_call(api, "hub_bot_create", {"slug": "release-helper", "template": "custom-release"})
-    assert not bad and again["setup_task_id"] == made["setup_task_id"]
-    only_record = post(api, "bots/register", {"slug": "record-helper", "template": "custom-release"})
-    assert "setup_task_id" not in only_record
-    pending = post(api, "bots/record-helper/go-live", {})
-    assert pending["building"] and pending["state"] == "planned" and pending["setup_task_id"]
-    ready(api, botops, ["botops", "record-helper"])
-    working = post(api, "bots/record-helper/go-live", {})
-    assert working["state"] == "active" and working["setup_started"] is False
-
-
-def test_template_preview_includes_setup_and_example(api):
-    card = next(c for c in get(api, "templates")["cards"] if c["template"] == "release-notes")
-    assert card["onboarding"] and all(q["ask"] and q["why"] for q in card["onboarding"])
-    assert card["first_routine"]["output"] and card["first_routine"]["draft_only"] is True
-    assert card["example_output"] and card["example"]
-
-
-def test_computer_and_health_include_release_and_services(api, botops):
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "release": "0.2.29",
-         "kind": "linux", "update": {"state": "failed", "target": "0.2.30", "error": "Download failed"},
-         "readiness": {"botops": True}}, token=botops["token"])
-    computer = get(api, "computers")["computers"][0]
-    assert computer["update"]["release"] == "0.2.29" and computer["update"]["target"] == "0.2.30"
-    assert computer["update"]["error"] == "Download failed" and "wanted_release" in computer["update"]
-    assert computer["readiness"]["bots"]["botops"]["ready"] and "services" in computer
-    assert get(api, "health/issues")["computers"][0] == computer

@@ -4,6 +4,7 @@
 //  - live reply: a bot's separate messages stay apart (the server joins them with a blank line,
 //    execution.text and execution.parts) and show as separate paragraphs, not one run-on line
 //    ("keep the bot planned.I've filed the build").
+//  - outline: a prompt on a page not loaded yet is paged in and brought into view; the draft stays put.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -236,10 +237,75 @@ async function liveReply(browser) {
   console.log('chat live reply and keyboard copy: ok');
 }
 
+async function outlineJump(browser) {
+  const page = await browser.newPage({viewport:{width:1280,height:800},serviceWorkers:'block'});
+  const errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  const at=n=>new Date(Date.UTC(2026,9,5,9,n)).toISOString();
+  const pair=(n,text)=>[{id:'h'+n,from_actor:'human:ana',body:text,created:at(n*2)},{id:'b'+n,from_actor:'bot:ops',body:'Done: '+text,created:at(n*2+1)}];
+  const older=[...pair(0,'Check the release notes'),...pair(1,'Draft the launch email')];
+  const latest=[2,3,4,5,6,7,8].flatMap(n=>pair(n,'Prompt number '+n));
+  const snapshot={messages:latest,next_before:'h2',execution:null};
+  const prompts=[...older,...latest].filter(m=>m.from_actor.startsWith('human:')).map(m=>({id:m.id,created:m.created,text:m.body,task:m.id==='h0'?{id:'t1',title:'Release v1'}:null}));
+  const pages=[];
+  await page.context().route('**/*',route=>{
+    const url=new URL(route.request().url()),p=url.pathname;
+    const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
+    if(p==='/')return route.fulfill({contentType:'text/html',body:html});
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    if(ui){const file=uiFile(ui[1]);
+      if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
+    if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
+    if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
+    if(p==='/api/employees')return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/issues')return json([]);
+    if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
+    if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
+      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
+    if(p==='/api/v2/conversations/c-ops/snapshot')return json(snapshot);
+    if(p==='/api/v2/conversations/c-ops/outline')return json({prompts});
+    if(p==='/api/v2/conversations/c-ops/messages'){pages.push(url.searchParams.get('before'));return json({messages:older,next_before:null});}
+    return json({});
+  });
+  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.waitForFunction(()=>V2C?.rendered&&V2C.loaded);
+  await page.locator('#chat-composer textarea').fill('half-written thought');
+  await page.getByRole('button',{name:'Outline',exact:true}).click();
+  const rows=page.locator('#chat-outline .co-row');
+  await rows.first().waitFor();
+  assert.equal(await rows.count(),9,'every prompt, loaded or not');
+  assert.equal(await page.evaluate(()=>document.activeElement?.dataset.id),'h8','focus starts on the newest');
+  for(let i=0;i<8;i++)await page.keyboard.press('ArrowUp');
+  assert.equal(await page.evaluate(()=>document.activeElement?.dataset.id),'h0');
+  if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-desktop.png'});
+  await page.keyboard.press('Enter');
+  const target=page.locator('#conv-thread [data-message="h0"]');
+  await target.waitFor();
+  assert.deepEqual(pages,['h2'],'one older page, from the existing cursor');
+  await page.waitForFunction(()=>{const t=document.querySelector('#conv-thread'),r=document.querySelector('[data-message="h0"]').getBoundingClientRect(),b=t.getBoundingClientRect();
+    return r.top>=b.top-1&&r.bottom<=b.bottom+1;});
+  assert.equal(await page.evaluate(()=>V2C.followLatest),false,'a jump stops following the end');
+  assert.equal(await page.locator('#chat-composer textarea').inputValue(),'half-written thought','the draft stays');
+  assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false);
+  // Phone: the same list is a bottom sheet with thumb-sized rows.
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'Outline',exact:true}).click();
+  await rows.first().waitFor();
+  const sheet=await page.evaluate(()=>{const d=document.querySelector('#chat-outline').getBoundingClientRect(),r=document.querySelector('#chat-outline .co-row').getBoundingClientRect();
+    return {bottom:Math.round(d.bottom)===innerHeight,full:Math.round(d.width)===innerWidth,tall:r.height>=44,overflow:document.documentElement.scrollWidth>innerWidth};});
+  assert.deepEqual(sheet,{bottom:true,full:true,tall:true,overflow:false});
+  if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-phone.png'});
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false,'Escape closes');
+  assert.deepEqual(errors,[]);
+  console.log('chat outline jump: ok');
+}
+
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
   try {
     await offlineRetry(browser);
     await liveReply(browser);
+    await outlineJump(browser);
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

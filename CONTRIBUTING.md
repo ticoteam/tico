@@ -20,17 +20,19 @@ There is no separate contributor license agreement (CLA): you sign off each comm
 
 ```bash
 pip install -r backend/requirements-dev.txt
-python -m pytest -q                            # the Python suite, in parallel
+python -m pytest -q                            # the default Python suite, in parallel (about a minute)
 
 npm ci
 npx playwright install chromium
-npm run test:ui                                # the browser scripts in ui/tests/
+npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
 ```
 
-Run both locally before you open a pull request: GitHub Actions does not run tests. A full run (pytest, then the browser scripts) takes a few minutes and has
-to stay under 10. To run less while you work: `python -m pytest -q backend/tests/test_x.py` for one
-file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run
-`cargo check` there.
+Run both locally before you open a pull request: GitHub Actions does not run tests. The default run leaves out
+tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
+list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
+them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
+for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
+there.
 
 ## Developer Certificate of Origin
 
@@ -53,8 +55,10 @@ with unsigned commits will be asked to sign them before it is merged.
 - Few, high-value tests. Write tests while you build if they help, then keep only the ones that guard a
   security or privacy boundary, data safety (migrations, backup, restore) or a core contract (the
   updater and release path, job claim and lease, task writes, the API schema), plus at most one happy
-  path per feature. Delete the rest before you open the pull request; the whole suite has to run in
-  under 10 minutes, so a new test that would push it over means cutting another.
+  path per feature. No tests of wording or docs prose, and one or two cases instead of an exhaustive
+  parametrization. Delete the rest before you open the pull request; the default Python suite has to run in about
+  a minute, so a new test that would slow it means cutting another, or marking it `@pytest.mark.slow` if it needs
+  real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.

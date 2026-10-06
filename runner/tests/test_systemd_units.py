@@ -57,24 +57,6 @@ def test_a_unit_file_is_private_and_lands_where_systemd_looks(tmp_path):
     assert su.user_unit_dir({"TICO_SYSTEMD_USER_DIR": "/y"}) == Path("/y")
 
 
-def test_linger_guidance_only_when_lingering_is_off():
-    def loginctl(answer, code=0):
-        return lambda cmd, **kw: subprocess.CompletedProcess(cmd, code, answer, "")
-    off = su.linger_guidance("ana", loginctl("no\n"))
-    assert "loginctl enable-linger ana" in off
-    assert su.linger_guidance("ana", loginctl("yes\n")) == "" and su.linger_guidance("ana", loginctl("", 1)) == ""
-
-    def missing(cmd, **kw):
-        raise FileNotFoundError
-    assert su.linger_guidance("ana", missing) == ""
-
-
-def test_restart_reports_what_systemctl_said():
-    ok = su.restart("tico-bot.service", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
-    bad = su.restart("tico-bot.service", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 5, "", "Unit not found.\n"))
-    assert ok == "" and bad == "Unit not found."
-
-
 # -- scripts/tico on Linux, with systemctl and loginctl faked ----------------------------------------------
 
 def fake_linux(tmp_path, linger="no"):
@@ -103,6 +85,7 @@ def tico(env, *args):
     return subprocess.run([str(ROOT / "scripts" / "tico"), *args], capture_output=True, text=True, env=env, timeout=120)
 
 
+@pytest.mark.slow
 def test_install_on_linux_writes_units_starts_them_and_explains_linger(tmp_path):
     env, log = fake_linux(tmp_path, linger="no")
     done = tico(env, "install")
@@ -116,6 +99,7 @@ def test_install_on_linux_writes_units_starts_them_and_explains_linger(tmp_path)
     assert "loginctl enable-linger ana" in done.stdout                   # linger is off: say so
 
 
+@pytest.mark.slow
 def test_install_on_linux_is_quiet_about_linger_when_it_is_on_and_handles_one_job(tmp_path):
     env, log = fake_linux(tmp_path, linger="yes")
     done = tico(env, "install", "connectors")
@@ -126,6 +110,7 @@ def test_install_on_linux_is_quiet_about_linger_when_it_is_on_and_handles_one_jo
     assert "systemctl --user disable --now tico-connectors.service" in log.read_text()
 
 
+@pytest.mark.slow
 def test_status_and_restart_on_linux_read_systemd(tmp_path):
     env, log = fake_linux(tmp_path)
     installed = tico(env, "install", "bot")

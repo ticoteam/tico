@@ -160,6 +160,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            the bots' updates, newest first
     hub update show <id>                   one update with its thread
     hub update create "<- bullets>" [--kind daily|weekly]   post your own update when Tico asks
+    hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
+    hub update redo --day D [--kind weekly|daily] [--bot B ...]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
     hub update reply <id> "<text>"
     hub update settings <bot> [--daily on|off] [--weekly on|off]
@@ -252,6 +254,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
+    hub service-key create --label "Release Manager" --scope update
+                                           the owner: a key a release bot on another install uses to check for,
+                                           start and follow an update of this one (/api/v2/system/update), and nothing else
     hub service-key list | revoke <id>     every service key, never its secret; stop one at once
     hub grokbot sync --file f.json         sync your Grok Bots into Tico
 
@@ -609,7 +614,7 @@ def parser():
 
     task = sub.add_parser("task").add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
-    s.add_argument("parent_id")
+    s.add_argument("parent")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
     s.add_argument("--body", default="")
@@ -617,10 +622,6 @@ def parser():
     s = task.add_parser("tree", help="show nested subtasks")
     s.add_argument("id")
     s.set_defaults(fn="task tree")
-    s = task.add_parser("parent", help="move a subtree; empty parent clears it")
-    s.add_argument("id")
-    s.add_argument("parent_id")
-    s.set_defaults(fn="task reparent")
     worktree = task.add_parser("worktree", help="create or attach this task's worktree").add_subparsers(dest="worktree_sub")
     for operation, argument in (("add", "repo"), ("attach", "path"), ("setup", "repo")):
         s = worktree.add_parser(operation)
@@ -634,7 +635,7 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
-    s.add_argument("--parent")
+    s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
@@ -688,7 +689,6 @@ def parser():
     s.add_argument("--note")
     s.add_argument("--owner")
     s.add_argument("--due")
-    s.add_argument("--blocked-by", dest="blocked_by", help="the task this one waits on; '' clears it")
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
@@ -728,6 +728,14 @@ def parser():
     s.add_argument("url")
     s.add_argument("--title")
     s.set_defaults(fn="task link")
+    s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
+    s.add_argument("id")
+    s.add_argument("task")
+    s.add_argument("--kind", default="related", choices=["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
+                   help="parent: task is its parent; blocks / blocked_by; related (default); duplicate_of; "
+                        "follow_up: it was split off or followed up from task")
+    s.add_argument("--remove", action="store_true", help="take it off instead")
+    s.set_defaults(fn="task relate")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
@@ -1158,10 +1166,18 @@ def parser():
         "check", help="what is wrong with the bots, most urgent first, each with its fix")
     s.set_defaults(fn="health check")
     upd = sub.add_parser("update", help="create, read and reply to the bots' daily and weekly updates").add_subparsers(dest="sub")
-    s = upd.add_parser("create", help="post your update when Tico asks for it: 1-5 plain-English bullets")
-    s.add_argument("body", help="one to five lines, each starting with '- '")
+    s = upd.add_parser("create", help="post your update when Tico asks for it: 1-5 plain-English bullets, "
+                                       "or a week in review's slides")
+    s.add_argument("body", nargs="?", help="a daily: one to five lines, each starting with '- '")
+    s.add_argument("--slides-file", help="a week in review: JSON {goal, kpis, done, focus, blockers}")
     s.add_argument("--kind", choices=("daily", "weekly"))
+    s.add_argument("--day", help="YYYY-MM-DD, only when Tico asks you to redo a past day")
     s.set_defaults(fn="update create")
+    s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
+    s.add_argument("--day", required=True)
+    s.add_argument("--kind", choices=("daily", "weekly"))
+    s.add_argument("--bot", dest="bots", action="append", help="only this bot (repeatable)")
+    s.set_defaults(fn="update redo")
     s = upd.add_parser("list", help="the bots' updates, newest first")
     s.add_argument("--kind", choices=("daily", "weekly"))
     s.add_argument("--bot")
@@ -1531,9 +1547,11 @@ def parser():
     s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
     s.add_argument("message")
     s.set_defaults(fn="support file")
-    keys = sub.add_parser("service-key", help="keys another system uses to file, update and close tasks (owner and admins)").add_subparsers(dest="sub")
+    keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")
+    s.add_argument("--scope", choices=["tasks", "update"], default="tasks",
+                   help="tasks (default): files tasks; update (owner only): checks for, starts and follows an update of this install")
     s.set_defaults(fn="service-key create")
     keys.add_parser("list", help="every service key, never its secret").set_defaults(fn="service-key list")
     s = keys.add_parser("revoke", help="stop a key at once")

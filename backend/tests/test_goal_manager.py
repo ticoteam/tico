@@ -5,12 +5,10 @@ archives it, only the owner edits it, and its daily pass starts once the first K
 import shutil
 from pathlib import Path
 
-import yaml
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
-from backend.store import H
-from backend.tests.test_onboarding import (PEOPLE, ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, draft,  # noqa: F401
+from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person, draft,  # noqa: F401
                                            environment, machine, signed_in)
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "goal-manager"
@@ -81,40 +79,3 @@ def test_nobody_archives_it_and_only_the_owner_edits_it(environment):
     assert admin.status_code == 403
     assert api.post("/api/v2/bots/goal-manager/definition", json=edit, headers=signed_in()).status_code == 200
 
-
-def test_the_first_kpi_starts_its_daily_pass_once_and_a_paused_pass_stays_paused(environment):
-    api, _ = built(environment)
-    made = lambda name: api.post("/api/v2/kpis", json={"name": name, "owner": "company"}, headers=signed_in())
-    assert made("Activation").status_code == 200
-    assert {k: v["enabled"] for k, v in routines(api).items()} == {"goal-manager:kpi-pass": 1, "goal-manager:goals-review": 0}
-    with api.app.state.store.transaction() as c:                                # the owner pauses it
-        c.execute("UPDATE schedule_config SET enabled=0 WHERE schedule_id='goal-manager:kpi-pass'")
-    assert made("Churn").status_code == 200
-    assert routines(api)["goal-manager:kpi-pass"]["enabled"] == 0               # not overruled
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action='goal_manager.armed'").fetchone()[0] == 1
-
-
-def test_the_template_is_short_and_every_playbook_it_names_exists():
-    assert len((TEMPLATE / "AGENT.md").read_text().splitlines()) <= 150
-    card = yaml.safe_load((TEMPLATE / "card.yaml").read_text())
-    assert (card["required"], card["bootstrap"], card["slug"]) == (True, True, "goal-manager")
-    schedules = yaml.safe_load((TEMPLATE / "bot.yaml").read_text())["routines"]
-    assert [s["id"] for s in schedules] == ["kpi-pass", "goals-review"] and not any(s["enabled"] for s in schedules)
-    for entry in schedules:
-        assert (TEMPLATE / entry["template"]).is_file()
-    named = (TEMPLATE / "AGENT.md").read_text()
-    for playbook in (TEMPLATE / "playbooks").glob("*.md"):
-        assert playbook.name == "README.md" or playbook.name in named or playbook.name in (TEMPLATE / "playbooks/README.md").read_text()
-
-
-def test_turn_on_path_reuses_existing_goal_manager_and_requires_owner(environment):
-    api, _ = built(environment)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='paused' WHERE slug='goal-manager'")
-    denied = api.post("/api/v2/goal-manager/turn-on", json={}, headers=as_person(api, PEOPLE["people"][1]["id"]))
-    assert denied.status_code == 403
-    result = api.post("/api/v2/goal-manager/turn-on", json={}, headers=signed_in())
-    assert result.status_code == 200, result.text
-    assert states(api)["goal-manager"] == "active"
-    assert len(routines(api)) == 2

@@ -8,7 +8,8 @@ room, a person's room with it) is never moved: the task just stops pointing at i
 `tasks` then simply no longer sees the task, and a restore puts the same rows back. A task that
 carries work is refused whole, so nothing anyone or any bot did is touched: a turn, a job, an
 approval, a file, a routine occurrence, a meeting delivery, a subtask or a blocked task outside the
-list. The audit log keeps one `task.deleted` (and `task.restored`, `task.purged`) event per task.
+list. Its relations to other tasks (task_relations, from either end) go into the trash with it, and a
+restore puts back each one whose other task still exists. The audit log keeps one `task.deleted` (and `task.restored`, `task.purged`) event per task.
 Purging is offline and separate; a purged task keeps only its trash row's number, so no new task takes it.
 """
 
@@ -17,6 +18,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from .store import H
+from . import task_relations as TR
 
 
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
@@ -40,7 +42,9 @@ MESSAGE_ROWS = (("slack_posts", "message_id"), ("slack_digests", "message_id"), 
 CONVERSATION_ROWS = (("slack_digests", "conversation_id"), ("slack_threads", "conversation_id"))
 # Rows that point at the task but belong to something else, by their key: restored only if still unset.
 POINTERS = (("market_insights", "id", "filed_task"),)
-LINKS = ("conversation_id", "parent_id", "blocked_by")
+LINKS = ("conversation_id",)
+# Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
+LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
 CORE = ("tasks", "conversations", "messages")
 
 
@@ -107,7 +111,7 @@ def _rowid_alias(c, table):
     return pks[0][1] if len(pks) == 1 and str(pks[0][2]).upper() == "INTEGER" else None
 
 
-def _snapshot(c, tid):
+def _snapshot(c, tid, relations=None):
     """Every row deleting task `tid` removes, by table, in the order a restore puts them back."""
     task = dict(c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone())
     conversations = _owned_conversations(c, [tid])
@@ -122,6 +126,8 @@ def _snapshot(c, tid):
                 rows.setdefault(table, []).append(row)
     for table in TASK_ROWS:
         add(table, _rows(c, table, "task_id", [tid]))
+    # Taken for the whole list before any is deleted, so each entry keeps every relation it had.
+    rows["task_relations"] = TR.snapshot_rows(c, tid) if relations is None else relations
     for table, column in MESSAGE_ROWS:
         add(table, _rows(c, table, column, messages))
     for table, column in CONVERSATION_ROWS:
@@ -149,10 +155,12 @@ def delete_tasks(c, ids, apply=False, actor=None):
     for table in CONVERSATION_WORK:
         if n := _count(c, table, "conversation_id", conversations):
             refusals[f"{table}.conversation_id"] = n
-    outside = [r for r in _column(c, "SELECT id FROM tasks WHERE parent_id IN ({})", ids) if r not in chosen]
+    outside = [r for r in _column(c, "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task IN ({})", ids)
+               if r not in chosen]
     if outside:
         refusals["subtasks outside the list"] = len(outside)
-    blocked = [r for r in _column(c, "SELECT id FROM tasks WHERE blocked_by IN ({})", ids) if r not in chosen]
+    blocked = [r for r in _column(c, "SELECT to_task FROM task_relations WHERE kind='blocks' AND from_task IN ({})", ids)
+               if r not in chosen]
     if blocked:
         refusals["tasks blocked by one outside the list"] = len(blocked)
     pointing = [r for r in _column(c, "SELECT task_id FROM task_delegations WHERE message_id IN ({})", messages)
@@ -174,8 +182,9 @@ def delete_tasks(c, ids, apply=False, actor=None):
     ensure(c)
     actor = actor or H.KEEPER
     now = H.now()
+    relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
     for tid in ids:
-        rows, convs, msgs, pointers = _snapshot(c, tid)
+        rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
                   "deleted_by,rows_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -188,6 +197,7 @@ def delete_tasks(c, ids, apply=False, actor=None):
             _delete(c, table, column, convs)
         for table in TASK_ROWS:
             _delete(c, table, "task_id", [tid])
+        c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
             c.execute("UPDATE bot_status SET task_id=NULL WHERE task_id=?", (tid,))
@@ -197,9 +207,6 @@ def delete_tasks(c, ids, apply=False, actor=None):
         _delete(c, "messages", "id", msgs)
         c.execute("UPDATE tasks SET conversation_id=NULL WHERE id=?", (tid,))
         _delete(c, "conversations", "id", convs)
-    # Links between tasks inside the list go first, so no row points at a deleted one.
-    for p in _parts(ids):
-        c.execute(f"UPDATE tasks SET parent_id=NULL, blocked_by=NULL WHERE id IN ({_marks(p)})", p)
     _delete(c, "tasks", "id", ids)
     parties = []
     for tid in ids:
@@ -298,9 +305,25 @@ def restore_tasks(c, ids, actor=None):
     _delete(c, "jobs", "message_id", messages)
     for e, snap in snapshots:
         for table, found in snap["rows"].items():
-            if table not in CORE:
+            if table not in CORE and table != "task_relations":
                 for row in found:
                     _try_insert(c, table, row, skipped)
+    for e, snap in snapshots:
+        tid = e["task_id"]
+        relations = [r for r in snap["rows"].get("task_relations", []) if "kind" in r]
+        task = snap["rows"]["tasks"][0]
+        for column, (kind, inward) in LEGACY_LINKS.items():
+            if task.get(column):
+                ends = (task[column], tid) if inward else (tid, task[column])
+                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created": task.get("updated") or H.now()})
+        for row in snap["rows"].get("task_relations", []):
+            if "related_id" in row:     # draft #110's related-only rows
+                a, b = sorted((row["task_id"], row["related_id"]))
+                relations.append({"from_task": a, "to_task": b, "kind": "related", "created_by": row.get("added_by"),
+                                  "created": row["created"]})
+        for row in relations:
+            if TR.restore_row(c, row) is False:
+                unlinked.setdefault(tid, []).append(row["kind"])
     for e, snap in snapshots:
         task = snap["rows"]["tasks"][0]
         links = {}

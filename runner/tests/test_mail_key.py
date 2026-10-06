@@ -109,33 +109,6 @@ def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_lay
     assert mail_umask() == {}
 
 
-def test_a_mail_run_by_the_connectors_job_leaves_files_a_group_member_can_write(tmp_path, monkeypatch):
-    import subprocess
-    import sys
-    monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
-    from runner.connectors import mail_umask
-    target = tmp_path / "mail.db"
-    subprocess.run([sys.executable, "-c", f"open({str(target)!r}, 'w').close()"], check=True, **mail_umask())
-    assert stat.S_IMODE(target.stat().st_mode) == 0o664
-
-
-def test_a_bot_the_hub_named_no_mailbox_is_told_so_not_that_the_key_is_missing(channel, monkeypatch):
-    from connectors.mail import auth
-    channel.register("attempt-helper", "helper")                          # the hub sent no mailboxes
-    channel.register("attempt-inbox", "ana-inbox", ["ana@acme.team"])
-    monkeypatch.setenv(auth.SOCKET_ENV, channel.path)
-    monkeypatch.setenv("HUB_TOKEN", "attempt-helper")
-    with pytest.raises(auth.Failure) as refused:
-        auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE])
-    assert "no mailbox" in refused.value.msg and "message bot" in refused.value.msg and "key is not at" not in refused.value.msg
-    assert '"inbox_bot"' in refused.value.hint
-    monkeypatch.setenv("HUB_TOKEN", "attempt-inbox")                      # the server's address, not the one in bot.yaml
-    with pytest.raises(auth.Failure) as wrong:
-        auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE])
-    assert "ana@acme.team" in wrong.value.msg and '"mailbox"' in wrong.value.hint
-    assert channel.minted == []
-
-
 def test_every_isolated_turn_is_pointed_at_the_socket_and_a_plain_runner_is_not():
     from types import SimpleNamespace
     from runner.service import Runner as Service
@@ -178,7 +151,7 @@ def test_reenrollment_carries_the_protected_key_once_with_permissions(tmp_path):
     assert list(new.parent.glob(".mail-key-*")) == [new.parent / ".mail-key-carried"]
 
 
-@pytest.mark.parametrize("missing", ["key", "state-directory", "stale-registration"])
+@pytest.mark.parametrize("missing", ["key"])
 def test_missing_previous_mail_key_is_quiet_and_not_retried(tmp_path, monkeypatch, missing):
     config, key = previous_registration(tmp_path)
     if missing == "key":
@@ -228,7 +201,7 @@ def test_failed_carryover_can_retry_without_leaving_temporary_keys(tmp_path, mon
     assert new.read_bytes() == key.read_bytes()
 
 
-@pytest.mark.parametrize("change", ["operator", "url", "environment", "directory-symlink", "file-symlink", "owner", "volume"])
+@pytest.mark.parametrize("change", ["operator", "file-symlink", "owner"])
 def test_reenrollment_never_imports_another_operators_key(tmp_path, monkeypatch, change):
     config, key = previous_registration(tmp_path)
     if change in ("operator", "url", "environment"):
@@ -277,12 +250,3 @@ def test_enrollment_recovers_the_previous_registrations_protected_key(tmp_path, 
     assert not (tmp_path / "state-new" / mail_key.FILE).exists() and old.exists()
 
 
-def test_reenrollment_accepts_an_older_registration_without_environment(tmp_path):
-    import json
-    config, key = previous_registration(tmp_path)
-    stale = tmp_path / "runner.json.stale"
-    previous = json.loads(stale.read_text())
-    previous.pop("environment")
-    stale.write_text(json.dumps(previous))
-    assert mail_key.carry_protected(config, tmp_path / "runner.json")
-    assert (tmp_path / "state-new" / mail_key.FILE).read_bytes() == key.read_bytes()

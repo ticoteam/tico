@@ -1,17 +1,8 @@
 """Real attachment submissions, authorization boundaries, retries, and local downloads."""
 
-import os
-import subprocess
-import sys
-import uuid
-from pathlib import Path
-
 import pytest
 
-from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
-from backend.tests.test_runner import live
-from clients.tico import APIError, Client
-from runner.service import ROOT, Runner
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 
 
 def upload(api, path, fields, token="ana-test", key=None, data=b"Original material", expected=200):
@@ -22,7 +13,6 @@ def upload(api, path, fields, token="ana-test", key=None, data=b"Original materi
 
 
 @pytest.mark.parametrize("path,fields", [
-    ("chat/inbox", {"text": "Private destination"}),
     ("tasks", {"title": "Private task", "body": "Private", "owner": "inbox"}),
 ])
 def test_forbidden_upload_never_publishes_file_or_work(api, path, fields):

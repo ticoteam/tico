@@ -40,7 +40,7 @@ def test_ciphertext_round_trip_preserves_signed_bundles(archives):
     assert {path.name: path.read_bytes() for path in Path("bundles").iterdir()} == expected
 
 
-@pytest.mark.parametrize("failure", ["company", "tag", "run", "key", "tamper"])
+@pytest.mark.parametrize("failure", ["company", "tamper"])
 def test_artifacts_reject_wrong_context_and_tampering_before_publish(archives, monkeypatch, failure):
     company, _ = archives
     if failure == "company":

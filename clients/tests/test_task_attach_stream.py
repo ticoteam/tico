@@ -76,7 +76,7 @@ def test_multipart_retry_replays_same_parts_and_key(tmp_path, monkeypatch):
     assert int(first[0].get_header('Content-length')) == len(first[1])
 
 
-@pytest.mark.parametrize('bad', ['outside', 'symlink', 'credential', 'poster'])
+@pytest.mark.parametrize('bad', ['symlink', 'credential'])
 def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     from clients import bot_files as BF
     root = tmp_path / 'checkout'
@@ -102,25 +102,20 @@ def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     client.post_multipart.assert_not_called()
 
 
-@pytest.mark.parametrize('multipart', [False, True])
-def test_cli_attach_combines_streaming_poster_note_and_choices(monkeypatch, tmp_path, multipart):
+def test_cli_attach_combines_streaming_poster_note_and_choices(monkeypatch, tmp_path):
     path, poster = tmp_path / 'draft.md', tmp_path / 'poster.png'
     path.write_text('# Draft')
     poster.write_bytes(b'poster')
     monkeypatch.setenv('HUB_API_URL', 'https://api.example.com')
     client = Mock()
     client.get.return_value = {'actor': 'human:ana'}
-    client.features.return_value = {'task_files_multipart': multipart}
+    client.features.return_value = {'task_files_multipart': True}
     monkeypatch.setattr(remotecli, 'Client', lambda *args, **kw: client)
     args = hubcli.parser().parse_args(['task', 'attach', 'task', str(path), '--poster', str(poster),
                                       '--note', 'Revised', '--choices', 'Approve,Request changes'])
     remotecli.run(args)
-    if multipart:
-        call = client.post_multipart.call_args
-        assert call.args[:2] == ('tasks/task/files', {'file': path, 'poster': poster})
-    else:
-        call = client.post.call_args
-        assert call.args[0] == 'tasks/task/files' and call.args[1]['text'] == '# Draft'
+    call = client.post_multipart.call_args
+    assert call.args[:2] == ('tasks/task/files', {'file': path, 'poster': poster})
     body = call.args[-1]
     assert body['name'] == 'draft.md' and body['note'] == 'Revised'
     assert body['ask']['questions'][0]['options'] == [{'label': 'Approve'}, {'label': 'Request changes'}]

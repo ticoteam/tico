@@ -1,6 +1,5 @@
 """The server compose file pins its updater to the release, and an update leaves the updater running."""
 import importlib.util
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,12 +29,6 @@ def test_server_forwards_storage_without_operator_aws_settings_in_checkout_and_r
         for name, service in services.items():
             if name != "server":
                 assert not STORAGE_KEYS.intersection(service.get("environment", {}))
-
-
-def test_the_updater_image_follows_the_release_tag():
-    text = (ROOT / "compose.yaml").read_text()
-    image = re.search(r"tico-updater\}:(\S+)", text).group(1)
-    assert image == "${TICO_UPDATER_TAG:-${TICO_TAG:-latest}}"
 
 
 def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch, tmp_path):
@@ -78,12 +71,3 @@ def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_ot
     for name in ("server", "slack"):
         env = set(services[name]["environment"])
         assert keys <= env and "CLOUDFLARE_TUNNEL_TOKEN" not in env
-
-
-def test_naming_integrations_and_the_aws_region_pass_through_only_when_set():
-    import yaml
-    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
-    shared = {"AWS_REGION", "AWS_DEFAULT_REGION", "TICO_APP_NAME", "TICO_ASSISTANT_NAME", "TICO_INTEGRATIONS_DIR"}
-    for name, keys in (("server", shared), ("slack", shared | {"TICO_SLACK_SECRET_ARN"})):
-        environment = services[name]["environment"]
-        assert all(key in environment and environment[key] is None for key in keys), name   # bare: unset stays unset

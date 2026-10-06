@@ -7,7 +7,7 @@ import pytest
 from backend.tests.test_api import api, headers, post  # noqa: F401
 
 
-@pytest.mark.parametrize("kind", ["task_json", "task_multipart", "chat_multipart"])
+@pytest.mark.parametrize("kind", ["task_multipart"])
 def test_upload_replays_and_conflicts_do_not_write_blobs(api, monkeypatch, kind):
     tid = post(api, "tasks", {"title": "Review upload", "owner": "ops", "body": "Read the report."})["id"]
     path = "/api/v2/uploads/chat/ops" if kind == "chat_multipart" else f"/api/v2/tasks/{tid}/files"

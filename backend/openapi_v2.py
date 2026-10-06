@@ -39,7 +39,26 @@ TAGS = {
             "evidence and a quality, never edited; a correction supersedes the old one.",
     "Usage": "Estimated model spend per bot (docs/usage.md): tokens counted by each run's computer, priced at list price.",
     "Health": "Whether the installation is working.",
+    "Live events": "One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, "
+                   "messages, runs, bots and Needs you as they change, resumable from a change number.",
 }
+
+EVENTS_DESCRIPTION = (
+    "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
+    "(who made it, when the viewer may know) and `at`:\n"
+    "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
+    "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
+    "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
+    "- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
+    "`state` (`job_id`, and the job's or attempt's state).\n"
+    "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved.\n"
+    "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), "
+    "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
+    "Only what the viewer may read is sent. A stream ends after about five minutes; reconnect with `after` (or the "
+    "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
+)
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
@@ -70,7 +89,8 @@ STABLE = [
     ("/api/v2/me/tokens/{token_id}/revoke", "post", "Session", "revokeMyToken", "Revoke a personal API token", None),
     ("/api/v2/service-keys", "get", "Session", "listServiceKeys", "Service keys, never the secret (owner and admins)", None),
     ("/api/v2/service-keys", "post", "Session", "createServiceKey",
-     "Make a key another system uses to file, update and close tasks, and nothing else; shown once (owner and admins)", None),
+     "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, "
+     "owner only), and nothing else; shown once (owner and admins)", None),
     ("/api/v2/service-keys/{key_id}/revoke", "post", "Session", "revokeServiceKey", "Revoke a service key", None),
     ("/api/v2/openapi.json", "get", "Session", "getOpenApi", "This document", None),
     ("/api/v2/config", "get", "Team", "getConfig", "Team and app names, version, setup state", "Config"),
@@ -135,10 +155,6 @@ STABLE = [
      "Send a message in a conversation", "MessageResult"),
     ("/api/v2/conversations/{cid}/snapshot", "get", "Conversations", "getConversationSnapshot",
      "The newest messages and the bot's current run, in one read", "Snapshot"),
-    ("/api/v2/conversations/{cid}/watch", "get", "Conversations", "watchConversation",
-     "Server-sent events: whole-conversation snapshots while a bot works (reconnect for a fresh one)", None),
-    ("/api/v2/conversations/{cid}/stream", "get", "Conversations", "streamConversation",
-     "Server-sent events: bot output deltas with a resumable cursor (after=<id>) and message lists", None),
     ("/api/v2/chat/{bot}", "post", "Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", "ChatResult"),
     ("/api/v2/chat/{bot}/new", "post", "Conversations", "startNewChat", "Archive the current personal chat and start fresh", None),
     ("/api/v2/conversations/{cid}/goal", "get", "Conversations", "getChatGoal", "Read the pinned goal and commands", "ChatGoalResult"),
@@ -174,6 +190,9 @@ STABLE = [
      "Change the text of a comment you wrote; it wakes nobody and is marked edited_at", "CommentResult"),
     ("/api/v2/tasks/{tid}/comments/{mid}/delete", "post", "Tasks", "deleteTaskComment",
      "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain", "CommentResult"),
+    ("/api/v2/tasks/{tid}/relations", "post", "Tasks", "relateTask",
+     "Relate another task to this one ({task, kind}: parent, blocks, blocked_by, related, duplicate_of, "
+     "follow_up), or take the relation off with remove", "TaskResult"),
     ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
      "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
      "as themselves; a task carrying work is refused (409 has_work)", None),
@@ -187,6 +206,11 @@ STABLE = [
     ("/api/v2/updates/read", "post", "Updates", "markUpdatesRead", "Mark updates read or unread", None),
     ("/api/v2/updates/{uid}", "get", "Updates", "getUpdate", "One update and the replies to it", None),
     ("/api/v2/updates/{uid}/reply", "post", "Updates", "replyToUpdate", "Reply to an update (goes to the bot)", None),
+    ("/api/v2/updates/redo", "post", "Updates", "redoUpdates",
+     "Ask the bots again for a past day's update in the current shape: the owner", None),
+    ("/api/v2/events", "get", "Live events", "streamEvents",
+     "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
+     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller; count=true for the number alone", "NeedsYou"),
     ("/api/v2/messages/{mid}/answer", "post", "Needs you", "answerMessage", "Answer a question a bot asked", None),
@@ -252,7 +276,7 @@ STABLE = [
     ("/api/v2/docs/ask", "post", "Docs", "askDocs",
      "Ask the Librarian a question about the team's docs. It goes to the caller's own private docs conversation; "
      "`results` is the instant search (same shape as docs/search) and the answer streams on "
-     "GET /api/v2/conversations/{cid}/watch", "DocsAsked"),
+     "GET /api/v2/events?topics=messages,runs&conversation={cid}", "DocsAsked"),
     ("/api/v2/librarian", "get", "Docs", "getLibrarian", "Whether the Librarian is on, and whether the caller can turn it on",
      "Librarian"),
     ("/api/v2/librarian/conversations", "get", "Docs", "listDocsConversations",
@@ -453,6 +477,12 @@ SCHEMAS = {
                                       "height": {"type": ["integer", "null"]}}), {"type": "null"}]},
                 open_asks={"type": "integer", "description": "Questions on this task with no answer or dismissal"},
                 type_id={"type": ["string", "null"]}, step_id={"type": ["string", "null"]},
+                relations={"type": "object", "description": "Related tasks the reader may open, by kind (parent, "
+                           "blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; "
+                           "direction is out when this task is the subtask, blocker, duplicate or follow-up, in for "
+                           "the other end, both for related. Subtasks are in the task's children.",
+                           "additionalProperties": items(obj({"id": "s", "title": "s", "status": "s", "owner": "s",
+                                                              "direction": "s"}))},
                 type={"oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}]},
                 step={"oneOf": [ref("TaskStep"), {"type": "null"}]},
                 body={"type": "string", "description": "Left out of a list asked for with brief=true, "
@@ -860,10 +890,8 @@ def spec(app):
         responses = {code: r for code, r in op.get("responses", {}).items() if code != "422"}
         if answer:
             responses["200"] = {"description": "OK", "content": {"application/json": {"schema": ref(answer)}}}
-        if path.endswith(("/stream", "/watch")):
-            events = ("`event: output` (id = cursor) and `event: messages`" if path.endswith("/stream")
-                      else "`event: snapshot`, `event: expired`, and `: keepalive` comments")
-            responses["200"] = {"description": "text/event-stream: " + events + ". Ends after about a minute; reconnect.",
+        if path == "/api/v2/events":
+            responses["200"] = {"description": EVENTS_DESCRIPTION,
                                 "content": {"text/event-stream": {"schema": {"type": "string"}}}}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
@@ -923,7 +951,8 @@ def spec(app):
                 "bearer": {"type": "http", "scheme": "bearer",
                            "description": "A bearer session from POST /auth/token (browser apps) or a personal API token (servers)."},
                 "serviceKey": {"type": "http", "scheme": "bearer",
-                               "description": "A service key, tico_sk_..., which reaches POST /api/v2/inbound/tasks and nothing else."},
+                               "description": "A service key, tico_sk_...: a tasks key reaches POST /api/v2/inbound/tasks and nothing else "
+                                              "(an update key reaches only /api/v2/system/update, docs/service-keys.md)."},
                 "cookie": {"type": "apiKey", "in": "cookie", "name": "tico_session",
                            "description": "The browser session of Tico's own page (`__Host-tico_session` over https)."}}},
         "security": [{"bearer": []}, {"cookie": []}],

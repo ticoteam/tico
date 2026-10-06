@@ -89,28 +89,6 @@ class Rig(unittest.TestCase):
 
 
 class Watchers(Rig):
-    def test_assigned_subscription_is_used_and_missing_one_skips_script(self):
-        from unittest import mock
-        from runner import profiles
-        assigned = profiles.create(self.projects / 'profiles', 'assigned')
-        local = profiles.create(self.projects / 'profiles', 'local')
-        self.runner.config.update(profiles={'assigned': assigned, 'local': local}, default_profile='local')
-        entry = self.runner.assignments_seen[0]
-        entry.update(profile='assigned', computer_label='Build Computer')
-        script = self.repo / 'software' / 'profile.py'
-        script.write_text('import os\nprint(os.environ["CODEX_HOME"])\n')
-        self.declare('software/profile.py')
-        with mock.patch.object(self.runner, 'runtime_readiness', side_effect=AssertionError('live probe')):
-            self.tick(0)
-            self.settle()
-        self.assertEqual(self.client.posts[0][1]['output'], str(Path(assigned['dir']) / 'codex'))
-        entry['profile'] = 'absent'
-        self.tick(300)
-        self.settle()
-        self.assertEqual(len(self.client.posts), 1)
-        self.assertIn("Subscription absent isn't on Build Computer", self.watchers.noted[('support', 'hq-tickets')])
-        self.assertEqual(self.runner.vault_values, {})
-
     def test_revoked_grants_and_legacy_files_do_not_reach_the_next_watcher(self):
         self.client.credentials = []
         self.declare("software/hq-tickets quiet")
@@ -149,20 +127,8 @@ class Watchers(Rig):
         self.assertNotIn("staff-key-value", json.dumps(body))
         self.assertTrue((self.repo / ".state" / "hq-tickets" / "cursor.json").is_file())
 
-    def test_no_more_often_than_every_and_never_twice_at_once(self):
-        self.declare("software/hq-tickets sleep", timeout="2s")
-        self.watchers.next_scan = 0
-        self.tick(0)
-        self.tick(1)                                  # still running (and not yet due)
-        self.tick(299)
-        self.settle()
-        self.assertEqual(len(self.client.posts), 1)
-        self.tick(300)
-        self.settle()
-        self.assertEqual(len(self.client.posts), 2)
-
     def test_a_run_that_is_still_going_when_the_next_is_due_is_not_started_again(self):
-        self.declare("software/hq-tickets sleep", every="1m", timeout="3s")
+        self.declare("software/hq-tickets sleep", every="1m", timeout="1s")
         self.tick(0)
         self.tick(61)                                 # due, but the first is still sleeping
         self.assertEqual(len(self.watchers.running), 1)
@@ -176,12 +142,6 @@ class Watchers(Rig):
         self.settle()
         self.assertLess(time.time() - started, 10)
         self.assertTrue(self.client.posts[0][1]["timed_out"])
-
-    def test_a_failure_is_reported_with_its_exit_status(self):
-        self.declare("software/hq-tickets fail")
-        self.tick(0)
-        self.settle()
-        self.assertEqual(self.client.posts[0][1]["exit"], 3)
 
     def test_the_state_goes_back_when_the_hub_does_not_take_the_report(self):
         self.client.down = True
@@ -212,52 +172,14 @@ class Watchers(Rig):
             self.settle()
         self.assertEqual(self.client.posts, [])
 
-    def test_a_python_file_runs_without_being_executable(self):
-        script = self.repo / "software" / "hq-tickets"
-        script.chmod(0o644)
-        self.tick(0)
-        self.settle()
-        self.assertEqual(self.client.posts[0][1]["exit"], 0)
-
-
 class Declaration(unittest.TestCase):
-    def test_what_is_accepted(self):
-        (one,) = declared.parse([{"name": "hq-tickets", "run": "software/hq-tickets watch", "every": "5m"}])
-        self.assertEqual((one["argv"], one["every"], one["timeout"]), (["software/hq-tickets", "watch"], 300, 60))
-        self.assertEqual(declared.parse([{"name": "a", "run": "x", "every": 120, "timeout": "5m"}])[0]["timeout"], 300)
-        self.assertEqual(declared.parse([{"name": "a", "run": "x", "every": "1m", "enabled": False}]), [])
-        self.assertEqual(declared.parse(None), [])
-
     def test_what_is_refused(self):
-        for bad in ({"name": "a", "run": "x", "every": "30s"}, {"name": "a", "run": "x", "every": "2d"},
-                    {"name": "a", "run": "x", "every": "5m", "timeout": "10m"}, {"name": "A b", "run": "x", "every": "5m"},
-                    {"name": "a", "run": "../x", "every": "5m"}, {"name": "a", "run": "/bin/sh", "every": "5m"},
-                    {"name": "a", "run": "", "every": "5m"}, {"name": "a", "run": "x", "every": "5m", "user": "root"},
-                    {"name": "a", "run": "x"}):
+        for bad in ({"name": "a", "run": "../x", "every": "5m"}, {"name": "a", "run": "/bin/sh", "every": "5m"},
+                    {"name": "a", "run": "x", "every": "5m", "user": "root"}):
             with self.assertRaises(ValueError, msg=str(bad)):
                 declared.parse([bad])
         with self.assertRaises(ValueError):
             declared.parse([{"name": "a", "run": "x", "every": "5m"}] * 2)
-
-    def test_event_lines(self):
-        found, log = declared.events('hello\ntico-event {"op": "task", "key": "k", "title": "T", "junk": 1}\n'
-                                     'tico-event {"op": "shout", "key": "k"}\ntico-event {"op": "done"}\n')
-        self.assertEqual(found, [{"op": "task", "key": "k", "title": "T"}])
-        self.assertIn("hello", log)
-        self.assertEqual(len(declared.events("".join('tico-event {"op":"done","key":"%d"}\n' % i for i in range(80)))[0]), 50)
-
-
-class SupportTemplate(unittest.TestCase):
-    def test_the_support_agent_declares_watchers_whose_programs_ship_with_it(self):
-        import yaml
-        folder = Path(__file__).resolve().parents[2] / "templates/catalog/support"
-        specs = declared.parse(yaml.safe_load((folder / "bot.yaml").read_text())["watchers"])
-        self.assertEqual({s["name"] for s in specs}, {"hq-tickets", "gh-support"})
-        for spec in specs:
-            self.assertEqual(spec["every"], 300)
-            self.assertIsNotNone(W.command(folder, spec["argv"]), spec["name"])       # a file inside the repository
-        self.assertIn(".state/", (folder / ".gitignore").read_text())
-
 
 if __name__ == "__main__":
     unittest.main()

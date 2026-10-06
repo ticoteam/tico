@@ -283,7 +283,7 @@ function openTaskCreate(owner = '', opts = {}) {
     if (labels.length) payload.labels = labels;
     if (form.top.checked) payload.top = true;
     if (form.link.value.trim()) payload.links = [form.link.value.trim()];
-    if (parent) payload.parent_id = parent.id;
+    if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
     try {
       const goal = form.goal?.value || '';
       if (goal) payload.goal_id = goal;

@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import task_relations as TR
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -379,44 +380,44 @@ class WaitingWithDependency(HubCase):
         # Server tasks carry the optimistic version used when completing a blocker.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
-    def test_self_requested_task_can_wait_on_blocker_in_same_update(self):
+    def test_self_requested_task_can_wait_once_its_blocker_is_related(self):
         blocker = H.task_create(self.conn, CMO, 'Prepare the build environment', '', CMO)
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        after = H.task_update(self.conn, CMO, task['id'], status='waiting',
-                              blocked_by=blocker['id'], note='Needs the build environment')
-        self.assertEqual((after['status'], after['blocked_by']), ('waiting', blocker['id']))
+        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Needs the build environment')
+        self.assertEqual((after['status'], TR.blocker_ids(self.conn, task['id'])), ('waiting', [blocker['id']]))
         self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
         future = H.shift(H.now(), hours=48)
         self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
         self.assertEqual(H.sweep_stranded(self.conn, at=future), [])
         H.task_update(self.conn, CMO, blocker['id'], status='done')
-        self.assertIsNone(H.task(self.conn, task['id'])['blocked_by'])
+        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
         self.assertTrue(any('Unblocked:' in m['body'] for m in H._rows(
             self.conn.execute("SELECT body FROM messages WHERE to_actor=?", (CMO,)))))
 
     def test_removed_or_finished_blocker_does_not_justify_waiting(self):
         blocker = H.task_create(self.conn, CMO, 'Prepare the build environment', '', CMO)
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        H.task_update(self.conn, CMO, task['id'], blocked_by=blocker['id'])
-        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting', blocked_by='')
+        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
+        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by', remove=True)
+        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
         self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
+        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
         H.task_update(self.conn, CMO, blocker['id'], status='done')
-        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting', blocked_by=blocker['id'])
+        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
 
-    def test_invalid_dependency_cannot_enable_waiting(self):
+    def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
         for blocker in ('missing-task', task['id']):
             with self.assertRaises(H.Refused):
-                H.task_update(self.conn, CMO, task['id'], status='waiting', blocked_by=blocker)
-            self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
+                TR.relate(self.conn, CMO, task['id'], blocker, 'blocked_by')
+        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
 
     def test_private_blocker_still_requires_access(self):
         blocker = H.task_create(self.conn, SEO, 'Prepare a private report', '', SEO, private=True)
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        self.refused('not-found', H.task_update, self.conn, CMO, task['id'],
-                     status='waiting', blocked_by=blocker['id'])
-        self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
-        self.assertIsNone(H.task(self.conn, task['id'])['blocked_by'])
+        self.refused('not-found', TR.relate, self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
+        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
 
     def test_a_task_waiting_on_a_person_stays_waiting_and_counts_until_they_answer(self):
         H.status_set(self.conn, H.KEEPER, "cmo", state="idle")

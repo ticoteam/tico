@@ -54,17 +54,16 @@ def allowed(api, path, token):
     return status == 200
 
 
-def test_tasks_are_visible_through_sql_exactly_when_the_api_shows_them(api, seeded):
+def test_sql_shows_each_caller_exactly_what_the_api_does_and_refuses_a_reassigned_bot(api, seeded):
+    # One seeded world, three checks: building it is the expensive part.
     for name, token in actors(seeded).items():
         in_sql = sql_ids(api, "tasks", token)
         through_api = {tid for tid in seeded["tasks"] if allowed(api, "tasks/" + tid, token)}
         assert in_sql == through_api, name
-    for name in ("owner", "member", "person with a private room"):     # the list endpoint too, for people
-        listed = {t["id"] for t in get(api, "tasks?status=all", actors(seeded)[name])["tasks"]}
-        assert listed == sql_ids(api, "tasks", actors(seeded)[name]), name
+    listed = {t["id"] for t in get(api, "tasks?status=all", "ben-test")["tasks"]}      # the list endpoint too
+    assert listed == sql_ids(api, "tasks", "ben-test")
 
-
-def test_private_rooms_and_their_messages_are_visible_through_sql_exactly_when_the_api_shows_them(api, seeded):
+    # Private rooms and their messages.
     with api.app.state.store.read() as c:      # every conversation there is, whoever may read it
         every_room = {row[0] for row in c.execute("SELECT id FROM conversations")}
     assert set(seeded["rooms"]) <= every_room
@@ -77,8 +76,7 @@ def test_private_rooms_and_their_messages_are_visible_through_sql_exactly_when_t
         assert sql_ids(api, "conversations", token) == readable, name
         assert sql_ids(api, "messages", token) == message_ids, name
 
-
-def test_a_bot_whose_turn_was_reassigned_is_refused_by_both_doors(api, seeded):
+    # A bot whose turn was reassigned is refused by both doors.
     token = seeded["attempt"]["token"]
     assert query(api, "SELECT count(*) FROM tasks", token)["rows"]
     expire(api, seeded["attempt"]["id"])       # the first Mac stops renewing; the bot moves to another

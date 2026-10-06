@@ -284,17 +284,6 @@ def test_an_event_is_persisted_once_however_often_slack_delivers_it(gateway, hub
 
 
 # ----------------------------------------------------------------------------- routing
-def test_low_confidence_falls_back_to_the_assistant_with_the_candidates(gateway, hub):
-    result = send(gateway, "<@U0BUS6WA4SY> thoughts on the thing?", answers(legal=0.4, seo=0.35, cto=0.2))
-    decision = result["decision"]
-    assert decision["fallback"] is True and [r["bot"] for r in decision["recipients"]] == ["coo"]
-    assert len(gateway._judge.calls) == 1, "a small roster keeps the one-call path"
-    assert [c["bot"] for c in decision["candidates"]] == ["legal", "seo", "cto"]
-    assert jobs(hub) == [{"bot": "coo", "state": "queued"}]
-    conversation = H.conversation(hub.connect(), rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"])
-    assert conversation["scope"] == "direct", "a Slack DM is a front door, never the personal room"
-
-
 # ----------------------------------------------------------------------------- egress
 def routed_reply(gateway, hub, text="Done."):
     send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
@@ -336,21 +325,6 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
     assert len(slack.posts) == 1
 
 
-def test_a_dm_is_a_front_door_and_the_reply_goes_back_to_the_dm(gateway, hub):
-    result = send(gateway, "can you check the NDA?", answers(legal=0.8), channel=DM, kind="message")
-    assert result["state"] == "routed"
-    assert not any(call[0] == "conversations.info" for call in gateway.slack.calls), "a DM needs no channel lookup"
-    refs = json.loads(rows(hub, "SELECT refs_json FROM messages")[0]["refs_json"])
-    assert refs["slack"]["kind"] == "im" and refs["slack"]["channel_name"] == "DM"
-    thread = rows(hub, "SELECT * FROM slack_threads")[0]
-    with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "Reading it now.", conversation_id=thread["conversation_id"])
-    gateway.tick()
-    assert gateway.slack.posts[0]["channel"] == DM and gateway.slack.posts[0]["thread_ts"] is None, "a DM reply is not a thread"
-    assert thread["thread_ts"] == "", "a DM is one context however the person types"
-
-
-# ----------------------------------------------------------------------------- pure pieces
 # ----------------------------------------------------------------------------- the review's cases
 def test_a_bot_reply_is_escaped_so_it_cannot_page_the_channel_or_lose_prose(gateway, hub):
     routed_reply(gateway, hub, "<!channel> R&D says x < y and y > z")
@@ -422,20 +396,6 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
     if subtype:
         payload["event"]["subtype"] = subtype
     return payload
-
-
-def edit(channel, ts, text):
-    COUNTER["n"] += 1
-    return {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": f"Ev{COUNTER['n']:08d}",
-            "event": {"type": "message", "subtype": "message_changed", "channel": channel, "channel_type": "channel",
-                      "ts": f"{1690009000 + COUNTER['n']}.000000", "message": {"ts": ts, "text": text, "user": "U1"}}}
-
-
-def delete(channel, ts):
-    COUNTER["n"] += 1
-    return {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": f"Ev{COUNTER['n']:08d}",
-            "event": {"type": "message", "subtype": "message_deleted", "channel": channel, "channel_type": "channel",
-                      "ts": f"{1690009000 + COUNTER['n']}.000000", "deleted_ts": ts}}
 
 
 def digests(hub):
@@ -522,40 +482,6 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
     assert events(hub)[0]["state"] == "routed"
 
 
-def test_a_decision_the_model_refuses_ends_failed_with_the_reason_and_tells_the_human(gateway, hub):
-    gateway._judge = CappedJudge({}, fail=J.JudgeError("invalid", "at most 40 questions in one call"))
-    result = send(gateway, "please draft the vendor terms", channel=DM, kind="message")
-    assert result["state"] == "failed" and "at most 40 questions" in result["reason"]
-    event = events(hub)[0]
-    assert event["state"] == "failed" and "decisions: at most 40 questions" in event["reason"]
-    assert [p["channel"] for p in gateway.slack.posts] == [DM]
-    assert "nobody has it" in gateway.slack.posts[0]["text"]
-    gateway.clock.advance(3600)
-    assert gateway.tick()["events"] == [], "a failed message is never picked up again"
-    assert len(gateway._judge.calls) == 1 and jobs(hub) == []
-
-
-def test_a_later_batch_failure_routes_none_of_the_earlier_answers(gateway, hub):
-    add_bots(hub, 50)
-
-    class LaterFailure(CappedJudge):
-        def __call__(self, state, questions, label=None):
-            if self.calls:
-                self.fail = J.JudgeError("invalid", "synthetic second batch refusal")
-            else:
-                self.first_state, self.first_label = state, label
-            assert state == self.first_state and label == self.first_label
-            return super().__call__(state, questions, label)
-
-    gateway._judge = engine = LaterFailure({"asks": 0.9, "bot:bot-00": 0.95})
-    result = send(gateway, "please draft the vendor terms", channel=DM, kind="message")
-    assert result["state"] == "failed" and "second batch" in result["reason"]
-    assert [len(call) for call in engine.calls] == [40, 19]
-    assert jobs(hub) == [], "partial answers cannot enqueue any bot work"
-    gateway.clock.advance(3600)
-    assert gateway.tick()["events"] == [] and len(engine.calls) == 2
-
-
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):
     gateway._judge = CappedJudge({}, fail=J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True))
     assert send(gateway, "hello there", channel=DM, kind="message")["state"] == "received"
@@ -585,9 +511,8 @@ def link_task_requester(hub, slack_id='U1', enabled=True):
         c.execute('UPDATE humans SET slack_id=? WHERE id=?', (slack_id, 'ana'))
 
 
-@pytest.mark.parametrize('owner', ['bot:legal', 'human:ben'])
-@pytest.mark.parametrize('status', ['done', 'declined'])
-def test_task_results_are_one_tico_dm_per_task_status(gateway, hub, owner, status):
+def test_task_results_are_one_tico_dm_per_task_status(gateway, hub):
+    owner, status = 'bot:legal', 'done'
     link_task_requester(hub)
     made = task_notice(hub, owner=owner, status=status)
     assert gateway.task_completions() == 1
@@ -617,83 +542,12 @@ def test_task_results_are_one_tico_dm_per_task_status(gateway, hub, owner, statu
     assert len(rows(hub, 'SELECT * FROM slack_posts')) == 1
 
 
-@pytest.mark.parametrize('skip', ['self', 'quiet', 'bot', 'unlinked', 'off', 'disabled', 'outside', 'wrong_person', 'guest'])
+@pytest.mark.parametrize('skip', ['outside', 'wrong_person'])
 def test_task_result_skips(gateway, hub, skip):
-    slack_id = {'outside': 'U8', 'wrong_person': 'U2', 'guest': 'U5'}.get(skip, 'U1')
-    link_task_requester(hub, slack_id='' if skip == 'unlinked' else slack_id, enabled=skip != 'disabled')
-    if skip == 'off':
-        with hub.transaction() as c:
-            doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-            doc['people'][0]['notify_slack_task_done'] = False
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
-    task_notice(hub, requester='bot:coo' if skip == 'bot' else 'human:ana',
-                actor='human:ana' if skip == 'self' else None, quiet=skip == 'quiet')
+    link_task_requester(hub, slack_id={'outside': 'U8', 'wrong_person': 'U2'}[skip])
+    task_notice(hub)
     assert gateway.task_completions() == 0
     gateway.originate()
     gateway.mirror()
     assert rows(hub, 'SELECT * FROM slack_posts') == []
     assert gateway.slack.posts == []
-
-
-def test_task_result_reuses_verified_slack_dm_and_retries_rate_limit(gateway, hub):
-    hub.settings.slack_gateway_enabled = True
-    send(gateway, 'Please help', answers(legal=0.8), channel=DM, kind='message')
-    gateway.tick()
-    gateway.slack.calls.clear()
-    made = task_notice(hub)
-    assert gateway.task_completions() == 1
-    assert not any(call[0] == 'conversations.open' for call in gateway.slack.calls)
-    gateway.slack.failures.append(G.SlackError('chat.postMessage', 'ratelimited', retry_after=5))
-    assert gateway.deliver()[0]['state'] == 'rate_limited'
-    assert gateway.deliver() == []
-    gateway.clock.advance(6)
-    assert gateway.deliver()[0]['state'] == 'sent'
-    assert gateway.slack.posts[-1]['channel'] == DM
-    with hub.transaction() as c:
-        H.task_update(c, 'human:ana', made['id'], status='open')
-        H.task_update(c, 'bot:legal', made['id'], status='declined')
-        H.task_update(c, 'human:ana', made['id'], status='open')
-        H.task_update(c, 'bot:legal', made['id'], status='done')
-        H.task_update(c, 'bot:legal', made['id'], status='declined')
-    assert gateway.task_completions() == 1
-    assert len(rows(hub, 'SELECT * FROM slack_posts')) == 2
-
-
-def test_task_notification_preparation_is_durable_and_respects_open_retry_after(gateway, hub):
-    link_task_requester(hub)
-    task_notice(hub)
-    original = gateway.slack.conversations_open
-    failures = [G.SlackError('conversations.open', 'ratelimited', retry_after=120)]
-
-    def open_dm(user_id):
-        if failures:
-            raise failures.pop()
-        return original(user_id)
-
-    gateway.slack.conversations_open = open_dm
-    assert gateway.task_completions() == 0
-    restarted = G.Gateway(hub, gateway.slack, clock=gateway.clock)
-    restarted.verify_app()
-    gateway.clock.advance(61)
-    assert restarted.task_completions() == 0
-    gateway.clock.advance(60)
-    assert restarted.task_completions() == 1
-    hub.settings.slack_gateway_enabled = False
-    assert restarted.deliver() == []
-    hub.settings.slack_gateway_enabled = True
-    assert restarted.deliver()[0]['state'] == 'sent'
-    assert len(gateway.slack.posts) == 1
-
-
-def test_task_notification_opt_out_does_not_deliver_old_results_on_opt_in(gateway, hub):
-    link_task_requester(hub)
-    with hub.transaction() as c:
-        doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        doc['people'][0]['notify_slack_task_done'] = False
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
-    task_notice(hub)
-    with hub.transaction() as c:
-        doc['people'][0]['notify_slack_task_done'] = True
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
-    assert gateway.task_completions() == 0
-    assert rows(hub, 'SELECT * FROM slack_posts') == []

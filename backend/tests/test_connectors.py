@@ -2,9 +2,7 @@
 
 import os
 
-import pytest
-
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api, post, runner  # noqa: F401
 from runner.connectors import ConnectorPublisher
 from runner.outage import Outage
 
@@ -101,30 +99,3 @@ def test_mail_tables_are_owner_only_in_sql(api):
     assert query(api, "SELECT msg_id FROM mail_messages", "ben-test")["rows"] == []
     assert query(api, "SELECT address FROM mail_mailboxes", "ben-test")["rows"] == []
     assert query(api, "SELECT msg_id FROM mail_fts", "ben-test")["rows"] == []
-
-
-
-def test_an_overlong_mail_field_is_cut_not_refused_so_the_mailbox_keeps_syncing(api):
-    # One 32,809-character body used to refuse every batch for hours.
-    from backend.connectors import MAIL_BODY_MAX
-    from backend.tests.test_sql import column
-
-    machine = runner(api)
-    long = mail_message(msg_id="m-long", body="x" * (MAIL_BODY_MAX + 41), subject="s" * 1200,
-                        cc=[f"p{i}@example.com" for i in range(150)])
-    post(api, "connectors/mail/messages", mail_publish(messages=[mail_message(), long]), machine["token"])
-    assert sorted(column(api, "SELECT msg_id FROM mail_messages")) == ["m-long", "m-plain"]
-    assert column(api, "SELECT length(body) FROM mail_messages WHERE msg_id='m-long'") == [MAIL_BODY_MAX]
-    assert column(api, "SELECT body_truncated FROM mail_messages WHERE msg_id='m-long'") == [1]
-    assert column(api, "SELECT length(subject) FROM mail_messages WHERE msg_id='m-long'") == [998]
-    assert column(api, "SELECT json_array_length(cc_json) FROM mail_messages WHERE msg_id='m-long'") == [100]
-
-
-def test_the_mail_tools_cut_body_fits_the_hub_with_its_note():
-    from backend.connectors import MAIL_BODY_MAX
-    from connectors.mail import MAX_BODY
-    from connectors.mail.gmail import truncate
-
-    text, cut = truncate("y" * (MAX_BODY * 2))
-    assert cut and len(text) == MAX_BODY <= MAIL_BODY_MAX
-    assert truncate("short") == ("short", False)

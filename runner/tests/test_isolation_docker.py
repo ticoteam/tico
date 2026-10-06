@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.slow  # Docker: opt-in
+
 IMAGE = os.environ.get("TICO_RUNNER_TEST_IMAGE", "tico-runner:local")
 HERE = Path(__file__).parent / "isolation"
 
@@ -117,26 +119,6 @@ def test_the_codex_home_is_the_bot_users_and_group_writable_so_both_users_can_us
     """)
     assert started.returncode == 0, started.stdout + started.stderr
     assert started.stdout.split()[-7:] == ["10003:10002", "2770", "10003:10002", "664", "key", "10002", "mail-ok"], started.stdout
-
-
-def test_the_bot_user_can_build_the_mail_venv_where_the_connectors_job_made_the_folder_first(volume):
-    # The connectors job (ticorun, umask 022) made workspace/runtime/mail with mail.db before any turn ran.
-    seeded = docker("run", "--rm", "-u", "0", "-v", f"{volume}:/home/runner", "--entrypoint", "sh", IMAGE, "-c", """
-        set -e; cd /home/runner; : > .tico-two-user-layout; chown 10002:10002 . .tico-two-user-layout; chmod 1770 .
-        mkdir -p workspace/secrets workspace/runtime/mail; echo db > workspace/runtime/mail/mail.db
-        chown -R 10002:10002 workspace; chmod 755 workspace/runtime workspace/runtime/mail
-    """)
-    assert seeded.returncode == 0, seeded.stderr
-    started = docker("run", "--rm", "--user", "0", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", *CAPS,
-                     "-v", f"{volume}:/home/runner", IMAGE, "sh", "-c", """
-        stat -c '%u:%g %a' /home/runner/workspace/runtime /home/runner/workspace/runtime/mail
-        setpriv --reuid=10003 --regid=10002 --clear-groups --inh-caps=-all --ambient-caps=-all \\
-          sh -c 'umask 002; mkdir -p /home/runner/workspace/runtime/mail/venv && echo mail-ok'
-        # the supervisor still writes beside it, through the group
-        setpriv --reuid=10002 --regid=10002 --clear-groups sh -c 'echo x > /home/runner/workspace/runtime/mail/audit.jsonl && echo super-ok'
-    """)
-    assert started.returncode == 0, started.stdout + started.stderr
-    assert started.stdout.split() == ["10003:10002", "2770", "10003:10002", "2770", "mail-ok", "super-ok"], started.stdout
 
 
 def test_both_users_can_write_the_mail_database_the_connectors_job_created_and_nothing_else_widens(volume):

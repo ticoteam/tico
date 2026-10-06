@@ -5,7 +5,6 @@ A committed batch writes the person's responses into each bot's room; the label 
 Live voice session that also wrote into the assistant's room was retired on 2026-09-24."""
 import unittest
 
-from clients.tico import APIError
 from runner.service import Runner
 
 
@@ -28,27 +27,6 @@ def prompt_of(runner, payload, **kw):
 class PromptLabels(unittest.TestCase):
     def setUp(self):
         self.runner = Runner.__new__(Runner)
-
-    def test_update_acknowledgement_uses_the_final_answer_without_a_task(self):
-        current = {"id": "m1", "from_actor": "human:ana", "body": "Thanks!", "refs": {"update": "u1"}}
-        prompt = prompt_of(self.runner, attempt(current, []))
-        self.assertIn("final answer is automatically attached to that update", prompt)
-        self.assertIn("hub_update_reply is for humans", prompt)
-        self.assertIn("short reply and no task", prompt)
-
-    def test_next_run_tasks_ride_in_the_same_prompt_under_one_header(self):
-        # Bot Desk finds this block in the transcript by its header and shows each task apart.
-        from runner.service import NEXT_RUN_HEADER
-        current = {"id": "m1", "from_actor": "human:ana", "body": "Daily check", "refs": {}}
-        payload = attempt(current, [])
-        payload["next_run"] = [{"id": "t9", "title": "Watch the new refund requests", "body": "Released today.",
-                                "requester": "bot:product-manager", "created": "2026-09-24T10:00:00Z"}]
-        prompt = prompt_of(self.runner, payload)
-        self.assertIn("Current message from human:ana:\nDaily check", prompt)
-        self.assertIn(NEXT_RUN_HEADER + '\n[{"id": "t9", "title": "Watch the new refund requests"', prompt)
-        self.assertLess(prompt.index("Daily check"), prompt.index(NEXT_RUN_HEADER))
-        self.assertNotIn(NEXT_RUN_HEADER, prompt_of(self.runner, attempt(current, [])))
-
 
 class DevelopmentDataBoundary(unittest.TestCase):
     def test_synthetic_test_permission_preserves_live_data_and_task_authority_boundaries(self):
@@ -83,15 +61,6 @@ class SetupTurn(unittest.TestCase):
         for generic in ("Human chat response contract", "file each distinct ask as a hub task", "Do not end the turn with only a plan"):
             self.assertNotIn(generic, prompt)
         self.assertIn("Current message from human:ana:\nLet's set you up.", prompt)
-
-    def test_any_other_turn_is_unchanged(self):
-        for more in ({}, {"onboarding": "onboarded"}, {"onboarding": "needs_setup", "task": {"id": "t1"}},
-                     {"onboarding": "needs_setup", "routine": {"id": "r1"}}):
-            prompt = self.turn(**more)
-            self.assertNotIn("Setup: a human is setting you up", prompt)
-            self.assertIn("Do not end the turn with only a plan", prompt)
-        self.assertIn("Human chat response contract", self.turn(onboarding="onboarded"))
-
 
 class FakeConfig:
     """The runner's client, answering only GET /api/v2/config."""

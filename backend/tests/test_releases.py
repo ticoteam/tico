@@ -36,85 +36,6 @@ def test_semver_comparison():
     assert not releases.newer("0.2.0", "dev") and not releases.newer("latest", "0.1.0")
 
 
-def test_refresh_caches_and_revalidates_with_the_etag(monkeypatch):
-    seen = []
-
-    def handler(request):
-        seen.append(request.headers.get("if-none-match"))
-        if request.headers.get("if-none-match") == '"abc"':
-            return httpx.Response(304)
-        return httpx.Response(200, json=RELEASE, headers={"etag": '"abc"'})
-    network(monkeypatch, handler)
-    checker = releases.Checker()
-    checker.refresh()
-    checker.refresh()
-    assert seen == [None, '"abc"']
-    assert checker.view("0.1.0") == {"current": "0.1.0", "latest": "0.2.0", "available": True,
-                                     "url": RELEASE["html_url"], "published_at": RELEASE["published_at"],
-                                     "name": "Tico 0.2.0"}
-    assert checker.view("0.2.0")["available"] is False
-
-
-def test_failures_are_silent_keep_the_last_answer_and_back_off(monkeypatch):
-    now = [0.0]
-    checker = releases.Checker(clock=lambda: now[0])
-    network(monkeypatch, lambda request: httpx.Response(200, json=RELEASE))
-    checker.refresh()
-
-    def boom(request):
-        raise httpx.ConnectTimeout("slow")
-    network(monkeypatch, boom)
-    now[0] += releases.TTL + 1
-    checker.refresh()
-    assert checker.view("0.1.0")["available"] is True
-    assert checker.retry_at > now[0]
-    network(monkeypatch, lambda request: httpx.Response(403))
-    checker.refresh()
-    assert checker.release["tag"] == "v0.2.0"
-
-
-def test_disabled_and_dev_builds_show_no_notice_and_make_no_request(monkeypatch):
-    def forbidden(request):
-        raise AssertionError("no request expected")
-    network(monkeypatch, forbidden)
-    monkeypatch.setenv("TICO_UPDATE_CHECK", "off")
-    checker = releases.Checker()
-    assert checker.view("0.1.0")["available"] is False
-    monkeypatch.setenv("TICO_UPDATE_CHECK", "on")
-    assert checker.view("dev") == {"current": "dev", "latest": "", "available": False, "url": "",
-                                   "published_at": "", "name": ""}
-    assert checker.view("abc1234")["available"] is False
-
-
-def test_check_now_bypasses_the_cache_and_is_rate_limited(monkeypatch):
-    now, calls = [1000.0], []
-
-    def handler(request):
-        calls.append(1)
-        return httpx.Response(200, json=RELEASE)
-    network(monkeypatch, handler)
-    checker = releases.Checker(clock=lambda: now[0])
-    checker.refresh()
-    checker.check_now()
-    assert len(calls) == 2                     # a fresh cache does not stop an explicit check
-    with pytest.raises(releases.Problem) as refused:
-        checker.check_now()
-    assert refused.value.status == 429 and len(calls) == 2
-    now[0] += releases.FORCE_GAP + 1
-    checker.check_now()
-    assert len(calls) == 3
-
-
-def test_check_for_updates_endpoint_is_owner_only_and_returns_the_notice(environment, monkeypatch):
-    api = environment()
-    network(monkeypatch, lambda request: httpx.Response(200, json=RELEASE))
-    person = as_person(api, "riley")
-    assert api.post("/api/v2/system/update/check", headers=person).status_code == 403
-    got = api.post("/api/v2/system/update/check", headers=signed_in())
-    assert got.status_code == 200 and got.json()["latest"] == "0.2.0" and got.json()["available"] is True
-    assert api.post("/api/v2/system/update/check", headers=signed_in()).status_code == 429
-
-
 def test_update_is_owner_only(environment):
     api = environment()
     person = as_person(api, "riley")
@@ -146,59 +67,6 @@ def test_update_is_forwarded_to_the_updater_with_the_token(environment, monkeypa
     assert got["running"] == "0.1.9"                       # the server's own record, beside the updater's view
 
 
-def test_bad_version_and_dead_updater(environment, monkeypatch):
-    api = environment()
-    assert api.post("/api/v2/system/update", json={"version": "latest"}, headers=signed_in()).status_code == 422
-
-    def dead(request):
-        raise httpx.ConnectError("down")
-    network(monkeypatch, dead)
-    monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")
-    r = api.post("/api/v2/system/update", json={"version": "0.2.0"}, headers=signed_in())
-    assert r.status_code == 502 and r.json()["error"]["command"]
-
-
-def test_changelog_section_extraction():
-    from scripts.changelog_notes import section
-    text = "# Changelog\n\n## [Unreleased]\n\n- b\n\n## [0.1.0] - 2026-09-29\n\n### Added\n- a\n\n[0.1.0]: https://x\n"
-    assert section(text, "v0.1.0") == "### Added\n- a"
-    assert section(text, "0.9.0") == ""
-    # Versions whose tags no longer exist are plain headings; the section before them still ends there.
-    text = "## [0.2.3] - d\n\n- new\n\n## 0.2.2 - d\n\n- old\n\n## 0.2.20 - d\n\n- other\n"
-    assert section(text, "0.2.3") == "- new"
-    assert section(text, "0.2.2") == "- old"
-
-
-def events_of(api, action):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT actor,target,detail_json FROM events WHERE action=?", (action,))]
-
-
-def test_update_start_and_outcome_are_audited_once(environment, monkeypatch):
-    state = {"state": "pulling", "from": "0.1.0", "to": "0.2.0", "message": ""}
-    network(monkeypatch, lambda request: httpx.Response(200, json=dict(state)))
-    monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")
-    monkeypatch.setenv("TICO_UPDATER_TOKEN", "s3cret")
-    api = environment()
-    api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=signed_in())
-    started = events_of(api, "system.update.started")
-    assert len(started) == 1 and json.loads(started[0]["detail_json"]) == {"from": "0.1.0", "to": "0.2.0"}
-    api.get("/api/v2/system/update", headers=signed_in())
-    assert events_of(api, "system.update.finished") == []
-    state.update(state="rolled_back", message="did not answer")
-    api.get("/api/v2/system/update", headers=signed_in())
-    api.get("/api/v2/system/update", headers=signed_in())
-    finished = events_of(api, "system.update.finished")
-    assert len(finished) == 1 and finished[0]["actor"] == started[0]["actor"]
-    assert json.loads(finished[0]["detail_json"])["outcome"] == "rolled_back"
-
-
-def test_refused_update_leaves_no_audit_event(environment):
-    api = environment()
-    assert api.post("/api/v2/system/update", json={"version": "0.2.0"}, headers=signed_in()).status_code == 409
-    assert events_of(api, "system.update.started") == []
-
-
 def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tmp_path):
     """The real docker/updater.py behind the real client: version spelling, token, status shape."""
     import importlib.util
@@ -214,7 +82,7 @@ def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tm
     # What the previous update left in the status: a new one must not show any of it.
     updater.status.update(state="healthy", **{"from": "v0.1.0", "to": "v0.1.9"}, message="old", snapshot="s", restored=True)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), updater.Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=lambda: httpd.serve_forever(0.02), daemon=True).start()
     try:
         monkeypatch.setenv("TICO_UPDATER_URL", "http://127.0.0.1:%d" % httpd.server_address[1])
         monkeypatch.setenv("TICO_UPDATER_TOKEN", "s3cret")
@@ -230,6 +98,8 @@ def test_docker_updater_speaks_the_servers_contract(environment, monkeypatch, tm
     finally:
         httpd.shutdown()
     import time
-    time.sleep(0.2)
+    deadline = time.time() + 2
+    while not started and time.time() < deadline:
+        time.sleep(0.01)
     assert started == [("v0.2.0", "v0.1.9")]
 

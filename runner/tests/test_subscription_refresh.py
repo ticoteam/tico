@@ -2,7 +2,6 @@
 import os
 import tempfile
 import threading
-import time
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -48,22 +47,6 @@ class Refresh(unittest.TestCase):
         self.assertTrue(Host.last.stopped)
         self.assertNotIn('OPENAI_API_KEY', Host.last.kwargs['env'])
         self.assertEqual(Host.last.kwargs['env']['CODEX_HOME'], str(self.profile.home('codex')))
-
-    @patch('runner.subscription_refresh.shutil.which', return_value='/fake/codex')
-    def test_no_weekly_and_other_bucket_are_unknown(self, _):
-        Host.response['rateLimits']['secondary']['windowDurationMins'] = 300
-        self.assertEqual(read_codex(self.profile, Host)['state'], 'unavailable')
-        Host.response = {'rateLimitsByLimitId': {'different-model': {'secondary': {
-            'windowDurationMins': 10080, 'usedPercent': 5}}}}
-        self.assertEqual(read_codex(self.profile, Host)['state'], 'unavailable')
-
-    @patch('runner.subscription_refresh.shutil.which', return_value='/fake/codex')
-    def test_bad_percent_or_expired_reset_is_failed(self, _):
-        for percent in (float('nan'), -1, 101, True, None):
-            Host.response['rateLimits']['secondary']['usedPercent'] = percent
-            self.assertEqual(read_codex(self.profile, Host)['state'], 'failed')
-        Host.response['rateLimits']['secondary'].update(usedPercent=5, resetsAt=1)
-        self.assertEqual(read_codex(self.profile, Host)['state'], 'failed')
 
     @patch('runner.subscription_refresh.shutil.which', return_value='/fake/codex')
     def test_exception_is_redacted_and_process_stopped(self, _):

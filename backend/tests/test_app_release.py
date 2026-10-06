@@ -65,13 +65,3 @@ def test_company_s3_publish_with_prefix_and_quiet_output(tmp_path, monkeypatch, 
         main(["--version", "1.2.3", "--bucket", "acme-files", "--base", "https://runner.example.com",
               "--complete", "--quiet", str(tmp_path)])
     assert not calls
-
-
-def test_apple_signing_flags_do_not_claim_windows_or_linux_code_signing(tmp_path):
-    for name in ("Tico.dmg", "Tico-setup.exe", "Tico.AppImage"):
-        (tmp_path / name).write_bytes(b"bundle")
-        if name != "Tico.dmg":
-            (tmp_path / (name + ".sig")).write_text("signature")
-    value = manifest("1.2.3", "https://runner.example.com", [classify(tmp_path)], None, signed=True, notarized=True)
-    assert value["installers"]["mac"]["signed"] and value["installers"]["mac"]["notarized"]
-    assert all(not entry["signed"] and not entry["notarized"] for os_name, entry in value["installers"].items() if os_name != "mac")

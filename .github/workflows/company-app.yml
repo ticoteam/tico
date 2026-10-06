@@ -24,7 +24,7 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
-    # Do not cache branded binaries into caches a generic public build could restore.
+    # Do not cache branded binaries into caches a generic public build could restore (the cache step only restores).
     runs-on: ${{ matrix.os }}
     env:
       TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
@@ -41,6 +41,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # Restores the generic desktop build's cache (dependencies and the Tauri CLI) and never saves: branded
+      # build output must not reach a cache a public build could restore. The app crate itself always recompiles,
+      # since its build script reruns when the company identity in the environment changes.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app
+          shared-key: desktop
+          save-if: false
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |

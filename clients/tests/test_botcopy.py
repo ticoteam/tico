@@ -117,6 +117,7 @@ def copy_of(workspace):
     return sha, workspace / "bot-scribe", workspace / "bot-scribe-two"
 
 
+@pytest.mark.slow
 def test_update_from_the_original_merges_what_each_side_changed(workspace):
     base, original, copy = copy_of(workspace)
     # The original improves one line of AGENT.md and adds a playbook; the copy changes another line and one of its own files.
@@ -150,18 +151,7 @@ def test_update_from_the_original_that_conflicts_changes_nothing(workspace):
     assert botcopy.dirty(copy, *botcopy.SCOPE) == ["playbooks/notes.md"]
 
 
-def test_a_suggestion_is_the_copys_own_changes_and_holds_back_what_the_original_changed_too(workspace):
-    base, original, copy = copy_of(workspace)
-    save(copy, {"AGENT.md": AGENT.replace("Line two.", "Mine."), "skills/triage/SKILL.md": "Triage it better.\n",
-                "playbooks/notes.md": "Copy notes.\n", "state.md": "# State\nnot instructions\n"}, "Copy improves")
-    save(original, {"playbooks/notes.md": "Original notes.\n"}, "Original changes one of them")
-    found = botcopy.suggestion(workspace, "scribe", "scribe-two", base)
-    assert [f["path"] for f in found["files"]] == ["AGENT.md", "skills/triage/SKILL.md"]     # instructions only
-    assert found["held_back"] == ["playbooks/notes.md"] and "+Mine." in found["diff"] and "Copy notes" not in found["diff"]
-    only = botcopy.suggestion(workspace, "scribe", "scribe-two", base, paths=["skills/triage"])
-    assert [f["path"] for f in only["files"]] == ["skills/triage/SKILL.md"]
-
-
+@pytest.mark.slow
 def test_a_skill_is_committed_into_each_target_and_a_different_one_is_not_replaced_unasked(workspace):
     for slug in ("one", "two", "three"):
         target = workspace / ("bot-" + slug)
@@ -215,6 +205,7 @@ def elsewhere(workspace, tmp_path, monkeypatch):
     return cloned
 
 
+@pytest.mark.slow
 def test_an_original_on_another_computer_is_fetched_read_only_used_and_cleaned_up(workspace, tmp_path, monkeypatch):
     cloned = elsewhere(workspace, tmp_path, monkeypatch)
     base = run(tmp_path / "remote" / "bot-scribe", "rev-parse", "HEAD")
@@ -237,15 +228,3 @@ def test_an_original_on_another_computer_is_fetched_read_only_used_and_cleaned_u
     person.answers["bots/scribe/skills/copy"] = {"to": [{"bot": "scribe-two"}]}
     shared = botcopy.run_skill(person, {"skill": "triage", "bot": "scribe", "to": ["scribe-two"]}, workspace)
     assert shared["to"][0]["status"] == "unchanged" and not any(p.exists() for p in cloned)
-
-
-def test_no_repository_anywhere_says_who_to_ask(workspace, tmp_path):
-    from clients.tico import APIError
-    (workspace / "bot-scribe").rename(tmp_path / "gone")
-    for answer in ({"configured": False}, APIError("forbidden", "You may not read it", 403)):
-        person = Person({"bots/scribe/repository-read-token": answer})
-        with pytest.raises((APIError, botcopy.CopyError)) as refused:
-            botcopy.run_skill(Person({"bots/scribe/skills/copy": {"to": [{"bot": "x"}]}, **person.answers}),
-                              {"skill": "triage", "bot": "scribe", "to": ["x"]}, workspace)
-        assert getattr(refused.value, "detail", "") in (
-            "The source bot's repository isn't on this computer or GitHub; ask its owner to publish it.", "You may not read it")

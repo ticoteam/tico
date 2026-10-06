@@ -72,6 +72,7 @@ version bump when it changes what a bot does with the answer.
 | `slack-route` | a DM or @Tico: does it ask, is it a reply, does it name a bot; the gateway adds one noul per active bot | the Slack gateway, every accepted message |
 | `listening-card` | a fetched public card's likely owner opportunity, competitor move and impact | Listening's competitor sweep and Reddit/X mention checks |
 | `listening-item` | one saved post: an independent probability per category (market, content, lead, creator, partner), so a post can go to several inboxes, and `vendor_pitch`, which keeps a vendor's promotion out of leads | `hub listening decide`, which stores the scores and routes by the destinations in the company's `registry/listening.yaml` |
+| `learnings-route` | one item of the day's activity: is it learnable; the run adds one relevance noul per recipient | the nightly learning run (`backend/learnings.py`) |
 | `reply-intent` | an ambiguous inbound SMS or email reply's explicit intent | Response Rate's read-only scorecards |
 
 Adding a set is a pull request here: the file, a line in this table, and the change in the

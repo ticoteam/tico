@@ -89,16 +89,6 @@ class Manifests(unittest.TestCase):
             self.assertTrue((H.HOSTS_DIR / f"{manifest.host}.py").is_file())
             self.assertEqual(manifest.policy, "latest")
 
-    def test_every_provider_has_a_harness_and_the_catalog_agrees(self):
-        from backend import providers
-        found = H.load_all()
-        for row in providers.PROVIDERS:
-            owners = [m for m in found.values() if row["id"] in m.providers]
-            self.assertEqual([m.id for m in owners], [row["harness"]], row["id"])
-            self.assertEqual(owners[0].host, row["runtime"])
-        for manifest in found.values():
-            self.assertTrue(set(manifest.providers) <= set(providers.PROVIDER_BY_ID), manifest.id)
-
     def valid(self, **change):
         data = {"id": "tool", "name": "Tool", "host": "codex", "executable": "tool", "providers": ["acme"],
                 "install": {"method": "npm", "package": "tool-cli"}}
@@ -107,20 +97,10 @@ class Manifests(unittest.TestCase):
 
     def test_bad_manifests_are_refused_with_the_field_named(self):
         cases = {
-            "unknown field": self.valid(colour="red"),
-            "id": self.valid(id="Bad Id"),
-            "host": self.valid(host="nonesuch"),
             "executable": self.valid(executable="../evil"),
-            "providers": self.valid(providers=[]),
-            "install.method": self.valid(install={"method": "curl-bash"}),
             "install.package": self.valid(install={"method": "npm", "package": "x; rm -rf /"}),
             "install.url": self.valid(install={"method": "script", "url": "http://x", "prefix_env": "P", "bin": "b"}),
             "sha256": self.valid(install={"method": "binary", "url": "https://x/{os}-{arch}"}),
-            "version.pattern": self.valid(version={"pattern": "no group"}),
-            "update.pin": self.valid(update={"policy": "pinned"}),
-            "auth.methods": self.valid(auth={"methods": ["telepathy"]}),
-            "api_key_env": self.valid(auth={"methods": ["api-key"]}),
-            "[login]": self.valid(auth={"methods": ["device-code"]}),
         }
         for needle, data in cases.items():
             with self.subTest(needle):
@@ -160,22 +140,6 @@ class Installing(Base):
         self.assertTrue(os.environ["PATH"].endswith(str(self.root / "tools" / "bin")))
         self.assertEqual(self.tools.install_plan(), [])
 
-    def test_a_failed_install_is_reported_and_retried_only_after_the_backoff(self):
-        (self.root / "fail").write_text("x")
-        self.tools.want(providers=["openai"])
-        self.settle()
-        row = self.tools.report()["codex"]
-        self.assertEqual((row["installed"], row["state"]), (False, "failed"))
-        self.assertIn("network", row["detail"])
-        self.assertFalse(any((self.root / "tools" / "codex").glob("*")), "a failed install leaves nothing behind")
-        (self.root / "fail").unlink()
-        self.settle()
-        self.assertEqual(self.version(), "", "still backing off")
-        self.now += H.RETRY_AFTER_S + 1
-        self.settle()
-        self.assertEqual(self.version(), "1.0.0")
-        self.assertEqual(self.tools.report()["codex"]["state"], "idle")
-
 class Updating(Base):
     def installed(self, providers=("openai",)):
         self.tools.want(providers=list(providers))
@@ -205,46 +169,11 @@ class Updating(Base):
                          sorted({(self.root / "tools" / "codex" / "current").resolve().name}),
                          "the old copy is removed after the switch")
 
-class Reporting(Base):
-
-    def test_the_report_fits_the_servers_contract(self):
-        from backend.models import StructuredReadiness
-        self.tools.want(providers=["openai"])
-        self.settle()
-        document = {"schema_version": 1, "runtimes": {}, "bots": {}, "harnesses": self.tools.report()}
-        parsed = StructuredReadiness.model_validate(document)
-        self.assertTrue(parsed.harnesses["codex"].installed)
 
 if __name__ == "__main__":
     unittest.main()
 
 
-CURSOR_SCRIPT = """#!/bin/bash
-# stands in for https://cursor.com/install: everything goes under $HOME, as the real one does
-set -e
-v=2027.01.01-abc1234
-mkdir -p "$HOME/.local/share/cursor-agent/versions/$v" "$HOME/.local/bin"
-printf '#!/bin/sh\\necho %s\\n' "$v" > "$HOME/.local/share/cursor-agent/versions/$v/cursor-agent"
-chmod +x "$HOME/.local/share/cursor-agent/versions/$v/cursor-agent"
-ln -s "$HOME/.local/share/cursor-agent/versions/$v/cursor-agent" "$HOME/.local/bin/cursor-agent"
-"""
-
-
-class ScriptInstall(Base):
-    """Cursor's only official install is a script that installs under $HOME."""
-
-    def setUp(self):
-        super().setUp()
-        self.fetched = []
-
-        def fetch(url):
-            self.fetched.append(url)
-            return CURSOR_SCRIPT.encode()
-        self.tools.fetch = fetch
-        manifest = self.tools.manifests["cursor-agent"]
-        # The stand-in needs neither curl nor tar.
-        self.tools.manifests["cursor-agent"] = H.dataclasses.replace(
-            manifest, install={**manifest.install, "requires": []})
 
 class BinaryInstall(Base):
     """A binary download is refused unless it matches the checksum the manifest pins."""

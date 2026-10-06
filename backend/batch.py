@@ -51,7 +51,7 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute("SELECT * FROM tasks WHERE parent_id=? AND owner=? AND status IN ('open','doing','waiting','review','ready') "
+    return H._rows(c.execute("SELECT * FROM tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner=? AND status IN ('open','doing','waiting','review','ready') "
                              "ORDER BY created", (task_id, owner)))
 
 

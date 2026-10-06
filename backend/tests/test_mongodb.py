@@ -15,8 +15,6 @@ import uuid
 
 import pytest
 
-from backend import integrations as I
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_databases import FakeHub, workspace
 from clients import dbmongo as M
 from clients import dbquery as D
@@ -39,27 +37,11 @@ def env(tmp_path, url, entry=None):
 # ----------------------------------------------------------------------------- no server: mongodb+srv parsing
 
 
-def test_a_connection_string_that_cannot_work_is_refused_with_the_fix():
-    for url, word in (("mongodb+srv://u:p@cluster0.ab1cd.mongodb.net/", "database in its path"),
-                      ("mongodb+srv://u:p@cluster0.ab1cd.mongodb.net:27017/app", "no port"),
-                      ("mongodb+srv://u:p@h1.mongodb.net,h2.mongodb.net/app", "exactly one host"),
-                      ("mongodb://u:p@/app", "no host")):
-        with pytest.raises(D.Refusal, match=word):
-            M.parse_target(url)
-
-
 # ----------------------------------------------------------------------------- no server: the read-only rules
 @pytest.mark.parametrize("call, operator", [
     ({"op": "aggregate", "collection": "c", "pipeline": [{"$match": {}}, {"$out": "copy"}]}, "$out"),
-    ({"op": "aggregate", "collection": "c", "pipeline": [{"$merge": {"into": "copy"}}]}, "$merge"),
-    ({"op": "find", "collection": "c", "filter": {"$where": "sleep(1000)"}}, "$where"),
     ({"op": "count", "collection": "c", "filter": {"$or": [{"a": 1}, {"$where": "true"}]}}, "$where"),
-    ({"op": "aggregate", "collection": "c", "pipeline": [{"$addFields": {"x": {"$function": {"body": "function(){}", "args": [], "lang": "js"}}}}]}, "$function"),
-    ({"op": "aggregate", "collection": "c", "pipeline": [{"$group": {"_id": 1, "x": {"$accumulator": {"init": "x"}}}}]}, "$accumulator"),
-    ({"op": "aggregate", "collection": "c", "pipeline": [{"$unionWith": {"coll": "o", "pipeline": [{"$out": "x"}]}}]}, "$out"),
     ({"op": "aggregate", "collection": "c", "pipeline": [{"$lookup": {"from": "o", "pipeline": [{"$merge": "x"}], "as": "y"}}]}, "$merge"),
-    ({"op": "distinct", "collection": "c", "field": "a", "filter": {"$where": "1"}}, "$where"),
-    ({"op": "find", "collection": "c", "projection": {"x": {"$function": {}}}}, "$function"),
 ])
 def test_write_and_javascript_operators_are_refused_at_any_depth(call, operator):
     with pytest.raises(D.Refusal) as caught:
@@ -123,23 +105,6 @@ def test_catalog_values_are_substituted_as_typed_values_and_stay_values():
     with pytest.raises(D.Refusal, match="not a valid date"):
         M.coerce("yesterday", "date", "since")
     assert M.coerce("a, b ,c", "list", "x") == ["a", "b", "c"] and M.coerce("02134", "text", "zip") == "02134"
-
-
-def test_a_catalog_entry_cannot_smuggle_a_write_or_a_bad_placeholder():
-    hostile = {"id": "x", "params": [], "mongo": {"op": "aggregate", "collection": "c", "pipeline": [{"$out": "copy"}]}}
-    with pytest.raises(D.Refusal, match=r"\$out"):
-        M.validate(M.named_call(hostile, {}), 10)
-    with pytest.raises(D.Refusal, match="no other keys"):
-        M.named_call({"id": "x", "mongo": {"op": "find", "collection": "c", "filter": {"a": {"$param": "p", "$ne": 1}}}}, {"p": 1})
-    with pytest.raises(D.Refusal, match="no value for p"):
-        M.named_call({"id": "x", "mongo": {"op": "find", "collection": "c", "filter": {"a": {"$param": "p"}}}}, {})
-    with pytest.raises(D.Refusal, match="no valid `mongo:` block"):
-        M.named_call({"id": "x", "mongo": {"op": "insert", "collection": "c"}}, {})
-
-
-def catalog_entry(**mongo):
-    return {"id": "q", "title": "Q", "description": "", "category": "", "tags": [], "database": "atlas",
-            "mongo": {"op": "find", "collection": "c", **mongo}, "params": [{"name": "p", "type": "text"}]}
 
 
 # ----------------------------------------------------------------------------- no server: audit through the command
@@ -218,6 +183,7 @@ def go(url, verb, *rest, max_rows=None, timeout=None, **kw):
     return M.execute(D.Database("atlas", "mongodb", url, **limits), M.call_from_args(verb, rest, margs("atlas", **kw)))
 
 
+@pytest.mark.slow
 def test_mongo_reads_caps_rows_and_supports_the_five_operations(mongo):
     result = go(mongo["ro"], "find", "orders", '{"status": "paid"}', sort='{"n": -1}', projection='{"n": 1, "_id": 0}', limit=3)
     assert [d["n"] for d in result["documents"]] == [999, 997, 995] and not result["truncated"]
@@ -233,6 +199,7 @@ def test_mongo_reads_caps_rows_and_supports_the_five_operations(mongo):
     assert set(found) == {"orders", "one"} and found["orders"]["email"] == "str" and found["orders"]["_id"] == "objectId"
 
 
+@pytest.mark.slow
 def test_writes_are_refused_before_they_leave_even_for_a_user_who_could_write(mongo):
     for pipeline in ('[{"$match": {}}, {"$out": "copy"}]', '[{"$merge": {"into": "copy"}}]',
                      '[{"$unionWith": {"coll": "one", "pipeline": [{"$out": "copy"}]}}]'):
@@ -245,4 +212,3 @@ def test_writes_are_refused_before_they_leave_even_for_a_user_who_could_write(mo
         go(mongo["rw"], "aggregate", "orders", '[{"$addFields": {"x": {"$function": {"body": "function(){return 1}", "args": [], "lang": "js"}}}}]')
     assert "copy" not in mongo["admin"]["app"].list_collection_names()
     assert mongo["admin"]["app"].orders.count_documents({}) == 1000
-

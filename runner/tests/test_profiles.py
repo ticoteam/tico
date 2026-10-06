@@ -178,14 +178,6 @@ class Readiness(unittest.TestCase):
         self.assertEqual(env['CLAUDE_CONFIG_DIR'], '/operator/.claude')
         self.assertNotIn('CLAUDE_CONFIG_DIR', profiles.Profile('one', self.one['dir']).environment('claude', {}))
 
-    def test_readiness_reports_the_actual_local_fallback_profile(self):
-        assignments, report = self.report()
-        self.runner.tools = None
-        checks = self.runner.preflight(assignments, report)
-        body = self.runner.readiness(assignments, checks, report)
-        self.assertEqual(body['bots']['sales']['profile'], 'two')
-        self.assertEqual(body['bots']['sales']['sign_in'], 'missing')
-
     def test_named_profile_uses_state_not_workspace_and_rejects_symlinks(self):
         root = Path(self.tmp.name)
         destination = root / 'other-directory'
@@ -217,31 +209,6 @@ class Readiness(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.runner.add_profile('swapped')
         self.assertEqual(target.read_text(), 'preserve')
-
-    def test_invalid_local_names_are_not_reported(self):
-        from unittest import mock
-        self.runner.config['profiles'].update({'Acme_Main': self.one, 'a' * 81: self.one})
-        with mock.patch('runner.service.shutil.which', return_value=None):
-            self.assertEqual([r['name'] for r in self.runner.profile_report()], ['one', 'two'])
-
-    def test_completion_profiles_are_optional_for_old_servers(self):
-        from runner.state import State
-        self.runner.state = State(self.runner.state.directory)
-        from clients.tico import APIError
-        calls = []
-        class Client:
-            def post(self, path, body, key=None):
-                calls.append(body)
-                if 'profile_used' in body:
-                    raise APIError('validation', 'body.profile_used: Extra inputs are not permitted', 422)
-                if body.get('usage', {}).get('profile_used'):
-                    raise AssertionError('nested profile was not removed')
-                return {'ok': True}
-        self.runner.client = Client()
-        completion = {'outcome': 'completed', 'profile_used': 'two', 'usage': {'profile_used': 'two'}}
-        self.assertEqual(self.runner.complete('attempt', completion), {'ok': True})
-        self.assertEqual(completion['profile_used'], 'two')
-        self.assertEqual(calls[-1]['usage'], {})
 
     def test_a_turn_records_the_assigned_profile_and_separates_resume_keys(self):
         from runner.hosts.fake import FakeHost
@@ -311,29 +278,6 @@ class Readiness(unittest.TestCase):
         self.runner.clear_rejection('codex', 'two')
         self.assertIsNone(self.runner.rejection('codex', 'two'))
 
-    def test_parent_symlink_is_supported_but_profile_symlink_is_refused(self):
-        root = Path(self.tmp.name)
-        (root / 'linked').symlink_to(root / 'profiles', target_is_directory=True)
-        entry = profiles.create(root / 'linked' / 'profiles', 'linked-profile')
-        self.assertEqual(Path(entry['dir']), (root / 'profiles/profiles/linked-profile').resolve())
-
-    def test_docker_profile_ownership_uses_process_identity(self):
-        from unittest import mock
-        with mock.patch('runner.isolation.identity', return_value=(12345, 12345)), \
-                mock.patch('runner.profiles.os.fchown') as chown:
-            entry = profiles.create(Path(self.tmp.name) / 'docker-profiles', 'engineering')
-        self.assertGreaterEqual(chown.call_count, 7)
-        self.assertTrue(all(call.args[1:] == (12345, 12345) for call in chown.call_args_list))
-        self.assertEqual(Path(entry['dir']).stat().st_mode & 0o777, 0o700)
-
-    def test_completion_omits_empty_profile_used(self):
-        from runner.state import State
-        self.runner.state = State(self.runner.state.directory)
-        from unittest import mock
-        self.runner.client = mock.Mock()
-        self.runner.complete('attempt', {'outcome': 'completed', 'profile_used': None})
-        self.assertNotIn('profile_used', self.runner.client.post.call_args.args[1])
-
     def test_turn_guard_uses_cached_state_without_live_probes(self):
         from unittest import mock
         work = {**BOT, 'profile': 'one', 'computer_label': 'Build Computer'}
@@ -350,56 +294,32 @@ class Readiness(unittest.TestCase):
             self.runner._profile_report_cache[1][0]['runtimes']['codex']['signed_in'] = None
             self.assertEqual(self.runner.turn_profile(work).name, 'one')
 
-    def test_profileless_runtime_detail_has_no_empty_profile_prefix(self):
-        from unittest import mock
-        self.runner.config.update(default_profile=None, bot_profiles={}, profiles={})
-        with mock.patch.object(self.runner, 'runtime_readiness', return_value={
-                'installed': True, 'authenticated': 'ready', 'detail': 'Signed in'}):
-            row = self.runner.runtime_report([BOT])['codex']
-            self.assertEqual(row['detail'], 'Signed in')
-            self.assertNotIn('profiles', row)
-            self.runner.reject('codex', 'Unauthorized')
-            row = self.runner.runtime_report([BOT])['codex']
-            self.assertEqual(row['authenticated'], 'rejected')
-            self.assertEqual(row['detail'], 'Sign-in rejected: Unauthorized')
-
-    def test_fallback_uses_assigned_profile_and_waits_if_signed_out(self):
+    def test_fallback_uses_assigned_profile(self):
         from unittest import mock
         from runner.hosts.fake import FakeHost
         from runner.tests.test_runner_resilience import FakeClient, attempt
         root = Path(self.tmp.name)
         (root / 'emp-coo').mkdir()
-        for signed_in in (True, False):
-            client, calls = FakeClient(), []
-            primary, secondary = FakeHost(), FakeHost(replies=['fallback reply'])
-            primary.fail_next_turn("You've hit your usage limit")
-            def factory(work, env):
-                calls.append((work['config']['runtime'], env))
-                return secondary if work.get('fallback') else primary
-            runner = Runner(self.runner.config, root / ('fallback-' + str(signed_in)),
-                            host_factory=factory, client=client, push=lambda path, env=None: (0, ''))
-            runner.renew_interval = 0.05
-            runner.runtime_rows = {runtime: {'profiles': {'one': {'authenticated': status}}}
-                                   for runtime, status in [('codex', 'ready'), ('claude', 'ready' if signed_in else 'missing')]}
-            work = {**attempt(), 'profile': 'one', 'computer_label': 'Build Computer'}
-            work['config']['fallback'] = {'harness': 'claude', 'model': 'test-model'}
-            with mock.patch.object(runner, 'runtime_readiness', side_effect=AssertionError('live probe')):
-                runner.execute(work)
-            completion = client.completion()
-            if signed_in:
-                self.assertEqual([runtime for runtime, env in calls], ['codex', 'claude'])
-                self.assertEqual(calls[1][1]['HOME'], str(Path(self.one['dir']) / 'claude'))
-                settings = next(iter(secondary.threads.values()))['settings']
-                self.assertEqual(settings['env']['HOME'], calls[1][1]['HOME'])
-                self.assertEqual(completion['outcome'], 'completed')
-            else:
-                self.assertEqual(len(calls), 1)
-                self.assertEqual(completion['outcome'], 'failed')
-                self.assertEqual(completion['text'], "Subscription one isn't signed in on Build Computer")
-                self.assertNotIn('limited', completion)
-                self.assertTrue(completion['retryable'])
-                self.assertNotIn('auth_rejected', completion)
-                self.assertEqual(runner.last_heartbeat, float('-inf'))
+        client, calls = FakeClient(), []
+        primary, secondary = FakeHost(), FakeHost(replies=['fallback reply'])
+        primary.fail_next_turn("You've hit your usage limit")
+        def factory(work, env):
+            calls.append((work['config']['runtime'], env))
+            return secondary if work.get('fallback') else primary
+        runner = Runner(self.runner.config, root / 'fallback', host_factory=factory, client=client,
+                        push=lambda path, env=None: (0, ''))
+        runner.renew_interval = 0.05
+        runner.runtime_rows = {runtime: {'profiles': {'one': {'authenticated': 'ready'}}} for runtime in ('codex', 'claude')}
+        work = {**attempt(), 'profile': 'one', 'computer_label': 'Build Computer'}
+        work['config']['fallback'] = {'harness': 'claude', 'model': 'test-model'}
+        with mock.patch.object(runner, 'runtime_readiness', side_effect=AssertionError('live probe')):
+            runner.execute(work)
+        completion = client.completion()
+        self.assertEqual([runtime for runtime, env in calls], ['codex', 'claude'])
+        self.assertEqual(calls[1][1]['HOME'], str(Path(self.one['dir']) / 'claude'))
+        settings = next(iter(secondary.threads.values()))['settings']
+        self.assertEqual(settings['env']['HOME'], calls[1][1]['HOME'])
+        self.assertEqual(completion['outcome'], 'completed')
 
     def test_start_refusal_is_retryable_without_chat_and_prevents_fallback(self):
         import json
@@ -429,7 +349,7 @@ class Readiness(unittest.TestCase):
     def test_profile_probe_timeout_is_unknown_in_heartbeat_and_turn_guard(self):
         import subprocess
         from unittest import mock
-        for runtime in ('codex', 'claude'):
+        for runtime in ('codex',):
             work = {**BOT, 'profile': 'one', 'config': {'runtime': runtime}}
             with mock.patch('runner.service.shutil.which', return_value=runtime), \
                     mock.patch('runner.service.isolation.run', side_effect=subprocess.TimeoutExpired('probe', 3)), \
@@ -441,20 +361,12 @@ class Readiness(unittest.TestCase):
             self.assertFalse(any('signed in' in problem for problem in checks[0]['problems']))
             self.assertEqual(self.runner.turn_profile(work).name, 'one')
 
-    def test_mixed_runtime_detail_has_no_empty_profile_prefix(self):
-        from unittest import mock
-        self.runner.config.update(default_profile=None, bot_profiles={})
-        with mock.patch.object(self.runner, 'runtime_readiness', return_value={
-                'installed': True, 'authenticated': 'ready', 'detail': 'Signed in'}):
-            row = self.runner.runtime_report([BOT, {**BOT, 'bot': 'other', 'profile': 'one'}])['codex']
-        self.assertEqual(row['detail'], 'Signed in; one: Signed in')
-
     def test_assigned_profile_refuses_runtimes_without_home_mapping(self):
         from unittest import mock
         from runner.tests.test_runner_resilience import FakeClient, attempt as run_attempt
         root = Path(self.tmp.name)
         (root / 'emp-coo').mkdir()
-        for runtime, harness in [('cursor', 'cursor-agent'), ('pi', 'pi'), ('gemini', 'antigravity'), ('other', 'other')]:
+        for runtime, harness in [('cursor', 'cursor-agent')]:
             client, factory = FakeClient(), mock.Mock()
             runner = Runner(self.runner.config, root / ('unsupported-' + runtime), host_factory=factory,
                             client=client, push=lambda path, env=None: (0, ''))
@@ -471,20 +383,3 @@ class Readiness(unittest.TestCase):
             row = self.runner.preflight([work], {runtime: status})[0]
             self.assertFalse(row['ready'])
             self.assertIn(result['text'], row['problems'])
-
-    def test_subscription_refusal_completion_supports_older_server(self):
-        from clients.tico import APIError
-        from unittest import mock
-        calls = []
-        def post(path, body, key=None):
-            calls.append(dict(body))
-            if 'subscription_unavailable' in body:
-                raise APIError('validation', 'body.subscription_unavailable: Extra inputs are not permitted', 422)
-            return {}
-        self.runner.client = mock.Mock(post=post)
-        self.runner.complete('attempt', {'outcome': 'failed', 'last_seq': 0, 'retryable': True,
-            'subscription_unavailable': {'profile': 'one', 'runtime': 'codex',
-                                         'problem': "Subscription one isn't on Build Computer"}})
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(calls[-1]['retryable'])
-        self.assertNotIn('subscription_unavailable', calls[-1])

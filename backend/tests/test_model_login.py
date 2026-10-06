@@ -55,18 +55,3 @@ def test_nothing_token_like_is_stored_or_shown(api):
     assert shown["url"] == "" and shown["code"] == ""            # http and free text are refused
     assert "Enter code AB12-CD345" in shown["lines"]
     assert "\x1b" not in dump
-
-
-def test_operator_and_admin_can_manage_signin_on_allowed_computers(api):
-    r = runner(api, operator="cara")
-    ready(api, r, [])
-    base = f"runners/{r['runner_id']}/logins"
-    lid = post(api, base, {"runtime": "claude", "profile": "engineering"}, token="cara-test")["id"]
-    assert get(api, f"{base}/{lid}", token="cara-test")["profile"] == "engineering"
-    report(api, r, lid, state="waiting")
-    post(api, f"{base}/{lid}/code", {"code": "example-code"}, token="cara-test")
-    post(api, f"{base}/{lid}/cancel", {}, token="cara-test")
-    admin_login = post(api, base, {"runtime": "codex", "profile": "admin-profile"}, token="ben-test")
-    assert get(api, f"{base}/{admin_login['id']}", token="ben-test")["state"] == "requested"
-    other = online(api)
-    post(api, f"runners/{other['runner_id']}/logins", {"runtime": "codex"}, token="cara-test", expected=403)

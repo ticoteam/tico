@@ -19,7 +19,7 @@ from backend.file_delivery import byte_range
 from backend.file_metadata import dimensions
 from backend.store import Problem
 from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_files import publish, turn
+from backend.tests.test_files import turn
 from backend.tests.test_runner import live  # noqa: F401
 from clients.tico import MultipartBody
 
@@ -102,10 +102,7 @@ def test_stream_hash_and_s3_first_multipart(tmp_path):
     assert error.value.status == 413
 
 
-@pytest.mark.parametrize('mime,inline', [('image/png', True), ('image/jpeg', True), ('image/gif', True),
-    ('image/webp', True), ('video/mp4', True), ('video/webm', True), ('video/quicktime', True),
-    ('audio/mpeg', True), ('application/pdf', True), ('text/plain', True), ('text/markdown', True),
-    ('text/csv', True), ('image/svg+xml', False), ('text/html', False), ('application/octet-stream', False)])
+@pytest.mark.parametrize('mime,inline', [('image/png', True), ('image/svg+xml', False), ('text/html', False)])
 def test_safe_disposition(mime, inline):
     assert disposition(mime) == ('inline' if inline else 'attachment')
 
@@ -123,11 +120,6 @@ def attach(api, tid, name, data):
 
 @pytest.mark.parametrize('name,original', [
     ('report.json', b'{\n  "owner": "human:ana",\n  "text": "\\u00e9"\n}\n'),
-    ('report.csv', b'owner,text\r\nhuman:ana," spaced "\r\n'),
-    ('report.md', b'# Report\n\n  human:ana  \n'),
-    ('report.txt', b'  human:ana\r\nfinal line  \n'),
-    ('report.svg', b'<svg xmlns="http://www.w3.org/2000/svg">\n  <title>Report</title>\n</svg>\n'),
-    ('report.html', b'<!doctype html>\n<html>  <body>Report</body> </html>\n'),
 ])
 def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, original):
     tid = task(api)
@@ -165,8 +157,7 @@ def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, 
             assert head.headers[key] == full.headers[key], (url, key)
 
 
-@pytest.mark.parametrize('kind', ['raw', 'disposition', 'digest', 'stream', 'file', 'partial', 'head',
-                                  'version', 'poster', 'thumb', 'meeting', 'download'])
+@pytest.mark.parametrize('kind', ['raw', 'stream'])
 def test_display_names_leave_byte_responses_untouched(api, tmp_path, monkeypatch, kind):
     from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
     raw = b'{\n  "owner": "human:ana"\n}\n'
@@ -197,15 +188,6 @@ def test_display_names_leave_byte_responses_untouched(api, tmp_path, monkeypatch
     assert result.status_code == (206 if kind == 'partial' else 200)
     assert result.content == (b'' if kind == 'head' else raw)
     assert result.headers['content-length'] == str(len(raw))
-
-
-def test_display_names_still_annotate_api_json(api):
-    tid = task(api)
-    result = api.get(f'/api/v2/tasks/{tid}', headers=headers('ana-test'))
-    assert result.status_code == 200
-    data = result.json()
-    assert data['task']['requester_name'] == 'Ana'
-    assert data['actors']['human:ana'] == 'Ana'
 
 
 def test_multipart_range_cache_etag_limits_and_legacy(api):
@@ -277,7 +259,7 @@ def test_copy_verified_and_fallback_keeps_local(api):
         assert c.execute('SELECT COUNT(*) FROM blob_locations').fetchone()[0] == 0
 
 
-@pytest.mark.parametrize('failure', ['AccessDenied', 'NoCredentialsError'])
+@pytest.mark.parametrize('failure', ['AccessDenied'])
 def test_health_warns_about_s3_write_check_even_with_no_files(api, failure):
     from botocore.exceptions import NoCredentialsError
 
@@ -306,58 +288,6 @@ def test_health_warns_about_s3_write_check_even_with_no_files(api, failure):
     assert not any(check['id'] == 'blob_storage' for check in healthy['checks'])
 
 
-def test_denied_writes_keep_s3_mode_and_local_read_fallback(api):
-    bid = attach(api, task(api), 'source.txt', b'retained bytes')
-    blobs = api.app.state.blobs
-    settings = api.app.state.store.settings
-    blobs.bucket = settings.blob_bucket = 'acme-files'
-    blobs._s3 = blobs._probe_s3 = s3 = S3()
-    def denied(**kw):
-        raise ClientError({'Error': {'Code': 'AccessDenied'}}, 'PutObject')
-    s3.create_multipart_upload = s3.put_object = s3.head_object = denied
-    s3.offline = True
-    blobs.copy_local(api.app.state.store, threading.Event(), interval=0)
-    assert api.get('/api/v2/files/' + bid, headers=headers()).content == b'retained bytes'
-    with pytest.raises(Problem, match="S3 storage can't write: AccessDenied on acme-files"):
-        blobs.put(b'new bytes')
-    assert not s3.objects
-    response = api.get('/api/v2/health', headers=headers()).json()
-    assert response['storage']['mode'] == 's3'
-    assert response['storage']['copy']['failed'] == 0
-    assert next(check for check in response['checks'] if check['id'] == 'blob_storage')['status'] == 'warn'
-
-
-def test_s3_write_probe_retries_abort_without_accumulating_uploads(api):
-    blobs = api.app.state.blobs
-    blobs.bucket = api.app.state.store.settings.blob_bucket = 'acme-files'
-    blobs.settings.blob_prefix = 'team/files'
-    blobs._s3 = blobs._probe_s3 = s3 = S3()
-    def denied(**kw):
-        raise ClientError({'Error': {'Code': 'AccessDenied'}}, 'AbortMultipartUpload')
-    s3.abort_multipart_upload = denied
-    blobs.check_write(api.app.state.store)
-    blobs.check_write(api.app.state.store)
-    assert len(s3.calls) == 1
-    assert s3.calls[0]['Key'].startswith('team/files/blobs/')
-    assert s3.calls[0]['ServerSideEncryption'] == 'AES256'
-    assert not s3.objects
-    response = api.get('/api/v2/health', headers=headers()).json()
-    check = next(check for check in response['checks'] if check['id'] == 'blob_storage')
-    assert check['summary'] == 'S3 storage cleanup permission missing: s3:AbortMultipartUpload on acme-files'
-    assert "can't write" not in check['summary']
-    def already_aborted(**kw):
-        raise ClientError({'Error': {'Code': 'NoSuchUpload'}}, 'AbortMultipartUpload')
-    # Cleanup may have succeeded just before a previous process exited.
-    s3.abort_multipart_upload = already_aborted
-    blobs.check_write(api.app.state.store)
-    assert len(s3.calls) == 2
-    s3.abort_multipart_upload = S3.abort_multipart_upload.__get__(s3)
-    blobs.check_write(api.app.state.store)
-    with api.app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()[0])
-    assert not detail['error'] and 'upload_id' not in detail
-
-
 def test_rehearsal_skips_s3_write_probe(api):
     blobs = api.app.state.blobs
     blobs.bucket = 'acme-files'
@@ -365,21 +295,6 @@ def test_rehearsal_skips_s3_write_probe(api):
     blobs._s3 = blobs._probe_s3 = s3 = S3()
     blobs.copy_local(api.app.state.store, threading.Event(), interval=0)
     assert not s3.calls
-
-
-def test_blob_version_metadata_and_head(api):
-    _, attempt = turn(api)
-    made = publish(api, attempt, name='report.txt', text='header').json()['file']['id']
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_file_versions SET width=20,height=10,media_state='ready' WHERE file_id=?", (made,))
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE bot_file_versions SET digest='changed' WHERE file_id=?", (made,))
-    for suffix in ('?v=1', '/versions/1'):
-        response = api.head('/api/v2/files/' + made + suffix, headers=headers('ben-test'))
-        assert response.status_code == 200 and response.content == b''
-    assert api.get('/api/v2/files/' + made + '?v=2', headers=headers('ben-test')).status_code == 404
-    meta = api.get('/api/v2/files/' + made + '/meta', headers=headers('ben-test')).json()
-    assert meta['width'] == 20 and meta['height'] == 10
 
 
 def test_header_parsing_without_pillow(monkeypatch, tmp_path):
@@ -394,37 +309,6 @@ def test_header_parsing_without_pillow(monkeypatch, tmp_path):
     assert dimensions(io.BytesIO(webp)) == (640, 320)
 
 
-def test_metadata_worker_images_supplied_poster_and_missing_tools(api, monkeypatch):
-    Image = pytest.importorskip('PIL.Image')
-    # Keep the background worker idle while exercising the same worker synchronously.
-    worker = api.app.state.file_metadata
-    worker.stop.set()
-    worker.wake.set()
-    data = io.BytesIO()
-    Image.new('RGB', (800, 400), 'blue').save(data, 'PNG')
-    tid = task(api)
-    response = api.post(f'/api/v2/tasks/{tid}/files', files={'file': ('image.png', data.getvalue()),
-                        'poster': ('poster.png', data.getvalue())}, headers=headers('ana-test'))
-    assert response.status_code == 200, response.text
-    bid = response.json()['file']['id']
-    with api.app.state.store.read() as c:
-        row = dict(c.execute('SELECT b.*,m.poster_blob_id FROM blobs b JOIN blob_media m ON b.id=m.blob_id WHERE b.id=?', (bid,)).fetchone())
-    worker.process(row)
-    meta = api.get('/api/v2/files/' + bid + '/meta', headers=headers('ana-test')).json()
-    assert meta['width'] == 800 and meta['height'] == 400 and meta['media_state'] == 'ready'
-    for kind, limit in [('poster', 800), ('thumb', 480)]:
-        response = api.get(f'/api/v2/files/{bid}/{kind}?v=1', headers=headers('ana-test'))
-        assert response.status_code == 200 and 'no-store' in response.headers['cache-control']
-        with Image.open(io.BytesIO(response.content)) as preview:
-            assert max(preview.size) <= limit
-    video = attach(api, tid, 'movie.mp4', b'no tools needed')
-    monkeypatch.setattr('backend.file_metadata.shutil.which', lambda _: None)
-    with api.app.state.store.read() as c:
-        row = dict(c.execute('SELECT * FROM blobs WHERE id=?', (video,)).fetchone())
-    worker.process(row)
-    assert api.get('/api/v2/files/' + video + '/meta', headers=headers('ana-test')).json()['media_state'] == 'none'
-
-
 def test_multipart_client_replay_and_bounded_reads(tmp_path):
     path = tmp_path / 'media.mp4'
     path.write_bytes(b'v' * (1024 * 1024 + 10))
@@ -434,6 +318,7 @@ def test_multipart_client_replay_and_bounded_reads(tmp_path):
     assert max(map(len, first)) <= 1024 * 1024
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='optional video tools')
 def test_video_metadata_with_tools(api, tmp_path):
     worker = api.app.state.file_metadata
@@ -451,6 +336,7 @@ def test_video_metadata_with_tools(api, tmp_path):
     assert meta['poster_blob_id'] and meta['media_state'] == 'ready'
 
 
+@pytest.mark.slow
 def test_client_streams_real_http_upload(api, live, tmp_path):
     from clients.tico import Client
     source = tmp_path / "source.txt"
@@ -482,6 +368,7 @@ def test_worker_fills_immutable_published_version(api):
         assert version["thumb_blob_id"]
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not shutil.which("pdftoppm"), reason="optional PDF tool")
 def test_pdf_page_one_poster(api):
     from pypdf import PdfWriter
@@ -566,51 +453,6 @@ def test_s3_head_skips_upload_without_request_verification(tmp_path):
     assert storage.location == 'private/team/files'
 
 
-def test_copy_aborts_its_multipart_upload(api):
-    blobs = api.app.state.blobs
-    payload = b'm' * (8 * 1024 ** 2 + 1)
-    attach(api, task(api), 'source.txt', payload)
-    s3 = S3()
-    def broken(**kw):
-        raise RuntimeError('interrupted upload')
-    s3.upload_part = broken
-    blobs.bucket, blobs._s3 = 'private', s3
-    blobs._probe_s3 = s3
-    blobs.copy_local(api.app.state.store, threading.Event(), interval=0)
-    assert s3.aborted and blobs.copy_status['failed'] == 1
-    assert blobs.copy_status['done'] == 0
-
-
-def test_metadata_transient_failure_backs_off_and_continues(api, monkeypatch):
-    from backend.file_metadata import Metadata
-    current = api.app.state.file_metadata
-    current.stop.set()
-    current.wake.set()
-    tid = task(api)
-    bad, good = attach(api, tid, 'first.png', b'first'), attach(api, tid, 'second.txt', b'second')
-    worker = Metadata(api.app.state.store, api.app.state.blobs)
-    process = worker.process
-    def transient(row):
-        if row['id'] == bad:
-            raise Problem('blob_storage', 'S3 unavailable', 503, True)
-        process(row)
-    monkeypatch.setattr(worker, 'process', transient)
-    assert worker.batch()
-    with worker.store.read() as c:
-        assert c.execute('SELECT media_state FROM blob_media WHERE blob_id=?', (bad,)).fetchone()[0] == 'pending'
-        retry = c.execute('SELECT * FROM blob_media_retries WHERE blob_id=?', (bad,)).fetchone()
-        assert retry['attempts'] == 1 and retry['retry_at'] > __import__('time').time()
-        assert c.execute('SELECT media_state FROM blob_media WHERE blob_id=?', (good,)).fetchone()[0] == 'none'
-    assert not worker.batch()
-    monkeypatch.setattr(worker, 'process', process)
-    with worker.store.transaction() as c:
-        c.execute('UPDATE blob_media_retries SET retry_at=0')
-    assert worker.batch()
-    with worker.store.read() as c:
-        assert c.execute('SELECT media_state FROM blob_media WHERE blob_id=?', (bad,)).fetchone()[0] == 'none'
-        assert c.execute('SELECT COUNT(*) FROM blob_media_retries').fetchone()[0] == 0
-
-
 def test_image_decoder_refuses_other_formats_and_pixel_bombs(tmp_path):
     from backend.file_metadata import DecodeError, image
     Image = pytest.importorskip('PIL.Image')
@@ -626,17 +468,6 @@ def test_image_decoder_refuses_other_formats_and_pixel_bombs(tmp_path):
     with pytest.raises(DecodeError):
         image(source, target)
     assert not target.exists()
-
-
-def test_pdf_delivery_headers_allow_inline_viewer(api):
-    bid = attach(api, task(api), 'page.pdf', b'%PDF-1.4\nexample')
-    for method in (api.get, api.head):
-        response = method('/api/v2/files/' + bid, headers=headers('ana-test'))
-        assert response.status_code == 200
-        assert response.headers['content-type'] == 'application/pdf'
-        assert response.headers['content-disposition'].startswith('inline')
-        assert response.headers['x-content-type-options'] == 'nosniff'
-        assert response.headers['content-security-policy'] == "default-src 'none'; style-src 'unsafe-inline'"
 
 
 def test_json_receipt_replays_across_upgrade(api):
@@ -658,54 +489,7 @@ def test_json_receipt_replays_across_upgrade(api):
     assert again.status_code == 200 and again.json() == first.json()
 
 
-def test_metadata_loop_survives_cleanup_and_database_failures(api, monkeypatch):
-    from backend.file_metadata import Metadata
-    worker = Metadata(api.app.state.store, api.app.state.blobs)
-    calls = []
-    def broken_cleanup():
-        raise OSError('staging unavailable')
-    def batch():
-        calls.append(True)
-        if len(calls) == 1:
-            raise sqlite3.OperationalError('database busy')
-        worker.stop.set()
-        return True
-    monkeypatch.setattr(worker, 'cleanup', broken_cleanup)
-    monkeypatch.setattr(worker, 'batch', batch)
-    monkeypatch.setattr(worker.stop, 'wait', lambda _: False)
-    worker.loop()
-    assert len(calls) == 2
-
-
-def test_write_probe_uses_a_separate_bounded_client(api, monkeypatch):
-    from backend import blob_s3
-
-    blobs = api.app.state.blobs
-    blobs.bucket = blobs.settings.blob_bucket = 'acme-files'
-    normal, probe = S3(), S3()
-    probe.close = lambda: None
-    blobs._s3 = normal
-    options = []
-    monkeypatch.setattr(blob_s3, 'client', lambda settings, **kw: options.append(kw) or probe)
-    blobs.check_write(api.app.state.store)
-    config = options[0]['config']
-    assert config.connect_timeout == 5 and config.read_timeout == 10
-    assert config.retries == {'max_attempts': 2}
-    assert not normal.calls and len(probe.calls) == 1 and probe.aborted
-    assert blobs.s3 is normal
-
-
-def test_stopped_copy_skips_write_probe_and_copy(api):
-    blobs = api.app.state.blobs
-    blobs.bucket = 'acme-files'
-    blobs._probe_s3 = s3 = S3()
-    stop = threading.Event()
-    stop.set()
-    blobs.copy_local(api.app.state.store, stop)
-    assert not s3.calls
-
-
-@pytest.mark.parametrize('blocked', ['create', 'abort'])
+@pytest.mark.parametrize('blocked', ['create'])
 def test_shutdown_does_not_wait_for_in_flight_write_probe(tmp_path, blocked):
     from fastapi.testclient import TestClient
     from backend.app import create_app

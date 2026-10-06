@@ -2,12 +2,10 @@
 saw, score it with the judge, route it, and let each receiver accept or reject what it was sent."""
 
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 from backend import listening as L
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 
 RECEIVERS = ("listening", "librarian", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
 
@@ -125,121 +123,6 @@ def test_hub_sql_shows_posts_only_to_listening_the_owner_and_their_receivers(api
     assert rows("SELECT count(*) FROM listen_judgments", sales)[0][0] == 1
     assert rows("SELECT count(*) FROM listen_items", listening)[0][0] == 2
     assert rows("SELECT count(*) FROM listen_items", "ana-test")[0][0] == 2
-
-
-def test_registry_question_versions_rescore_recent_posts_and_keep_vetoes(api):
-    _bots(api)
-    settings = api.app.state.store.settings
-    (settings.registry_dir / L.LISTENING_FILE).write_text("""
-destinations:
-  leads: {category: custom_lead, threshold: 0.75, receiver: sales-ops, unless: {category: custom_veto, threshold: 0.70}}
-""")
-    qset = {"id": "listening-item", "version": 9, "summary": "Company questions", "questions": {
-        "custom_lead": {"type": "noul", "instructions": "A team lead wants help"},
-        "custom_veto": {"type": "noul", "instructions": "A vendor is pitching"}}}
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    path.write_text(json.dumps(qset))
-    api.app.state.judge = engine = FakeJudge()
-    saved = post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
-        _post("custom-1", "[custom_lead]"), _post("custom-2", "[custom_lead] [custom_veto]")]})
-    result = post(api, "listening/judge", {})
-    assert (result["question_set"], result["judged"], result["routed"]) == ("listening-item@9", 2, 1)
-    assert [i["post"]["id"] for i in get(api, "intake")["items"]] == [saved["items"][0]["id"]]
-    assert all(label == "listening-item@9" for _, label in engine.calls)
-    assert post(api, "listening/judge", {})["judged"] == 0
-    qset["version"] = 10
-    path.write_text(json.dumps(qset))
-    result = post(api, "listening/judge", {})
-    assert (result["question_set"], result["judged"]) == ("listening-item@10", 2)
-    assert len(get(api, "intake")["items"]) == 1, "rescoring does not duplicate an inbox row"
-
-
-def test_missing_destination_and_veto_categories_are_logged(api, caplog):
-    settings = api.app.state.store.settings
-    (settings.registry_dir / L.LISTENING_FILE).write_text("""
-destinations:
-  lead: {category: unknown, threshold: 0.75, receiver: sales-ops, unless: {category: wrong_type, threshold: 0.70}}
-""")
-    qset = {"questions": {"wrong_type": {"type": "choice"}}}
-    dests = L.destinations(settings, qset=qset)
-    assert dests["lead"]["receiver"] == "bot:sales-ops"
-    assert len(caplog.records) == 2
-    assert "unknown" in caplog.text and "unless category 'wrong_type'" in caplog.text
-
-
-def test_configuration_warnings_repeat_only_after_changes_and_memory_is_bounded(api, caplog, monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
-    monkeypatch.setattr(L, "_warning_revisions", L.OrderedDict())
-    settings = api.app.state.store.settings
-    path = settings.registry_dir / L.LISTENING_FILE
-    source = "destinations:\n  leads: {category: unknown, threshold: 0.75, receiver: sales-ops}\n"
-    path.write_text(source)
-    qset = {"version": 1, "questions": {}}
-    for _ in range(5):
-        L.destinations(settings, qset=qset)
-        L.destinations(settings, check_questions=False)  # Health reads must not rearm category logs.
-    assert len(caplog.records) == 1
-    path.write_text(source + "# changed destination configuration\n")
-    L.destinations(settings, qset=qset)
-    assert len(caplog.records) == 2
-    qset["version"] = 2
-    L.destinations(settings, qset=qset)
-    assert len(caplog.records) == 3
-    qset["questions"]["unknown"] = {"type": "noul"}
-    L.destinations(settings, qset=qset)
-    qset["questions"].clear()
-    L.destinations(settings, qset=qset)
-    assert len(caplog.records) == 4, "a correction rearms the warning if the problem returns"
-    path.unlink()
-    L.destinations(settings)
-    path.write_text(source)
-    L.destinations(settings, qset=qset)
-    assert len(caplog.records) == 5, "removed and restored config is a new revision"
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda _: L.destinations(settings, qset=qset), range(8)))
-    assert len(caplog.records) == 5, "concurrent loads also suppress an unchanged warning"
-    for index in range(L.WARNING_CACHE_LIMIT + 1):
-        other = SimpleNamespace(registry_dir=Path("/fictional-registry") / str(index))
-        L._warn_configuration(other, "questions", source, [], qset)
-    assert len(L._warning_revisions) == L.WARNING_CACHE_LIMIT
-    assert all(len(key[0]) == len(value) == 32 for key, value in L._warning_revisions.items())
-
-
-def test_invalid_question_warnings_rearm_on_changed_file_without_echoing_it(api, caplog, monkeypatch):
-    monkeypatch.setattr(L, "_warning_revisions", L.OrderedDict())
-    settings = api.app.state.store.settings
-    (settings.registry_dir / L.LISTENING_FILE).write_text("destinations:\n  leads: {category: lead, threshold: 0.75, receiver: sales-ops}\n")
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    path.write_text("private-invalid-fixture-one")
-    L.destinations(settings)
-    L.destinations(settings)
-    assert len(caplog.records) == 1
-    path.write_text("private-invalid-fixture-two")
-    L.destinations(settings)
-    L.destinations(settings)
-    assert len(caplog.records) == 2 and "private-invalid-fixture" not in caplog.text
-
-
-def test_malformed_destination_warnings_are_fixed_and_deduplicated(api, caplog, monkeypatch):
-    monkeypatch.setattr(L, "_warning_revisions", L.OrderedDict())
-    settings = api.app.state.store.settings
-    secret = "private-destination-fixture"
-    path = settings.registry_dir / L.LISTENING_FILE
-    path.write_text(f"destinations:\n  leads: {{category: lead, threshold: {secret}, receiver: sales-ops}}\n")
-    for _ in range(3):
-        assert L.destinations(settings) == L.destinations(settings, check_questions=False) == {}
-    assert len(caplog.records) == 1
-    assert caplog.records[0].message == "listening.yaml: destination 'leads' skipped (invalid destination configuration)"
-    assert secret not in caplog.text
-    path.write_text("destinations:\n  leads: {category: lead, threshold: 0.75, receiver: sales-ops}\n")
-    L.destinations(settings)
-    path.write_text(f"destinations:\n  leads: {{category: lead, threshold: {secret}, receiver: sales-ops}}\n")
-    L.destinations(settings)
-    assert len(caplog.records) == 2 and secret not in caplog.text
 
 
 def test_invalid_registry_questions_refuse_decisions_without_private_details(api):

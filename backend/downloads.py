@@ -154,7 +154,8 @@ class Downloads:
     def github_manifest(self):
         with self._lock:
             fetched, cached = self._github
-            if fetched and time.monotonic() - fetched < 600:
+            # A miss is retried after a minute: desktop files reach a release a few minutes after it is published.
+            if fetched and time.monotonic() - fetched < (600 if cached is not None else 60):
                 return cached
             fetching = not self._github_ready.is_set()
             if not fetching:
@@ -198,7 +199,9 @@ class Downloads:
                     response = http.get(assets["latest.json"]["browser_download_url"])
                     response.raise_for_status()
                     value = response.json()
-                    if not isinstance(value, dict) or value.get("version") != self.version:
+                    # A release whose desktop shell did not change carries the previous app forward: the app's
+                    # version may be older than the server's, but its files are assets of this release.
+                    if not isinstance(value, dict) or not VERSION_RE.fullmatch(str(value.get("version") or "")):
                         raise ValueError("wrong app version")
                     platforms = value.get("platforms")
                     if not isinstance(platforms, dict) or not platforms:

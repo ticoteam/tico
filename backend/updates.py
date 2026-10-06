@@ -14,10 +14,15 @@ sensitive so it can take a while."
 - A reply is an ordinary chat message to the bot carrying `refs.update`; the bot's session gets it
   like any message, and the update's thread is those replies plus the bot's answers to them.
 - `update_settings`: a bot's daily and weekly switches (both on unless turned off).
+- A week in review is five slides, swiped left to right: Goal, KPIs, Done last week, Focus next week,
+  Biggest blockers. The bot writes the words and may add a few numbers; Tico adds its goal KPIs with
+  their sparklines, frozen when it posts, so an old week shows that week's numbers. `body` keeps a
+  plain-markdown copy for places that show one block of text.
+- An owner can ask every bot to redo a past day (`redo`), and a redone request is sent like a new one.
 """
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .store import H, Problem
@@ -40,6 +45,18 @@ BULLET = re.compile(r"^\s*[-*•]\s+\S")
 HEADING = re.compile(r"^\s*(#{1,6}\s|\*\*[^*]+\*\*:?\s*$|__[^_]+__:?\s*$|[A-Z][A-Za-z /]{0,30}:\s*$)")
 LABEL = re.compile(r"^\s*[-*•]\s+(\*\*[^*]+\*\*|(done|next|blocked|needs you|blocked / needs you|this week|next week)\s*[:—-])", re.I)
 MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# The week in review's slides: (fewest, most) bullets and words a bullet; the goal is one line.
+SLIDES = {"done": (1, 5, 25), "focus": (1, 3, 25), "blockers": (0, 3, 25)}
+GOAL_WORDS = 30
+BOT_KPIS_MAX = 4           # numbers the bot adds to the KPI slide
+TRACKED_MAX = 6            # goal KPIs Tico adds
+SERIES_MAX = 30
+SLIDES_SHAPE = ("A week in review is five slides, passed as `slides`: goal (one sentence, at most 30 words: the goal you "
+                "work toward and where it stands), kpis (up to four numbers that show the week, each with name and value, "
+                "and optionally unit, a short series of recent values oldest first for a chart, and a note; Tico adds your "
+                "goal KPIs itself), done (one to five bullets: what got done last week), focus (one to three: your focus "
+                "next week), blockers (zero to three: what blocks you and who can unblock it). Each bullet is one plain "
+                "English line of at most 25 words, with no task ids.")
 TASK_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
                      r"|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b"
                      r"|\b(?:task|job|attempt|msg|message)[:#\s]+[0-9a-f]{4,}\b", re.I)
@@ -115,6 +132,8 @@ def _busy(c, bot):
 def ensure_schema(c):
     """Columns added after the tables first shipped."""
     H.add_column(c, "update_queue", "tries", "INTEGER NOT NULL DEFAULT 0")
+    H.add_column(c, "update_queue", "redo", "INTEGER NOT NULL DEFAULT 0")
+    H.add_column(c, "updates", "slides_json", "TEXT")
 
 
 def _retry_or_miss(c, row, reason):
@@ -135,7 +154,9 @@ def _finish(c, row, state, reason=None):
 
 def settle_sent(c, row):
     """The request out now: posted, ended without a post, or still going. True while it is going."""
-    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?", (row["bot"], row["kind"], row["day"])).fetchone():
+    redo = row["redo"] if "redo" in row.keys() else 0
+    if c.execute("SELECT 1 FROM updates WHERE bot=? AND kind=? AND day=?" + (" AND updated>=?" if redo else ""),
+                 (row["bot"], row["kind"], row["day"], *([row["sent_at"]] if redo else []))).fetchone():
         _finish(c, row, "posted")
         return False
     job = c.execute("SELECT j.state, a.state attempt_state FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id "
@@ -158,14 +179,21 @@ def settle_sent(c, row):
     return True
 
 
-def request_text(c, bot, kind, day):
+def request_text(c, bot, kind, day, redo=False):
     """What the bot is asked, with its facts: done since its last update, open work, what waits on
-    a person, its goals. It writes from these, so the turn is short and says only what happened."""
+    a person, its goals. It writes from these, so the turn is short and says only what happened.
+    A redo of a past week takes that week's finished work and the bot's old update to rewrite."""
     actor = H.bot_actor(bot)
-    last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
-    since = last or H.shift(H.now(), days=-7 if kind == "weekly" else -1)
-    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated>=? "
-                     "ORDER BY updated DESC LIMIT 12", (actor, since)).fetchall()
+    week = kind == "weekly"
+    if redo:
+        start = datetime.combine(datetime.fromisoformat(day).date(), datetime.min.time(), ZONE)
+        utc = lambda at: at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        since, until = utc(start - timedelta(days=6 if week else 0)), utc(start + timedelta(days=1))
+    else:
+        last = c.execute("SELECT max(created) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
+        since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
+    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated>=? AND updated<? "
+                     "ORDER BY updated DESC LIMIT 12", (actor, since, until)).fetchall()
     open_ = c.execute("SELECT title, status FROM tasks WHERE owner=? AND status IN ('open','doing','waiting','review','ready') "
                       "ORDER BY updated DESC LIMIT 12", (actor,)).fetchall()
     asked = c.execute("SELECT title, owner FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND status IN "
@@ -173,27 +201,57 @@ def request_text(c, bot, kind, day):
     goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
                       "ORDER BY rank LIMIT 5", (actor,)).fetchall()
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
-    week = kind == "weekly"
-    return "\n".join([
-        f"Time for your {'week in review' if week else 'daily update'} ({day}). Post it with hub_update_create "
-        "(or `hub update create`), in plain words, then carry on.",
-        "",
-        "Write one to five bullets in plain English and nothing else: no title, no headings or sections, "
-        "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
-        f"waits on a person (say who). At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all."
-        + (" For the week: what got done, how your goals went, and your one or two commitments for next week." if week else ""),
-        "If nothing got done, say why in one bullet, then pick your most useful open task and start it in "
-        "this turn. Every bot moves at least once a day. An update that breaks these rules is refused.",
-        "",
-        f"Finished {'this week' if week else 'since your last update'}:", line(done, lambda r: r["title"]),
-        "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-        "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner'])})"),
-        "Your goals:", line(goals, lambda r: r["title"]),
-    ])
+    post_day = f" with day {day}" if redo else ""
+    if week:
+        tracked = kpi_snapshot(c, bot)
+        ask = [
+            f"Time for your week in review ({day}). Post it with hub_update_create{post_day} "
+            "(or `hub update create --slides-file`), then carry on.",
+            "",
+            SLIDES_SHAPE,
+            "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
+            "If nothing got done, say why in one bullet, then pick your most useful open task and start it in this turn. "
+            "A review that breaks these rules is refused.",
+        ]
+        facts = [
+            "", f"Finished {'that week' if redo else 'this week'}:", line(done, lambda r: r["title"]),
+            "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner'])})"),
+            "Your goals:", line(goals, lambda r: r["title"]),
+            "Your goal KPIs (Tico puts these on the KPI slide):",
+            line(tracked, lambda k: f"{k['name']}: {k['value'] if k['value'] is not None else 'no data'}"
+                                     f"{(' ' + k['unit']) if k['unit'] and k['value'] is not None else ''}"
+                                     f"{(' (' + k['target_label'] + ')') if k.get('target_label') else ''}"),
+        ]
+    else:
+        ask = [
+            f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
+            "(or `hub update create`), in plain words, then carry on.",
+            "",
+            "Write one to five bullets in plain English and nothing else: no title, no headings or sections, "
+            "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
+            f"waits on a person (say who). At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} in all.",
+            "If nothing got done, say why in one bullet, then pick your most useful open task and start it in "
+            "this turn. Every bot moves at least once a day. An update that breaks these rules is refused.",
+        ]
+        facts = [
+            "", f"Finished {'that day' if redo else 'since your last update'}:", line(done, lambda r: r["title"]),
+            "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner'])})"),
+            "Your goals:", line(goals, lambda r: r["title"]),
+        ]
+    if redo:
+        old = c.execute("SELECT body FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone()
+        ask.insert(1, f"This redoes your {'week in review' if week else 'update'} for {day} in the current shape; "
+                      "write it as of that day.")
+        if old:
+            facts += ["What you posted then:", old["body"]]
+    return "\n".join(ask + facts)
 
 
 def send_request(c, row):
-    message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"]),
+    redo = bool(row["redo"]) if "redo" in row.keys() else False
+    message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
                     kind="notice", refs={"update_request": row["id"], "wake": "update"})
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=? WHERE id=?",
               (message["id"], H.now(), row["id"]))
@@ -210,8 +268,9 @@ def dispatch(c, at=None):
     out = c.execute("SELECT * FROM update_queue WHERE state='sent' ORDER BY sent_at LIMIT 1").fetchone()
     if out and settle_sent(c, out):
         return None
+    # Today's requests first, then any redo of a past day an owner asked for.
     for row in c.execute("SELECT q.* FROM update_queue q JOIN bots b ON b.slug=q.bot WHERE q.state='queued' "
-                         "AND q.day=? ORDER BY q.rank", (day,)).fetchall():
+                         "AND (q.day=? OR q.redo=1) ORDER BY q.day=? DESC, q.rank", (day, day)).fetchall():
         bot = H.bot(c, row["bot"]) or {}
         if bot.get("state") != "active":
             _finish(c, row, "skipped", "the bot is " + (bot.get("state") or "gone"))
@@ -224,9 +283,135 @@ def dispatch(c, at=None):
         send_request(c, row)
         return row["bot"]
     # A day that ends with bots never free leaves their requests behind; they are missed.
-    for row in c.execute("SELECT * FROM update_queue WHERE state='queued' AND day<?", (day,)).fetchall():
+    for row in c.execute("SELECT * FROM update_queue WHERE state='queued' AND day<? AND redo=0", (day,)).fetchall():
         _finish(c, row, "missed", "it was busy all day")
     return None
+
+
+def redo(c, kind, day, bots=None):
+    """Ask bots again for a past day's update, in today's shape: every active bot whose switch is on,
+    or only `bots`. Each goes to the back of the queue and is sent like any request."""
+    if kind not in KINDS:
+        raise Problem("kind", "An update is daily or weekly", 422)
+    try:
+        when = datetime.fromisoformat(day).date()
+    except ValueError:
+        raise Problem("day", "day is YYYY-MM-DD", 422)
+    if when.isoformat() > today():
+        raise Problem("day", "A redo is for today or an earlier day", 422)
+    rows = c.execute("SELECT b.slug FROM bots b LEFT JOIN update_settings us ON us.bot=b.slug WHERE b.state='active' "
+                     "AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug").fetchall()
+    chosen = [r["slug"] for r in rows if not bots or r["slug"] in bots]
+    unknown = sorted(set(bots or ()) - set(chosen))
+    if unknown:
+        raise Problem("bot", "Not an active bot with its " + kind + " update on: " + ", ".join(unknown), 422)
+    last = c.execute("SELECT coalesce(max(rank), 0) FROM update_queue").fetchone()[0]
+    for n, slug in enumerate(chosen, 1):
+        c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state,tries,redo,reason) VALUES(?,?,?,?,?,'queued',0,1,?) "
+                  "ON CONFLICT(bot,kind,day) DO UPDATE SET state='queued', rank=excluded.rank, tries=0, redo=1, "
+                  "message_id=NULL, sent_at=NULL, done_at=NULL, reason=excluded.reason",
+                  (H.new_id(), slug, kind, when.isoformat(), last + n, "asked again in the current shape"))
+    return chosen
+
+
+# ----------------------------------------------------------------------------- the week's slides
+def kpi_snapshot(c, bot):
+    """The KPIs on the bot's open goals, as the KPI slide shows them: today's value, target and
+    sparkline. With no goal KPIs, its automatic ones that have a reading."""
+    from . import botkpis, kpis as K
+    goal_ids = [r["id"] for r in c.execute(
+        "SELECT id FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) ORDER BY rank LIMIT 5",
+        (H.bot_actor(bot),))]
+    views, seen = [], set()
+    for gid, items in K.goal_views(c, goal_ids).items() if goal_ids else ():
+        for v in items:
+            if v["id"] not in seen:
+                seen.add(v["id"]); views.append(v)
+    if not views:
+        views = [v for v in botkpis.for_bot(c, bot) if v.get("latest")]
+    out = []
+    for v in views[:TRACKED_MAX]:
+        latest = v.get("latest") or {}
+        out.append({"name": v["name"], "unit": v.get("unit") or "", "value": latest.get("value"),
+                    "period_end": latest.get("period_end"), "spark": v.get("spark") or [],
+                    "status": v.get("status") or "gray", "target_label": v.get("target_label") or "",
+                    "fresh": v.get("freshness", "fresh") == "fresh"})
+    return out
+
+
+def _words(text):
+    return len(str(text or "").split())
+
+
+def lint_slides(slides):
+    """What is wrong with a week's slides, or None."""
+    if not isinstance(slides, dict):
+        return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with hub_update_create."
+    problems = []
+    goal = str(slides.get("goal") or "").strip()
+    if not goal:
+        problems.append("the goal slide is empty")
+    elif _words(goal) > GOAL_WORDS or "\n" in goal:
+        problems.append(f"the goal is one sentence of at most {GOAL_WORDS} words (it is {_words(goal)})")
+    names = {"done": "done", "focus": "focus", "blockers": "blockers"}
+    for key, (low, high, words) in SLIDES.items():
+        items = slides.get(key) or []
+        if len(items) < low:
+            problems.append(f"{names[key]} needs at least {low} bullet")
+        if len(items) > high:
+            problems.append(f"{names[key]} has {len(items)} bullets (at most {high})")
+        long = [_words(b) for b in items if _words(b) > words]
+        if long:
+            problems.append(f"a {names[key]} bullet is {max(long)} words (at most {words})")
+    kpis = slides.get("kpis") or []
+    if len(kpis) > BOT_KPIS_MAX:
+        problems.append(f"it adds {len(kpis)} KPIs (at most {BOT_KPIS_MAX}; Tico adds your goal KPIs)")
+    text = " ".join([goal, *(str(b) for k in SLIDES for b in slides.get(k) or []),
+                     *(str(k.get("note") or "") for k in kpis)])
+    ids = TASK_ID.findall(MD_LINK.sub(r"\1", text))
+    if ids:
+        problems.append("it has a task id or internal code (" + ", ".join(sorted(set(ids))[:3]) + "); say it in plain English")
+    if not problems:
+        return None
+    return "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with hub_update_create."
+
+
+def clean_slides(raw):
+    """The bot's slides with blank bullets dropped and every bullet on one line."""
+    one = lambda v: " ".join(re.sub(r"^\s*[-*•]\s+", "", str(v or "")).split())
+    out = {"goal": " ".join(str(raw.get("goal") or "").split())}
+    for key in SLIDES:
+        out[key] = [one(b) for b in raw.get(key) or [] if one(b)]
+    out["kpis"] = []
+    for k in raw.get("kpis") or []:
+        k = dict(k)
+        item = {"name": one(k.get("name")), "value": one(k.get("value"))}
+        if not item["name"] or not item["value"]:
+            continue
+        if k.get("unit"):
+            item["unit"] = one(k["unit"])
+        if k.get("note"):
+            item["note"] = one(k["note"])
+        series = [float(v) for v in k.get("series") or [] if isinstance(v, (int, float))][-SERIES_MAX:]
+        if series:
+            item["series"] = series
+        out["kpis"].append(item)
+    return out
+
+
+def slides_body(slides):
+    """The plain-markdown copy of a week's slides, for the bot's page and summaries."""
+    lines = ["- " + b for b in slides["done"]]
+    lines += ["- Next: " + b for b in slides["focus"]]
+    lines += ["- Blocked: " + b for b in slides["blockers"]]
+    return "\n".join(lines)
+
+
+def _decode(row):
+    item = dict(row)
+    raw = item.pop("slides_json", None)
+    item["slides"] = json.loads(raw) if raw else None
+    return item
 
 
 # ----------------------------------------------------------------------------- posting and reading
@@ -265,29 +450,50 @@ def lint(body, kind):
             + " Rewrite it and post again with hub_update_create.")
 
 
-def post(c, bot, body, kind=None, day=None):
-    """Store a bot's bullets. `headline` keeps its first bullet, for places that show one line
-    (MCP summaries); the feed shows only the bullets."""
+def check_day(c, bot, day):
+    """A bot posts for today, or for a past day Tico asked it to redo; never a back-dated post of its own."""
+    if day and day != today() and not c.execute("SELECT 1 FROM update_queue WHERE bot=? AND day=? AND redo=1",
+                                                (bot, day)).fetchone():
+        raise Problem("day", "An update is for today, or for the day Tico asked you to redo", 422)
+
+
+def post(c, bot, body, kind=None, day=None, slides=None):
+    """Store a bot's update. A daily is its bullets; a week in review is its slides, with the goal
+    KPIs added, and a markdown copy in `body`. `headline` keeps one line, for places that show one
+    (MCP summaries)."""
     day = day or today()
-    kind = kind or kind_for(day)
+    kind = kind or ("weekly" if slides else kind_for(day))
     if kind not in KINDS:
         raise Problem("kind", "An update is daily or weekly", 422)
-    body = "\n".join(line.rstrip() for line in str(body or "").strip().splitlines() if line.strip())
-    problem = lint(body, kind)
-    if problem:
-        raise H.Refused("lint", problem, "normal")
-    first = body.splitlines()[0]
-    headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
+    stored = None
+    if kind == "weekly":
+        if not slides:
+            raise H.Refused("lint", lint_slides(None), "normal")
+        slides = clean_slides(slides)
+        problem = lint_slides(slides)
+        if problem:
+            raise H.Refused("lint", problem, "normal")
+        stored = json.dumps({**slides, "tracked": kpi_snapshot(c, bot)})
+        body = slides_body(slides)
+        headline = slides["goal"][:200]
+    else:
+        body = "\n".join(line.rstrip() for line in str(body or "").strip().splitlines() if line.strip())
+        problem = lint(body, kind)
+        if problem:
+            raise H.Refused("lint", problem, "normal")
+        first = body.splitlines()[0]
+        headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
     existing = c.execute("SELECT id FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone()
     if existing:
-        c.execute("UPDATE updates SET headline=?, body=?, updated=? WHERE id=?", (headline, body, now, existing["id"]))
+        c.execute("UPDATE updates SET headline=?, body=?, slides_json=?, updated=? WHERE id=?",
+                  (headline, body, stored, now, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
-                  (uid, bot, kind, day, headline, body, now, now))
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides_json,created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (uid, bot, kind, day, headline, body, stored, now, now))
     H.event(c, H.bot_actor(bot), "update.post", uid, {"kind": kind, "day": day})
     return one(c, uid)
 
@@ -297,7 +503,8 @@ def purge_rejected(c):
     deleted and redone). Runs when the hub
     starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue."""
     removed = []
-    for row in c.execute("SELECT * FROM updates").fetchall():
+    # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
+    for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall():
         if not lint(row["body"], row["kind"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))
@@ -320,7 +527,7 @@ def purge_rejected(c):
 
 def one(c, uid):
     row = c.execute("SELECT * FROM updates WHERE id=?", (uid,)).fetchone()
-    return dict(row) if row else None
+    return _decode(row) if row else None
 
 
 def thread(c, uid):
@@ -364,7 +571,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         "WHERE " + " AND ".join(where) + " ORDER BY u.created DESC LIMIT ?", (actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = dict(row)
+        item = _decode(row)
         item["read"] = bool(item.pop("read_at"))
         item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.update')=?",
                                     (row["id"],)).fetchone()[0]

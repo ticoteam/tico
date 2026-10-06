@@ -11,7 +11,8 @@
       "Bash(gh release view *)",
       "Bash(gh search prs *)",
       "Bash(gh run list *)",
-      "Bash(gh issue list *)"
+      "Bash(gh issue list *)",
+      "Bash(python3 software/rollout.py *)"
     ],
     "deny": [
       "Bash(gh pr review *)",

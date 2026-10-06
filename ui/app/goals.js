@@ -299,7 +299,8 @@ async function goalManagerMount(pageState) {
   const active = !!bot && !GM_STATE[bot.status];
   let stopped = false, es = null, poll = null, conversation = null, messages = [], execution = null, sending = false, lastReply, composer = null;
   const current = () => !stopped && GOALS_ST === pageState && host.isConnected;
-  const stopStream = () => { try { es?.close(); } catch { /* closed */ } es = null; clearInterval(poll); poll = null; };
+  // `es` is the release of this chat's live events (ui/app/live.js).
+  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
   GOAL_MANAGER_STOP = () => { stopped = true; stopStream(); if (composer) PILLS.delete(composer); };
   const off = !bot ? 'Not set up' : GM_STATE[bot.status] || '';
   host.innerHTML = `<section class="rail-sec gm-info">
@@ -372,16 +373,18 @@ async function goalManagerMount(pageState) {
       try { await apply(await get(`/v2/conversations/${encodeURIComponent(conversation.id)}/snapshot`)); fail(''); }
       catch (e) { fail(e.message); }
     };
-    // The same stream the bot page's chat uses; when it cannot connect, a poll.
+    // The page's live events, as the bot page's chat uses them: a change to this conversation reads its snapshot
+    // again. Without EventSource, a poll.
     const watch = () => {
       stopStream();
       if (!conversation || !current()) return;
-      const fallback = () => { if (!poll && current()) poll = setInterval(snapshot, 5000); };
-      if (typeof EventSource === 'undefined') return fallback();
-      es = new EventSource(`${API}/v2/conversations/${encodeURIComponent(conversation.id)}/watch`);
-      es.addEventListener('snapshot', ev => { let d; try { d = JSON.parse(ev.data); } catch { return; } void apply(d); });
-      es.addEventListener('expired', () => { stopStream(); fallback(); });
-      es.addEventListener('error', () => { if (es && es.readyState === 2) { stopStream(); fallback(); } });
+      const fallback = liveFallback(snapshot, 5000);
+      if (fallback) { poll = fallback; return; }
+      const cid = conversation.id, mine = d => d.conversation_id === cid && current();
+      const soon = () => liveSoon('gm:' + cid, () => void snapshot(), 150);
+      const offs = [liveFollow(cid), liveOn('messages', d => { if (mine(d)) soon(); }),
+                    liveOn('runs', d => { if (mine(d)) soon(); }), liveOn('reset', () => { if (current()) soon(); })];
+      es = () => offs.forEach(off => off());
     };
     const send = async (P, text) => {
       if (!text || sending) return;

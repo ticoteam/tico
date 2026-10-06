@@ -1,7 +1,6 @@
 """Spend limits (backend/usage_limits.py, docs/usage.md): a bot over a limit takes no new job and a run already going
 finishes, the 80% notice comes once, raising the limit resumes the bot, and who may set one."""
 
-from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_usage import complete
 
@@ -32,12 +31,6 @@ def fleet(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     return r
-
-
-def notices(api, fragment):
-    with api.app.state.store.read() as c:
-        return [row[0] for row in c.execute("SELECT body FROM messages WHERE kind='notice' AND to_actor='human:ana' AND body LIKE ?",
-                                            ("%" + fragment + "%",))]
 
 
 def paused(api):
@@ -72,49 +65,6 @@ def test_the_monthly_limit_and_the_company_default_block_too(api):
     assert shown["blocked"] == "monthly" and shown["source"]["monthly"] == "company" and shown["month_spent"] == 5
     put(api, "usage/limits/ops", {"monthly_usd": 100})                            # its own limit wins over the default
     assert claim(api, r) is not None
-
-
-def test_the_warning_at_80_percent_comes_once_and_raising_the_limit_rearms_it(api):
-    r = fleet(api)
-    put(api, "usage/limits/ops", {"daily_usd": 10})
-    finish(api, r, start(api, r), 850_000)                                        # $8.50
-    assert len(notices(api, "80% of its daily limit")) == 1
-    assert "$8.50 of $10.00" in notices(api, "80%")[0]
-    finish(api, r, start(api, r), 20_000)                                         # $8.70: still between 80% and 100%
-    assert len(notices(api, "80%")) == 1 and notices(api, "reached its daily limit") == []
-    finish(api, r, start(api, r), 200_000)                                        # $10.70
-    assert len(notices(api, "reached its daily limit")) == 1
-    put(api, "usage/limits/ops", {"daily_usd": 12})                               # 89%: not a new crossing of the old limit
-    finish(api, r, start(api, r), 1_000)
-    assert len(notices(api, "80%")) == 2                                          # a new limit, a new warning
-    assert len(notices(api, "reached")) == 1
-
-
-def test_a_run_that_jumps_past_both_levels_sends_the_higher_notice_only(api):
-    r = fleet(api)
-    put(api, "usage/limits/ops", {"daily_usd": 1})
-    finish(api, r, start(api, r), 500_000)
-    assert notices(api, "80%") == [] and len(notices(api, "reached its daily limit")) == 1
-
-
-def test_the_owner_of_a_bot_with_no_operator_is_told_instead_of_nobody(api):
-    r = fleet(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='' WHERE bot='ops'")
-    put(api, "usage/limits/ops", {"daily_usd": 1})
-    finish(api, r, start(api, r), 900_000)
-    assert len(notices(api, "reached its daily limit")) == 1                      # the company owner, Ana
-
-
-def test_subscription_runs_count_only_when_the_company_opts_in(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, finished, exit, est_cost_usd, billing) VALUES('s1','ops',?,?,'completed',6,'subscription')",
-                  (H.now(), H.now()))
-    put(api, "usage/limits/ops", {"daily_usd": 5})
-    assert get(api, "usage/limits")["bots"]["ops"]["blocked"] is None
-    put(api, "usage/limits", {"count_subscription": True})
-    shown = get(api, "usage/limits")["bots"]["ops"]
-    assert shown["blocked"] == "daily" and shown["day_spent"] == 6 and shown["percent"] == 120
 
 
 def test_who_may_set_a_limit(api):

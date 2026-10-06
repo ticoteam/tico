@@ -32,7 +32,7 @@ The rest of this page is what the example does, and what you decide when you bui
 - [Sign-in (option B)](#sign-in-option-b), the one to use for a separate address
 - [Same origin (option A)](#same-origin-option-a) and [servers and scripts (option C)](#servers-and-scripts-option-c)
 - [Key endpoints](#key-endpoints)
-- [Streaming live replies](#streaming)
+- [Live events](#live-events): replies as they stream, and every change to tasks, bots and Needs you
 - [Errors](#errors)
 - [Rate limits](#rate-limits)
 - [Versioning and what is stable](#versioning)
@@ -247,75 +247,67 @@ they may not read is left out of lists and refused by id, and an edit they may n
 bot to decide what to show (a chat box needs `write`, its activity needs `read`), and build for those answers. A human who
 may write to a bot but not read it still sees their own conversations with it and the tasks they requested or own.
 
-## Streaming
+## Live events
 
-A bot answers in seconds to minutes, and the reply is produced piece by piece. After `POST /api/v2/chat/{bot}`, watch the
-conversation:
-
-```
-GET /api/v2/conversations/{id}/watch        Accept: text/event-stream
-```
-
-It is [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events): a series of blocks separated
-by a blank line.
+One stream carries everything a page shows changing: tasks, the messages and runs of a conversation, bots' status
+lines, and the person's own Needs you. Open one per page, not one per thing, and nothing needs polling.
 
 ```
-event: snapshot
-data: {"messages": [...newest 200...], "has_more": false, "next_before": null,
-       "execution": {"state": "running", "label": "Working", "bot": "ops", "job_id": "...",
-                     "text": "I'll file the task.\n\nFiled it. The reply so far",
-                     "parts": [{"kind": "progress", "text": "I'll file the task.", "at": "2026-09-29T10:00:01.120Z"},
-                               {"kind": "tool", "text": "Ran hub task create", "at": "2026-09-29T10:00:02.410Z"},
-                               {"kind": "reply", "text": "Filed it. The reply so far", "at": "2026-09-29T10:00:04.870Z"}], ...}}
+GET /api/v2/events?topics=tasks,messages,runs,bots,needs&after=<n>&conversation=<id>      Accept: text/event-stream
+```
+
+It is [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events): blocks separated by a blank
+line. Each change has an `id:` (its change number), an `event:` (its topic) and JSON `data` with `seq`, `actor` (who made
+it, when you may know) and `at`:
+
+```
+id: 4120
+event: tasks
+data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id": "t9", "task": {...as GET /api/v2/tasks shows it...}}
+
+id: 4121
+event: runs
+data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "output": {"kind": "delta", "payload": {"text": "Filed"}}}
 
 : keepalive
 ```
 
-- Each **`snapshot`** is the whole picture: the newest messages and the bot's current run. `execution.state` is
-  `queued`, `leased`, `running`, `completed`, `uncertain` and so on; `execution.label` is a sentence for a human
-  ("Saved - waiting for a computer"); while the state is `leased` or `running`, `execution.text` is **the reply so
-  far**. When the run completes, the final message is in `messages` and `execution.text` is no longer needed. Show
-  `text` as a growing bubble, then let it be replaced by the stored message. `execution` is `null` before the first
-  message.
-- **`execution.text` and `execution.parts`.** A run can write several messages ("I'll look into it", then a tool call,
-  then the answer). `text` joins them with a blank line (`"\n\n"`), so rendering it as Markdown gives one paragraph
-  each, while the pieces of one message (the token deltas as it is typed) join with nothing between them. `parts`
-  is the same run as a list, in order, for a frontend that wants to style them apart. Each is `{"kind", "text", "at"}`:
-  - `reply`: what the bot wrote;
-  - `progress`: what the bot wrote just before a tool call, as a note on what it is about to do;
-  - `tool`: a short label such as `Ran hub task create`. It is the tool's name only; the call's arguments and output are never
-    in a snapshot. A bot's tool calls appear here when its runtime reports them (Cursor, Gemini, Pi, Grok and Antigravity
-    do; Claude and Codex do not, so their pieces are all `reply`).
+| Topic | `data` |
+|---|---|
+| `tasks` | `id` and `task`, or `gone: true` for a deleted task |
+| `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
+| `runs` | `attempt_id`, `conversation_id`, `bot`, and `output` (one step of the run) or `state` (the job's or attempt's state) |
+| `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
+| `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
 
-  `text` leaves the tool labels out. Like `text`, `parts` is filled while the state is `leased` or `running`. `at` is when
-  the piece began. Show a `tool` piece as a quiet line; it is not part of the answer.
-- A new snapshot is sent when something changed (a new message, a new piece of the reply, a computer going offline);
-  `: keepalive` comment lines fill the time between. They carry no data.
-- **`event: expired`** means the session ended: sign in again.
-- **The stream ends after about a minute** by design (so a revoked session cannot keep listening). This is normal:
-  **reconnect**. The first thing a new connection sends is a full snapshot, so there is nothing to resume and no
-  cursor to keep. Wait a moment between attempts and back off (0.5 s, 1 s, 2 s ... up to 15 s) while the network is
-  down; reconnect at once when the tab becomes visible or the browser goes back online.
+- **Only what you may read is sent.** A private task, a conversation you are not in, or a bot whose activity you may
+  not read never shows up, not even as a number. Bots cannot open the stream (`403`).
+- **Narrow it.** `topics` defaults to all five. `conversation=<id>` (up to 20, comma-separated) limits messages and runs to
+  those conversations; `bot=<slug>` limits runs and bots. A chat page opens `topics=messages,runs&conversation=<id>`.
+- **A live reply.** On a `messages` or `runs` event for the open chat, read `GET /api/v2/conversations/{id}/snapshot`
+  again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
+  `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
+  is the same run as a list of `{"kind", "text", "at"}`: `reply` (what the bot wrote), `progress` (what it wrote just
+  before a tool call) and `tool` (a short label such as `Ran hub task create`, never the call's arguments; Claude and
+  Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
+  the tool labels out.
+- **Resume.** The stream ends after about five minutes by design (so a revoked session stops listening); `event: ready`
+  opens each one with where the log stands. Reconnect with `after` set to the last `id` you saw (or let `EventSource` send
+  `Last-Event-ID`); `event: cursor` moves it past changes you were not sent. Back off (0.5 s, 1 s, 2 s ... up to 15 s)
+  while the network is down.
+- **`event: reset`** means you were further behind than the server keeps (a day): read your page in full, then carry on
+  from the `seq` it gives. **`event: expired`** means the session ended: sign in again.
 - **Do not use `EventSource` with a bearer session:** it cannot send an `Authorization` header. Read the stream with
   `fetch` and a `ReadableStream`, as `watch()` in [`examples/custom-frontend/app.js`](../examples/custom-frontend/app.js)
   does (about twenty lines). With the same-origin cookie option, `EventSource` works.
-- Open one stream per visible conversation and close it (`AbortController`) when the human leaves the chat. Each
-  costs the server a small read every second.
 
 Reads that do not need a stream: `GET /api/v2/conversations/{id}/snapshot` is one snapshot; `GET
 /api/v2/conversations/{id}/messages` is the message history.
 
-**When you need a cursor.** `GET /api/v2/conversations/{id}/stream?after=<n>` is the lower-level feed: `event: output`
-blocks with an `id:` line (the cursor) and the run's raw events as they are written (`kind` `delta` with
-`payload_json` `{"text": "..."}`, `tool`, `status`...), plus `event: messages` every second with the message list. To
-resume, pass the last `id` you saw as `after` (the `Last-Event-ID` header is not read by the server: a `fetch` client
-sets `after` itself). It ends after about a minute as well. Use `/watch` unless you are building a step-by-step view of
-what a bot is doing.
-
 ### Which run took a message
 
 Messages sent while a bot is working are folded into its current run (`execution.label` reads "Working - follow-up
-added"). The messages say so themselves, on the routes that return them (`/messages`, `/snapshot` and `/watch`):
+added"). The messages say so themselves, on the routes that return them (`/messages` and `/snapshot`):
 
 ```json
 {"messages": [
@@ -379,10 +371,9 @@ Tico applies **no request-rate limit** to the API: it will answer as fast as it 
 - Bodies: 2 MB for writes; 20 MB for uploads (`/api/v2/uploads/...`) and meeting imports (`413 too_large`).
 - A few actions have a daily allowance (tool notes, the server's decisions) and answer `429` when it is used; the
   `detail` says which.
-- Live streams: each open `/watch` or `/stream` costs one database read per second and holds a worker for up to a
-  minute; keep to one per visible chat.
-- Be a good client: use `/watch` instead of polling a chat; poll `GET /api/v2/needs-you?count=true` (a few bytes) no more
-  than every 30 seconds for a badge; do not refetch `/api/v2/org` or `/api/v2/bots` on every render (cache them for a
+- Live events: an open `/api/v2/events` costs nothing while nothing changes, and one read per burst of changes; keep
+  to one per page.
+- Be a good client: follow `/api/v2/events` instead of polling a chat, a task list or a badge; do not refetch `/api/v2/org` or `/api/v2/bots` on every render (cache them for a
   minute). Answers are marked `no-store`, so cache in your own code.
 - If you expose your frontend to many humans, set a limit at the reverse proxy (Caddy, Cloudflare) in front of Tico.
 
@@ -425,7 +416,7 @@ are described loosely on purpose (`additionalProperties` is open), so treat the 
 [`examples/custom-frontend/`](../examples/custom-frontend/) is `index.html`, `app.js`, `style.css` and `config.js`: about
 280 lines of script, no build, no dependencies, and it is what this page describes. It signs in with the flow above, then shows
 the team chart (humans and bots nested by `reports_to`), a chat with any bot with the reply streaming in through
-`/watch`, the open tasks, and Needs you. It sets no cookies and puts everything on the page as text.
+`/api/v2/events`, the open tasks, and Needs you. It sets no cookies and puts everything on the page as text.
 
 `ui/tests/custom-frontend.cjs` runs it in a real browser against a real server on another origin, once with a local
 server (`TICO_AUTH_PROXY=none` with the owner token, the development shortcut the example offers only for a Tico on

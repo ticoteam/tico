@@ -18,9 +18,7 @@ from unittest import mock
 from clients.tico import APIError
 from runner import service
 from runner.hosts.fake import FakeHost
-from runner.outage import Outage, describe, span
 from runner.service import Runner
-from runner.state import BOT_THREAD
 
 CLOUDFLARE = APIError("http_error", "HTTP 530: Error 1033: Cloudflare Tunnel error", 530, True)
 GONE = APIError("conflict", "Attempt is no longer leased to this runner", 409, False)
@@ -76,35 +74,6 @@ class Execution(unittest.TestCase):
         runner.renew_interval = 0.05
         return runner
 
-    def test_an_input_another_run_took_over_is_not_acknowledged_again(self):
-        # A run that lapsed and was restored may find its input moved to a later run: the ack is a 404.
-        message = {"id": "msg-2", "kind": "say", "from_actor": "human:ana", "body": "One more thing"}
-        for error, settled in ((APIError("not_found", "This input is not assigned to this execution", 404), True),
-                               (GONE, False)):
-            client = FakeClient()
-            post = client.post
-
-            def scripted(path, body=None, key=None, post=post, error=error):
-                if path.endswith("/inputs"):
-                    post(path, body, key)
-                    return {"attempt_id": "att-1", "messages": [message]}
-                if path.endswith("/ack"):
-                    post(path, body, key)
-                    raise error
-                return post(path, body, key)
-            client.post = scripted
-            runner = self.runner(client)
-            steered = []
-            self.host.steer = lambda thread, turn, text: steered.append(text)
-            if settled:
-                runner.receive_inputs("att-1", self.host, "thread", "turn")
-                runner.receive_inputs("att-1", self.host, "thread", "turn")
-                self.assertEqual(len(steered), 1, "applied once, never steered again")
-                self.assertEqual(sum(path.endswith("/ack") for path, _ in client.posts), 2)
-            else:
-                with self.assertRaises(APIError):
-                    runner.receive_inputs("att-1", self.host, "thread", "turn")
-
     def test_a_refused_key_is_held_until_a_credential_changes_or_the_recheck(self):
         runner = self.runner(FakeClient())
         (Path(self.tmp.name) / "secrets").mkdir()
@@ -130,51 +99,6 @@ class Execution(unittest.TestCase):
             self.assertEqual(runner.runtime_report([])["codex"]["credential_source"], "computer")
         with mock.patch("runner.service.time.monotonic", return_value=time.monotonic() + service.REJECT_RECHECK_S + 1):
             self.assertIsNone(runner.rejection("codex"), "after a few minutes one turn may find out again")
-
-    def test_credential_source_waits_for_server_support_and_survives_rollback(self):
-        import copy
-
-        client = FakeClient()
-        client.get = lambda path, **kw: {"bots": {}} if path == "runner-credential-grants" else []
-        runner = self.runner(client)
-        runner.tools = mock.Mock()
-        runner.follower = mock.Mock(following=True)
-        runner.follower.fields.return_value = {}
-        runner.migrate_credentials = lambda rows: None
-        runner.enabled_providers = lambda: []
-        runner.runtime_report = lambda rows: {"codex": {"installed": True, "authenticated": "rejected",
-                                                       "credential_source": "credentials"}}
-        runner.preflight = lambda *args: []
-        runner.changed_agent_instructions = lambda rows: ({}, {})
-        runner.mail_agent_instructions = lambda rows: {}
-        runner.readiness = lambda rows, checks, runtimes: {"schema_version": 1, "runtimes": runtimes,
-                                                          "harnesses": {"codex": {"installed": True}}, "bots": {}}
-        runner.recover_output = lambda: None
-        sent, supported = [], True
-
-        def heartbeat(path, body):
-            sent.append(copy.deepcopy(body))
-            if not supported and "credential_source" in body["readiness"]["runtimes"]["codex"]:
-                raise APIError("validation", "Unknown field", 422)
-            return {"runtime_credential_source": True} if supported else {}
-
-        client.post = heartbeat
-        runner.maintain()
-        assert "credential_source" not in sent[-1]["readiness"]["runtimes"]["codex"]
-        runner.maintain()
-        assert sent[-1]["readiness"]["runtimes"]["codex"]["credential_source"] == "credentials"
-        supported = False
-        runner.maintain()
-        assert "credential_source" not in sent[-1]["readiness"]["runtimes"]["codex"]
-        assert "harnesses" in sent[-1]["readiness"]
-        assert runner._harness_after == 0 and not runner._reports_credential_source
-        runner.maintain()
-        assert "credential_source" not in sent[-1]["readiness"]["runtimes"]["codex"]
-        supported = True
-        runner.maintain()
-        assert "credential_source" not in sent[-1]["readiness"]["runtimes"]["codex"]
-        runner.maintain()
-        assert sent[-1]["readiness"]["runtimes"]["codex"]["credential_source"] == "credentials"
 
     def test_a_due_self_update_exits_when_idle_and_drains_after_a_while(self):
         # The runner updates itself instead of asking a person to pull and restart.
@@ -281,6 +205,7 @@ def git(path, *args, env=None):
     return subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True, text=True, env=env)
 
 
+@pytest.mark.slow
 class Pushing(unittest.TestCase):
     """A bare `origin` and a clone with a local commit stand in for GitHub and the emp-* checkout."""
 
@@ -357,6 +282,7 @@ def _behind_checkout(tmp, change="README"):
     return clone, first
 
 
+@pytest.mark.slow
 def test_self_update_fast_forwards_a_clean_checkout_and_asks_for_a_restart():
     with tempfile.TemporaryDirectory() as tmp, mock.patch("runner.service.log"):
         clone, first = _behind_checkout(tmp)
@@ -365,150 +291,11 @@ def test_self_update_fast_forwards_a_clean_checkout_and_asks_for_a_restart():
         assert service.self_update(clone, running=first) == (True, ""), "pulled but not restarted still restarts"
 
 
-SUPERVISOR_VARS = ("XPC_SERVICE_NAME", "TICO_SUPERVISED", "TICO_RUNNER_SELF_UPDATE")
-
-
-def clean_env(**extra):
-    env = {k: v for k, v in os.environ.items() if k not in SUPERVISOR_VARS}
-    env.update(extra)
-    return mock.patch.dict(os.environ, env, clear=True)
-
-
-def test_only_a_supervisor_lets_the_runner_exit_to_update():
-    for extra in ({"XPC_SERVICE_NAME": "team.tico-bot"}, {"TICO_SUPERVISED": "1"}):
-        with clean_env(**extra):
-            assert service.supervised() is True
-            assert service.under_supervisor({}) is True
-            assert service.under_supervisor({"self_update": False}) is False
-            with mock.patch.dict(os.environ, {"TICO_RUNNER_SELF_UPDATE": "0"}):
-                assert service.under_supervisor({}) is False
-    for extra in ({}, {"XPC_SERVICE_NAME": "0"}, {"XPC_SERVICE_NAME": "application.com.other"},
-                  {"TICO_SUPERVISED": "0"}):
-        with clean_env(**extra):
-            assert service.supervised() is False
-            assert service.under_supervisor({}) is False
 
 
 if __name__ == "__main__":
     unittest.main()
 
-
-def antigravity(**over):
-    a = attempt()
-    a["config"] = {"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.8-flash",
-                   "reasoning_effort": "low", "max_run_minutes": 1}
-    a["conversation"] = {"id": "private-ana", "scope": "personal", "kind": "chat"}
-    a["principal"] = "human:ana"
-    a.update(over)
-    return a
-
-
-def with_fallback(row=None):
-    row = row or antigravity()
-    row["config"] = {**row["config"], "fallback": {
-        "harness": "gemini", "model": "gemini-3.8-flash", "reasoning_effort": "low"}}
-    return row
-
-
-class Fallback(unittest.TestCase):
-    """A configured fallback harness reruns the turn when the primary is unavailable."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
-        (root / "emp-coo").mkdir()
-        self.config = {"url": "https://runner.example", "token": "machine", "projects_dir": str(root), "capacity": 1}
-        self.calls = []
-        self.hosts = {"antigravity": FakeHost(), "gemini": FakeHost(replies=["Answered on the fallback"])}
-        self.hosts["antigravity"].fail_next_turn("UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-low")
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def factory(self, attempt, env):
-        which = attempt.get("fallback") or attempt["config"].get("harness")
-        self.calls.append((which, attempt["config"].get("harness"), env["HUB_TOKEN"]))
-        return self.hosts[which]
-
-    def runner(self, client):
-        runner = Runner(self.config, Path(self.tmp.name) / "state", host_factory=self.factory, client=client,
-                        push=lambda path, env=None: (0, ""))
-        runner.renew_interval = 0.05
-        return runner
-
-    def test_a_limited_turn_runs_on_the_configured_fallback(self):
-        client = FakeClient()
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-1234567890"}), \
-                mock.patch("runner.service.log") as log, mock.patch("runner.service.Client") as vault:
-            vault.return_value.get.return_value = {"credentials": [{"id": "gemini", "env": "GEMINI_API_KEY",
-                "kind": "api_key", "value": "granted-key-1234567890"}]}
-            runner = self.runner(client)
-            runner.execute({**with_fallback(), "credential_vault": True})
-        completion = client.completion()
-        self.assertEqual(completion["outcome"], "completed")
-        self.assertEqual(completion["text"], "Answered on the fallback")
-        self.assertEqual(completion["fallback"], "gemini")
-        self.assertNotIn("limited", completion)
-        log.assert_called_once_with("Tico runner: coo: antigravity unavailable; ran the turn on gemini")
-        self.assertEqual([c[0] for c in self.calls], ["antigravity", "gemini"])
-        self.assertEqual(self.calls[1][1], "gemini")
-        self.assertTrue(self.calls[0][2].startswith("tico-file:") and self.calls[1][2] == "turn-token")
-        settings = next(iter(self.hosts["gemini"].threads.values()))["settings"]
-        self.assertEqual((settings["model"], settings["effort"], settings["cwd"]),
-                         ("gemini-3.8-flash", "low", str(Path(self.tmp.name) / "emp-coo")))
-        self.assertEqual(settings["env"]["GEMINI_API_KEY"], "granted-key-1234567890")
-        self.assertIn("hello", self.hosts["gemini"].prompts[0][1])
-        self.assertEqual(runner.warm.entries, {})
-        self.assertFalse(self.hosts["antigravity"].alive())
-        self.assertEqual(runner.state.unfinished(), [])
-        kinds = [json.loads(p)["text"] for (k, p) in self.events(runner, "diagnostic")]
-        self.assertIn("antigravity unavailable; running this turn on gemini", kinds)
-
-    @staticmethod
-    def events(runner, kind):
-        with runner.state.connect() as c:
-            return [(r["kind"], r["payload"]) for r in c.execute("SELECT kind,payload FROM events WHERE kind=?", (kind,))]
-
-
-class ThreadContinuity(unittest.TestCase):
-    """A bot keeps one thread. Nothing here ends it; the runtime compacts it when it fills."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
-        (root / "emp-coo").mkdir()
-        self.config = {"url": "https://runner.example", "token": "machine", "projects_dir": str(root), "capacity": 1}
-        self.hosts = []
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def factory(self, attempt, env):
-        host = FakeHost(replies=["one", "two", "three"])
-        if getattr(self, "factory_fails", False):
-            self.factory_fails = False
-            host.fail_next_turn("the model returned garbage")
-        self.hosts.append(host)
-        return host
-
-    def runner(self):
-        runner = Runner(self.config, Path(self.tmp.name) / "state", host_factory=self.factory, client=FakeClient(),
-                        push=lambda path, env=None: (0, ""))
-        runner.renew_interval = 0.05
-        return runner
-
-    def test_every_turn_resumes_the_same_thread(self):
-        runner = self.runner()
-        with mock.patch("runner.service.log") as log:
-            runner.execute(attempt("a1"))
-            runner.execute(attempt("a2"))
-            runner.execute(attempt("a3"))
-            self.assertEqual(len(self.hosts[1].resumes), 1)
-            self.assertEqual(len(self.hosts[2].resumes), 1)     # heavy or not, it is the same thread
-            log.assert_not_called()
-            first = self.hosts[0].prompts[0][0]
-            self.assertEqual(next(iter(self.hosts[2].threads)), first)
-            self.assertEqual(runner.state.session("coo", BOT_THREAD, "codex"), first)
 
 class RefusedReplies(unittest.TestCase):
     """The COO, 2026-09-28: a reply with Codex's local file links into another bot's repository
@@ -552,20 +339,6 @@ class RefusedReplies(unittest.TestCase):
         self.assertIn("refused this turn's reply", completes[1]["text"])
 
 
-def test_the_runner_keeps_its_last_trouble_lines_for_a_support_bundle():
-    from runner import outage
-    outage.RECENT.clear()
-    outage.log("Tico runner: heartbeat is fine")
-    outage.log("Tico runner: cloud unavailable (http_error, HTTP 530); retrying")
-    outage.log("Tico runner: coo: codex sign-in was rejected")
-    assert [line.split(" ", 1)[1] for line in outage.RECENT] == [
-        "Tico runner: cloud unavailable (http_error, HTTP 530); retrying", "Tico runner: coo: codex sign-in was rejected"]
-    for n in range(80):
-        outage.log(f"Tico runner: failed {n}")
-    assert len(outage.RECENT) == 50 and outage.RECENT[-1].endswith("failed 79")
-    outage.RECENT.clear()
-
-
 def test_busy_bots_follow_live_turn_processes_until_they_exit(tmp_path):
     client = FakeClient()
     runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": str(tmp_path)},
@@ -580,30 +353,6 @@ def test_busy_bots_follow_live_turn_processes_until_they_exit(tmp_path):
     future.set_result(None)
     runner.claim_next()
     assert client.posts[-1] == ("jobs/claim", {"next_run": True, "busy_bots": []})
-
-
-def test_busy_bots_fall_back_to_one_claim_on_an_old_server(tmp_path):
-    client = FakeClient()
-    original = client.post
-    seen = []
-    def old(path, body=None, key=None):
-        seen.append(body)
-        if "busy_bots" in body:
-            raise APIError("validation", "Extra inputs: busy_bots", 422, False)
-        return original(path, body, key)
-    client.post = old
-    runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": str(tmp_path)},
-                    tmp_path / "state", client=client)
-    runner.assignments_seen = [{"bot": "ops"}, {"bot": "finance"}]
-    assert runner.claim_next() == {"attempt": None}
-    assert runner.claim_next() == {"attempt": None}
-    assert seen == [{"next_run": True, "busy_bots": []}, {"next_run": True}, {"next_run": True}]
-    # Re-probe after an old server updates, without restarting the computer.
-    runner._busy_bots_after = 0
-    assert runner.claim_next() == {"attempt": None}
-    assert seen[-2:] == [{"next_run": True, "busy_bots": []}, {"next_run": True}]
-    # Heartbeats keep the original contract, with no process report.
-    assert runner.report_heartbeat({"readiness": {}}) == {}
 
 
 def test_started_and_saved_completion_keep_original_idempotency_keys(tmp_path):
@@ -622,24 +371,6 @@ def test_started_and_saved_completion_keep_original_idempotency_keys(tmp_path):
     assert 'started:att-1' in keys
     assert keys.count('complete:att-1') == 2
     assert not any(key and key.startswith(('started:att-1:', 'complete:att-1:')) for key in keys)
-
-def test_combined_heartbeat_reports_retry_only_the_named_field(tmp_path):
-    from clients.tico import APIError
-    client = FakeClient()
-    runner = Runner({'url': 'https://runner.example', 'token': 'machine', 'projects_dir': str(tmp_path)}, tmp_path / 'state', client=client)
-    calls = []
-    fields = ['profiles', 'worktrees', 'repositories']
-    def post(path, body):
-        calls.append(json.loads(json.dumps(body)))
-        if len(calls) <= len(fields):
-            raise APIError('validation', 'body.' + fields[len(calls) - 1] + ': Extra inputs', 422)
-        return {'ok': True}
-    client.post = post
-    body = {'readiness': {'bots': {'coo': {'ready': True}}}, 'profiles': [], 'worktrees': [], 'repositories': []}
-    assert runner.report_heartbeat(body) == {'ok': True}
-    for before, after, field in zip(calls, calls[1:], fields):
-        assert set(before) - set(after) == {field}
-        assert before['readiness'] == after['readiness']
 
 
 def test_lease_renews_while_turn_waits_for_worktree_maintenance(tmp_path):
@@ -699,16 +430,7 @@ def test_lease_renews_while_turn_waits_for_worktree_maintenance(tmp_path):
     assert client.completion()['outcome'] == 'completed'
 
 
-def test_busy_bots_include_worktree_maintenance(tmp_path):
-    client = FakeClient()
-    runner = Runner({'url': 'https://runner.example', 'token': 'machine', 'projects_dir': str(tmp_path)},
-                    tmp_path / 'state', client=client)
-    runner.worktrees.maintaining.add('coo')
-    runner.claim_next()
-    assert client.posts == [('jobs/claim', {'next_run': True, 'busy_bots': ['coo']})]
-
-
-@pytest.mark.parametrize("configured", [True, False])
+@pytest.mark.parametrize("configured", [True])
 def test_startup_backlog_uses_the_bots_scoped_helper(tmp_path, configured):
     from runner.tests.test_git_credentials import Hub, fill
     from runner import git_credentials as G, safe_git

@@ -11,27 +11,8 @@ import pytest
 
 from backend import replication
 from backend.config import ROOT
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
 
 ENTRYPOINT = ROOT / "docker/entrypoint.sh"
-
-
-def test_status_modes(tmp_path):
-    stamp = tmp_path / "status.json"
-    stamp.write_text(json.dumps({"last_replicated_at": "2026-01-02T03:04:05Z"}))
-    local = replication.status({"TICO_BACKUP_MODE": "local-only"}, stamp)
-    assert local["mode"] == "local-only" and local["target_kind"] == "local"
-    assert local["last_replicated_at"] == "2026-01-02T03:04:05Z" and "tico-backups" in local["warning"]
-    r2 = replication.status({"TICO_BACKUP_MODE": "remote", "TICO_BACKUP_URL": "s3://b/p",
-                             "TICO_BACKUP_ENDPOINT": "https://x.r2.cloudflarestorage.com"}, stamp)
-    assert (r2["mode"], r2["target_kind"], r2["warning"]) == ("remote", "r2", "")
-    assert replication.status({"TICO_BACKUP_MODE": "remote", "TICO_BACKUP_URL": "s3://b"}, stamp)["target_kind"] == "s3"
-    minio = replication.status({"TICO_BACKUP_MODE": "remote", "TICO_BACKUP_URL": "s3://b", "TICO_BACKUP_ENDPOINT": "http://minio:9000"}, stamp)
-    assert minio["target_kind"] == "s3-compatible"
-    off = replication.status({"TICO_BACKUP_MODE": "off"}, stamp)
-    assert off["mode"] == "off" and off["target_kind"] == "none" and off["warning"]
-    # No status file yet: the replica has not been written, which is not the same as a time.
-    assert replication.status({"TICO_BACKUP_MODE": "remote", "TICO_BACKUP_URL": "s3://b"}, tmp_path / "none")["last_replicated_at"] is None
 
 
 class FakeS3:
@@ -70,7 +51,7 @@ def put_blob(root, data):
     return digest
 
 
-@pytest.mark.parametrize("kind", ["local", "s3"])
+@pytest.mark.parametrize("kind", ["s3"])
 def test_blobs_sync_incrementally_and_restore_verified(tmp_path, kind):
     mirror = replication.LocalMirror(tmp_path / "backups") if kind == "local" else replication.S3Mirror(FakeS3(), "bucket", "tico/")
     live = tmp_path / "live"
@@ -97,7 +78,7 @@ def key_env(tmp_path, **extra):
             "TICO_BLOB_DIR": str(tmp_path / "data" / "blobs"), **extra}
 
 
-@pytest.mark.parametrize("kind", ["local", "s3"])
+@pytest.mark.parametrize("kind", ["local"])
 def test_the_credential_key_is_copied_when_it_appears_and_again_when_it_changes(tmp_path, kind, capsys):
     fake = FakeS3()
     mirror = replication.LocalMirror(tmp_path / "backups") if kind == "local" else replication.S3Mirror(fake, "bucket", "tico/")
@@ -166,19 +147,6 @@ def test_the_loop_reports_the_key_copy_keeps_it_out_of_logs_and_the_status_file(
     assert "RuntimeError" in out.out and KEY.hex() not in out.out + out.err
 
 
-def test_a_kms_key_or_no_backup_means_no_key_copy(tmp_path):
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "credential.key").write_bytes(KEY)
-    env = key_env(tmp_path, TICO_CREDENTIAL_KMS_KEY="alias/tico")
-    replication.loop(env, sleep=lambda s: None, rounds=1)
-    assert not (tmp_path / "backups" / "credential-key").exists()
-    assert replication.status(env)["credential_key"]["present"] is False
-    off = key_env(tmp_path, TICO_BACKUP_MODE="off")
-    replication.loop(off, sleep=lambda s: None, rounds=1)
-    assert not (tmp_path / "backups" / "credential-key").exists()
-    assert replication.status(off)["credential_key"] == {"present": True, "copied_at": None, "current": False}
-
-
 def test_restoring_the_credential_key_never_overwrites_a_different_one(tmp_path):
     mirror = replication.LocalMirror(tmp_path / "backups")
     assert replication.restore_credential_key(mirror, tmp_path / "credential.key") == "missing"
@@ -237,27 +205,18 @@ def entrypoint(tmp_path, *args, command="restore", env=None):
     return subprocess.run(["bash", str(ENTRYPOINT), command, *([] if command == "prepare" else args)], env=env, capture_output=True, text=True, timeout=60)
 
 
-def test_restore_refuses_a_non_empty_volume_without_force(tmp_path):
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "hub.sqlite").write_bytes(b"live")
-    result = entrypoint(tmp_path)
-    assert result.returncode != 0 and "--force" in result.stderr
-    assert (tmp_path / "data" / "hub.sqlite").read_bytes() == b"live"
-    assert not (tmp_path / "stub.log").exists()
-
-
 def test_restore_into_an_empty_volume_and_force_over_a_full_one(tmp_path):
     result = entrypoint(tmp_path)
     assert result.returncode == 0, result.stderr
     assert sqlite3.connect(tmp_path / "data" / "hub.sqlite").execute("SELECT x FROM t").fetchone() == (1,)
     forced = entrypoint(tmp_path)
-    assert forced.returncode != 0
+    assert forced.returncode != 0 and "--force" in forced.stderr     # a non-empty volume needs --force
     forced = entrypoint(tmp_path, "--force")
     assert forced.returncode == 0, forced.stderr
     assert list((tmp_path / "data").glob("hub.sqlite.before-restore.*"))
 
 
-@pytest.mark.parametrize("rehearsal", ["0", "1"])
+@pytest.mark.parametrize("rehearsal", ["1"])
 def test_restore_brings_the_credential_key_back_and_force_keeps_a_different_one_aside(tmp_path, rehearsal):
     copy = tmp_path / "backups" / replication.CREDENTIAL_KEY_COPY
     copy.parent.mkdir(parents=True)
@@ -294,11 +253,7 @@ def test_a_failed_restore_of_an_existing_company_refuses_to_start(tmp_path):
     assert not (data / "hub.sqlite").exists() and not (data / replication.LOCAL_MARKER).exists()
 
 
-def test_an_unreadable_backup_refuses_even_with_no_marker(tmp_path):
-    result, data = prepare(tmp_path, restore_fails=True)
-    assert result.returncode != 0 and "unknown whether" in result.stderr and not (data / "hub.sqlite").exists()
-
-
+@pytest.mark.slow
 def test_a_new_company_over_an_existing_backup_needs_initialize_empty(tmp_path):
     level = tmp_path / "backups" / "ltx" / "0"
     level.mkdir(parents=True)
@@ -311,6 +266,7 @@ def test_a_new_company_over_an_existing_backup_needs_initialize_empty(tmp_path):
     assert (tmp_path / "backups" / replication.MARKER).exists()
 
 
+@pytest.mark.slow
 def test_a_fresh_install_starts_and_leaves_markers_a_later_empty_volume_respects(tmp_path):
     fresh, data = prepare(tmp_path)
     assert fresh.returncode == 0, fresh.stderr

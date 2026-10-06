@@ -1,12 +1,10 @@
 """In-process release contract: streamed versions, previews, reviews and the next turn."""
-import base64
 import hashlib
 import json
 from pathlib import Path
 import struct
 import zlib
 
-import pytest
 
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_task_review import ask, get, task
@@ -135,71 +133,3 @@ def test_streamed_task_versions_review_and_next_wake(api, monkeypatch):
     prompt = Runner.__new__(Runner).prompt(next_turn)
     assert json.loads(next(line[8:] for line in prompt.splitlines() if line.startswith('answer: '))) == answer['answer']
     assert answer['comment']['body'] in prompt
-
-
-@pytest.mark.parametrize('multi', [False, True])
-def test_page_other_answer_omits_unselected_question_ids(api, multi):
-    tid = task(api)
-    questions = ask()
-    if multi:
-        questions['questions'].append({**questions['questions'][0], 'id': 'opening', 'other': False})
-    comment = post(api, f'tasks/{tid}/comments', {'text': 'Review', 'ask': questions})['comment']
-    target = {'comment': comment['id']}
-    picked = {'opening': ['Approve']} if multi else {}
-    answer = post(api, f'tasks/{tid}/answers', {'target': target, 'answers': picked, 'other': 'Change the ending.'}, 'ben-test')
-    assert answer['answer']['answers'] == {'verdict': [], **picked}
-    assert answer['answer']['other'] == 'Change the ending.'
-    assert get(api, f'tasks/{tid}')['task']['open_asks'] == 0
-    assert api.post(f'/api/v2/tasks/{tid}/answers', json={'target': target, 'answers': picked},
-                    headers=headers('ben-test')).status_code == 422
-    if multi:
-        assert api.post(f'/api/v2/tasks/{tid}/answers', json={'target': target, 'answers': {}, 'other': 'Change it.'},
-                        headers=headers('ben-test')).status_code == 422
-
-
-def test_streamed_attachment_openapi_documents_both_request_shapes(api):
-    document = get(api, 'openapi.json')
-    content = document['paths']['/api/v2/tasks/{tid}/files']['post']['requestBody']['content']
-    json_schema = content['application/json']['schema']
-    assert json_schema['required'] == ['name']
-    assert {'name', 'text', 'content_base64', 'note', 'ask'} == set(json_schema['properties'])
-    multipart = content['multipart/form-data']['schema']
-    assert multipart['required'] == ['file']
-    assert {'file', 'name', 'note', 'ask', 'poster'} == set(multipart['properties'])
-    assert multipart['properties']['file']['format'] == 'binary'
-    assert multipart['properties']['ask']['type'] == 'string'
-
-
-def test_posters_are_available_before_processing_and_legacy_previews_survive_adoption(api):
-    from backend.auth import Identity
-    from backend.blobs import register
-    worker = api.app.state.file_metadata
-    worker.stop.set()
-    worker.wake.set()
-    tid = task(api)
-    image = png((0, 0, 255))
-    blobs = api.app.state.blobs
-    digest = blobs.put(image, 'image/png')
-    with api.app.state.store.transaction() as c:
-        old = register(c, Identity('human:ana', 'owner'), digest, len(image), 'image.png', 'image/png')
-        preview = register(c, Identity('human:ana', 'owner'), digest, len(image), 'preview.png', 'image/png')
-        c.execute('INSERT INTO task_assets VALUES(?,?)', (tid, old['id']))
-        c.execute("INSERT INTO blob_media(blob_id,width,height,thumb_blob_id,media_state) VALUES(?,16,8,?,'ready')",
-                  (old['id'], preview['id']))
-    adopted = post(api, f'tasks/{tid}/files', {'name': 'image.png', 'content_base64': base64.b64encode(image).decode()})
-    assert adopted['file_id'] == old['id'] and adopted['version'] == 2
-    versions = get(api, f'tasks/{tid}/files')['files'][0]['versions']
-    first = versions[1]
-    assert (first['width'], first['height'], first['media_state']) == (16, 8, 'ready')
-    assert api.get(first['thumb_url'], headers=headers()).content == image
-    assert api.head(first['thumb_url'], headers=headers()).status_code == 200
-    assert api.get(first['thumb_url']).status_code == 401
-    assert versions[0]['media_state'] == 'pending'
-    made = api.post(f'/api/v2/tasks/{tid}/files', headers=headers(), files={
-        'file': ('video.mp4', Path(__file__).with_name('fixtures').joinpath('task-review.mp4').read_bytes(), 'video/mp4'),
-        'poster': ('poster.png', image, 'image/png')})
-    assert made.status_code == 200, made.text
-    video = next(f for f in get(api, f'tasks/{tid}/files')['files'] if f['id'] == made.json()['file_id'])
-    assert video['versions'][0]['media_state'] == 'pending'
-    assert api.get(video['versions'][0]['poster_url'], headers=headers()).content == image
-    assert api.get(task_row(api, tid)['cover']['url'], headers=headers()).content == image

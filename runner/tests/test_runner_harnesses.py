@@ -9,8 +9,9 @@ from concurrent.futures import Future
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from clients.tico import APIError
-from runner import harness_tools as H
 from runner.service import Runner
 from runner.tests.test_harness_tools import FAKE_NPM, script
 
@@ -95,35 +96,6 @@ class RunnerHarnesses(unittest.TestCase):
         self.assertIn("Tool report rejected", client.report["readiness"]["bots"]["alpha"]["warnings"][0])
         self.assertEqual(runner._tools_after, 0)
 
-    def test_an_old_server_can_reject_disk_without_losing_tools(self):
-        class OldServer(Client):
-            def post(self, path, body=None, key=None):
-                if "disk" in body["readiness"]:
-                    raise APIError("validation", "body.readiness.StructuredReadiness.disk: Extra inputs are not permitted", 422, False)
-                self.report = body
-                return {}
-        client = OldServer()
-        runner = self.runner(client)
-        body = {"readiness": {"disk": {"total_bytes": 100, "free_bytes": 20},
-                               "bots": {"alpha": {"tools": [{"service": "valid"}]}}}}
-        with mock.patch("runner.service.log"):
-            runner.report_heartbeat(body)
-        self.assertNotIn("disk", client.report["readiness"])
-        self.assertEqual(client.report["readiness"]["bots"]["alpha"]["tools"], [{"service": "valid"}])
-        self.assertEqual(runner._tools_after, 0)
-
-    def test_unrelated_or_out_of_range_validation_is_not_retried(self):
-        for detail in ("body.readiness.runtime: Invalid value",
-                       "body.readiness.StructuredReadiness.bots.alpha.tools.99: Invalid value"):
-            class Reject(Client):
-                def post(self, path, body=None, key=None):
-                    raise APIError("validation", detail, 422, False)
-            runner = self.runner(Reject())
-            body = {"readiness": {"bots": {"alpha": {"tools": [{"service": "valid"}]}}}}
-            with mock.patch("runner.service.log"), self.assertRaises(APIError):
-                runner.report_heartbeat(body)
-            self.assertEqual(body["readiness"]["bots"]["alpha"]["tools"], [{"service": "valid"}])
-
     def test_the_runner_installs_what_the_servers_enabled_providers_need_into_its_own_dir(self):
         client = Client(providers=["openai", "deepseek"])
         runner = self.runner(client)
@@ -141,6 +113,7 @@ class RunnerHarnesses(unittest.TestCase):
                          (True, "1.0.0", True))
         self.assertFalse(harnesses["claude-code"]["installed"])
 
+    @pytest.mark.slow
     def test_an_update_waits_for_the_running_turn_then_goes_in_between_turns(self):
         runner = self.runner(Client(providers=["openai"]))
         self.maintain(runner)

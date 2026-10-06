@@ -57,7 +57,6 @@ INSTRUCTIONS = ("Tico: tasks, messages, Decisions, status. "
 TOOLS = []
 CLI_TOOL_ALIASES = {
     "hub_task_child": ("hub_task_child_create",),
-    "hub_task_parent": ("hub_task_reparent",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
     "hub_bot_repos": ("hub_bot_repos_get", "hub_bot_repos_set"),
 }
@@ -414,7 +413,7 @@ def tag_update(api, args):
        "body": _s("The details", default=""),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
-       "parent_id": _s("Parent task id (or 8-character short id), when this is one part of a bigger task"),
+       "parent": _s("Parent task id (or 8-character short id), when this is one part of a bigger task"),
        "request_id": _s("BotOps continuation: originating human chat message id"),
        "type": _s("Task type id or name; defaults to General"),
        "step": _s("Step id or name within the type; sets its status"),
@@ -433,8 +432,9 @@ def tag_update(api, args):
       required=("owner", "title"), writes=True)
 def task_create(api, args):
     body = {"owner": _target(api, args["owner"]), "title": args["title"], "body": args.get("body") or "",
-            "due": args.get("due"), "parent_id": args.get("parent_id"),
-            "goal_id": args.get("goal_id") or None}
+            "due": args.get("due"), "goal_id": args.get("goal_id") or None}
+    if args.get("parent"):
+        body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
@@ -446,8 +446,8 @@ def task_create(api, args):
 
 
 @tool("hub_task_child_create", "Create a subtask carrying its parent's requester rights.",
-      {"parent_id": TASK_ID, "owner": _s("Bot slug or human id"), "title": _s("What to do"),
-       "body": _s("Details", default="")}, required=("parent_id", "owner", "title"), writes=True)
+      {"parent": TASK_ID, "owner": _s("Bot slug or human id"), "title": _s("What to do"),
+       "body": _s("Details", default="")}, required=("parent", "owner", "title"), writes=True)
 def task_child_create(api, args):
     return task_create(api, {**args, "body": args.get("body") or args["title"]})
 
@@ -458,12 +458,6 @@ def task_tree(api, args):
     return api.get(f"tasks/{args['id']}/tree")
 
 
-@tool("hub_task_reparent", "Move a task and its subtree under another parent; empty parent_id clears it.",
-      {"id": TASK_ID, "parent_id": _s("New parent id; an explicit empty string clears it", minLength=0)},
-      required=("id", "parent_id"), writes=True)
-def task_reparent(api, args):
-    current = api.get(f"tasks/{args['id']}")["task"]
-    return api.post(f"tasks/{args['id']}", {"version": current["version"], "parent_id": args["parent_id"]}, key=_key(args))
 @tool("hub_task_worktree_add", "Create a task worktree from a repository this bot may write.",
       {"repo": _s("Repository owner/name"), "task": TASK_ID}, required=("repo",), writes=True, local=True)
 def task_worktree_add(api, args):
@@ -547,7 +541,6 @@ def task_ask(api, args):
        "owner": _s("Hand the task to this bot or person"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
-       "blocked_by": _s("The id (or 8-character short id) of the task this one waits on; an empty string clears it"),
        "waiting_on": _s("With status waiting: the person it waits on (their id), so it shows in their Needs you; "
                         "put exactly what they must do in the note. An empty string clears it"),
        "goal_id": _s("The goal this task serves; an empty string takes it off")},
@@ -565,8 +558,6 @@ def task_update(api, args):
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]
-    if args.get("blocked_by") is not None:
-        body["blocked_by"] = args["blocked_by"]
     if args.get("waiting_on") is not None:
         body["waiting_on"] = args["waiting_on"]
     return api.post("tasks/" + args["id"], body, key=_key(args))
@@ -691,6 +682,19 @@ def task_label(api, args):
       required=("id", "url"), writes=True)
 def task_link(api, args):
     return api.post(f"tasks/{args['id']}/links", {"url": args["url"], "title": args.get("title")}, key=_key(args))
+
+
+@tool("hub_task_relate", "Relate another task to this one, read as `id kind task`: parent (task is its "
+      "parent; moves it and its subtree), blocks, blocked_by (it waits on task; several are allowed), "
+      "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
+      "up from task). `remove` takes the relation off.",
+      {"id": TASK_ID, "task": {**TASK_ID, "description": "The other task: its id or first 8 or more characters"},
+       "kind": {"type": "string", "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"], "default": "related"},
+       "remove": {"type": "boolean", "default": False}},
+      required=("id", "task"), writes=True)
+def task_relate(api, args):
+    return api.post(f"tasks/{args['id']}/relations", {"task": args["task"], "kind": args.get("kind") or "related",
+                                                      "remove": bool(args.get("remove"))}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- goals
@@ -2343,16 +2347,53 @@ def grokbot_sync(api, args):
 
 
 # ----------------------------------------------------------------------------- updates
+_SLIDE_LINES = lambda what, most: {"type": "array", "maxItems": most, "items": {"type": "string"}, "description": what}
+_SLIDES = {
+    "type": "object", "additionalProperties": False,
+    "description": "Your week in review as five slides, swiped left to right. Tico adds your goal KPIs to the KPI slide.",
+    "properties": {
+        "goal": _s("One sentence, at most 30 words: the goal you work toward and where it stands"),
+        "kpis": {"type": "array", "maxItems": 4, "description": "Up to four numbers that show the week",
+                 "items": {"type": "object", "additionalProperties": False, "required": ["name", "value"], "properties": {
+                     "name": _s("What it counts"), "value": _s("This week's value, as it should read"),
+                     "unit": _s("Unit, like $, % or signups"),
+                     "series": {"type": "array", "maxItems": 30, "items": {"type": "number"},
+                                "description": "Recent values, oldest first, drawn as a chart"},
+                     "note": _s("One short line on what moved it")}}},
+        "done": _SLIDE_LINES("What got done last week: 1-5 plain lines, at most 25 words each", 5),
+        "focus": _SLIDE_LINES("Your focus next week: 1-3 lines", 3),
+        "blockers": _SLIDE_LINES("Your biggest blockers and who can clear them: 0-3 lines (empty when nothing blocks you)", 3)},
+    "required": ["goal", "done", "focus"]}
+
+
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
-      "for it: one to five markdown bullets in plain English and nothing else. No title, no headings or "
-      "sections, no task ids. At most 25 words a bullet and 90 in all (Friday: 40 and 180); an update that "
-      "breaks this is refused with how to fix it. One a day; posting again replaces it.",
-      {"body": _s("One to five lines, each starting with '- '"),
-       "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"])},
-      required=("body",), writes=True)
+      "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
+      "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
+      "kpis, done, focus, blockers. One of each a day; posting again replaces it, and one that breaks the "
+      "rules is refused with how to fix it.",
+      {"body": _s("A daily: one to five lines, each starting with '- '"),
+       "slides": _SLIDES,
+       "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),
+       "day": _s("YYYY-MM-DD, only when Tico asks you to redo a past day")},
+      writes=True)
 def update_post(api, args):
-    return api.post("updates", {k: v for k, v in (("body", args["body"]), ("kind", args.get("kind"))) if v is not None},
-                    key=_key(args))["update"]
+    slides = args.get("slides")
+    if args.get("slides_file"):
+        slides = json.loads(Path(args["slides_file"]).read_text())
+    if isinstance(slides, str):
+        slides = json.loads(slides)
+    fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")))
+    return api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))["update"]
+
+
+@tool("hub_update_redo", "Ask the bots again for a past day's update in the current shape, such as last "
+      "Friday's week in review as slides (the owner). Every active bot with that update on, or only `bots`.",
+      {"day": _s("YYYY-MM-DD"), "kind": _s("daily or weekly (default weekly)", enum=["daily", "weekly"]),
+       "bots": {"type": "array", "items": {"type": "string"}, "description": "Only these bots"}},
+      required=("day",), writes=True)
+def update_redo(api, args):
+    fields = (("day", args["day"]), ("kind", args.get("kind")), ("bots", args.get("bots") or None))
+    return api.post("updates/redo", {k: v for k, v in fields if v is not None}, key=_key(args))
 
 
 @tool("hub_update_list", "The bots' updates, newest first, with your read state: what each bot did, does "

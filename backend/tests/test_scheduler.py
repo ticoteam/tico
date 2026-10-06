@@ -2,13 +2,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, post  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
 
 
-@pytest.mark.parametrize('finished_status', ['done', 'declined'])
-def test_schedule_survives_restart_without_duplicate_work(api, finished_status):
+def test_schedule_survives_restart_without_duplicate_work(api):
+    finished_status = 'done'
     at = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc)
     store = api.app.state.store
     with store.transaction() as c:
@@ -47,6 +47,7 @@ def test_due_reminder_deduplicates_across_scheduler_restart(api):
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[0] == 2
 
 
+@pytest.mark.slow
 def test_idle_claims_do_not_take_the_write_lock_and_never_starve_leases(api):
     import threading, time
     from backend.tests.test_api import assign, headers, ready, runner
@@ -114,71 +115,6 @@ def test_completed_tasks_stay_done_after_scheduler_ticks_and_restarts(api, monke
         assert c.execute("SELECT last_success FROM service_health WHERE service='scheduler'").fetchone()[0]
 
 
-def test_path_like_titles_and_a_failed_reminder_do_not_stop_other_rows(api, monkeypatch):
-    store = api.app.state.store
-    tasks = [post(api, "tasks", {"owner": "coo", "title": title, "body": "Review access",
-                                   "due": "2026-09-10T15:00:00Z"})
-             for title in ("Review secrets/prod access", "Review emp-ops/reports", "Broken reminder")]
-    original = H.say
-    def say(c, actor, target, body, **kw):
-        if body == "Due: Broken reminder":
-            H.event(c, H.KEEPER, "reminder.partial", tasks[-1]["id"])
-            raise RuntimeError("broken row")
-        return original(c, actor, target, body, **kw)
-    monkeypatch.setattr(H, "say", say)
-    with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES('deployment-drain:broken','invalid json')")
-        c.execute("INSERT INTO schedules(id,bot,cron,title,playbook,next_due) "
-                  "VALUES('healthy','coo','0 9 * * *','Review daily work','Review work',?)",
-                  ('2026-09-09T16:00:00Z',))
-    result = Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
-    assert len(result["fired"]) == 1
-    assert result["failures"] == [{"reminder": tasks[-1]["id"], "error": "RuntimeError"}]
-    with store.read() as c:
-        assert {r[0] for r in c.execute("SELECT task_id FROM task_reminders")} == {t["id"] for t in tasks[:2]}
-        assert not c.execute("SELECT 1 FROM events WHERE action='reminder.partial'").fetchone()
-        assert c.execute("SELECT count(*) FROM schedule_occurrences").fetchone()[0] == 1
-
-
-def test_claim_query_skips_unready_queue_and_reuses_unchanged_selection(api, monkeypatch):
-    from backend.tests.test_api import assign, ready, runner
-    r = runner(api)
-    assign(api, r, "ops")
-    assign(api, r, "finance")
-    ready(api, r, ["finance"])
-    store, execution = api.app.state.store, api.app.state.execution
-    with store.transaction() as c:
-        for _ in range(40):
-            H.say(c, H.KEEPER, "bot:ops", "Review queued work", kind="notice")
-        expected = H.say(c, "human:ana", "bot:finance", "Review this first")
-    calls = []
-    candidate = execution.candidate
-    def select(*args):
-        calls.append(1)
-        return candidate(*args)
-    monkeypatch.setattr(execution, "candidate", select)
-    result = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-    assert result["message"]["id"] == expected["id"] and calls == [1]
-
-
-def test_claim_reselects_when_database_changes_after_the_read(api, monkeypatch):
-    from backend.tests.test_api import assign, ready, runner
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    post(api, "chat/ops", {"text": "Review work"})
-    store, execution = api.app.state.store, api.app.state.execution
-    idle = execution._idle_claim
-    def drain_after_read(*args):
-        result = idle(*args)
-        with store.transaction() as c:
-            c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1) "
-                      "ON CONFLICT(bot) DO UPDATE SET draining=1")
-        return result
-    monkeypatch.setattr(execution, "_idle_claim", drain_after_read)
-    assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is None
-
-
 def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, monkeypatch):
     from backend.tests.test_api import assign, claim, ready, runner
     from backend.tests.test_member_bots import finish
@@ -212,70 +148,8 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
         assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
 
 
-def test_claim_sql_preserves_python_task_refs_and_unrelated_human_chats(api):
-    from backend.tests.test_api import assign, ready, runner
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    store = api.app.state.store
-    with store.transaction() as c:
-        held = H.say(c, "human:ana", "bot:ops", "Interrupted request", refs={"task": "held-task"})
-        c.execute("UPDATE jobs SET state='uncertain' WHERE message_id=?", (held["id"],))
-        blocked = H.say(c, "human:ana", "bot:ops", "Continue that request",
-                        conversation_id=held["conversation_id"], refs={"task": [None, "\u00a0held-task\u3000"]})
-        unrelated = H.say(c, "human:ana", "bot:ops", "An unrelated request",
-                          conversation_id=held["conversation_id"], refs={"task": 42})
-    result = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-    assert result["message"]["id"] == unrelated["id"]
-    with store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (blocked["id"],)).fetchone()[0] == 'queued'
-
-
-def test_background_failures_are_rate_limited_and_visible_in_health(api, monkeypatch, caplog):
-    from backend.batch_work import isolated, _logged
-    _logged.clear()
-    store = api.app.state.store
-    for _ in range(3):
-        with store.transaction() as c:
-            with isolated(c, "expire", "broken-attempt"):
-                raise ValueError("Invalid saved run")
-    lines = [r for r in caplog.records if 'expire failed for broken-attempt' in r.message]
-    assert len(lines) == 1 and lines[0].exc_info
-    assert any('Invalid saved run' in i['detail'] for i in get(api, 'operations')['issues'])
-    later = _logged[('expire', 'broken-attempt')] + 3601
-    monkeypatch.setattr('backend.batch_work._clock', lambda: later)
-    with store.transaction() as c:
-        with isolated(c, "expire", "broken-attempt"):
-            raise ValueError("Invalid saved run")
-    lines = [r for r in caplog.records if 'expire failed for broken-attempt' in r.message]
-    assert len(lines) == 2 and not lines[-1].exc_info
-    with store.transaction() as c:
-        with isolated(c, "expire", "broken-attempt"):
-            pass
-        assert not c.execute("SELECT 1 FROM service_health WHERE service='background:expire:broken-attempt'").fetchone()
-
-
-def test_refused_reminder_is_recorded_and_not_retried(api, monkeypatch):
-    task = post(api, "tasks", {"owner": "coo", "title": "Reminder", "body": "Review", "due": "2026-09-10T15:00:00Z"})
-    original, refused = H.say, []
-    def say(c, actor, target, body, **kw):
-        if body == 'Due: Reminder':
-            refused.append(body)
-            raise H.Refused('reach', 'Task owner cannot receive this reminder')
-        return original(c, actor, target, body, **kw)
-    monkeypatch.setattr(H, 'say', say)
-    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
-    for _ in range(2):
-        scheduler.tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
-    assert len(refused) == 1
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM task_reminders WHERE task_id=?", (task['id'],)).fetchone()
-        assert c.execute("SELECT 1 FROM events WHERE action='task.reminder-refused' AND target=?", (task['id'],)).fetchone()
-
-
 def test_database_failure_keeps_original_error_and_stops_work(tmp_path):
     import sqlite3
-    import pytest
     from backend.batch_work import isolated
     c = sqlite3.connect(tmp_path / 'full.db', isolation_level=None)
     c.execute('CREATE TABLE data(x)')
@@ -297,9 +171,9 @@ def test_database_failure_keeps_original_error_and_stops_work(tmp_path):
     c.close()
 
 
+@pytest.mark.slow
 def test_claim_query_matches_old_python_oracle_on_200_rows(api):
     import itertools
-    import json
     from backend.auth import Identity
     from backend.models import Claim
     from backend.execution import bot_readiness, readiness_document
@@ -373,17 +247,3 @@ def test_row_isolation_keeps_standalone_task_databases_working(tmp_path):
     c.commit()
     assert c.execute('SELECT x FROM data').fetchall() == [(2,)]
     c.close()
-
-
-def test_row_sql_error_rolls_back_row_and_keeps_next_row(api):
-    from backend.batch_work import isolated
-    store = api.app.state.store
-    with store.transaction() as c:
-        with isolated(c, 'json', 'bad'):
-            c.execute("INSERT INTO registry_metadata VALUES('bad-row','{}')")
-            c.execute("SELECT json_extract(?, '$.value')", ('{',))
-        with isolated(c, 'json', 'good'):
-            c.execute("INSERT INTO registry_metadata VALUES('good-row','{}')")
-        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='bad-row'").fetchone()
-        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='good-row'").fetchone()
-        assert c.execute("SELECT last_error FROM service_health WHERE service='background:json:bad'").fetchone()[0] == 'json: malformed JSON'

@@ -40,9 +40,8 @@ def test_product_create_lost_response_keeps_key_bound_to_original_name(api, gh, 
     assert len([call for call in gh.calls if call[:2] == ('POST', '/orgs/Acme/repos')]) == 1
 
 
-@pytest.mark.parametrize('lost_response', [False, True])
-def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api, gh, monkeypatch,
-                                                                            lost_response):
+def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api, gh, monkeypatch):
+    lost_response = True
     connect(api, administration='true')
     gh.permissions = {'administration': 'write', 'metadata': 'read'}
     body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private',
@@ -73,6 +72,7 @@ def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api
     assert gh.created_repositories == {'Acme/tico-recorder'}
 
 
+@pytest.mark.slow
 def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(api, gh, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event

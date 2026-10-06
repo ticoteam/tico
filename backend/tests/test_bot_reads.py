@@ -9,7 +9,6 @@ from pathlib import Path
 
 from backend import bot_access as A
 from backend import groups as G
-from backend import updates
 from backend.tests.test_api import api, setup_attempt  # noqa: F401
 from backend.tests.test_runner import live  # noqa: F401
 from clients import hubcli
@@ -61,22 +60,3 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
         "under the hidden bot's manager, not dropped"
     assert {p["id"] for p in org["people"]} == {"ana", "ben", "cara"}
 
-
-def test_a_bot_reads_daily_and_weekly_updates_and_one_update_in_full(api, live):
-    _, _, attempt = setup_attempt(api, "ops")
-    with api.app.state.store.transaction() as c:
-        daily = updates.post(c, "cpo", "- Shipped the pricing page", kind="daily", day="2026-09-28")
-        weekly = updates.post(c, "finance", "- Closed the books for September", kind="weekly", day="2026-09-25")
-    token = attempt["token"]
-
-    code, listed = hub(live, token, "update", "list", "--kind", "weekly")
-    assert code == 0 and [u["id"] for u in listed["updates"]] == [weekly["id"]]
-    code, listed = hub(live, token, "update", "list", "--kind", "daily")
-    assert code == 0 and [u["id"] for u in listed["updates"]] == [daily["id"]]
-    code, both = hub(live, token, "update", "list", "--bot", "finance", "--limit", "5")       # the same read with more flags
-    assert code == 0 and [u["id"] for u in both["updates"]] == [weekly["id"]]
-    code, one = hub(live, token, "update", "show", daily["id"])
-    assert code == 0 and one["update"]["headline"] == "Shipped the pricing page"
-    # A bot may not mark updates read or reply: that is a person's, and the refusal says so (it is not "unsupported").
-    code, refused = hub(live, token, "update", "mark-read", daily["id"])
-    assert code == 2 and refused["error"] != "unsupported" and "person" in refused["detail"]
