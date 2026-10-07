@@ -3,6 +3,7 @@
 The scenarios are in install_scenarios.sh. They install curl and python3 from the distro's own packages, so the
 containers need network access; the tests skip when Docker is not available."""
 import hashlib
+import importlib.util
 import shutil
 import subprocess
 import tarfile
@@ -64,15 +65,25 @@ def rel(tmp_path_factory):
     return base
 
 
-def docker_ready() -> bool:
+def _docker_available() -> bool:
     if not shutil.which("docker"):
         return False
-    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=8).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
-@pytest.mark.skipif(not docker_ready(), reason="Docker is not available")
+@pytest.fixture
+def docker_ready():
+    """Probe lazily only when the opt-in container scenario is selected."""
+    if not _docker_available():
+        pytest.skip("Docker is unavailable or `docker info` timed out")
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("image", ["ubuntu:24.04", "debian:12"])
-def test_installer_scenarios(image, rel):
+def test_installer_scenarios(image, rel, docker_ready):
     name = "tico-install-test-" + uuid.uuid4().hex[:8]
     try:
         r = subprocess.run(
@@ -109,6 +120,50 @@ def test_bundle_from_the_real_repo_has_what_a_server_needs_and_is_reproducible(t
         assert hashlib.sha256((a / f.strip()).read_bytes()).hexdigest() == digest
     script = (a / "install.sh").read_text()
     assert "TICO_VERSION_BAKED='v1.2.3'" in script and "@TICO_VERSION@" not in script
+
+
+def test_docker_probe_is_lazy_and_timeout_is_bounded(monkeypatch):
+    calls = []
+
+    def reject_container_probe(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0] == 'docker':
+            raise AssertionError('Docker must not be probed while importing the test module')
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, 'run', reject_container_probe)
+    spec = importlib.util.spec_from_file_location('install_tests_import_probe', __file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert all(command[0] != 'docker' for command, _ in calls)
+
+    monkeypatch.setattr(module.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(module.subprocess, 'run', lambda *args, **kwargs: pytest.fail('ran Docker without a binary'))
+    assert module._docker_available() is False
+
+    monkeypatch.setattr(module.shutil, 'which', lambda name: '/usr/bin/docker' if name == 'docker' else None)
+
+    monkeypatch.setattr(module.subprocess, 'run',
+                        lambda command, **kwargs: subprocess.CompletedProcess(command, 1))
+    assert module._docker_available() is False
+
+    def timeout(command, **kwargs):
+        assert command == ['docker', 'info']
+        assert kwargs['timeout'] == 8
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    monkeypatch.setattr(module.subprocess, 'run', timeout)
+    assert module._docker_available() is False
+
+
+def test_only_real_container_scenarios_are_marked_slow():
+    slow = []
+    for name, test in globals().items():
+        if name.startswith('test_') and callable(test):
+            marks = {mark.name for mark in getattr(test, 'pytestmark', ())}
+            if 'slow' in marks:
+                slow.append(name)
+    assert slow == ['test_installer_scenarios']
 
 
 def test_build_refuses_a_non_release_version_and_a_script_without_the_placeholder(tmp_path):

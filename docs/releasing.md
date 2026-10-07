@@ -11,7 +11,8 @@ so later builds retain the complete history and do not announce already shipped 
 ## The fast path
 
 1. **Every PR** runs the default suites against `main` before it merges (`python scripts/release_checks.py`, below).
-2. **Before you tag**, the opt-in tests and a short whole-product check, about 3 to 5 minutes:
+2. **Before you tag**, reuse matching local default-suite evidence or run the default suite once on this clean candidate,
+   then run the opt-in tests and a short whole-product check:
    `python scripts/release_checks.py --release`.
 3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
@@ -27,13 +28,15 @@ python scripts/release_checks.py
 ```
 
 That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
-core browser scripts (`CORE` in `scripts/ui-tests.cjs`) three at a time. The check records wall time and load and fails
+core browser scripts (`CORE` in `scripts/ui-tests.cjs`) three at a time. `--core` names that explicit selection;
+`--non-core` selects its disjoint complement, and `--all` selects both. `--list` prints a selection without running it.
+The check records wall time and load and fails
 if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
 builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
 GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
-generates documentation images from the Actions tab (Run workflow). A release does not run this suite again: what is on
-`main` already passed it.
+generates documentation images from the Actions tab (Run workflow). Release mode reuses this suite only when a valid
+local receipt matches the exact release candidate; otherwise it runs the default suite once on that candidate.
 
 ## Before you tag
 
@@ -42,8 +45,8 @@ python scripts/release_checks.py --release                     # this checkout i
 python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag
 ```
 
-This checks what the per-PR suite leaves out. While the images build it runs the opt-in tests: `pytest -m slow`
-(real git, Docker, servers and long timers) and every browser script (`node scripts/ui-tests.cjs --all`). Then the
+This checks what the per-PR suite leaves out, after validating the candidate's default suite as described above. While the images build it runs the opt-in tests: `pytest -m slow`
+(real git, Docker, servers and long timers) and the non-core browser scripts (`node scripts/ui-tests.cjs --non-core`). Then the
 product as installed, in Docker: it builds the server, runner and
 updater images once (BuildKit cache; a source-only change rebuilds one layer per image) and runs three checks against
 them at the same time, each with its own Docker names, while the journey installs the previous release during the build:
@@ -57,8 +60,23 @@ them at the same time, each with its own Docker names, while the journey install
   pre-update snapshot is restored, with the server's real entrypoint running Litestream).
 
 It prints each check's time and the total, keeps the logs in a temporary directory and prints the end of any failed
-log. The target is under 5 minutes; a run over 300 seconds still passes but says so. Do not run two at once: the
-journey's candidate tags are fixed.
+log. The release gate's target is under 5 minutes; a run over 300 seconds still passes but says so. The default
+per-PR gate remains a hard 300-second limit. Do not run two release gates at once: the journey's candidate tags are fixed.
+
+### Reusing the default gate in release mode
+
+The default gate writes a signed receipt under this checkout's Git metadata, outside tracked files. Release mode reuses
+it only when it is recent (within 24 hours), successful, and matches the exact clean candidate commit and tree, the
+selected Python/browser commands, and a digest of dependency manifests and relevant local runtime/environment inputs.
+Starting another default run invalidates the old receipt first; a failure, over-budget run, changed tree/environment,
+or untrusted/missing receipt cannot authorize reuse. In those cases release mode runs the default gate once on the
+candidate before starting release-only checks. Release mode refuses a dirty candidate and aborts if the candidate or
+validation environment changes after the default gate.
+
+This receipt is a convenience for the same trusted local checkout and operator, not a CI attestation or a security
+boundary against someone who can edit that checkout's Git metadata. Do not copy receipts between worktrees/clones,
+hand-edit them, or treat a JSON file from another source as validation evidence. If there is no valid local receipt,
+let release mode run the default gate rather than supplying an external receipt.
 
 The full journey stays available on demand (about ten minutes), for a release that changes enrollment, the runner's
 restart behavior, Litestream or backups:

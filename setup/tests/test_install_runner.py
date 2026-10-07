@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from setup.tests.test_install_sh import SCRIPTS, build, docker_ready  # noqa: F401
+from setup.tests.test_install_sh import SCRIPTS, build
 
 ROOT = SCRIPTS.parent
 DOCKER = """#!/bin/sh
