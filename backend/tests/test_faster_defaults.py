@@ -72,4 +72,6 @@ def test_a_member_makes_a_personal_token_until_the_owner_says_otherwise(api):
     assert post(api, "me/tokens", {"label": "laptop"}, "cara-test")["token"].startswith("tico_pt_")
     assert put(api, "access/rules", {"member_tokens": False}, "ana-test")["member_tokens"] is False
     assert call(api, "post", "me/tokens", "cara-test", {"label": "again"}).status_code == 403
+    assert call(api, "get", "me/tokens", "cara-test").json()["can_create"] is False      # no Connect on her row
+    assert call(api, "get", "me/tokens", "ben-test").json()["can_create"] is True
     assert post(api, "me/tokens", {"label": "admin's"}, "ben-test")["token"]          # admins and the owner still do

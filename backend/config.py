@@ -166,6 +166,9 @@ class Settings:
     release_repo: str = ""
     # Signs the repository webhook that moves product tasks (backend/github.py). Unset: no webhook.
     github_webhook_secret: str = field(default="", repr=False)
+    # The task role a GitHub review request puts its reviewer in (backend/github.py), matched by the
+    # person's `github` login on the roster. Unset: review requests change no roles.
+    github_review_role: str = ""
     observability_environment: str = ""
     observability_id_secret: str = field(default="", repr=False)
     posthog_key: str = field(default="", repr=False)
@@ -349,6 +352,7 @@ class Settings:
             release_id=os.environ.get("TICO_RELEASE", ""),
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),
+            github_review_role=os.environ.get("TICO_GITHUB_REVIEW_ROLE", "").strip().lower(),
             observability_environment=os.environ.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
             observability_id_secret=os.environ.get("TICO_OBSERVABILITY_ID_SECRET", ""),
             posthog_key=quiet(os.environ.get("TICO_POSTHOG_KEY", "")),

@@ -33,6 +33,15 @@
 .bt-list dt{color:var(--muted);font-size:12px;padding-top:1px}
 .bt-list dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .bt-list .pill{margin:0 4px 2px 0}
+.bt-list .bt-state{display:none}
+@media (max-width:760px){
+  .bt-list .bt-item{grid-template-columns:22px minmax(0,1fr) auto;align-items:center;padding:7px 0}
+  .bt-list .bt-icon-static{grid-row:auto}
+  .bt-list .bt-state{display:block;font-size:12px;text-align:right}
+  .bt-list .bt-item{cursor:pointer}
+  .bt-list .bt-item dl{display:none;grid-column:2/-1}
+  .bt-list .bt-item.open dl{display:grid}
+}
 .bt-list .bt-problem{color:var(--fail)}
 .bts-tip{max-width:300px}
 .bts-tip .tip-head{display:block;margin-bottom:2px;font-weight:600;overflow-wrap:anywhere}
@@ -195,6 +204,9 @@
       rows.push(['Status', status]);
       return `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
     }
+    // A phone shows one line per tool, its name and only what is wrong; a tap opens its details.
+    const state = tool => tool.status === 'problem'
+      ? `<span class="bt-state">${tool.problem ? `<span class="bt-problem">${esc(tool.problem)}</span>` : statusPill(tool)}</span>` : '';
     async function refresh() {
       let got = null, failed = '';
       try { got = await load(slug, get); } catch (e) { failed = e.message || 'Could not load the tools.'; }
@@ -204,8 +216,12 @@
       host.innerHTML = (got.reportError ? `<p class="err" data-tool-report-error>${esc(got.reportError)}</p>` : '')
         + (got.tools.length ? got.tools.map(tool => `<div class="bt-item" data-tool="${esc(tool.id)}">
             <span class="bt-icon-static${tint(tool)}">${icons().markup(tool)}</span>
-            <span class="bt-name">${esc(tool.name)}</span>${detail(tool)}</div>`).join('') : '<div class="empty">None.</div>');
+            <span class="bt-name">${esc(tool.name)}</span>${state(tool)}${detail(tool)}</div>`).join('') : '<div class="empty">None.</div>');
     }
+    host.addEventListener('click', ev => {
+      const item = ev.target.closest('.bt-item');
+      if (item && !ev.target.closest('a') && matchMedia('(max-width: 760px)').matches) item.classList.toggle('open');
+    });
     refresh();
   }
 

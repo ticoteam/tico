@@ -19157,6 +19157,46 @@
             ],
             "title": "Notify Slack Task Done"
           },
+          "github": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$|^$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github"
+          },
+          "notify_slack_bot_messages": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify Slack Bot Messages"
+          },
+          "slack_muted_bots": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 80,
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slack Muted Bots"
+          },
           "reports_to": {
             "anyOf": [
               {

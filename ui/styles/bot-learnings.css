@@ -4,6 +4,11 @@
 .bot-learn:hover{color:var(--ink);background:var(--hover)}
 .bot-learn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .bot-learn .nav-icon{width:18px;height:18px;font-size:18px;color:inherit}
+.bot-learn .bl-label{display:none}
+/* At the top of More on a phone it is a labelled row: icon, "Learnings", how many are new. */
+.bot-more-top .bot-learn{display:inline-flex;width:auto;gap:6px;margin:0;padding:6px 10px 6px 8px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px;color:var(--ink)}
+.bot-more-top .bot-learn .bl-label{display:inline}
+.bot-more-top .bot-learn .bl-n{position:static}
 .bot-learn .bl-n{position:absolute;top:0;right:-2px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:var(--accent);color:var(--accent-ink);font-size:9.5px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 
 .learn-panel{margin:0 0 0 auto;height:100dvh;max-height:100dvh;width:min(460px,100vw);padding:0;border:0;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.35)}

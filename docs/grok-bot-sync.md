@@ -11,8 +11,9 @@ only receives (`backend/grokbot.py`).
 ## What Tico does with a sync
 
 - A Grok Bot it has not seen becomes a bot with the `grokbot` harness, **under the human who
-  synced it** (`reports_to: human:<them>`), active, with them as owner. Move it
-  anywhere on the team chart afterwards; a later sync never moves it back.
+  synced it** (`reports_to: human:<them>`), active, with them as owner. On the team chart it is a chip
+  beside their name (one by name, then "+N") rather than a row under them. Move it
+  anywhere on the team chart afterwards and it becomes an ordinary row; a later sync never moves it back.
 - Name and description follow Grok. The full instructions are kept in the bot's
   `config_json.grok.instructions` (with when they last changed), so the bot can be rebuilt on
   another runtime. Sending an explicit empty description or instructions clears it; leaving either field out preserves it.

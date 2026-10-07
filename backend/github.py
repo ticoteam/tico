@@ -6,6 +6,7 @@ signed with `TICO_GITHUB_WEBHOOK_SECRET`; nothing else on this path is trusted:
 - a pull request opened for review  -> the link is `open`,   the task is `review`
 - the pull request merged or closed -> `ready` once every PR is finished and at least one merged
 - checks, conflicts and reviews     -> specific owner notices grouped within three minutes
+- a review requested or withdrawn   -> that person is on or off the task in `github_review_role`
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
@@ -124,7 +125,38 @@ def _pr_status(c, task, note):
     return (task["id"], status) if after["status"] == status else None
 
 
-def pull_request(c, payload):
+def _review_role(c, task, payload, role):
+    """Who GitHub asks to review is on the task in `role`, matched by the `github` login on the roster.
+
+    A withdrawn request takes the person off; a request GitHub drops because their review arrived
+    leaves them on, so the opened and refresh paths only add."""
+    from . import task_roles as TRo
+    action, role = str(payload.get("action") or ""), TRo.role_name(role)
+    if not role or task["status"] in ("done", "closed"):
+        return False
+    if action in ("review_requested", "review_request_removed"):
+        logins = [(payload.get("requested_reviewer") or {}).get("login")]
+    elif action in ("opened", "reopened", "ready_for_review", "refresh"):
+        logins = [r.get("login") for r in (payload.get("pull_request") or {}).get("requested_reviewers") or []]
+    else:
+        return False
+    from .views import roster
+    by_login = {p["github"]: p["id"] for p in roster(c)["people"] if p.get("github") and not p.get("hidden")}
+    people = [by_login.get(str(login or "").lower()) for login in logins]
+    people = [H.human_actor(pid) for pid in people if pid and H.human(c, pid)]
+    people = [who for who in people if not H.task_private(c, task) or H.task_private_readable(c, who, task)]
+    if not people:
+        return False
+    have = TRo.roles_of(c, task["id"]).get(role, [])
+    want = ([who for who in have if who not in people] if action == "review_request_removed"
+            else have + [who for who in people if who not in have])
+    if want == have:
+        return False
+    return TRo.set_roles(c, H.KEEPER, task["id"], {role: want}, mover=True,
+                         note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"))
+
+
+def pull_request(c, payload, review_role=""):
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
@@ -194,6 +226,7 @@ def pull_request(c, payload):
             move = _pr_status(c, task, f"Pull request {item}.")
         if move:
             moved.append(move)
+        _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     return {"pr": url, "action": action, "tasks": len(links), "moved": moved}
 
@@ -356,7 +389,8 @@ def refresh_task_prs(service, task_id):
                             if not current or current[0] != link.get("updated"):
                                 success = True
                                 continue
-                            pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login})
+                            pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
+                                         review_role=service.settings.github_review_role)
                         success = True
                 except Exception:
                     logging.getLogger("tico.github").exception("PR refresh failed for %s #%s", *key)
@@ -559,7 +593,7 @@ def install_github(app, settings, store):
             return {"ok": True}
         with store.transaction() as c:
             if event == "pull_request":
-                result = pull_request(c, payload)
+                result = pull_request(c, payload, review_role=settings.github_review_role)
             elif event in ("check_run", "check_suite", "status", "pull_request_review", "pull_request_review_comment"):
                 result = pr_signal(c, event, payload)
             elif event == "push":

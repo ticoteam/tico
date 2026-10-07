@@ -162,7 +162,8 @@ const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `co
         assert.equal(await page.evaluate(secret => document.body.innerHTML.includes(secret), SECRET), false);
         if (tag === 'desktop-light') {
           await page.clock.fastForward(300000);
-          assert.equal(state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length, polls, 'polling stops on close');
+          // one read on close, for the team chart's Connect button; then nothing
+          assert.equal(state.urls.filter(u => u.endsWith('/api/v2/me/tokens')).length, polls + 1, 'polling stops on close');
         }
         await context.close();
       }

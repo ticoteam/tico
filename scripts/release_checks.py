@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Release checks.
 
-    python scripts/release_checks.py            # the default Python and core browser suites (the per-PR gate), under 300 s
-    python scripts/release_checks.py --release  # reuse matching default evidence or run it, then opt-in and whole-product checks
+    python scripts/release_checks.py            # the default Python and core browser suites, under 300 s
+    python scripts/release_checks.py --release  # full test suite and whole-product release gate
 
-`--release` reuses the default suites only when this trusted local worktree has a valid receipt for the exact clean
-candidate and environment. Otherwise it runs the default suites once on the candidate. It then runs what the default
-leaves out (`pytest -m slow` and `node scripts/ui-tests.cjs --non-core`) while it builds the candidate images once,
+PRs run tests for the files they change. Before a release, `--release` completes the full suite once: it reuses
+matching default-suite evidence from this trusted local worktree, or runs the default suites once on the clean
+candidate. It then runs the remaining slow Python tests and non-core browser scripts while it builds candidate images,
 then runs the whole-product checks against them at the same time: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install the previous release, upgrade to the
 candidate, roll back a migrating update). The journey starts installing the previous release while the images build. Each check gets its own Docker names and smoke a free host port, so they run
@@ -265,7 +265,9 @@ def full():
         if result.returncode:
             print(f'Release checks failed after {time.monotonic() - started:.2f}s; load {initial_load} -> {load()}', flush=True)
             return 1
-    elapsed = time.monotonic() - started
+    finished_monotonic = time.monotonic()
+    finished_at = time.time()
+    elapsed = finished_monotonic - started
     within_budget = elapsed < BUDGET_SECONDS
     print(f'Release checks {"passed" if within_budget else "exceeded budget"}: {elapsed:.2f}s / '
           f'{BUDGET_SECONDS}s; load {initial_load} -> {load()}', flush=True)
@@ -276,7 +278,6 @@ def full():
         except (OSError, ValueError, subprocess.SubprocessError):
             snapshot_after = identity_after = None
         if (snapshot_before.get('clean') and snapshot_after == snapshot_before and identity_after == identity_before):
-            finished_at = time.time()
             payload = {'schema': 1, 'kind': 'tico-default-validation', 'status': 'passed',
                        'commit': snapshot_before['commit'], 'tree': snapshot_before['tree'],
                        'environment': identity_before, 'commands': commands, 'selection': DEFAULT_SELECTION,
@@ -386,7 +387,7 @@ def release(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--release', action='store_true',
-                        help='release gate (reuse or run default checks, then whole-product checks)')
+                        help='full test suite and whole-product release gate (reuse or run exact-candidate default checks)')
     parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
     args = parser.parse_args()
     return release(args) if args.release else full()

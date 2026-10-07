@@ -249,8 +249,8 @@ def test_task_open_refreshes_in_background_with_coalescing_and_backoff(api, monk
             'merge_commit_sha': 'merged', 'head': {'sha': 'cur'}, 'user': {'login': 'computer-login'}})
     monkeypatch.setattr(service, '_call', fetch)
     real = G.pull_request
-    def update(*args):
-        result = real(*args)
+    def update(*args, **kwargs):
+        result = real(*args, **kwargs)
         finished.set()
         return result
     monkeypatch.setattr(G, 'pull_request', update)
@@ -472,3 +472,23 @@ def test_deploy_query_uses_repository_index_and_ignores_other_repos(api):
         assert any("task_links_repo_url" in r[3] and "url>?" in r[3] for r in plan)
         assert G.ship_deployed(c, store.settings) == [own["id"]]
         assert H.task(c, other["id"])["status"] == "ready"
+
+
+def test_a_review_request_puts_the_person_in_the_configured_role(api):
+    assert post(api, "people/ana", {"github": "@Ana-Dev"})["github"] == "ana-dev"
+    task = post(api, "tasks", {"owner": "cpo", "title": "Ship the pricing page", "body": "x", "links": [PR]})
+    asked = {**pr_event("review_requested"), "requested_reviewer": {"login": "Ana-Dev"}}
+    roles = lambda: get(api, "tasks/" + task["id"])["task"].get("roles") or {}
+
+    hook(api, "pull_request", asked)             # no role configured: roles stay generic and untouched
+    assert roles() == {}
+    api.app.state.store.settings.github_review_role = "reviewer"
+    hook(api, "pull_request", asked)
+    assert roles() == {"reviewer": ["human:ana"]}
+    hook(api, "pull_request", {**asked, "action": "review_request_removed"})
+    assert roles().get("reviewer", []) == []
+    # A refresh adds whoever is still asked, and never takes off someone who already reviewed.
+    hook(api, "pull_request", pr_event("opened", requested_reviewers=[{"login": "ana-dev"}, {"login": "stranger"}]))
+    assert roles() == {"reviewer": ["human:ana"]}
+    hook(api, "pull_request", pr_event("synchronize", requested_reviewers=[]))
+    assert roles() == {"reviewer": ["human:ana"]}

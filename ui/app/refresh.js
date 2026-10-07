@@ -28,7 +28,6 @@ async function refresh(force) {
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   if (BOT && $('#bot-alert')) $('#bot-alert').innerHTML = botAlertHTML(BOT.slug);   // an alert comes and goes with the poll
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
-  if (BOT && $('#bot-ticker') && isKeeper(BOT.slug)) void botTickerLoad(BOT.slug);
   // Poll data without destroying an expanded document or a comment being typed.
   const reviewing = $('#main .req[open], #main .issue-compose:not([hidden])');
   if (force || !reviewing) {
@@ -72,7 +71,6 @@ function liveTasksApply(events) {
       if (!BOT || BOT.slug !== me.slice(4)) return;
       if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
       if (BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
-      if ($('#bot-ticker')) void botTickerLoad(BOT.slug);
     });
   }
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {

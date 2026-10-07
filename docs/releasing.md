@@ -10,18 +10,22 @@ so later builds retain the complete history and do not announce already shipped 
 
 ## The fast path
 
-1. **Every PR** runs the default suites against `main` before it merges (`python scripts/release_checks.py`, below).
-2. **Before you tag**, reuse matching local default-suite evidence or run the default suite once on this clean candidate,
-   then run the opt-in tests and a short whole-product check:
-   `python scripts/release_checks.py --release`.
+1. **Every PR** runs only the tests for what it changed (below).
+2. **Before you tag**, run the full suite and a short whole-product check once on the release candidate:
+   `python scripts/release_checks.py --release`. Release mode reuses matching local default-suite evidence when
+   available; otherwise it runs the default suites once on the clean candidate, then the remaining tests and product checks.
 3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 5. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
-## The per-PR suite
+## Tests on a PR
 
-Tests run on your computer, not in CI: nothing in GitHub Actions runs the suite on a push or a pull request. Before
-merging a PR, run the whole thing from the repository root, on the PR merged with `main`:
+Tests run on your computer, not in CI: nothing in GitHub Actions runs the suite on a push or a pull request. Write unit
+tests while you build and run them as you go; once the change passes, keep only the highest-value ones. Before merging,
+run the test files for what you touched and the checks the change obviously affects, not the full suite. The full
+suite runs as late as possible: once, right before a release.
+
+The default Python and core-browser selection is available for a release candidate or an explicit local validation run:
 
 ```
 python scripts/release_checks.py
@@ -31,12 +35,13 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) three at a time. `--core` names that explicit selection;
 `--non-core` selects its disjoint complement, and `--all` selects both. `--list` prints a selection without running it.
 The check records wall time and load and fails
-if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
+if the combined run reaches 300 seconds; it should take about two minutes. Its hard 300-second budget is unchanged. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
 builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
 GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
-generates documentation images from the Actions tab (Run workflow). Release mode reuses this suite only when a valid
-local receipt matches the exact release candidate; otherwise it runs the default suite once on that candidate.
+generates documentation images from the Actions tab (Run workflow). Release mode completes the full suite; it reuses
+the default selection only when a valid local receipt matches the exact clean release candidate, otherwise it runs
+that selection once on the candidate.
 
 ## Before you tag
 
@@ -45,8 +50,10 @@ python scripts/release_checks.py --release                     # this checkout i
 python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag
 ```
 
-This checks what the per-PR suite leaves out, after validating the candidate's default suite as described above. While the images build it runs the opt-in tests: `pytest -m slow`
-(real git, Docker, servers and long timers) and the non-core browser scripts (`node scripts/ui-tests.cjs --non-core`). Then the
+This is the full suite, run once per release. After validating or reusing the default Python (`not slow`) and core-browser
+selection, it runs the complement: the opt-in Python tests (`pytest -m slow`, including real git, Docker, servers and long
+timers) and the non-core browser scripts (`node scripts/ui-tests.cjs --non-core`). Together these selections cover every
+Python test and browser script. While the complement runs, the candidate images build. Then the
 product as installed, in Docker: it builds the server, runner and
 updater images once (BuildKit cache; a source-only change rebuilds one layer per image) and runs three checks against
 them at the same time, each with its own Docker names, while the journey installs the previous release during the build:

@@ -4,7 +4,8 @@ Your own external agent (Grok, Muse, Claude, Cursor, Codex or any other that spe
 as you: read and act on your tasks, goals, docs and bots, with your rights and no more. It connects
 to Tico's MCP server with a personal token.
 
-**Connect an external agent** is the plug button beside your email (and a step in Finish setup). Any human can
+**Connect an external agent** is the plug button beside your email (and a step in Finish setup). Until one of your
+tokens has reached Tico, your own row on the team chart also shows **Connect**, which opens the same dialog. Any human can
 make a personal token, and it sees what they see; the owner may limit tokens to admins (Settings > Humans).
 
 1. Pick the agent.

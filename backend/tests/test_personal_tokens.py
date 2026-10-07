@@ -31,7 +31,7 @@ def test_the_list_never_carries_the_secret_or_its_hash(tokens):
         stored = c.execute("SELECT token_hash FROM human_tokens WHERE id=?", (issued["id"],)).fetchone()[0]
     assert issued["token"] not in r.text and stored not in r.text and stored != issued["token"]
     # Each person sees only their own list.
-    assert get(tokens, "me/tokens", token=OWNER) == {"tokens": []}
+    assert get(tokens, "me/tokens", token=OWNER)["tokens"] == []
     # Not through SQL either, not even for the owner (backend/sql.py denies unlisted tables).
     r = tokens.post("/api/v2/sql", json={"sql": "SELECT token_hash FROM human_tokens"}, headers=headers(OWNER))
     assert r.status_code == 422 and stored not in r.text

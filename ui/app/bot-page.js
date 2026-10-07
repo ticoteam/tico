@@ -12,7 +12,7 @@ async function recentRuns() {
 }
 
 // ----------------------------------------------------------------- bot page
-// Header (name, state, goal) always visible; everything else behind four tabs that live in the URL
+// Header (name, alert, goal) always visible, on a phone only the name; everything else behind four tabs that live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
 // The session view is a card inside More; #/bot/<slug>/session still opens it
@@ -162,43 +162,6 @@ function botAlertHTML(slug) {
     word = 'Offline with work waiting';
   return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>` : '';
 }
-// On a phone the top line says what this bot is doing. Something blocked on the
-// human stays put ("! Needs you: …", tap to open); otherwise the bot's active tasks cycle one at a
-// time, ticker-style. Nothing active, nothing shown.
-let BOT_TICKER = {slug: '', needs: [], active: [], i: 0, timer: 0};
-async function botTickerLoad(slug) {
-  const [owned, asked] = await Promise.all([
-    v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=all`),
-    v2Get(`/v2/tasks?requester=${encodeURIComponent(slug)}&status=all`)]);
-  if (BOT?.slug !== slug) return;
-  const live = t => ['open', 'doing', 'waiting', 'declined'].includes(String(t.status));
-  const mine = (owned?.tasks || []).filter(live), theirs = (asked?.tasks || []).filter(live);
-  const needs = [...theirs, ...mine].filter(t => taskNeedsMe(t) || (t.owner === myActor() && t.status !== 'done'));
-  const run = v2StatusOf(slug), runningId = run?.state === 'running' ? run.task_id : '';
-  const active = mine.filter(t => ['doing', 'open'].includes(String(t.status)) && !needs.includes(t))
-    .sort((a, b) => (b.id === runningId) - (a.id === runningId) || String(b.updated || '').localeCompare(String(a.updated || '')));
-  const same = BOT_TICKER.slug === slug;
-  BOT_TICKER = {...BOT_TICKER, slug, needs, active, i: same ? BOT_TICKER.i % Math.max(1, active.length) : 0, runningId};
-  botTickerPaint();
-  clearInterval(BOT_TICKER.timer);
-  if (!needs.length && active.length > 1) BOT_TICKER.timer = setInterval(() => {
-    if (BOT?.slug !== BOT_TICKER.slug || !$('#bot-ticker')) return clearInterval(BOT_TICKER.timer);
-    BOT_TICKER.i = (BOT_TICKER.i + 1) % BOT_TICKER.active.length;
-    botTickerPaint(true);
-  }, 3500);
-}
-function botTickerPaint(slide) {
-  const el = $('#bot-ticker'); if (!el) return;
-  const {needs, active, i, runningId} = BOT_TICKER;
-  if (needs.length) {
-    const t = needs[0];
-    el.innerHTML = `<button type="button" class="bot-ticker-needs" data-task-conversation="${esc(t.id)}"><span class="st-ic st-needs" aria-hidden="true">!</span><span>${needs.length > 1 ? `${needs.length} need you · ` : 'Needs you: '}${esc(t.title || '')}</span></button>`;
-  } else if (active.length) {
-    const t = active[i % active.length];
-    el.innerHTML = `<span class="bot-ticker-line${slide ? ' slide' : ''}"><span class="st-ic ${t.id === runningId ? 'st-doing' : 'st-doing-idle'}" aria-hidden="true"></span><span>${esc(t.title || '')}</span>${active.length > 1 ? `<span class="bot-ticker-n">${(i % active.length) + 1}/${active.length}</span>` : ''}</span>`;
-  } else el.innerHTML = '';
-  el.hidden = !el.innerHTML;
-}
 // Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
 // (#524, after bot-desk). A file dropped anywhere else on the page is swallowed: the browser's own
 // answer is to navigate away to it, and nothing here wants that. A file input keeps its own drop.
@@ -250,16 +213,16 @@ async function pageBot(slug, tab) {
   const tabsShown = [...work, ...(isKeeper(slug) && !limited ? ['history'] : []), 'more'];
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, one top line holds back, the bot and Chat · Tasks · More, with the goal as one
-  // line under it. A status shows only when it is an alert. Docs live inside More.
+  // line under it; on a phone the goal and the rest wait at the top of More (placeBotHead). A status shows
+  // only when it is an alert. Docs live inside More.
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
-      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}</h1><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-n" hidden></span></button><span id="bot-tool-strip" hidden></span></div>
+      <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}</h1><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button><span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-assignment-branches"></div>
-        <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div>
-        <div class="bot-ticker" id="bot-ticker" aria-live="polite" hidden></div></div></div>
+        <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
       ${tabsShown.map(t => { const label = t[0].toUpperCase() + t.slice(1);
         return `<button type="button" data-bt="${t}" role="tab" aria-label="${label}" title="${label}"><span class="nav-icon bt-icon" aria-hidden="true">${BOT_TAB_ICONS[t] || 'more_horiz'}</span><span class="bt-label">${label}</span></button>`; }).join('')}
@@ -305,6 +268,7 @@ async function pageBot(slug, tab) {
   </div>
   `}
   <div id="pane-more" hidden>
+    <div class="bot-more-top" id="bot-more-top"></div>
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd style="white-space:pre-wrap">${esc(role)}</dd>` : ''}
@@ -315,7 +279,7 @@ async function pageBot(slug, tab) {
         <dt>Your access</dt><dd>${e.my_access.write ? 'See it and send requests' : 'See it only'}</dd>
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
-` : `    <section class="card"><header><h2>Setup</h2>${settingsCanManageBot(e) ? '<button class="ghost" type="button" id="bot-edit-settings">Bot settings</button>' : ''}</header>
+` : `    <section class="card" id="bot-setup-card"><header><h2>Setup</h2>${settingsCanManageBot(e) ? '<button class="ghost" type="button" id="bot-edit-settings">Bot settings</button>' : ''}</header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd style="white-space:pre-wrap">${esc(role)}</dd>` : ''}
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
@@ -337,16 +301,16 @@ async function pageBot(slug, tab) {
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
         <button class="linkish" type="button" id="bot-goals-add">Add goal</button></header>
       <div id="bot-goals-list"><div class="empty">Loading…</div></div></section>
-    ${keeper ? `<section class="card"><header><h2>Status history</h2></header>
+    ${keeper ? `<section class="card" id="bot-status-card"><header><h2>Status history</h2></header>
       <div id="v2-history"><div class="empty">Loading…</div></div></section>` : ''}
-    <section class="card"><header><h2>Access</h2></header>
+    <section class="card" id="bot-access-card"><header><h2>Access</h2></header>
       ${accessTable(e)}</section>
 
     <section class="card" id="bot-routines"><header><h2>Routines</h2></header>
       <div id="bot-routines-list">${botRoutinesHTML(e, slug)}</div>
     </section>
 
-    <section class="card"><header><h2>Runs</h2></header>
+    <section class="card" id="bot-runs-card"><header><h2>Runs</h2></header>
       ${(rs => rs.length ? `<div id="bot-recent-runs">${runsTable(rs, false)}</div>`
         : '<div id="bot-recent-runs" data-pending="1"><div class="muted">Loading…</div></div>'
       )((S.status?.recent_runs || []).filter(r => r.employee === slug).slice(0, 10))}</section>
@@ -389,7 +353,6 @@ async function pageBot(slug, tab) {
     void botLearningsLoad(slug);
   }
   if (!limited) void botGoalLoad(slug);
-  if (isKeeper(slug) && !limited) void botTickerLoad(slug);
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === 'chat' ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.bt}`;
@@ -442,22 +405,55 @@ async function pageBot(slug, tab) {
   $('#pane-tasks').addEventListener('click', ev => { if (ev.target.dataset.tab) { ev.preventDefault(); showTab(ev.target.dataset.tab); } });
 
   if (!limited) bindRoutineExpand($('#pane-more'));
+  moreClampWatch();
   showBotTab(tab);
   if (typing) pq(BOT_PILL, '.p-text')?.focus();   // once the pane is shown; a hidden box cannot take it
 }
 // A desktop is wide enough for both: chat on the left, the bot's tasks on the right, each scrolling
 // on its own (#514). A phone keeps one at a time behind the Chat | Tasks switch.
 const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
-// On a phone the top line is back, the bot, and three icons on the right; the
-// goal moves into More so the top line is not crowded.
+// On a phone the top line is back, the bot and its tabs, nothing else. More is the rest, condensed: the Goals
+// card first, then an alert, Learnings, branches and temporary assignments (moved here from beside the name,
+// and back on a wider screen), then the cards in groups, each long list cut to its first three rows.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
 const BOT_TAB_ICONS = {chat: 'chat_bubble', tasks: 'task_alt', history: 'dynamic_feed', more: 'menu'};
-function placeBotGoal(view) {
-  const goal = $('#bot-goal'), more = $('#pane-more'), top = $('#bot-top');
-  if (!goal || !more || !top) return;
-  if (BOT_PHONE.matches && view === 'more') { if (goal.parentElement !== more) more.prepend(goal); }
-  else if (goal.parentElement !== top) top.insertBefore(goal, $('#bot-more-btn'));
-}   // the sidebar takes ~300px; below this one column fits
+function placeBotHead() {
+  const host = $('#bot-more-top'), top = $('#bot-top');
+  if (!host || !top) return;
+  const [alert, learn, ...rest] = ['#bot-alert', '#bot-learn', '#bot-branches', '#bot-assignment-branches'].map(q => $(q));
+  if (BOT_PHONE.matches) { host.append(...[alert, learn, ...rest].filter(Boolean)); return; }
+  if (learn?.parentElement === host) $('#bot-tool-strip').before(learn);
+  for (const el of [...rest, alert]) if (el?.parentElement === host) top.querySelector('.botid').append(el);
+}
+// The lists in More that a phone cuts to three: [host, rows, keep the newest last]. Each fills in its own time,
+// so one observer cuts whatever has arrived; "Show all" undoes it for that list until the page is redrawn.
+const MORE_LISTS = [['#bot-tools', '.bt-item'], ['#bot-routines-list', '.rlist>*'], ['#bot-access-card .scroll', 'tr:not(:first-child)'],
+  ['#v2-history', 'tr:not(:first-child)'], ['#bot-recent-runs', 'tr:not(:first-child)'], ['#sess-turns', ':scope>*', true]];
+const MORE_KEEP = 3;
+function moreClamp() {
+  const pane = $('#pane-more'); if (!pane) return;
+  for (const [q, rows, newest] of MORE_LISTS) {
+    const host = pane.querySelector(q); if (!host) continue;
+    const items = [...host.querySelectorAll(rows)];
+    const cut = BOT_PHONE.matches && !host.dataset.all && items.length > MORE_KEEP + 1;   // never hide just one
+    items.forEach((el, i) => el.classList.toggle('more-cut', cut && (newest ? i < items.length - MORE_KEEP : i >= MORE_KEEP)));
+    let btn = host.nextElementSibling?.matches('.more-all') ? host.nextElementSibling : null;
+    if (!cut) { btn?.remove(); continue; }
+    const label = `Show all ${items.length}`;
+    if (!btn) {
+      btn = Object.assign(document.createElement('button'), {type: 'button', className: 'linkish more-all'});
+      btn.onclick = () => { host.dataset.all = '1'; moreClamp(); };
+      host.after(btn);
+    }
+    if (btn.textContent !== label) btn.textContent = label;
+  }
+}
+function moreClampWatch() {
+  const pane = $('#pane-more'); if (!pane) return;
+  new MutationObserver(moreClamp).observe(pane, {childList: true, subtree: true});
+  moreClamp();
+}
+BOT_PHONE.addEventListener('change', () => { placeBotHead(); moreClamp(); });
 function showBotTab(tab) {
   if (!BOT || !$('#btabs')) return;
   const wantSession = tab === 'session';                         // the old tab, now a card in More
@@ -485,7 +481,7 @@ function showBotTab(tab) {
   $('#pane-more').hidden = $('#pane-docs').hidden = view !== 'more';
   if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
   if (view === 'history') void botHistoryLoad(BOT.slug);
-  placeBotGoal(view);
+  placeBotHead();
   if (!chat) convStop(); // the thread and microphone stop off-screen
   else if (isKeeper(BOT.slug)) {
     if (!V2C || V2C.slug !== BOT.slug) v2ChatLoad(BOT.slug);

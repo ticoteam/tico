@@ -106,7 +106,7 @@ async function assignmentBranchesLoad(source) {
     const data = await get(`/v2/bots/${encodeURIComponent(source)}/assignment-branches`);
     if (BOT?.slug !== source || !host.isConnected) return;
     if (!data.enabled) {
-      host.innerHTML = '<section class="assignment-branches"><strong>Temporary assignments need Allow branches.</strong><p class="muted">Enable it in this role’s Settings before allocating a task.</p></section>';
+      host.innerHTML = '';   // off: nothing to say on the bot's page; Allow branches is in its Settings
       return;
     }
     const manager = S.me?.role === 'owner' || !!bot.can_manage;

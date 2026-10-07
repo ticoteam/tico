@@ -288,6 +288,7 @@
       closed = true; stopPolling(); issued = null;
       dialog.remove();
       if (typeof renderSettingsTokens === 'function' && document.getElementById('set-tokens')) void renderSettingsTokens();
+      window.dispatchEvent(new Event('tico:agents-changed'));     // the team chart's Connect button (ui/app/sidebar.js)
     };
     document.body.appendChild(dialog); dialog.showModal();
     void showPicker();

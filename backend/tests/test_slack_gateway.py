@@ -542,6 +542,31 @@ def test_task_results_are_one_tico_dm_per_task_status(gateway, hub):
     assert len(rows(hub, 'SELECT * FROM slack_posts')) == 1
 
 
+def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(gateway, hub):
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"] = [{**p, "slack_muted_bots": ["legal"]} if p["id"] == "ana" else p for p in raw["people"]]
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(raw),))
+    # Ana asked Legal from Slack, so everything Legal says in that conversation still goes back there.
+    answer = routed_reply(gateway, hub)
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    with hub.transaction() as c:
+        later = H.say(c, "bot:legal", "human:ana", "Run report.", conversation_id=thread["conversation_id"])["id"]
+        other = H.say(c, "bot:cmo", "human:ana", "Done with the launch plan.")["id"]
+    gateway.originate()
+    gateway.mirror()
+    with hub.transaction() as c:
+        # Days later, Legal's unprompted digest lands in the same chat; Ana is no longer talking there.
+        c.execute("UPDATE messages SET created=? WHERE conversation_id=? AND from_actor='human:ana'",
+                  (H.shift(H.now(), days=-2), thread["conversation_id"]))
+        muted = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"])["id"]
+    gateway.originate()
+    gateway.mirror()
+    posts = {r["message_id"]: r["state"] for r in rows(hub, "SELECT * FROM slack_posts")}
+    assert posts == {answer: "ready", later: "ready", muted: "cancelled", other: "ready"}
+
+
 @pytest.mark.parametrize('skip', ['outside', 'wrong_person'])
 def test_task_result_skips(gateway, hub, skip):
     link_task_requester(hub, slack_id={'outside': 'U8', 'wrong_person': 'U2'}[skip])

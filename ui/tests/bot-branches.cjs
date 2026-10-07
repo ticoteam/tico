@@ -90,8 +90,11 @@ const {html, uiFile} = require('./support/page.cjs');
       if (p.endsWith('/files')) return json({files: []});
       return json({});
     });
-    await page.goto('https://tico-ui.test/#/bot/architect');
+    // On a phone the top line is only the bot and its tabs; branches and assignments wait at the top of More.
+    await page.goto('https://tico-ui.test/#/bot/architect/more');
     await page.locator('[data-branch-make]').waitFor();
+    assert.equal(await page.locator('#bot-top #bot-branches, #bot-top #bot-assignment-branches').count(), 0);
+    assert.equal(await page.locator('#bot-more-top > #bot-branches + #bot-assignment-branches').count(), 1);
     await page.locator('#bot-assignment-branches .assignment-card').waitFor();
     assert.match(await page.locator('#bot-assignment-branches').innerText(), /1\/3 active/);
     assert.match(await page.locator('#bot-assignment-branches').innerText(), /Ship the scoped feature/);
@@ -180,7 +183,7 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.match(await dialog.innerText(), /You have no computer yet/);
     assert.equal(await dialog.locator('[type=submit]').isEnabled(), true);
     await dialog.locator('[data-branch-close]').click();
-    await page.evaluate(() => { location.hash = '#/bot/architect'; });
+    await page.evaluate(() => { location.hash = '#/bot/architect/more'; });
     await page.waitForFunction(() => BOT?.slug === 'architect');
     assignment = {...assignment, phase: 'archived', revision: 5, cleanup: null,
       task: {...assignment.task, status: 'done'}};

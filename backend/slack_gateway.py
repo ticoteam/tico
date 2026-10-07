@@ -952,6 +952,27 @@ class Gateway:
             ('%"' + actor + '"%',)).fetchone()
         return row["channel"] if row else None
 
+    def stays_in_tico(self, c, row, bot, people):
+        """A bot message stays in Tico when its person turned off bot messages in Slack, or muted
+        this bot, unless they are mid-conversation in Slack: their latest message in it came from
+        Slack within the day. Not any Slack message ever: a bot's unprompted messages land in its
+        newest open chat with the person, which is often one they once started from Slack."""
+        person = P.person(row["to_actor"][6:], people) or {}
+        if person.get("notify_slack_bot_messages") is not False and bot not in (person.get("slack_muted_bots") or []):
+            return False
+        last = c.execute(
+            "SELECT created, json_extract(refs_json,'$.slack.event_id') AS slack FROM messages "
+            "WHERE conversation_id=? AND from_actor=? AND created<? ORDER BY created DESC LIMIT 1",
+            (row["conversation_id"], row["to_actor"], row["created"])).fetchone()
+        return not (last and last["slack"] and last["created"] >= H.shift(row["created"], hours=-24))
+
+    def keep_in_tico(self, c, row, bot, channel="", thread_ts=""):
+        """Mark a message handled without posting it, so the next pass does not pick it up again."""
+        now = self.clock()
+        c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,error,created,updated) "
+                  "VALUES(?,?,?,?,'','cancelled','Kept in Tico by their Slack settings',?,?)",
+                  (row["id"], channel, thread_ts, bot, now, now))
+
     def originate(self):
         """A bot message to a person with no Slack mapping yet: open (or reuse) their Tico DM.
 
@@ -960,13 +981,14 @@ class Gateway:
         """
         with self.store.read() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT m.id,m.body,m.conversation_id,m.from_actor,m.to_actor FROM messages m "
+                "SELECT m.id,m.body,m.conversation_id,m.from_actor,m.to_actor,m.created FROM messages m "
                 "WHERE m.kind IN ('say','ask','answer','notice') AND m.from_actor LIKE 'bot:%' "
                 "AND m.to_actor LIKE 'human:%' AND m.deleted_at IS NULL "
                 "AND json_extract(m.refs_json,'$.task_completion') IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
                 "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id) "
                 "ORDER BY m.created LIMIT 20")]
+            people = roster(c) if rows else None
         opened = 0
         for row in rows:
             bot, pid = row["from_actor"][4:], row["to_actor"][6:]
@@ -977,13 +999,14 @@ class Gateway:
                 if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=?",
                              (row["conversation_id"],)).fetchone():
                     continue
+                if self.stays_in_tico(c, row, bot, people):
+                    self.keep_in_tico(c, row, bot)
+                    continue
                 channel = self.im_channel(c, pid)
                 if not channel:
                     slack_id = str((H.human(c, pid) or {}).get("slack_id") or "").strip()
                     if not slack_id:
-                        raw = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
-                        roster = P.load(json.loads(raw["value_json"]) if raw else {})
-                        slack_id = str((P.person(pid, roster) or {}).get("slack_id") or "").strip()
+                        slack_id = str((P.person(pid, people) or {}).get("slack_id") or "").strip()
                     if not slack_id:
                         continue
                 else:
@@ -1026,13 +1049,17 @@ class Gateway:
         """New bot replies in mapped conversations become posts to make, once each."""
         with self.store.transaction() as c:
             rows = c.execute(
-                "SELECT m.id,m.body,m.in_reply_to,t.channel,t.thread_ts,t.bot FROM messages m "
+                "SELECT m.id,m.body,m.in_reply_to,m.to_actor,m.conversation_id,m.created,t.channel,t.thread_ts,t.bot FROM messages m "
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.from_actor='bot:'||t.bot "
                 "WHERE m.created>t.created AND m.kind IN ('say','ask','answer','notice') AND m.to_actor LIKE 'human:%' "
                 "AND m.deleted_at IS NULL AND json_extract(m.refs_json,'$.task_completion') IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created LIMIT 50").fetchall()
+            people = roster(c) if rows else None
             for r in rows:
                 if not privacy.public_message(c, H.message(c, r["id"])):
+                    continue
+                if self.stays_in_tico(c, r, r["bot"], people):
+                    self.keep_in_tico(c, r, r["bot"], r["channel"], r["thread_ts"])
                     continue
                 # The reply goes where the message it answers was: the thread root in a channel;
                 # in a DM, the bottom of the DM unless the person wrote inside a reply thread.

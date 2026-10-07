@@ -49,9 +49,13 @@ Loop until nothing is left that you can move:
 2. **Build** in its own worktree and branch `<issue>-<slug>` from the target repo's
    `origin/main` (`git worktree add`), so two tickets never share a checkout. For a bot repo,
    work in a fresh clone or worktree, never in the live bot checkout the runner uses.
-3. **Test** locally: the suites for what you changed, and the full suite (`python -m pytest -q -n auto`
-   and `npm run test:ui`) before a Tico merge. GitHub Actions only builds and publishes; it does not run tests.
-   Compare a local failure against main before calling it yours.
+3. **Test** locally, and only what you changed. Write unit tests while you build and run them as you
+   go. Once the change works and they pass, delete all but the highest-value ones: keep a test only if
+   it guards a privacy or permission boundary, data safety, or a core task/run flow. Before merging, run
+   the test files for what you touched, plus the checks the change obviously affects (catalog, docs
+   counts, tool parity). Do not run the full suite for a merge: it runs once, right before a release
+   (docs/releasing.md). GitHub Actions only builds and publishes; it does not run tests. Compare a local
+   failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / How it was checked**, and `Closes #<n>`.
 5. **Merge** when CI is green and a maintainer has approved. Contributors open the pull request and
    stop there; maintainers merge with `gh pr merge --merge`. How a merged change reaches a

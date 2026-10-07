@@ -10,6 +10,8 @@ the Goal Manager is reached from Goals and the Librarian from Docs and Market. S
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
 A message bot's mailboxes and Slack channels are listed under it in the sidebar; any other bot's Slack channels are
 under Slack in its Tools on the bot's page.
+A human's synced Grok Bots ([Grok Bot sync](grok-bot-sync.md)) are chips beside their name rather than rows under them. Your
+own row shows **Connect** until an external agent of yours has reached Tico ([Connect an external agent](connect-an-agent.md)).
 Bots read the same chart through `hub team show` / the `hub_team_show` MCP tool (`GET /api/v2/org`): the humans, and every bot the caller
 may see (see [permissions.md](permissions.md)) with its `reports_to`, its `team` (its group's id), its `department` (its group's name)
 and its `template`. `hub team show --team <group>` is that group and the groups in it. `hub human list` is the humans alone.

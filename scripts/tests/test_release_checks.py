@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -108,6 +109,95 @@ def test_failed_default_run_invalidates_an_older_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(release_checks.subprocess, 'run', run)
     assert release_checks.full() == 1
     assert len(calls) == 1
+    assert not receipt.exists()
+
+
+def test_full_receipt_round_trip_uses_check_completion_time(tmp_path, monkeypatch):
+    root = git_repo(tmp_path / 'candidate')
+    monkeypatch.setattr(release_checks, 'ROOT', root)
+    monkeypatch.setattr(release_checks, 'load', lambda: '0.00,0.00,0.00')
+    identity_calls = 0
+
+    def identity():
+        nonlocal identity_calls
+        identity_calls += 1
+        if identity_calls == 2:
+            # Model slow post-check verification; it must not change the receipt's run duration.
+            time.sleep(0.06)
+        return 'synthetic-environment'
+
+    monkeypatch.setattr(release_checks, 'environment_identity', identity)
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        if command[0] == 'git':
+            return real_run(command, **kwargs)
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr(release_checks.subprocess, 'run', run)
+
+    assert release_checks.full() == 0
+    assert identity_calls == 2
+    snapshot = release_checks.git_snapshot()
+    receipt = release_checks.valid_default_receipt(snapshot, 'synthetic-environment')
+    assert receipt is not None
+    assert receipt['commands'] == release_checks.default_commands()
+    assert receipt['checks'] == [
+        {'command': command, 'exit_code': 0, 'seconds': pytest.approx(0.0)}
+        for command in release_checks.default_commands()
+    ]
+
+
+@pytest.mark.parametrize('mutation', ['environment', 'dirty_tree'])
+def test_full_does_not_write_receipt_after_candidate_or_environment_changes(tmp_path, monkeypatch, mutation):
+    root = git_repo(tmp_path / 'candidate')
+    tracked = root / 'tracked.txt'
+    monkeypatch.setattr(release_checks, 'ROOT', root)
+    monkeypatch.setattr(release_checks, 'load', lambda: '0.00,0.00,0.00')
+    identity_calls = 0
+
+    def identity():
+        nonlocal identity_calls
+        identity_calls += 1
+        if mutation == 'environment' and identity_calls > 1:
+            return 'changed-environment'
+        return 'synthetic-environment'
+
+    monkeypatch.setattr(release_checks, 'environment_identity', identity)
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        if command[0] == 'git':
+            return real_run(command, **kwargs)
+        if mutation == 'dirty_tree' and command == release_checks.default_commands()[1]:
+            tracked.write_text('changed after validation\n')
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr(release_checks.subprocess, 'run', run)
+
+    assert release_checks.full() == 0
+    _, receipt, _ = release_checks.receipt_paths()
+    assert not receipt.exists()
+
+
+def test_full_over_budget_run_does_not_write_receipt(tmp_path, monkeypatch):
+    root = git_repo(tmp_path / 'candidate')
+    monkeypatch.setattr(release_checks, 'ROOT', root)
+    monkeypatch.setattr(release_checks, 'load', lambda: '0.00,0.00,0.00')
+    monkeypatch.setattr(release_checks, 'environment_identity', lambda: 'synthetic-environment')
+    moments = iter((0, 0, 151, 151, 302, 302))
+    monkeypatch.setattr(release_checks.time, 'monotonic', lambda: next(moments))
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        if command[0] == 'git':
+            return real_run(command, **kwargs)
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    monkeypatch.setattr(release_checks.subprocess, 'run', run)
+
+    assert release_checks.full() == 1
+    _, receipt, _ = release_checks.receipt_paths()
     assert not receipt.exists()
 
 

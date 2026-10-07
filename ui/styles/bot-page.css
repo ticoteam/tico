@@ -40,18 +40,6 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
 .bot-ident .botid{min-width:0;flex:1}
 .bot-ident h1{font-size:15px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bot-ident .meta{margin-top:2px;min-width:0}.bot-ident .meta:empty{display:none}
-.bot-ticker{display:none}
-@media (max-width:760px){
-  .bot-ticker:not([hidden]){display:block;margin-top:1px;min-width:0;overflow:hidden;height:18px;font-size:12px;color:var(--muted)}
-  .bot-ticker-line,.bot-ticker-needs{display:flex;align-items:center;gap:6px;min-width:0;height:18px}
-  .bot-ticker-line>span:nth-child(2),.bot-ticker-needs>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-  .bot-ticker .st-ic{display:inline-flex;width:12px;height:12px;flex:none;font-size:9px}
-  .bot-ticker-needs{border:0;background:none;padding:0;font:inherit;color:var(--wait);cursor:pointer;max-width:100%}
-  .bot-ticker-n{flex:none;font-variant-numeric:tabular-nums;opacity:.7}
-  .bot-ticker-line.slide{animation:tickerin .35s ease-out}
-}
-@keyframes tickerin{from{transform:translateY(100%);opacity:0}to{transform:none;opacity:1}}
-@media (prefers-reduced-motion:reduce){.bot-ticker-line.slide{animation:none}}
 .bot-alert{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:1px 7px;border-radius:9px;background:var(--fail-bg);color:var(--fail);font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bot-goal{order:2;flex:0 1 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:13px;color:var(--muted)}
 .bot-goal[data-status=none]{display:block;flex:0 1 auto}
@@ -61,7 +49,8 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .bot-goal-set{flex:none;color:var(--accent-quiet)}.bot-goal-set:hover{color:var(--accent)}
 .bot-goal-row{padding:8px 0;border-top:1px solid var(--line)}.bot-goal-row:first-child{border-top:0;padding-top:0}
 .person-edit-btn{font-size:13px;font-weight:400;margin-left:8px;vertical-align:middle}
-.person-notify{display:inline-flex;align-items:center;gap:10px;cursor:pointer}
+.person-notify{display:flex;width:fit-content;align-items:center;gap:10px;cursor:pointer}.person-notify+.person-notify{margin-top:10px}
+.person-muted{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin:8px 0 0 44px;font-size:13px}.person-muted[hidden]{display:none}.person-muted select{width:auto;min-width:0;flex:none;padding:2px 6px;font-size:13px}
 #person-notify-status:empty{display:none}#person-notify-status{margin-top:8px;font-size:13px}
 .person-head-form{display:grid;gap:8px;margin-top:6px;max-width:640px}.person-head-form input,.person-head-form textarea{width:100%}
 .bot-more-btn{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:6px;color:var(--muted);text-decoration:none}
@@ -147,9 +136,8 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .bot-switch .bt-icon{display:none}
 @media (max-width:760px){
   .bot-top{flex-wrap:nowrap}
-  .bot-top>.bot-goal{display:none}            /* the goal lives in More on a phone */
   #bot-tool-strip{display:none}               /* no room beside the name; the Tools card under More has them */
-  #pane-more>.bot-goal{margin:0 0 12px}
+  .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
   .bot-top .bot-switch{margin-left:auto;border:0;background:none;padding:0;gap:0}
   .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:38px;height:36px;padding:0;border-radius:8px}
   .bot-switch .bt-label{display:none}
@@ -163,3 +151,53 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 
 /* A status heading also removes the row's unused status track. */
 #pane-tasks .trow.status-in-heading :is(summary,.trow-head){grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"ttl pr who"}
+
+/* More on a phone: the Goals card, then what moved off the top line (alert, Learnings, branches), then the cards
+   grouped (setup and tools, what it does, what it did, its docs), each a compact block; long lists show three
+   rows and "Show all" (moreClamp in ui/app/bot-page.js); tables become one line a row. */
+.bot-more-top:empty,.more-cut{display:none!important}
+.bot-more-top>:empty,.bot-more-top:not(:has(>:not(:empty):not([hidden]))){display:none!important}   /* nothing to show yet: no gap, no margin */
+@media (max-width:760px){
+  #pane-more:not([hidden]){display:flex;flex-direction:column}
+  #pane-more>#bot-goals-card{order:1}
+  #pane-more>.bot-more-top{order:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
+  #pane-more>#bot-quarantine{order:3}
+  #pane-more>#bot-setup-card{order:4}
+  #pane-more>#bot-tools-card{order:5}
+  #pane-more>#bot-access-card{order:6;margin-bottom:22px}
+  #pane-more>#bot-routines{order:7}
+  #pane-more>#bot-updates-card{order:8;margin-bottom:22px}
+  #pane-more>#bot-status-card{order:9}
+  #pane-more>#bot-runs-card{order:10}
+  #pane-more>#sess-card{order:11}
+  .bot-more-top>#bot-branches,.bot-more-top>#bot-assignment-branches{flex:1 1 100%}
+  .bot-more-top .assignment-branches{margin-top:0}
+  :is(#pane-more,#pane-docs) section.card{padding:12px 14px;margin-bottom:10px;border-radius:12px}
+  :is(#pane-more,#pane-docs) section.card>header{margin-bottom:6px;align-items:center}
+  :is(#pane-more,#pane-docs) section.card>header h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+  :is(#pane-more,#pane-docs) section.card>header :is(.ghost,.linkish){margin-left:auto;font-size:12.5px;padding:3px 8px}
+  .more-all{display:block;margin:8px 0 0;font-size:12.5px;text-decoration:none}
+  #bot-goals-card .bot-goal-row{padding:6px 0}
+  #sess-turns{max-height:none}
+  /* tables as one line a row, no column heads */
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) .scroll{overflow:visible}
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) :is(table,tbody){display:block;width:100%}
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) tr:first-child:has(th){display:none}
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) tr{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:12.5px}
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) tr:nth-child(2){border-top:0}
+  :is(#v2-history,#bot-recent-runs,#bot-access-card) td{display:block;padding:0;border:0;min-width:0}
+  #v2-history td:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #v2-history td:nth-child(3){order:3}
+  #v2-history td:nth-child(n+4){display:none}
+  #bot-recent-runs td:nth-child(1){order:3;margin-left:auto}
+  #bot-recent-runs td:nth-child(5){display:none}
+  #bot-recent-runs td:nth-child(6){order:4}
+  #bot-access-card td:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+  #bot-access-card td:nth-child(5){display:none}
+  #bot-access-card .acc-summary{font-size:12.5px;margin-bottom:6px}
+}
+@media (max-width:760px){
+  #pane-more>#bot-routines{position:relative}
+  #bot-routines-list>.row:first-child{position:absolute;top:8px;right:14px}
+  #bot-routines-list>.row:first-child .ghost{font-size:12.5px;padding:3px 8px}
+}

@@ -447,9 +447,53 @@ function orgTreeWithHelpers(byParent) {
   }
   return out;
 }
+// A human's synced Grok Bots (backend/grokbot.py) are their own agents: small chips beside their name, not rows under
+// them. One moved elsewhere on the chart, or with bots under it, stays an ordinary row.
+const isSyncedAgent = e => e.harness === 'grokbot' || e.agent?.harness === 'grokbot';
+function orgAgentChips(byParent) {
+  const tree = {}, chips = {};
+  for (const [parent, kids] of Object.entries(byParent)) {
+    const rows = parent.startsWith('p:') ? kids.filter(n => {
+      const chip = n.kind === 'bot' && isSyncedAgent(n) && !byParent['b:' + n.name];
+      if (chip) (chips[parent] ||= []).push(n);
+      return !chip;
+    }) : kids;
+    if (rows.length) tree[parent] = rows;
+  }
+  return {tree, chips};
+}
+const AGENT_CHIPS_SHOWN = 1;                 // the rail fits one name; "+N" opens their page
+const agentChipName = e => (e.display_name || e.name).replace(/^Grok\s+/i, '') || e.display_name || e.name;
+function agentChipsHTML(p, list, curBot) {
+  if (!list?.length) return '';
+  const sorted = list.slice().sort((a, b) => agentChipName(a).localeCompare(agentChipName(b)));
+  const shown = sorted.slice(0, AGENT_CHIPS_SHOWN), rest = sorted.slice(AGENT_CHIPS_SHOWN);
+  const mark = window.toolIcons?.markup({logo_key: 'xai', name: 'Grok'}) || '';
+  return `<span class="org-agents">${shown.map(e => `<a class="org-agent${curBot === e.name ? ' cur' : ''}" href="#/bot/${encodeURIComponent(e.name)}"
+      data-org="b:${esc(e.name)}"${orgMayDrag('b:' + e.name) ? ' draggable="true"' : ''} title="${esc(`${e.display_name || e.name} · Grok Bot`)}"
+      aria-label="${esc(`${p.name || p.id}'s Grok Bot ${agentChipName(e)}`)}">${mark}<span>${esc(agentChipName(e))}</span></a>`).join('')}${rest.length
+    ? `<a class="org-agent more" href="#/person/${encodeURIComponent(p.id)}" title="${esc(rest.map(agentChipName).join(', '))}">+${rest.length}</a>` : ''}</span>`;
+}
+// Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
+// hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
+let MY_AGENT, MY_AGENT_AT = 0;
+async function loadMyAgent() {
+  MY_AGENT_AT = Date.now();
+  try {
+    const data = await get('/v2/me/tokens'), rows = data.tokens || [], now = Date.now();
+    MY_AGENT = data.can_create === false ? null : rows.some(r => r.last_used && !r.revoked_at && !(r.expires_at && new Date(r.expires_at) < now));
+  } catch { MY_AGENT = null; }
+  renderTree();
+}
+window.addEventListener('tico:agents-changed', () => void loadMyAgent());
+// An agent set up after the dialog closed reports in later: check again on return to the app, at most once a minute.
+window.addEventListener('focus', () => { if (MY_AGENT === false && Date.now() - MY_AGENT_AT > 60e3) void loadMyAgent(); });
 function renderTree() {
   ensureCollapsed();
-  const byParent = orgTreeWithHelpers(orgTreeByParent());
+  if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
+  const full = orgTreeWithHelpers(orgTreeByParent());
+  const {tree: byParent, chips} = orgAgentChips(full);
+  const myId = mePerson()?.id;
   const curBot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
   const curPerson = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -496,6 +540,8 @@ function renderTree() {
         <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${!flat && orgMayDrag(key) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
+        ${flat ? '' : agentChipsHTML(p, chips[key], curBot)}
+        ${!flat && p.id === myId && MY_AGENT === false && !chips[key] ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
         ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
@@ -516,7 +562,7 @@ function renderTree() {
   // Every bot and person, the one you opened last on top; ones you never opened follow by name.
   const history = () => {
     const seen = orgHistory(), at = n => { const i = seen.indexOf(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name); return i < 0 ? Infinity : i; };
-    return Object.values(byParent).flat().filter(n => n.kind !== 'group')
+    return Object.values(full).flat().filter(n => n.kind !== 'group')
       .sort((a, b) => (at(a) - at(b)) || nameOf(a).localeCompare(nameOf(b)))
       .map(node => row(node, 0, true)).join('');
   };
@@ -535,6 +581,7 @@ function renderTree() {
   orgDragWire($('#tree'));
   orgGroupFieldWire();
   $('#tree').onclick = ev => {
+    if (ev.target.closest('[data-connect-agent]')) { ev.preventDefault(); window.connectAgent?.(); return; }
     const remove = ev.target.closest('[data-group-delete]');
     if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
     const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');

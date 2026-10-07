@@ -25,7 +25,8 @@ A missing or empty file still gives a working roster: the environment owner, and
 DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
                   "team": "", "primary_for": [], "bot": None, "reports_to": "",
                   "inbox_bot": None, "hidden": False, "photo": "",
-                  "slack": "", "slack_id": "", "notify_slack_task_done": True, "phone": "", "about": "", "goals": "", "notes": "",
+                  "slack": "", "slack_id": "", "github": "", "notify_slack_task_done": True,
+                  "notify_slack_bot_messages": True, "slack_muted_bots": [], "phone": "", "about": "", "goals": "", "notes": "",
                   "directory": "", "external_id": "", "directory_left": False,
                   # What a member may do (docs/permissions.md): create bots (on by default), and add people
                   # (None = the default: coworkers in the company's email domain may, others may not).
@@ -64,7 +65,11 @@ def _person(row):
             "photo": photo,
             "slack": _clean(row.get("slack")).lstrip("@"),
             "slack_id": _clean(row.get("slack_id")),
+            # Their GitHub login, which a review request on a linked pull request names (backend/github.py).
+            "github": _clean(row.get("github")).lstrip("@").lower(),
             "notify_slack_task_done": row.get("notify_slack_task_done") is not False,
+            "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
+            "slack_muted_bots": _list(row.get("slack_muted_bots")),
             "phone": _clean(row.get("phone")),
             "about": _clean(row.get("about")),
             "goals": _clean(row.get("goals")),
@@ -388,7 +393,10 @@ def profile(person_row):
             "reports_to": p.get("reports_to") or "",
             "slack": p.get("slack") or "",
             "slack_id": p.get("slack_id") or "",
+            "github": p.get("github") or "",
             "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
+            "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
+            "slack_muted_bots": list(p.get("slack_muted_bots") or []),
             "phone": p.get("phone") or "",
             "about": p.get("about") or "",
             "goals": p.get("goals") or "",

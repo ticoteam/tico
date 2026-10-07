@@ -15,10 +15,10 @@ bot's own work is tasks, never issues.
 `@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cjs`). Tests run
 locally; GitHub Actions does not run tests. The default Python suite stays under about 60 seconds and the whole
 default run (pytest plus core UI) under 2 minutes; `python scripts/release_checks.py` runs both and records time and
-load (the per-PR gate). `--release` runs the opt-in rest (`pytest -m slow`, `ui-tests.cjs --all`) and the Docker
+load. A PR runs only the tests for what it changed; the full suite runs once, right before a release. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
 privacy or permission boundary, migrations and data safety, or a core task/run flow, one or two per rule; no tests
-of wording or docs, no exhaustive parametrizations. Real git, Docker, servers or long timers go behind
+of wording or docs, no exhaustive parametrizations. Write tests freely while building, then keep only the highest-value ones. Real git, Docker, servers or long timers go behind
 `@pytest.mark.slow`. Adding a test that slows the default run means cutting another. `evals/botops/run.py` scores a real BotOps
 against a dev install with a real model, on demand only; `backend/tests/test_botops_evals.py` is its scripted layer.
 

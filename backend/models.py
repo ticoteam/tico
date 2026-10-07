@@ -1137,6 +1137,11 @@ class PersonUpdate(Contract):
     goals: str | None = Field(default=None, max_length=8000)
     notes: str | None = Field(default=None, max_length=20_000)
     notify_slack_task_done: bool | None = None
+    # Their GitHub login ("" clears it): a review request naming it puts them on the linked task.
+    github: str | None = Field(default=None, pattern=r"^@?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$|^$")
+    notify_slack_bot_messages: bool | None = None
+    # Bots whose messages to this person stay in Tico even while bot messages in Slack are on.
+    slack_muted_bots: list[Slug] | None = Field(default=None, max_length=200)
     # Where this person sits on the org chart: another person's id, or "" for the top.
     reports_to: str | None = Field(default=None, max_length=80)
     # Someone who no longer works here is removed from the org chart. The
@@ -1148,7 +1153,7 @@ class PersonUpdate(Contract):
     @model_validator(mode="after")
     def has_change(self):
         if not (self.model_fields_set - {"on_behalf_of"}):
-            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, reports_to or left")
+            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, slack_muted_bots, github, reports_to or left")
         return self
 
 
