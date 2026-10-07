@@ -304,3 +304,22 @@ def test_a_slow_first_answer_after_the_switch_is_tried_again_not_rolled_back(mon
     monkeypatch.setattr(updater, "running_image", lambda: next(images))
     updater.update("v0.2.0")
     assert updater.status["state"] == "healthy", updater.status["message"]
+
+
+def test_prune_also_removes_dangling_images_of_its_own_repositories_only(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        out = ""
+        if argv[:3] == ["docker", "image", "ls"] and "dangling=true" in argv:
+            out = {"ghcr.io/ticoteam/tico": "sha256:aaa\nsha256:old\n", "ghcr.io/ticoteam/tico-updater": "sha256:bbb\n"}[argv[3]]
+        elif argv[:3] == ["docker", "image", "ls"]:
+            out = "v0.2.0\nv0.1.0\nv0.0.9\nlatest\n<none>\n" if argv[3] == "ghcr.io/ticoteam/tico" else ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+    monkeypatch.setattr(updater.subprocess, "run", run)
+    updater.prune_images(keep={"v0.2.0", "v0.1.0"}, keep_ids={"sha256:old"})
+    # The old tagged release and both repositories' dangling images go; the replaced image (by id) stays.
+    assert [a[2] for a in calls if a[:2] == ["docker", "rmi"]] == ["ghcr.io/ticoteam/tico:v0.0.9", "sha256:aaa", "sha256:bbb"]
+    assert all(a[3].startswith("ghcr.io/ticoteam/tico") for a in calls if a[:3] == ["docker", "image", "ls"])

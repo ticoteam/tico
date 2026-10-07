@@ -622,11 +622,12 @@ def replace_self():
     return 1
 
 
-def prune_images(keep):
+def prune_images(keep, keep_ids=()):
     """After a healthy update, drop this service's and the updater's older release images (the new one and the one to
     roll back to stay). Without this every release stays on disk until the host fills and an update fails. An image a
     container still uses is refused by Docker and kept."""
     keep = {str(k) for k in keep if k} | {"latest"}
+    keep_ids = {str(i) for i in keep_ids if i}
     for repo in (IMAGE, IMAGE.replace("tico-runner", "tico-updater") if MODE == "runner" else IMAGE + "-updater"):
         try:
             listed = subprocess.run(["docker", "image", "ls", repo, "--format", "{{.Tag}}"], capture_output=True, text=True,
@@ -637,6 +638,15 @@ def prune_images(keep):
             if tag in keep or tag == "<none>" or not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
                 continue
             subprocess.run(["docker", "rmi", repo + ":" + tag], capture_output=True, check=False, timeout=120)
+        # A release left untagged when `latest` (or a re-pulled tag) moved on: nothing would ever remove it.
+        try:
+            dangling = subprocess.run(["docker", "image", "ls", repo, "--filter", "dangling=true", "--no-trunc",
+                                       "--format", "{{.ID}}"], capture_output=True, text=True, timeout=60).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for image in dangling:
+            if image not in keep_ids:   # the image just replaced stays, untagged or not
+                subprocess.run(["docker", "rmi", image], capture_output=True, check=False, timeout=120)
 
 
 def update(version, running=""):
@@ -714,7 +724,7 @@ def update(version, running=""):
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)
             return
         remember(version)
-        prune_images(keep={version, previous, release_name(version), release_name(previous)})
+        prune_images(keep={version, previous, release_name(version), release_name(previous)}, keep_ids={image_id})
         message = ""
         if bundled and MODE == "server":
             # Slack, the front door and anything new follow the new compose file; the updater itself stays put.

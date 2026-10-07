@@ -14,6 +14,11 @@ from .blobs import register
 from .store import Problem
 
 FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")
+# Starts from the few pending rows (partial indexes in hubdb.migrate), never a scan of every blob: it runs every few seconds.
+PENDING = ("SELECT b.*,m.poster_blob_id FROM (SELECT blob_id FROM blob_media WHERE media_state='pending' "
+           "UNION SELECT blob_id FROM bot_file_versions WHERE media_state='pending') p JOIN blobs b ON b.id=p.blob_id "
+           "LEFT JOIN blob_media m ON m.blob_id=b.id LEFT JOIN blob_media_retries r ON r.blob_id=b.id "
+           "WHERE COALESCE(r.retry_at,0)<=? LIMIT 10")
 
 
 def dimensions(stream):
@@ -197,11 +202,7 @@ class Metadata:
 
     def batch(self):
         with self.store.read() as c:
-            rows = list(c.execute("SELECT b.*,m.poster_blob_id FROM blobs b LEFT JOIN blob_media m ON m.blob_id=b.id "
-                "LEFT JOIN blob_media_retries r ON r.blob_id=b.id "
-                "WHERE (m.media_state='pending' OR EXISTS(SELECT 1 FROM bot_file_versions v "
-                "WHERE v.blob_id=b.id AND v.media_state='pending')) AND COALESCE(r.retry_at,0)<=? LIMIT 10",
-                (time.time(),)))
+            rows = list(c.execute(PENDING, (time.time(),)))
         for row in rows:
             if self.stop.is_set():
                 break

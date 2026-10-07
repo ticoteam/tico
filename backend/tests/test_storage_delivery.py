@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 from botocore.exceptions import ClientError
@@ -366,6 +367,21 @@ def test_worker_fills_immutable_published_version(api):
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         assert (version["width"], version["height"], version["media_state"]) == (100, 50, "ready")
         assert version["thumb_blob_id"]
+
+
+def test_media_poll_starts_from_pending_rows_not_every_blob(api):
+    from backend.file_metadata import PENDING
+    worker = api.app.state.file_metadata
+    worker.stop.set()
+    worker.wake.set()
+    bid = attach(api, task(api), "notes.txt", b"pending media")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE blob_media SET media_state='pending' WHERE blob_id=?", (bid,))
+        assert bid in [r["id"] for r in c.execute(PENDING, (time.time(),))]
+        plan = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + PENDING, (0,)))
+        assert "SEARCH b USING" in plan and "blob_media_pending" in plan and "bot_file_versions_pending" in plan, plan
+        c.execute("INSERT INTO blob_media_retries(blob_id,attempts,retry_at) VALUES(?,1,?)", (bid, time.time() + 60))
+        assert bid not in [r["id"] for r in c.execute(PENDING, (time.time(),))]   # backing off
 
 
 @pytest.mark.slow
