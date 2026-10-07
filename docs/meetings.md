@@ -556,5 +556,5 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   `restart` and `uninstall` remove it.
 - The desktop app no longer captures audio or shows a meeting prompt; it is Tico in a window
   with a tray item. It no longer asks for microphone or system-audio permission.
-- `TICO_GEMINI_SECRET_ARN`, `TICO_XAI_SECRET_ARN` and `TICO_TRELLO_SECRET_ARN` are no longer read;
+- `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
   `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.

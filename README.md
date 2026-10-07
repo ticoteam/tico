@@ -77,7 +77,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/databases.md](docs/databases.md) | Letting bots read the team's own databases (PostgreSQL, MySQL, SQLite) read-only, and keeping your config private |
 | [docs/meetings.md](docs/meetings.md) | Meetings and call transcripts |
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
-| [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, Trello, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
+| [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
 | [docs/starter-bots.md](docs/starter-bots.md) | The 93 bot templates by group, their card fields and what a good bot looks like |
 | [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |

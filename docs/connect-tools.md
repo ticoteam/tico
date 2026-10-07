@@ -5,9 +5,8 @@ MCP server to anything we write: the vendor keeps it current, and Tico passes it
 BotOps ("connect Linear to Atlas") and it does the steps below; this page says what they are.
 
 **Tico does not currently manage OAuth renewal for bots.** Prefer a vendor-supported API credential or a connection with
-supported automatic refresh. Some providers require renewed human consent; check their documentation. Initial OAuth consent
-may need a person, but access-token expiry does not always require another sign-in: [Trello's refresh flow](https://developer.atlassian.com/cloud/trello/guides/rest-api/oauth-2-confidential-client-usage/)
-is one example. When Tico cannot maintain the MCP connection, a REST skill with a supported API credential is an option.
+supported automatic refresh. Some providers require renewed human consent; check their documentation. When Tico cannot
+maintain the MCP connection, a REST skill with a supported API credential is an option.
 
 | Service | Vendor MCP server | API token or key in a header? | For a bot |
 |---|---|---|---|
@@ -15,7 +14,6 @@ is one example. When Tico cannot maintain the MCP connection, a REST skill with 
 | Linear | `https://mcp.linear.app/mcp` | Yes: API key as Bearer | MCP with the key |
 | PostHog | `https://mcp.posthog.com/mcp` | Yes: a personal API key with the MCP Server preset, as Bearer | MCP with the key |
 | Sentry | `https://mcp.sentry.dev/mcp` | Documented in the server's README only: a user auth token as `Sentry-Bearer` (its docs page says OAuth) | MCP with the token, if it works for you; else the REST API |
-| Trello | `https://mcp.trello.com/v1` | No: OAuth only | REST API with key and token |
 | GitHub | none needed | The GitHub App gives each run a short-lived token | Built in |
 
 ## How a tool is connected
@@ -40,7 +38,7 @@ is one example. When Tico cannot maintain the MCP connection, a REST skill with 
    - From a shell or a chat: `hub tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
      --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `hub tool update` takes the same three flags.
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
-   `software/`) that calls the vendor's REST API with a key from `env`. See Trello below.
+   `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
 3. **The credential.** `hub credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
    `printf '%s' "$VALUE" | hub credential set <VAR> --for-bot <bot>`, which also grants it to that bot. A value is never
    written into a file, a task or a commit ([credential-vault.md](credential-vault.md)).
@@ -63,7 +61,7 @@ The operator's own MCP servers never reach a bot through Tico. The bot's own `.m
 
 An OAuth connection may renew automatically when the provider and client support refresh. Tico does not currently
 manage that renewal for bots. Use a supported API Credential, or a connection that manages automatic refresh, and check
-whether the provider requires renewed human consent. Trello's REST skill below is an example of the API Credential route.
+whether the provider requires renewed human consent. [A REST skill](#a-rest-skill) below is the API Credential route.
 
 ## Jira and Confluence
 
@@ -148,45 +146,37 @@ GitHub README (getsentry/sentry-mcp) describes a header for clients that can sen
 
 If it is refused (auth failed on the Tools tab), use Sentry's REST API with the same token from a skill.
 
-## Trello
+## A REST skill
 
-Trello has an official MCP server (`https://mcp.trello.com/v1`), but it signs in with OAuth only and Trello says API tokens are not
-supported for it, so a bot cannot use it. Use the REST API with an API key and a token, made in the Trello Power-Up admin
-(trello.com/power-ups/admin): store them as `TRELLO_API_KEY` and `TRELLO_TOKEN`. The token gives the whole account's access
-at the scope chosen (`read` or `read,write`); make it `never` expiring only if you accept that, and revoke it if it leaks.
+When a vendor has no MCP server, or only an OAuth one, give the bot a small skill that calls its REST API with an API token
+from `env`. Declare the tool, store the token as a Credential granted to the bot, and keep the first version read-only.
 
 ```yaml
-- service: trello
-  can: [read, write]
-  env: TRELLO_TOKEN
-  note: "REST API, skill trello; key in TRELLO_API_KEY"
+- service: example
+  can: [read]
+  env: EXAMPLE_API_TOKEN
+  note: "REST API, skill example"
 ```
 
-`skills/trello/SKILL.md` in the bot's repository:
+`skills/example/SKILL.md` in the bot's repository:
 
 ````markdown
 ---
-name: trello
-description: Read and change Trello boards and cards through the REST API.
+name: example
+description: Read Example records through its REST API.
 ---
 
-Credentials are in the environment as TRELLO_API_KEY and TRELLO_TOKEN. Never print them or write them into a file.
+The token is in the environment as EXAMPLE_API_TOKEN. Never print it or write it into a file.
 
-    trello() {  # trello GET /members/me/boards  |  trello POST /cards --data-urlencode name=...
+    example() {  # example GET /records?limit=5
       method=$1; path=$2; shift 2
-      curl -sS -X "$method" "https://api.trello.com/1$path" \
-        -H "Authorization: OAuth oauth_consumer_key=\"$TRELLO_API_KEY\", oauth_token=\"$TRELLO_TOKEN\"" "$@"
+      curl -sS -X "$method" "https://api.example.com/v1$path" -H "Authorization: Bearer $EXAMPLE_API_TOKEN" "$@"
     }
 
-Boards: `trello GET "/members/me/boards?fields=name,url"`. Cards on a list: `trello GET /lists/<id>/cards`.
-New card: `trello POST /cards --data-urlencode idList=<list id> --data-urlencode "name=..."`.
-Move a card: `trello PUT /cards/<id> --data-urlencode idList=<list id>`.
-Comment: `trello POST /cards/<id>/actions/comments --data-urlencode "text=..."`.
-Check first with the read-only board list.
+Check first with one read-only call.
 ````
 
-The key and token go in the `Authorization` header, not the URL, so they stay out of logs. Ask BotOps: "Connect Trello to `<bot>`; I will paste
-the key and token in the card."
+The token goes in a header, not the URL, so it stays out of logs.
 
 ## GitHub
 
@@ -201,7 +191,7 @@ tasks in Tico and close them (a report is ready for its account manager), give i
 
 Look for the vendor's own MCP server first: search "`<vendor>` MCP server", open the vendor's docs, and check for an
 address and whether it takes an API token or key in a header (not only OAuth). If the vendor has
-none, or it is OAuth-only, write a skill like Trello's that calls its REST API with an API token. Either way, say in the tool's `note:` who approved it and what is out of bounds.
+none, or it is OAuth-only, write [a REST skill](#a-rest-skill) that calls its REST API with an API token. Either way, say in the tool's `note:` who approved it and what is out of bounds.
 
 *Facts on this page were read from the vendors' own documentation on 2026-09-30; vendors change these, so when a tool shows "auth failed" or
 "unreachable", check the vendor's current page first.*

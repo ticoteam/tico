@@ -13,10 +13,10 @@ documentation: some require renewed human consent. In order:
 1. **The vendor's official MCP server, if it accepts an API token or key in a header.** Find it: search "<vendor> MCP server", open
    the vendor's own docs (not a blog or a third-party wrapper) and read the address, the transport (`http` = streamable HTTP, or
    `sse`) and how it signs in. `docs/connect-tools.md` has Jira and Confluence (basic auth, `email:token`), Linear (API key),
-   PostHog (personal API key), Sentry (auth token) and Trello already checked; say when you could not confirm a fact.
+   PostHog (personal API key) and Sentry (auth token) already checked; say when you could not confirm a fact.
 2. **Otherwise a small REST client with an API token**, in the bot's own repository (`skills/<service>/SKILL.md`, or a script under
-   `software/`) that calls the vendor's REST API with the token from `env`. This is the route when the MCP server is OAuth only
-   (Trello's is), and say why in one line. Keep it read-only first. The skill reads the variable; it never prints it or writes it to a file.
+   `software/`) that calls the vendor's REST API with the token from `env`. This is the route when the MCP server is OAuth only;
+   say why in one line. Keep it read-only first. The skill reads the variable; it never prints it or writes it to a file.
 
 For route 1 declare the server when you add the tool (the same request as any tool, plus three flags):
 

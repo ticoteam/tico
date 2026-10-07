@@ -456,7 +456,7 @@ tools:
 - `vault: hub` documents vault delivery. All run Credentials now require a grant to this bot.
 - `mcp:` makes the tool a remote MCP server (`{url, transport: http|sse, headers}`): Tico's runner passes it to the bot's
   harness next to Tico's own tools. The `headers` may use `${VAR}` for this entry's `env` variable, filled only from a
-  credential granted to this bot. See [connect-tools.md](connect-tools.md) for Jira, Confluence, Linear, PostHog, Sentry, Trello and GitHub (and Tico's OAuth renewal limitation).
+  credential granted to this bot. See [connect-tools.md](connect-tools.md) for Jira, Confluence, Linear, PostHog, Sentry and GitHub (and Tico's OAuth renewal limitation).
 - `note:` records who authorized it and what is excluded; human and bot readers rely on it. A
   browser-based access also names `sites:`, so the tool can refuse everything else.
 

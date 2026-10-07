@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Removed
+- Trello guidance: the connect-tools guide and BotOps's connect-a-tool playbook no longer cover Trello; a generic REST skill example replaces it.
+
 ## [0.3.32] - 2026-10-07
 
 ### Fixed
