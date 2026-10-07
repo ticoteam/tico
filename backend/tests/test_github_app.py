@@ -37,6 +37,7 @@ class FakeGitHub:
         self.permissions = None                  # the installation's live permissions; None leaves them out
         self.missing, self.selection, self.forbidden = set(), "all", False   # repositories GitHub answers 404 for
         self.selected_repositories = set()
+        self.list_status = 200
         self.created_repositories = set()
         self.create_response_message = ""
         self.lose_next_product_create_response = False
@@ -47,7 +48,10 @@ class FakeGitHub:
         path = request.url.path
         if path == "/installation/repositories":
             page = int(request.url.params.get("page", 1))
-            return httpx.Response(200, json={"repositories": self.repositories[(page-1)*100:page*100]})
+            seen = [r for r in self.repositories if r["full_name"].split("/")[1] not in self.missing]
+            if self.list_status != 200:
+                return httpx.Response(self.list_status)
+            return httpx.Response(200, json={"total_count": len(seen), "repositories": seen[(page-1)*100:page*100]})
         if "/contents/" in path:
             config = self.setup_files.get(path)
             if config is None:
@@ -288,6 +292,28 @@ def test_extra_repositories_join_the_turn_token_with_the_same_permissions(api, g
     assert body["repositories"] == ["design-system", "emp-cpo", "infra", "shared-docs"]
     assert body["permissions"] == {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
     assert set(api.get("/api/v2/bots/cpo/github-repos", headers=auth()).json()["repositories"]) == set(data["repositories"]) - {"Acme/emp-cpo"}
+
+
+def test_missing_own_repository_is_found_by_one_listing_not_a_probe_per_grant(api, gh):
+    connect(api)
+    assert api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': []}, headers=auth()).status_code == 200
+    runner_token(api, "cpo")
+    extras = [f"docs-{n}" for n in range(5)]
+    assert put_extras(api, "cpo", extras).status_code == 200
+    gh.repositories = [{"full_name": "Acme/" + name} for name in extras]
+    gh.missing = {"emp-cpo"}
+    data = turn_token(api).json()
+    assert set(data["repositories"]) == {"Acme/" + name for name in extras}
+    assert len(gh.of("/installation/repositories")) == 1 and not gh.of("/repos/Acme/docs-0")
+    # Within the missing mark, the own repository no longer fails a first mint on every call.
+    calls = len(gh.calls)
+    assert turn_token(api).status_code == 200 and len(gh.calls) == calls
+    # When GitHub will not list, each repository is probed as before.
+    with api.app_state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='repositories-confirmed-missing'")
+    gh.list_status = 500
+    assert set(turn_token(api).json()["repositories"]) == {"Acme/" + name for name in extras}
+    assert gh.of("/repos/Acme/emp-cpo") and gh.of("/repos/Acme/docs-0")
 
 
 def test_only_the_owner_manages_extra_repositories(api, gh):

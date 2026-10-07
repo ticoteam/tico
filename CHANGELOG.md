@@ -7,6 +7,13 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A turn's GitHub token no longer takes 15-20 seconds for a bot whose own repository does not exist: Tico finds missing
+  repositories with one listing of what the GitHub App can see instead of asking about each granted repository, and stops
+  retrying a known-missing own repository beside the others until its five-minute mark expires.
+- Health's Tool credentials check and the bot's Tools row count a GitHub tool's `GH_TOKEN`/`GITHUB_TOKEN` as present when
+  the connected GitHub App mints it for the bot's repository.
+
 ## [0.3.31] - 2026-10-07
 
 ### Added

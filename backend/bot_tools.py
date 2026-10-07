@@ -132,7 +132,9 @@ def _declared_tool(entry, used, label):
     service = str(entry.get("service") or "")
     env, credential = entry.get("env") or "", entry.get("credential") or "not-declared"
     status, problem, detail = "unknown", entry.get("problem") or "", ""
-    if credential == "present" and entry.get("granted"):
+    if credential == "present" and entry.get("github_app"):
+        status, detail = "ready", f"{env} is minted from the GitHub App for each run"
+    elif credential == "present" and entry.get("granted"):
         status, detail = "ready", f"{env} is granted through the credential vault; it arrives when a run starts"
     elif credential == "present" and entry.get("held") and env == "GOOGLE_SA_KEY":
         status, detail = "ready", f"{env} is present (held by the computer); a run gets a short-lived token, never the key"
@@ -193,12 +195,38 @@ def _same(a, b):
     return norm(a) == norm(b)
 
 
+def _app_token(entry):
+    return (entry.get("credential") == "missing" and str(entry.get("service") or "").lower() == "github"
+            and entry.get("env") in ("GH_TOKEN", "GITHUB_TOKEN"))
+
+
+def github_app_covers(c, bot):
+    """Whether each run gets GH_TOKEN/GITHUB_TOKEN minted from the GitHub App: the App is connected and the bot's
+    repository is in its organization (the same test as POST /api/v2/github/token; runner/git_credentials.py)."""
+    if not H._has_table(c, "github_app"):
+        return False
+    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    if not app or not app["org"]:
+        return False
+    from .github_app import repo_of
+    from .shared_bots import declared, source_of
+    config = declared(c, bot)
+    if config.get("assignment_branch"):
+        return False
+    row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (source_of(config) or bot,)).fetchone()
+    repo = repo_of(row["repo"] if row else "", app["org"])
+    return bool(repo) and repo.split("/")[0].lower() == app["org"].lower()
+
+
 def granted(c, bot, raw):
     """The reported tools, with a credential the computer says is missing counted present when the vault grants it to the bot.
 
     The runner reports only what its computer holds (a secrets file, a profile); a vault grant arrives with each run
     (`GET /api/v2/credential-runtime`), so the computer cannot see it but this server can. Only a grant a run would receive
-    counts: not revoked, its delegation intact, and a stored value behind it. Names only, never a value."""
+    counts: not revoked, its delegation intact, and a stored value behind it. A GitHub GH_TOKEN/GITHUB_TOKEN also counts
+    when the connected GitHub App mints it for the bot. Names only, never a value."""
+    if any(_app_token(e) for e in raw) and github_app_covers(c, bot):
+        raw = [dict(e, credential="present", github_app=True) if _app_token(e) else e for e in raw]
     missing = {str(e.get("env")) for e in raw if e.get("credential") == "missing" and e.get("env")}
     if not missing:
         return raw

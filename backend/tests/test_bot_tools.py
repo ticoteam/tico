@@ -206,3 +206,27 @@ def test_tools_render_when_bot_has_no_config_row(api):
     page = tools_of(api)
     assert page['bot'] == 'ops'
     assert isinstance(page['tools'], list)
+
+
+def test_a_github_gh_token_counts_present_when_the_github_app_mints_it(api):
+    from backend.health import _missing_tool_credentials
+    configure(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    declared = {"service": "github", "identity": "Acme issues", "can": ["read"], "env": "GH_TOKEN", "credential": "missing"}
+    assert report(api, machine, "ops", [declared]).status_code == 200
+    store = api.app.state.store
+
+    def status():
+        tool = next(t for t in tools_of(api)["tools"] if t.get("env") == "GH_TOKEN")
+        with store.read() as c:
+            missing = _missing_tool_credentials(c, {r[0] for r in c.execute("SELECT id FROM runners")})
+        return tool["status"], missing
+
+    assert status() == ("problem", [("GitHub", "Test Mac")])
+    with store.transaction() as c:
+        c.execute("INSERT INTO github_app VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')")
+    assert status() == ("ready", [])
+    with store.transaction() as c:
+        c.execute("UPDATE github_app SET org='elsewhere'")   # the App mints only inside its own org
+    assert status() == ("problem", [("GitHub", "Test Mac")])

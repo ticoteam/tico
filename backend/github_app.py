@@ -354,6 +354,10 @@ class GitHubApp:
         with self.store.read() as c:
             missing = unreachable(c)
             names = [name for name in repos if name.lower() not in missing or name.lower() == str(own).lower()]
+        # A known-missing own repository is kept only so a lone own scope can still be diagnosed; beside
+        # other repositories it would just fail the first mint every call until the mark expires.
+        if any(name.lower() not in missing for name in names):
+            names = [name for name in names if name.lower() not in missing]
         if not names:
             if diagnose_empty:
                 raise Problem('github_repo_not_accessible', 'Repository is not reachable; check the GitHub App installation (retry in five minutes)', 409)
@@ -366,8 +370,7 @@ class GitHubApp:
             wide, _ = self.mint(None, {'metadata': 'read'})
             absent = [name for name in names if name.lower() in missing]
             if not absent:
-                absent = [name for name in names if self._call(
-                    'GET', '/repos/' + name, headers={'Authorization': 'Bearer ' + wide}).status_code == 404]
+                absent = self._absent(names, wide)
             if not absent:
                 raise
             with self.store.transaction() as c:
@@ -391,6 +394,27 @@ class GitHubApp:
             reachable(c, names)
         return token, expires, names
 
+    def _absent(self, repos, wide):
+        """Which of `repos` the installation cannot see: one paged listing instead of a GET per repository
+        (a bot may hold many grants), falling back to probing each when GitHub will not list them."""
+        headers = {'Authorization': 'Bearer ' + wide}
+        visible, seen, page = set(), 0, 1
+        try:
+            while True:
+                r = self._call('GET', '/installation/repositories', params={'per_page': 100, 'page': page}, headers=headers)
+                if r.status_code >= 300:
+                    raise ValueError
+                data = r.json()
+                batch, total = data['repositories'], data.get('total_count')
+                visible.update(str(repo.get('full_name') or '').lower() for repo in batch)
+                seen += len(batch)
+                if len(batch) < 100 or (isinstance(total, int) and seen >= total):
+                    break
+                page += 1
+        except (Problem, ValueError, KeyError, TypeError, AttributeError):
+            return [name for name in repos if self._call('GET', '/repos/' + name, headers=headers).status_code == 404]
+        return [name for name in repos if name.lower() not in visible]
+
     def _unreachable(self, installation, repos, status, known_absent=None):
         """Why GitHub would not scope a token to `repos`. A repository that does not exist yet answers
         404, the same as one the app cannot see, so ask GitHub what the installation can see: with
@@ -409,8 +433,7 @@ class GitHubApp:
             absent = known_absent
             if absent is None:
                 wide, _ = self.mint(None, {"metadata": "read"})
-                absent = [repo for repo in repos
-                          if self._call("GET", f"/repos/{repo}", headers={"Authorization": "Bearer " + wide}).status_code == 404]
+                absent = self._absent(repos, wide)
         except Problem:
             return problem
         if not absent:
