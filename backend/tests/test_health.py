@@ -173,6 +173,32 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     assert body["stuck"] == [] and "release" not in json.dumps(body)
 
 
+def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
+    """The company default is Codex but the bots here run on Claude: no Codex warning, still a Sign in button."""
+    import json
+    api = environment()
+    revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+    assert api.put("/api/v2/providers", headers=signed_in(), json={
+        "enabled": ["openai", "anthropic"], "runtime": "codex", "expected_revision": revision}).status_code == 200
+    runner = enrolled(api)
+    add_bot(api, "writer")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('writer',?,'ana')", (json.dumps({"runtime": "claude"}),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('writer',?,1,?,'t')",
+                  (runner, H.now()))
+    heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
+                                     "claude": {"installed": True, "authenticated": "ready"}})
+    body, checks = health_of(api)
+    assert "computer_signin" not in checks
+    assert next(r for r in body["computers"][0]["runtimes"] if r["name"] == "codex")["signable"]
+    add_bot(api, "coder")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('coder',?,1,?,'t')",
+                  (runner, H.now()))
+    assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
+
+
 def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     """Uncached input only: cache reads are cheap and would dominate the count."""
     api = environment()

@@ -66,10 +66,12 @@ def _computers(c, runners_online, settings):
                                    "credential_source": v.get("credential_source") or "",
                                    "signable": bool(v.get("installed")) and v.get("authenticated") != "ready"
                                    and n in model_login.RUNTIMES,
-                                   # A model this computer runs (a bot on it, or the company's default) that it has no
-                                   # sign-in for, and that no key from the company gave it either.
+                                   # A model this computer runs that it has no sign-in for, and that no key from the
+                                   # company gave it either: one its active bots run on, or the company's default while
+                                   # it has none yet. A default its bots don't use is only `signable`.
                                    "sign_in": bool(v.get("installed")) and v.get("authenticated") == "missing"
-                                   and n in model_login.RUNTIMES and (n in assigned.get(r["id"], ()) or n == default)}
+                                   and n in model_login.RUNTIMES
+                                   and n in assigned.get(r["id"], {default})}
                                   for n, v in sorted(runtimes.items())
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())]})
     return rows
