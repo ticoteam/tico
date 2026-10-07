@@ -294,6 +294,35 @@ class ClaudeStreamJson(unittest.TestCase):
         self.assertNotIn("--strict-mcp-config", proc.argv)     # the bot repo's own .mcp.json stays
         self.finish(host, proc)
 
+    def test_a_missing_saved_session_restarts_once_fresh_under_the_same_id(self):
+        host = make_claude()
+        tid = host.resume_thread("cpo", "gone-session", self.SETTINGS)
+        turn = host.start_turn(tid, "ping")
+        dead = ClaudeProcess.instances[-1]
+        self.assertEqual(dead.session_id(), "gone-session")
+        self.assertIn("--resume", dead.argv)
+        dead.kwargs["stderr"].write("No conversation found with session ID: gone-session\n")
+        dead.result(text="", is_error=True, rc=1, errors=["No conversation found with session ID: gone-session"])
+        import time
+        for _ in range(400):
+            if len(ClaudeProcess.instances) > 1:
+                break
+            time.sleep(0.005)
+        fresh = ClaudeProcess.instances[-1]
+        self.assertNotIn("--resume", fresh.argv)
+        self.assertEqual(fresh.argv[fresh.argv.index("--session-id") + 1], "gone-session")
+        self.assertEqual(fresh.prompt, "ping")
+        events = self.finish(host, fresh)
+        self.assertEqual([e["kind"] for e in events if e["kind"] in ("diagnostic", "turn_failed", "turn_completed")],
+                         ["diagnostic", "turn_completed"])
+        self.assertTrue(all(e["turn_id"] == turn for e in events if e["kind"] in ("diagnostic", "turn_completed")))
+        self.assertEqual(host.session_id(tid), "gone-session")   # the runner saves this; next turn resumes it
+        host.start_turn(tid, "again")
+        again = ClaudeProcess.instances[-1]
+        self.assertEqual(again.argv[again.argv.index("--resume") + 1], "gone-session")
+        self.finish(host, again)
+        host.stop()
+
     def test_interrupt_terminates_the_process_and_reports_interrupted(self):
         host = make_claude()
         tid = host.start_thread("cpo", self.SETTINGS)

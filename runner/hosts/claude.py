@@ -252,24 +252,34 @@ class ClaudeHost(Host):
             transcript = self._transcript(thread_id)
             if transcript:
                 self._goal_offsets[thread_id] = transcript.stat().st_size
-            stderr = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
             try:
-                proc = self._spawn(self._argv(thread_id, t, effort), stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=stderr, cwd=t["settings"]["cwd"],
-                                   env=self._env(t["settings"]), text=True, bufsize=1)
+                proc, stderr = self._launch(thread_id, t, effort)
             except OSError as e:
-                stderr.close()
                 raise HostError(f"could not start claude: {e}")
             self.proc = proc
             self._turn = (thread_id, turn)
             self._reply[turn] = ""
         self._log(f"claude[{self.bot}]: turn started pid {getattr(proc, 'pid', '?')}")
         self.emit("status", thread_id, None, state="active")
-        threading.Thread(target=self._feed, args=(proc, text), daemon=True).start()
-        self._reader = threading.Thread(target=self._read_loop, args=(proc, thread_id, turn, stderr),
-                                        daemon=True)
-        self._reader.start()
+        self._run(proc, thread_id, turn, stderr, text, effort)
         return turn
+
+    def _launch(self, thread_id, t, effort):
+        stderr = tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace")
+        try:
+            proc = self._spawn(self._argv(thread_id, t, effort), stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=stderr, cwd=t["settings"]["cwd"],
+                               env=self._env(t["settings"]), text=True, bufsize=1)
+        except OSError:
+            stderr.close()
+            raise
+        return proc, stderr
+
+    def _run(self, proc, thread_id, turn, stderr, text, effort, recovered=False):
+        threading.Thread(target=self._feed, args=(proc, text), daemon=True).start()
+        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+                                        args=(proc, thread_id, turn, stderr, text, effort, recovered))
+        self._reader.start()
 
     @staticmethod
     def _feed(proc, text):
@@ -279,8 +289,9 @@ class ClaudeHost(Host):
         except (BrokenPipeError, ValueError, OSError):
             pass
 
-    def _read_loop(self, proc, tid, turn, stderr):
+    def _read_loop(self, proc, tid, turn, stderr, text="", effort=None, recovered=False):
         result = None
+        saw_event = False
         try:
             for line in proc.stdout:
                 line = line.strip()
@@ -293,6 +304,8 @@ class ClaudeHost(Host):
                 try:
                     if self._on_message(msg, tid, turn):
                         result = msg
+                    else:
+                        saw_event = True
                 except Exception as e:
                     self._log(f"claude[{self.bot}]: event error {e}")
         except (ValueError, OSError):
@@ -301,7 +314,30 @@ class ClaudeHost(Host):
             rc = proc.wait()
         except Exception:
             rc = -1
-        self._finish(tid, turn, result, rc, self._stderr_tail(stderr))
+        tail = self._stderr_tail(stderr)
+        # Claude checks --resume before the model runs and answers only with an error result (and
+        # stderr) when the session file is not on this computer: a new HOME or computer, or cleaned
+        # sessions. Restart once as a new session under the same id so the next turn resumes it; the
+        # prompt carries the recent messages and the `hub conversation show` pointer. Never after an event.
+        missing = isinstance(result, dict) and \
+            self._error_text(result, rc, tail).startswith("No conversation found with session ID")
+        with self._lock:
+            t = self._threads.get(tid)
+            if (missing and not recovered and not saw_event and rc and t and (t["started"] or t["fork_from"])
+                    and self._up and turn not in self._interrupted):
+                t.update(started=False, fork_from=None)
+                t.pop("session_id", None)
+                try:
+                    retry, retry_stderr = self._launch(tid, t, effort)
+                except OSError:
+                    pass
+                else:
+                    self.proc = retry
+                    self.emit("diagnostic", tid, turn,
+                              text="Saved provider session is unavailable; restoring this conversation's context.")
+                    self._run(retry, tid, turn, retry_stderr, text, effort, recovered=True)
+                    return
+        self._finish(tid, turn, result, rc, tail)
 
     def _stderr_tail(self, stderr):
         try:
