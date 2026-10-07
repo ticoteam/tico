@@ -1090,7 +1090,16 @@ class Store:
                                    ("attempts_bot_created", "attempts(bot, created)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
-                                   ("events_action_target", "events(action, target, ts)")):
+                                   ("events_action_target", "events(action, target, ts)"),
+                                   # A blob's provenance (task_privacy.blob_readable), read for every
+                                   # version of every file a bot's Files tab lists and for each download.
+                                   ("message_assets_blob", "message_assets(blob_id)"),
+                                   ("blob_media_poster", "blob_media(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
+                                   ("blob_media_thumb", "blob_media(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
+                                   ("bot_file_versions_poster",
+                                    "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
+                                   ("bot_file_versions_thumb",
+                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 R.ensure_task_sweep(c)

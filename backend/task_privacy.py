@@ -99,7 +99,14 @@ def message_tasks(c, message, seen=None, include_run=True, current=False):
     return ids
 
 
-def attempt_tasks(c, aid):
+def attempt_tasks(c, aid, memo=None):
+    """`memo`: a dict kept for one read transaction, where a run's tasks cannot change; many files of one
+    bot share the run that made them, and a Files page asked this once per file version."""
+    if memo is not None:
+        key = ("attempt_tasks", aid)
+        if key not in memo:
+            memo[key] = frozenset(attempt_tasks(c, aid))
+        return set(memo[key])
     snapshot(c)
     ids = set()
     for row in c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
@@ -253,9 +260,9 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     return payload
 
 
-def attempt_readable(c, actor, aid):
+def attempt_readable(c, actor, aid, memo=None):
     try:
-        return readable(c, actor, attempt_tasks(c, aid))
+        return readable(c, actor, attempt_tasks(c, aid, memo))
     except Problem:
         return False
 
@@ -435,8 +442,9 @@ def job_counts(c, who, bots, states=("queued",)):
     return out
 
 
-def blob_readable(c, actor, bid, seen=None):
-    """A task attachment cannot regain access through uploader ownership or another link."""
+def blob_readable(c, actor, bid, seen=None, memo=None):
+    """A task attachment cannot regain access through uploader ownership or another link.
+    `memo` is attempt_tasks' cache for one read transaction."""
     snapshot(c)
     seen = set() if seen is None else seen
     if bid in seen:
@@ -445,7 +453,7 @@ def blob_readable(c, actor, bid, seen=None):
         return False
     seen.add(bid)
     for parent in c.execute("SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=?", (bid, bid)):
-        if not blob_readable(c, actor, parent[0], seen):
+        if not blob_readable(c, actor, parent[0], seen, memo):
             return False
     ids = {r[0] for r in c.execute("SELECT task_id FROM task_assets WHERE blob_id=?", (bid,))}
     for row in c.execute("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
@@ -456,7 +464,7 @@ def blob_readable(c, actor, bid, seen=None):
         if row["scope"].startswith("task:"):
             ids.add(row["scope"][5:])
         if row["attempt_id"]:
-            ids.update(attempt_tasks(c, row["attempt_id"]))
+            ids.update(attempt_tasks(c, row["attempt_id"], memo))
     for row in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id "
                          "WHERE a.blob_id=?", (bid,)):
         if not message_readable(c, actor, row):

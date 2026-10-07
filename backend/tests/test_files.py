@@ -130,3 +130,15 @@ def test_runner_upload_is_retried_after_a_restart_and_lands_once(api, live, tmp_
     assert page["total"] == 1 and page["files"][0]["version"] == 1 and page["files"][0]["synced"]
     log = api.get(f"/api/v2/files/{page['files'][0]['id']}/activity", headers=headers("ben-test")).json()["activity"]
     assert len(log) == 1
+
+
+def test_a_blobs_provenance_is_read_by_index(api):
+    """blob_readable runs for every version of every file a Files page lists: a scan per blob made a page
+    with a few thousand files take seconds."""
+    with api.app.state.store.read() as c:
+        for query in ("SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=?",
+                      "SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+                      "WHERE v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?",
+                      "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"):
+            plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + query, ("b",) * query.count("?"))]
+            assert not any(step.startswith("SCAN") for step in plan), (query, plan)

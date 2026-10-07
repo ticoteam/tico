@@ -528,10 +528,12 @@ class Files:
             return False
         if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
             return False
+        # `cache` lives for one read: a run's tasks are read once, however many files it made.
         for version in c.execute("SELECT blob_id,attempt_id FROM bot_file_versions WHERE file_id=?", (row["id"],)):
-            if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"]):
+            if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
                 return False
-            if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"]):
+            if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
+                                                                      memo=cache):
                 return False
         if who.role == "bot" and H.actor_id(who.actor) != row["bot"] and not row["scope"].startswith("task:"):
             return False
