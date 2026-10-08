@@ -28,14 +28,20 @@ def _person(who):
 
 
 def no_minting(who, what):
-    """A token makes no other standing credential (an agent credential, a service key, a SCIM token): one made by a
-    leaked token would keep working after the token is revoked."""
+    """A token makes no other standing credential (an agent credential, a SCIM token): one made by a leaked token
+    would keep working after the token is revoked. A service key it makes ends with it instead (backend/service_keys.py)."""
     if who.via_token:
         raise Problem("forbidden", what + " from a signed-in browser: an API token cannot make other credentials", 403)
 
 
 def can_create(c, auth, who):
     return bool(auth.bot_admin(who) or team_rules.load(c)["member_tokens"])
+
+
+def has_live(c, who):
+    """Whether this person holds a token that still works: Settings keeps their list when they may no longer make one."""
+    return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND revoked_at IS NULL AND (expires_at IS NULL OR "
+                          "expires_at>?) LIMIT 1", (H.actor_id(who.actor), H.now())).fetchone())
 
 
 def listing(c, who):

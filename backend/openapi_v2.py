@@ -92,7 +92,7 @@ STABLE = [
     ("/api/v2/service-keys", "get", "Session", "listServiceKeys", "Service keys, never the secret (owner and admins)", None),
     ("/api/v2/service-keys", "post", "Session", "createServiceKey",
      "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, "
-     "owner only), and nothing else; shown once (owner and admins; not with a personal API token)", None),
+     "owner only), and nothing else; shown once (owner and admins; a key made with a personal token ends with it)", None),
     ("/api/v2/service-keys/{key_id}/revoke", "post", "Session", "revokeServiceKey", "Revoke a service key", None),
     ("/api/v2/openapi.json", "get", "Session", "getOpenApi", "This document", None),
     ("/api/v2/config", "get", "Team", "getConfig", "Team and app names, version, setup state", "Config"),

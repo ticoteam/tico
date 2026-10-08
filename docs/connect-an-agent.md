@@ -42,8 +42,8 @@ For a correction to your active BotOps request, send `hub_message_send` with `in
 the original message id, or `steer: true` in the same conversation. The message stays queued until
 the Computer delivers it into the active run; conversation status shows when the follow-up is added.
 
-The token cannot create or revoke tokens, make other credentials (a bot's agent credential, a pairing approval, a service
-key) or click Confirm cards. Those need the human signed in to Tico.
+The token cannot create or revoke tokens, make other credentials (a bot's agent credential, a pairing approval) or click
+Confirm cards. Those need the human signed in to Tico.
 Ask BotOps to collect Credential values through your chat card. The API pass-through retains the
 human's existing Credential permissions, including storing or revealing values when authorized. A Credential administrator can import a bot's existing Credential with
 `hub_credential_import`, grant or revoke access, and delete it with `hub_credential_delete`; values never pass through the

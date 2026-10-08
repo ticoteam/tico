@@ -74,6 +74,8 @@ class Identity:
     # That token's label ("grok-bot", "muse"): which assistant is acting for the person, said
     # where it matters, e.g. on the message a batch sends a bot (backend/batch.py).
     token_label: str = ""
+    # That token's id, recorded on a service key it makes so the key ends with it (backend/service_keys.py).
+    token_id: str = ""
     # A browser session vouched for by the identity proxy in front of the server (Cloudflare Access,
     # the AWS load balancer), the only kind that /api/v2/logout can end; the UI offers "Sign out" for it.
     via_proxy: bool = False
@@ -110,8 +112,9 @@ def validate_identity(c, who):
                                       attempt_id=who.attempt_id, agent=who.agent))
     if who.role == "service":
         # Again under a write's lock: a key revoked since the request began writes nothing.
-        if not c.execute("SELECT 1 FROM service_keys WHERE id=? AND revoked_at IS NULL",
-                         (H.actor_id(who.actor),)).fetchone():
+        row = c.execute("SELECT made_with_token FROM service_keys WHERE id=? AND revoked_at IS NULL",
+                        (H.actor_id(who.actor),)).fetchone()
+        if not row or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         return
     if who.role in ("owner", "human"):
@@ -328,16 +331,16 @@ class Auth:
         email = str(row["email"] or "").lower()
         role = "owner" if email and email == self.owner_email else "human"
         return Identity("human:" + row["human"], role, email=email, via_token=True,
-                        token_label=str(row["label"] or ""))
+                        token_label=str(row["label"] or ""), token_id=row["id"])
 
     def identity_from_service_key(self, c, token, path, method):
         """Another system's service key (backend/service_keys.py), on the routes of its scope.
 
         It is no person and no bot: anywhere else it is refused here, before any route could take
         its unfamiliar role for one with more reach. A revoked key is refused like an unknown one."""
-        row = c.execute("SELECT id,label,last_used,revoked_at,scope FROM service_keys WHERE key_hash=?",
+        row = c.execute("SELECT id,label,last_used,revoked_at,scope,made_with_token FROM service_keys WHERE key_hash=?",
                         (digest(token),)).fetchone()
-        if not row or row["revoked_at"]:
+        if not row or row["revoked_at"] or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         if not service_keys.allowed(row["scope"], method, path):
             raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)

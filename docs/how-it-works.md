@@ -297,9 +297,9 @@ curl -H "Authorization: Bearer $HUB_TOKEN" https://hub.acme.example/api/v2/bots
 No `HUB_BOT`: the token is you, not a bot. It is you for every purpose, with the rights you
 have in the browser (a member sees what a member sees, an admin adds bots for their own
 account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make or revoke
-tokens or make any other standing credential (a bot's agent credential, a pairing, a service key); that takes a signed-in
-browser, so a leaked token cannot extend its own life. The owner and the Admins see everyone's tokens there and revoke any.
-Revoke one on the same page, and it stops at once; the owner may revoke anyone's. Every token
+tokens or make another standing credential (a bot's agent credential, a pairing); that takes a signed-in browser, and a
+service key it makes ends with it, so a leaked token cannot extend its own life. Revoke one on the same page, and it stops
+at once; the owner and the Admins see and revoke anyone's. Every token
 made or revoked is an `events` row (`token.create`, `token.revoke`).
 
 ## Where things are

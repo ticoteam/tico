@@ -7,7 +7,8 @@ bot on another install update this one: check for updates, start an update to a 
 how it stands (the owner's "Update now", UPDATE_ROUTES). A person's own token would carry everything
 that person may do; `Auth.authenticate` refuses a key on every route outside its scope. It is stored as a
 hash, shown once, and lasts until it is revoked; the owner and the bot administrators make, list and
-revoke keys, and only the owner makes an `update` key, since only the owner updates the install.
+revoke keys, and only the owner makes an `update` key, since only the owner updates the install. A key made with
+a personal token ends when that token is revoked or expires (`made_with_token`), so a leaked token leaves no key behind.
 
 The route is an upsert of the work as the other system sees it now. The pair (service key, that
 system's own `key` for the work) names one task, so a call never depends on an earlier one: the
@@ -22,7 +23,7 @@ import secrets
 from fastapi import Request
 
 from . import models as M
-from . import personal_tokens, rooms
+from . import rooms
 from .store import H, Problem, digest
 
 PREFIX = "tico_sk_"
@@ -33,11 +34,19 @@ ROUTES = {
     "tasks": {("POST", INBOUND_PATH)},
     "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
 }
-FIELDS = ("id", "label", "scope", "created", "created_by", "last_used", "revoked_at", "revoked_by")
+FIELDS = ("id", "label", "scope", "created", "created_by", "last_used", "revoked_at", "revoked_by", "made_with_token")
 
 
 def allowed(scope, method, path):
     return (method, path) in ROUTES.get(scope or "tasks", set())
+
+
+def token_ended(c, token_id):
+    """Whether the personal token a key was made with is revoked, expired or gone; False for a key made signed in."""
+    if not token_id:
+        return False
+    row = c.execute("SELECT revoked_at,expires_at FROM human_tokens WHERE id=?", (token_id,)).fetchone()
+    return not row or bool(row["revoked_at"]) or bool(row["expires_at"] and row["expires_at"] <= H.now())
 
 
 def refusal(scope):
@@ -53,22 +62,24 @@ def _admin(auth, who):
 
 
 def listing(c, auth, who):
-    """Every service key, newest first; never the secret or its hash."""
+    """Every service key, newest first, with the label of the token it ends with; never the secret or its hash."""
     _admin(auth, who)
-    return [dict(row) for row in c.execute("SELECT " + ",".join(FIELDS) + " FROM service_keys ORDER BY created DESC")]
+    return [dict(row) for row in c.execute("SELECT " + ",".join("k." + f for f in FIELDS) + ",t.label AS token_label "
+                                           "FROM service_keys k LEFT JOIN human_tokens t ON t.id=k.made_with_token "
+                                           "ORDER BY k.created DESC")]
 
 
 def create(c, auth, who, body):
     """Mint a key and return its plaintext, the one time it is shown."""
     _admin(auth, who)
-    personal_tokens.no_minting(who, "Make a service key")
     if body.scope == "update" and who.role != "owner":
         raise Problem("forbidden", "Only the owner makes an update key: only the owner updates this install", 403)
     key, key_id, now = PREFIX + secrets.token_urlsafe(30), H.new_id(), H.now()
-    c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by,scope) VALUES(?,?,?,?,?,?)",
-              (key_id, body.label, digest(key), now, who.actor, body.scope))
-    H.event(c, who.actor, "service_key.create", key_id, {"label": body.label, "scope": body.scope})
-    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created": now}
+    made_with = who.token_id or None
+    c.execute("INSERT INTO service_keys(id,label,key_hash,created,created_by,scope,made_with_token) VALUES(?,?,?,?,?,?,?)",
+              (key_id, body.label, digest(key), now, who.actor, body.scope, made_with))
+    H.event(c, who.actor, "service_key.create", key_id, {"label": body.label, "scope": body.scope, "made_with_token": made_with})
+    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created": now, "made_with_token": made_with}
 
 
 def revoke(c, auth, who, key_id):

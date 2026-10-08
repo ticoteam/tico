@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS human_tokens(
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL,
- created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT, scope TEXT NOT NULL DEFAULT 'tasks');
+ created_by TEXT NOT NULL, last_used TEXT, revoked_at TEXT, revoked_by TEXT, scope TEXT NOT NULL DEFAULT 'tasks',
+ made_with_token TEXT);
 CREATE TABLE IF NOT EXISTS service_key_tasks(
  key_id TEXT NOT NULL REFERENCES service_keys(id), external_key TEXT NOT NULL,
  task_id TEXT NOT NULL REFERENCES tasks(id), created TEXT NOT NULL, PRIMARY KEY(key_id, external_key));
@@ -1069,6 +1070,9 @@ class Store:
                 # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
                 # the trash: an older release reads the table as before and never sees the column.
                 H.add_column(c, "service_keys", "scope", "TEXT NOT NULL DEFAULT 'tasks'")
+                # The personal token a key was made with, which it never outlives (backend/service_keys.py); NULL for a
+                # key made signed in, and for every older key. Unversioned like the scope.
+                H.add_column(c, "service_keys", "made_with_token", "TEXT")
                 # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
                 # lease renewal. Unversioned like the key scope: an older release never reads the column.
                 H.add_column(c, "attempts", "stop_requested", "TEXT")

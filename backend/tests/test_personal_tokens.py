@@ -97,13 +97,12 @@ def test_a_token_cannot_make_other_credentials(tokens):
     hermes_bot(tokens)
     issued = mint(tokens, OWNER)
     refused = "an API token cannot make other credentials"
-    for path, body in (("bots/scout/agent-credential", {}), ("service-keys", {"label": "Billing backend"}),
+    for path, body in (("bots/scout/agent-credential", {}),
                        ("agents/pairings/approve", {"code": pair(tokens).json()["code"], "bot": "scout"})):
         r = tokens.post("/api/v2/" + path, json=body, headers=headers(issued["token"]))
         assert r.status_code == 403 and refused in r.json()["error"]["detail"], (path, r.text)
     with tokens.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM agents").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM service_keys").fetchone()[0] == 0
     # The same person, signed in, still can.
     assert post(tokens, "bots/scout/agent-credential", {}, token=OWNER)["token"]
     assert approve(tokens, pair(tokens).json()["code"]).status_code == 200
