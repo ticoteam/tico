@@ -8,13 +8,19 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Changed
-- Pull requests, release tags and deploys no longer move tasks. A PR on a task shows its state (open, merged, shipped); a person moves the task.
-- A task's Private row is a plain checkbox; the "Company" label and help line are gone (hover for who can see it).
-- On a task type with bot `work` access, a bot may close a task that is in a ready step, so a deploy bot can move shipped tickets to Done. Moving a task into ready stays with people.
+- Pull requests, release tags and deploys no longer move tasks. A PR on a task shows its state (open, merged, shipped); a person moves the task. ([#269](https://github.com/ticoteam/tico/pull/269))
+- A task's Private row is a plain checkbox; the "Company" label and help line are gone (hover for who can see it). ([#274](https://github.com/ticoteam/tico/pull/274))
+- On a task type with bot `work` access, a bot may close a task that is in a ready step, so a deploy bot can move shipped tickets to Done. Moving a task into ready stays with people. ([#271](https://github.com/ticoteam/tico/pull/271))
 - A personal API token no longer makes other credentials: creating or rotating a bot's agent credential, approving a pairing
-  or making a SCIM token needs a signed-in browser. A service key made with a token stops when that token is revoked or expires.
+  or making a SCIM token needs a signed-in browser. A service key made with a token stops when that token is revoked or expires. ([#273](https://github.com/ticoteam/tico/pull/273))
 - The owner and Admins see every person's API tokens in Settings > Computers and revoke any of them. The token card and
-  **Connect an agent** show for anyone allowed to make a token, not only Admins; someone who still holds a token keeps the card.
+  **Connect an agent** show for anyone allowed to make a token, not only Admins; someone who still holds a token keeps the card. ([#273](https://github.com/ticoteam/tico/pull/273))
+
+### Fixed
+- Decisions answer within about 8 seconds: the server tries TypeSafe once, and when it is slow or down the company's own model answers instead of a 503 after up to a minute. ([#275](https://github.com/ticoteam/tico/pull/275))
+- Clicking a meeting on the Meetings page opens it in the page; **Open in its own window** is a button in the meeting's top bar. ([#268](https://github.com/ticoteam/tico/pull/268))
+- Health's Task worktrees no longer warns about a checkout of a commit (detached HEAD), and a real failure names the step and cause. ([#276](https://github.com/ticoteam/tico/pull/276))
+- A turn stopped by a runner error says so, with the error's kind, instead of "Runner restarted during execution". ([#264](https://github.com/ticoteam/tico/pull/264))
 
 ## [0.3.33] - 2026-10-08
 
