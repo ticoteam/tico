@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Pull requests, release tags and deploys no longer move tasks. A PR on a task shows its state (open, merged, shipped); a person moves the task.
+
 ## [0.3.33] - 2026-10-08
 
 ### Added

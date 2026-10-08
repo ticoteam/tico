@@ -11,8 +11,8 @@ so later builds retain the complete history and do not announce already shipped 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
 task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it,
-so the tasks waiting on the release learn it shipped. When a tag is pushed anyway, Tico still moves the Waiting tasks
-whose merged work it contains to Review with "Shipped in vX.Y.Z" (backend/github.py).
+so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
+only marks the merged PR links the running release contains as Shipped (backend/github.py).
 
 ## The fast path
 

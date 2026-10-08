@@ -13,8 +13,8 @@ tasks start with that type. Clearing filters keeps the selected type. Older comb
 deleted types fall back to General. Finished work appears in the selected type's
 Done or Closed steps as well as under Done.
 
-Picking a step sets the task's status. Steps can move in any order. Bots, older runners, GitHub
-webhooks and existing scripts can keep setting `status`:
+Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
+existing scripts can keep setting `status`:
 
 - If the current step has that status, it stays there.
 - Otherwise Tico picks the first step with that status, in the type's step order.
@@ -46,10 +46,8 @@ a person, plain English when a bot writes it on General, and no other live task 
 requester and owner, under the same parent, with that title. The old and new titles are in the task's history, and a task's own conversation keeps the
 new title as its subject.
 
-A task on a custom type with a linked pull request follows the existing GitHub flow: review when
-the PR opens, ready when it merges, and done when the configured release includes it. Each move
-uses the mapping above, including clearing the step when the type has no match. General tasks
-keep their existing behavior.
+A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
+release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
 ## Work that is waiting
 
@@ -247,13 +245,8 @@ need task rights; worktree links keep their worktree rules.
 PR URLs outside the connected GitHub org are plain links. PR links include repository,
 number, branch, checks, mergeability, review state and pending review comments. The task's `pr_state` shows the worst active PR:
 Failing, Conflict, Changes requested, Open, then Merged. Closed PRs are excluded; shipped PRs
-count as merged. Automatic Ready requires at least one merged PR and every tracked PR
-merged or closed. A repository in the connected org is tracked when it is reachable, ticked,
-or has received a PR webhook on any task. Its PRs block automatic Ready even before their
-first event. Unreachable, unticked repositories with no webhook history do not block it. Removing a PR link
-recomputes the automatic status. Abandoning every PR returns a task in Review or Ready
-to Doing. Adding a PR keeps a Ready task in Ready. Automatic PR moves retain the existing custom-type and legacy
-product-lane behavior and preserve a human's status choice for one hour.
+count as merged. A PR link is information only: adding, removing, opening, merging, closing or
+shipping a PR leaves the task's status and step as they are.
 
 Opening a task returns its last known PR state immediately and schedules a background
 refresh for repositories the App can reach. Refreshes are grouped, capped at 20 links and
@@ -268,8 +261,8 @@ keep the last known mergeability. Pending or passing checks and the bot's own co
 do not wake it. Tico recognises the GitHub App identity, configured bot login and PR author.
 A head pusher counts as the bot only when their login matches the PR author. Requests for
 changes always wake the owner, including requests from those identities.
-Automatic shipping waits until every merged PR is included in the configured release;
-PRs in another repository remain Ready for their release or a human's completion.
+A merged PR becomes Shipped once the running release includes its merge commit; the task stays
+where it is. PRs in another repository stay Merged.
 
 ## Related tasks
 

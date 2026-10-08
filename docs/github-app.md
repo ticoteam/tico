@@ -193,9 +193,7 @@ app from its settings page.
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
 Pull request review comments, Check runs, Check suites and Commit statuses, plus Push for
-release tracking. **Existing installs: also tick Release** (Permissions & events → Subscribe to events), so a
-release published on GitHub moves the Waiting tasks it contains to Review. Without it, a pushed `vX.Y.Z` tag
-still does the same through the Push event. The webhook remains `POST /api/v2/github/webhook` with signature verification.
+deploy tracking. Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in
 the GitHub App. Existing installations without these events keep their last known PR states;
 opening a task refreshes reachable PRs, cached for three minutes.
@@ -227,17 +225,14 @@ the review arrived leaves them on. Logins are unique on the team: setting one so
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
 
-Several PRs can belong to one task. Automatic Ready requires every tracked PR merged or
-closed and at least one merge. Tracking applies to repositories in the connected org that are
-reachable, ticked or have received a PR webhook on any task. Without a GitHub App, a new repository counts as tracked only after its first PR webhook. Until then, the first task linking that repository can reach Ready before all of its PRs finish. Abandoning every PR returns Review or Ready to Doing. A human can always move
-a task to Ready or Done, and GitHub preserves their choice for one hour. A release completes
-it only after all merged PRs are included; merged PRs in another repository remain Ready.
-Automatic completion waits for open subtasks.
+Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
+tags and deploys never change the task's status or step; a person moves the task. A merged PR
+becomes Shipped once the running release includes its merge commit; merged PRs in another
+repository stay Merged.
 When push deliveries were missed, the enabled background scheduler also checks up to 20 merge/deployed
 commit pairs every three minutes using the existing App's Contents read access. It compares against the
 running release's recorded commit, never latest main or the newest tag. Only verified same-repository
-ancestry completes a task; errors, missing commits and diverged histories leave it Ready. Failed checks
+ancestry marks a PR Shipped; errors, missing commits and diverged histories leave it Merged. Failed checks
 retry after at least five minutes. Results are cached in memory for up to 512 immutable pairs and checked
-again after a restart; completion records the verified pair. All linked PRs, open subtasks and the one-hour
-human-change protection still apply. Completion means **Done**, not **Closed**, and creates no push history.
+again after a restart; the shipped event records the verified pair. It creates no push history.
 Apps created before v0.3.1 may have Webhook → Active turned off in GitHub App settings. Their repository list refreshes daily and on Refresh in Settings → Repositories. The App webhook API does not expose the Active switch; enable it in GitHub to receive installation events.

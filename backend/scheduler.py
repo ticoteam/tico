@@ -102,9 +102,8 @@ class Scheduler:
                     if created:
                         fired.append(created)
             # a merged pull request whose push record arrived after the deploy still ships
-            from .github import ship_deployed, ship_running_release
+            from .github import ship_deployed
             ship_deployed(c, self.store.settings)
-            ship_running_release(c, self.store.settings)
             from .task_loops import flag as flag_task_loops
             with isolated(c, "task_loops", "all", failures):
                 flag_task_loops(c)

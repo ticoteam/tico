@@ -338,7 +338,7 @@ options, and their missing repositories do not count as readiness or Health fail
 
 Task types add named steps above the existing status contract. General is built in and backfilled
 onto existing tasks. Every status write maps to a compatible step, or clears the step when the
-type has none, so older runners and GitHub webhook moves keep working. Movers manage definitions
+type has none, so older runners and scripts keep working. Movers manage definitions
 in Settings → Types; the board's type filter uses steps as columns. See [Tasks](tasks.md).
 
 ## On computers

@@ -2559,9 +2559,6 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     _task_event(conn, task_id, actor, "link", have["url"], None, "removed")
     event(conn, actor, "task.unlink", task_id, {"url": have["url"]})
-    if have["kind"] == "pr":
-        from .github import _pr_status
-        _pr_status(conn, row, "Pull request link removed.")
     return have
 
 
