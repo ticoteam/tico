@@ -32,8 +32,8 @@ from .models import Contract
 from .store import H, Problem
 
 DAILY_CALLS = {"owner": 20_000, "human": 5_000, "bot": 5_000}
-# TypeSafe gets one short try from the server; when it is slow or down, the company's own model answers instead of
-# a caller waiting a minute for a 503 (Oct 8: up to 49 s and six 503s on one install in a day).
+# TypeSafe gets one short try from the server; when it is slow or down, the company's own model answers, so a
+# caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
 
 
