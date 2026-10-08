@@ -9,6 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Changed
 - Pull requests, release tags and deploys no longer move tasks. A PR on a task shows its state (open, merged, shipped); a person moves the task.
+- A task's Private row is a plain checkbox; the "Company" label and help line are gone (hover for who can see it).
 - On a task type with bot `work` access, a bot may close a task that is in a ready step, so a deploy bot can move shipped tickets to Done. Moving a task into ready stays with people.
 - A personal API token no longer makes other credentials: creating or rotating a bot's agent credential, approving a pairing
   or making a SCIM token needs a signed-in browser. A service key made with a token stops when that token is revoked or expires.

@@ -39,7 +39,7 @@ function taskPropsHTML(t, opts = {}) {
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
   if (t.roles && (typed || Object.keys(t.roles).length)) rows.push(taskPeopleRowHTML(t, r));
-  rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label><input type="checkbox" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester) ? '' : 'disabled'}> ${t.private ? '<span class="nav-icon" aria-hidden="true">lock</span> Private' : 'Company'}</label><small>Only the requester and assignee can see a private task.</small></span></div>`);
+  rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><label class="prop-v" title="Only the requester and assignee see a private task"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester) ? '' : 'disabled'}></label></div>`);
   // Due: a person's deadline (red once passed), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due);
   const info = taskDueInfo(t);
