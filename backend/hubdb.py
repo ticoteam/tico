@@ -1903,8 +1903,9 @@ def type_list(conn):
 # (a developer board, a support queue) is shared work: the bots that file, build and hand it on need
 # to read all of it, where a person's own to-dos stay with the people and bots on them.
 #   read: read every task of the type, comment on it and file a subtask under it.
-#   work: also change it as its owner or requester could (step, owner, due, body, rank) and add or
-#         remove its links. Closing it, a ready step and its labels stay with people.
+#   work: also change it as its owner or requester could (step, owner, due, body, rank), add or
+#         remove its links, and close it once it is in a ready step (shipped). Moving it into ready
+#         and its labels stay with people.
 TYPE_BOTS = ("read", "work")
 
 
@@ -3382,7 +3383,9 @@ def _task_close_allowed(conn, actor, row, note):
     _task_private_writer(conn, actor, row)
     if actor != KEEPER and not is_human(actor) and row["status"] != "closed" and children_summary(conn, row["id"])["open"]:
         refuse(conn, actor, "children", "Finish the open subtasks before closing this task")
-    if actor != row["requester"] and not is_human(actor) and actor != KEEPER:
+    # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
+    shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
+    if actor != row["requester"] and not is_human(actor) and actor != KEEPER and not shipped:
         refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they close it")
     if (row["status"] not in ("done", "declined", "closed") and is_human(actor)
             and is_human(row["owner"]) and is_bot(row["requester"])

@@ -9,6 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Changed
 - Pull requests, release tags and deploys no longer move tasks. A PR on a task shows its state (open, merged, shipped); a person moves the task.
+- On a task type with bot `work` access, a bot may close a task that is in a ready step, so a deploy bot can move shipped tickets to Done. Moving a task into ready stays with people.
 
 ## [0.3.33] - 2026-10-08
 

@@ -576,6 +576,12 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
         r = api.post('/api/v2/tasks/' + ticket['id'], json={'version': moved['version'], **refused},
                      headers=headers(token))
         assert r.status_code in (403, 422), (refused, r.text)
+    shipped = post(api, 'tasks/' + ticket['id'], {'version': moved['version'], 'step': 'Shipped', 'owner': 'ben'})
+    post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token, expected=422)
+    child = get(api, 'tasks/' + child['id'])['task']
+    post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True})
+    closed = post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token)
+    assert closed['status'] == 'closed'
     todo = get(api, 'tasks/' + todo['id'])['task']
     post(api, 'tasks/' + todo['id'], {'version': todo['version'], 'status': 'doing'}, token=token, expected=403)
 
@@ -583,7 +589,7 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
     assert post(api, 'task-types/' + typ['id'], {'bots': 'parties'})['type']['bots'] is None
     assert get(api, 'tasks/' + ticket['id'], token=token)['task']['id'] == ticket['id']
     assert ticket['id'] in listed()
-    post(api, 'tasks/' + ticket['id'], {'version': moved['version'], 'status': 'doing'}, token=token, expected=403)
+    post(api, 'tasks/' + ticket['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
 
 
 # ----------------------------------------------------------------------------- stats
