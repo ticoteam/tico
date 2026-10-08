@@ -7213,7 +7213,7 @@
     },
     "/api/v2/me/tokens/{token_id}/revoke": {
       "post": {
-        "summary": "Revoke a personal API token",
+        "summary": "Revoke a personal API token: your own; the owner and admins revoke anyone's",
         "operationId": "revokeMyToken",
         "parameters": [
           {
@@ -9326,7 +9326,7 @@
         ]
       },
       "post": {
-        "summary": "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, owner only), and nothing else; shown once (owner and admins)",
+        "summary": "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, owner only), and nothing else; shown once (owner and admins; not with a personal API token)",
         "operationId": "createServiceKey",
         "requestBody": {
           "content": {

@@ -22,7 +22,7 @@ import secrets
 from fastapi import Request
 
 from . import models as M
-from . import rooms
+from . import personal_tokens, rooms
 from .store import H, Problem, digest
 
 PREFIX = "tico_sk_"
@@ -61,6 +61,7 @@ def listing(c, auth, who):
 def create(c, auth, who, body):
     """Mint a key and return its plaintext, the one time it is shown."""
     _admin(auth, who)
+    personal_tokens.no_minting(who, "Make a service key")
     if body.scope == "update" and who.role != "owner":
         raise Problem("forbidden", "Only the owner makes an update key: only the owner updates this install", 403)
     key, key_id, now = PREFIX + secrets.token_urlsafe(30), H.new_id(), H.now()

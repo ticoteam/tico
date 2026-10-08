@@ -283,7 +283,7 @@ status and reporting line are changed in **Settings → Bots**, not in the file.
 A human is normally the browser sign-in (Cloudflare Access). A **personal API token** is the
 same human from a script, a cron job or another computer, with no browser: any human (the owner may
 limit it to admins, Settings > Humans) opens **Connect an external agent** beside their email
-(or, for an admin, **Settings → Computers → API tokens**), gives the
+(or **Settings → Computers → API tokens**), gives the
 token a label and a life (90 days unless changed, a year at most), and copies it once; it is
 not shown again and only its hash is kept. Then:
 
@@ -296,8 +296,9 @@ curl -H "Authorization: Bearer $HUB_TOKEN" https://hub.acme.example/api/v2/bots
 
 No `HUB_BOT`: the token is you, not a bot. It is you for every purpose, with the rights you
 have in the browser (a member sees what a member sees, an admin adds bots for their own
-account, the owner does what the owner does), and it leaves the same audit trail. The one thing a token cannot do is make
-or revoke tokens; that takes a signed-in browser, so a leaked token cannot extend its own life.
+account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make or revoke
+tokens or make any other standing credential (a bot's agent credential, a pairing, a service key); that takes a signed-in
+browser, so a leaked token cannot extend its own life. The owner and the Admins see everyone's tokens there and revoke any.
 Revoke one on the same page, and it stops at once; the owner may revoke anyone's. Every token
 made or revoked is an `events` row (`token.create`, `token.revoke`).
 

@@ -17,6 +17,8 @@ const settingsCanCreateBots = () => S.me?.role === 'owner' || !!S.me?.bot_admin 
 // The owner, an admin, one of the bot's owners, or someone it reports up to: what the server says (`can_manage`).
 const settingsCanManageBot = e => S.me?.role === 'owner' || !!S.me?.bot_admin || !!e?.can_manage;
 const settingsIsAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
+// Whoever the server lets make a personal token (`can_create_tokens`); an admin also sees everyone's.
+const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
   if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'devices'; location.hash = INTEGRATIONS; return; }
@@ -53,7 +55,7 @@ function pageSettings() {
       </div></section></div>` : ''}
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines"><div class="empty">Loading…</div></div></section>
-      ${settingsIsAdmin() ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens"><div class="empty">Loading…</div></div></section>` : ''}
+      ${settingsCanMakeTokens() ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens"><div class="empty">Loading…</div></div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
       <section class="card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled>Add from template</button></div>' : ''}</header><div id="set-bots"><div class="empty">Loading…</div></div></section>

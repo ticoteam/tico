@@ -69,12 +69,41 @@ def test_a_token_cannot_list_mint_or_revoke_tokens(tokens):
     assert r.status_code == 403
 
 
-def test_the_owner_may_revoke_anyones_token_and_nobody_else_may(tokens):
-    stevens, anas = mint(tokens, ADMIN), mint(tokens, OWNER)
-    post(tokens, "me/tokens/" + anas["id"] + "/revoke", {}, token=ADMIN, expected=404)
-    assert get(tokens, "me", token=anas["token"])["role"] == "owner"
-    post(tokens, "me/tokens/" + stevens["id"] + "/revoke", {}, token=OWNER)
-    assert tokens.get("/api/v2/me", headers=headers(stevens["token"])).status_code == 401
+def test_the_owner_and_admins_see_and_revoke_everyones_tokens_and_members_only_their_own(tokens):
+    bens, anas, caras = mint(tokens, ADMIN), mint(tokens, OWNER), mint(tokens, PLAIN)
+    # A member sees no one else's tokens and cannot revoke them; nobody does it with a token.
+    assert tokens.get("/api/v2/access/tokens", headers=headers(PLAIN)).status_code == 403
+    post(tokens, "me/tokens/" + bens["id"] + "/revoke", {}, token=PLAIN, expected=404)
+    assert tokens.get("/api/v2/access/tokens", headers=headers(bens["token"])).status_code == 403
+    r = tokens.get("/api/v2/access/tokens", headers=headers(ADMIN))
+    listed = {row["id"]: row for row in r.json()["tokens"]}
+    assert set(listed) == {bens["id"], anas["id"], caras["id"]} and listed[caras["id"]]["human"] == "cara"
     with tokens.app.state.store.read() as c:
-        row = c.execute("SELECT actor FROM events WHERE action='token.revoke' AND target=?", (stevens["id"],)).fetchone()
-    assert row["actor"] == "human:ana"
+        hashes = [row[0] for row in c.execute("SELECT token_hash FROM human_tokens")]
+    assert not any(secret in r.text for secret in [bens["token"], anas["token"], caras["token"], *hashes])
+    # An admin revokes anyone's, the owner's included, and the audit names who did it.
+    post(tokens, "me/tokens/" + anas["id"] + "/revoke", {}, token=ADMIN)
+    assert tokens.get("/api/v2/me", headers=headers(anas["token"])).status_code == 401
+    with tokens.app.state.store.read() as c:
+        row = c.execute("SELECT actor FROM events WHERE action='token.revoke' AND target=?", (anas["id"],)).fetchone()
+    assert row["actor"] == "human:ben"
+    post(tokens, "me/tokens/" + caras["id"] + "/revoke", {}, token=OWNER)
+    assert tokens.get("/api/v2/me", headers=headers(caras["token"])).status_code == 401
+
+
+def test_a_token_cannot_make_other_credentials(tokens):
+    from backend.tests.test_agents import hermes_bot
+    from backend.tests.test_hermes_pairing import approve, pair
+    hermes_bot(tokens)
+    issued = mint(tokens, OWNER)
+    refused = "an API token cannot make other credentials"
+    for path, body in (("bots/scout/agent-credential", {}), ("service-keys", {"label": "Billing backend"}),
+                       ("agents/pairings/approve", {"code": pair(tokens).json()["code"], "bot": "scout"})):
+        r = tokens.post("/api/v2/" + path, json=body, headers=headers(issued["token"]))
+        assert r.status_code == 403 and refused in r.json()["error"]["detail"], (path, r.text)
+    with tokens.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM agents").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM service_keys").fetchone()[0] == 0
+    # The same person, signed in, still can.
+    assert post(tokens, "bots/scout/agent-credential", {}, token=OWNER)["token"]
+    assert approve(tokens, pair(tokens).json()["code"]).status_code == 200

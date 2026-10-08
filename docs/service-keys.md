@@ -19,8 +19,8 @@ hub service-key revoke <id>
 `create` answers with the key (`tico_sk_...`) this once; Tico keeps only a hash. Put it in the other system's secret
 store. The label names that system on every task it files. `list` shows every key, when it was last used and whether it
 is revoked, never the secret. The same routes are `POST /api/v2/service-keys` `{"label": "..."}`,
-`GET /api/v2/service-keys` and `POST /api/v2/service-keys/{id}/revoke`, from a signed-in session or a personal API
-token, with an `Idempotency-Key` like other writes. Retrying a create acknowledges the same key id without
+`GET /api/v2/service-keys` and `POST /api/v2/service-keys/{id}/revoke`, from a signed-in session, with an
+`Idempotency-Key` like other writes. A personal API token lists and revokes keys but cannot make one. Retrying a create acknowledges the same key id without
 returning its secret again; the retry cache stores only metadata. There is no Settings page for them yet.
 
 ## The one route
@@ -113,5 +113,5 @@ as made by Tico.
 - The audit log has every key made (`service_key.create`), every call (`service_key.use`, with the `key` and the task)
   and every revocation (`service_key.revoke`). A call the task rules refuse (a request's wording, an inactive bot) is
   recorded as a refusal under the key.
-- The owner's and admins' personal API tokens can make keys, so `hub` can. A leaked token can make a key that outlives
-  the token: when you revoke a token, check `hub service-key list` too.
+- A personal API token cannot make a key, so a leaked token leaves no key behind. Keys made before this rule stay: when
+  you revoke a token, check `hub service-key list` too.

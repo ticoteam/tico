@@ -1397,8 +1397,7 @@ def create_app(settings=None):
         with store.read() as c:
             who = request.state.identity
             # can_create: the team chart offers Connect only to someone who may make a token (personal_tokens.create)
-            return {"tokens": personal_tokens.listing(c, who),
-                    "can_create": bool(auth.bot_admin(who) or team_rules.load(c)["member_tokens"])}
+            return {"tokens": personal_tokens.listing(c, who), "can_create": personal_tokens.can_create(c, auth, who)}
 
     @app.post("/api/v2/me/tokens")
     def create_my_token(request: Request, body: M.PersonalTokenCreate):
@@ -1406,7 +1405,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/me/tokens/{token_id}/revoke")
     def revoke_my_token(request: Request, token_id: str, body: M.Empty):
-        return mutate(request, body, lambda c: personal_tokens.revoke(c, request.state.identity, token_id))
+        return mutate(request, body, lambda c: personal_tokens.revoke(c, auth, request.state.identity, token_id))
+
+    # Everyone's tokens, for the owner and the Admins; they revoke one with the route above.
+    @app.get("/api/v2/access/tokens")
+    def all_tokens(request: Request):
+        with store.read() as c:
+            return {"tokens": personal_tokens.listing_all(c, auth, request.state.identity)}
 
     # "Connect an agent" (ui/connect-agent.js): the MCP address a person's own agent (Grok, Muse,
     # Claude, ...) is given beside a personal token. It is the runner hostname, where a bearer is let
@@ -3642,6 +3647,7 @@ def create_app(settings=None):
     def agent_credential(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
         def work(c):
+            personal_tokens.no_minting(who, "Create an agent credential")
             settings_admin._manager(c, who, bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
@@ -3718,6 +3724,7 @@ def create_app(settings=None):
     @app.post("/api/v2/agents/pairings/approve")
     def agent_pairing_approve(request: Request, body: M.AgentPairingApprove):
         who = request.state.identity
+        personal_tokens.no_minting(who, "Approve a pairing")
         return mutate(request, body, lambda c: agents.approve_pairing(c, who, settings_admin._manager, body.code, body.bot))
 
     @app.post("/api/v2/agents/pairings/decline")

@@ -92,7 +92,7 @@ function renderAccount() {
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
   el.innerHTML = `<span class="account-email">${esc(me.email || 'Not signed in')}</span><span class="hl-alert" data-hl-alert hidden></span>`;
   window.hlNav?.();
-  $('#connect-agent').hidden = !settingsIsAdmin();
+  $('#connect-agent').hidden = !settingsCanMakeTokens();
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();

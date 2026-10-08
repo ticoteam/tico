@@ -29,7 +29,7 @@ from . import access as Access
 from . import directory_sources as Sources
 from . import hubdb as H
 from . import people as P
-from . import people_photos
+from . import people_photos, personal_tokens
 from .models import Contract
 from .store import Problem
 
@@ -484,6 +484,7 @@ def install_directory(app, settings, store, mutate):
     @app.post("/api/v2/directory/scim-token")
     def directory_scim_token(request: Request, body: Empty):
         who = owner(request, "manages directory sync")
+        personal_tokens.no_minting(who, "Make a SCIM token")
         return mutate(request, body, lambda c: {"token": service.new_scim_token(c, who.actor)})
 
     @app.post("/api/v2/directory/preview")
