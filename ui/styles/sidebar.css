@@ -122,13 +122,14 @@ body.native #rail{display:block}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--accent);text-decoration:none}
 .tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.org-agents{display:inline-flex;align-items:center;gap:3px;flex:1 1 auto;min-width:0;overflow:hidden;margin-left:2px}
-.tree .noderow:has(>.org-agents)>a.node{flex:0 0 auto;max-width:45%}  /* the name keeps its width; the chips take the rest */
-.org-agent{display:inline-flex;align-items:center;gap:4px;flex:0 1 auto;min-width:0;max-width:96px;height:20px;padding:0 7px;border:1px solid var(--line);border-radius:10px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:none}
-.org-agent span{overflow:hidden;text-overflow:ellipsis}
-.org-agent svg{width:11px;height:11px;flex:none}
-.org-agent.more{flex:none;padding:0 6px}
-.org-agent:hover,.org-agent.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
+/* A human's bots on one platform (a Grok Bot cluster): one framed group under them, the platform's sections inside. */
+.tree li.org-cluster{margin:4px 2px 4px 0;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--surface2) 45%,transparent)}
+.tree li.org-cluster>ul{margin-left:10px;border-left-style:dashed}
+.tree li.org-cluster-section{margin:2px 0 0;border:0;background:none}
+.org-cluster-label{flex:1;display:flex;align-items:center;gap:6px;min-width:0;padding:5px 6px 5px 2px;color:var(--muted);font-size:var(--t-sm);font-weight:600;cursor:pointer;user-select:none}
+.org-cluster-label svg{width:12px;height:12px;flex:none}
+.org-cluster-section .org-cluster-label{font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.org-cluster-n{flex:none;margin-left:auto;padding:0 6px;border-radius:8px;background:var(--surface);color:var(--muted);font-size:var(--t-2xs);font-weight:500;line-height:16px}
 .org-connect{flex:none;height:22px;margin-left:2px;padding:0 9px;border:1px solid var(--line);border-radius:11px;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .org-connect:hover{background:var(--surface2)}
 

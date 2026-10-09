@@ -262,6 +262,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            start and follow an update of this one (/api/v2/system/update), and nothing else
     hub service-key list | revoke <id>     every service key, never its secret; stop one at once
     hub grokbot sync --file f.json         sync your Grok Bots into Tico
+    hub external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
 
 The commands of the last release keep working for one more release, hidden: each prints a one-line "renamed to"
 notice on stderr and runs the new command (RENAMED below).
@@ -1224,10 +1225,15 @@ def parser():
     s.add_argument("--daily", choices=("on", "off"))
     s.add_argument("--weekly", choices=("on", "off"))
     s.set_defaults(fn="update settings")
-    grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/grok-bot-sync.md)").add_subparsers(dest="sub")
+    grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
     s = grok.add_parser("sync", help="sync Grok Bots from a JSON file: {\"bots\": [...], \"source\": ...}")
     s.add_argument("--file", required=True, help="the JSON body hub_grokbot_sync takes")
     s.set_defaults(fn="grokbot sync")
+    ext = sub.add_parser("external", help="your bots on another platform in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
+    s = ext.add_parser("sync", help="sync Grok Bots or Dots from a JSON file: {\"bots\": [...], \"source\": ...}")
+    s.add_argument("--provider", required=True, choices=("grokbot", "dots"))
+    s.add_argument("--file", required=True, help="the JSON body hub_external_sync takes")
+    s.set_defaults(fn="external sync")
 
     calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")
     s = calendar.add_parser("list", help="appointments on a company calendar")

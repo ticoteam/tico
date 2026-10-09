@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 
 from clients.agent_skill import WHO_NEEDS_ME
 
-from . import agents, batch, grokbot, inbox_isolation, harness_actions, model_login, oidc, personal_tokens, views
+from . import agents, batch, external_sync, inbox_isolation, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -3707,15 +3707,23 @@ def create_app(settings=None):
             return agents.revoke_credential(c, who, bot)
         return mutate(request, body, work)
 
-    # A person's Grok Bots, synced in by a routine on their own Grok account with their own
-    # token: created under them on the chart, transcripts copied, instructions kept.
-    @app.post("/api/v2/grokbot/sync")
-    def grokbot_sync(request: Request, body: grokbot.GrokSync):
+    # A person's bots on another platform (Grok Bot, Dots), synced in by the agent itself with the
+    # person's own sign-in: created under them on the chart, transcripts copied, instructions kept.
+    def external_sync_run(request, body):
         # Images are fetched before the write, never while holding it.
-        grokbot.allowed(auth, request.state.identity)
-        images = grokbot.prefetch_images(store, app.state.blobs, body, person=H.actor_id(request.state.identity.actor))
-        return mutate(request, body, lambda c: grokbot.sync(c, auth, settings_admin,
-                                                            request.state.identity, body, images))
+        external_sync.allowed(request.state.identity)
+        images = external_sync.prefetch_images(store, app.state.blobs, body,
+                                               person=H.actor_id(request.state.identity.actor))
+        return mutate(request, body, lambda c: external_sync.sync(c, auth, settings_admin,
+                                                                  request.state.identity, body, images))
+
+    @app.post("/api/v2/external/sync")
+    def external_agent_sync(request: Request, body: external_sync.ExternalSync):
+        return external_sync_run(request, body)
+
+    @app.post("/api/v2/grokbot/sync")          # older Grok routines
+    def grokbot_sync(request: Request, body: external_sync.ExternalSync):
+        return external_sync_run(request, body.model_copy(update={"provider": "grokbot"}))
 
     @app.post("/api/v2/agents/heartbeat")
     def agent_heartbeat(request: Request, body: M.AgentHeartbeat):

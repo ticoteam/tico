@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Changed
+- A human's Grok Bots sit in one framed **Grok Bot** cluster under them on the team chart, with Grok's own sections (Pinned first) nested inside, instead of chips beside their name. The sync now takes every Bot on the account and its section. Dots links the same way as a single bot under its human (`hub_external_sync` with `provider` `dots`). Any human may link their own bots, within a member's bot limit. What you write to a synced bot in Tico comes back to its routine in the next sync's `inbox`, so it can answer. `hub_grokbot_sync` keeps working. See docs/external-agent-sync.md.
 - A bot paused by the safety check says why in plain words (what it wrote and the secrets path or other bot's folder it named), shows the refused text with credential values masked and the task it was on, and has a one-click Resume bot beside the warning and under More, for every bot you manage, including bots on a computer.
 - A bot's Tools list is one line per tool (icon, name, key values, status) that opens to its details, and two or more GitHub repositories share one line ("GitHub · N repositories", access added up) that opens to a short line each.
 - On a phone, Tasks is in the bottom bar (Team, Search, Tasks, Updates, More). Phone task rows are denser: titles wrap to two lines, a task's note shows under its title, and a lone subtask's 0/1 is hidden. A task waiting on you shows Waiting once, not twice (desktop too).

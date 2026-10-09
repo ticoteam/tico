@@ -1,4 +1,4 @@
-"""A person's Grok Bots synced in: placed under them, transcripts copied once, never dispatched to."""
+"""A person's external agents synced in (Grok Bot, Dots): placed under them, transcripts copied once, never dispatched to."""
 
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -47,16 +47,39 @@ def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions
     assert all(m["read_at"] for m in messages)
 
 
-def test_the_same_name_from_two_grok_bots_gets_two_slugs_and_a_bot_cannot_sync(api):
-    sync(api, designer(), designer(grok_id="other-grok-id", messages=[]))
+def test_the_same_name_from_two_grok_bots_gets_two_slugs_and_sections_are_kept(api):
+    sync(api, designer(section="Pinned"), designer(grok_id="other-grok-id", messages=[]))
     slugs = {b["slug"] for b in get(api, "bots")}
     assert {"grok-designer", "grok-designer-2"} <= slugs
-    r = api.post("/api/v2/grokbot/sync", json={"bots": [designer()]}, headers=headers("cara-test"))
-    assert r.status_code == 403
+    agents = {b["slug"]: b["agent"] for b in get(api, "bots") if b["slug"].startswith("grok-designer")}
+    assert agents["grok-designer"]["section"] == "Pinned" and agents["grok-designer"]["label"] == "Grok Bot"
+    assert agents["grok-designer-2"]["section"] == ""
+
+
+def test_a_member_links_their_own_dots_as_one_bot_under_them(api):
+    out = post(api, "external/sync", {"provider": "dots", "bots": [
+        {"name": "Dots", "messages": [{"role": "bot", "text": "Morning brief ready.", "at": "2026-10-09T07:00:00Z"}]}]},
+        token="cara-test")
+    [bot] = out["bots"]
+    assert bot["created"] and bot["bot"] == "dots" and bot["messages_added"] == 1
+    again = post(api, "external/sync", {"provider": "dots", "bots": [{"name": "Dots"}]}, token="cara-test")
+    assert again["bots"][0]["bot"] == "dots" and not again["bots"][0]["created"]     # one Dots per person
+    row = next(b for b in get(api, "bots") if b["slug"] == "dots")
+    assert row["reports_to"] == "human:cara" and row["operator"] == "cara" and row["harness"] == "dots"
+    post(api, "external/sync", {"provider": "dots", "bots": [{"name": "A"}, {"name": "B"}]},
+         token="cara-test", expected=422)
+
+
+def test_what_the_person_wrote_in_tico_comes_back_once_in_the_next_sync(api):
+    sync(api, designer())
+    post(api, "chat/grok-designer", {"text": "Try a warmer palette."})
+    [bot] = sync(api, designer(messages=[]))["bots"]
+    assert [m["text"] for m in bot["inbox"]] == ["Try a warmer palette."]
+    assert sync(api, designer(messages=[]))["bots"][0]["inbox"] == []
 
 
 def test_tico_fetches_only_public_https_images():
-    from backend import grokbot as G
+    from backend import external_sync as G
     assert G.fetch_image("http://imagine.example/a.png") is None
     assert G.fetch_image("file:///etc/passwd") is None
     assert not G.public_host("localhost") and not G.public_host("127.0.0.1") and not G.public_host("169.254.169.254")

@@ -74,7 +74,7 @@ Your regular CLI configuration stays in its own directory.
 
 ## Each agent
 
-**Grok** (xAI)
+**Grok** (xAI). To put every Grok Bot on the team chart under you, see [External agent sync](external-agent-sync.md#grok-bot).
 - A Grok Bot: ask it to add a custom MCP server with the dialog's block (name, URL, `Authorization`
   header). Grok adds it to the whole account.
 - grok.com: **Connectors > New Connector > Custom**, paste the URL, then give the token if it asks. On
@@ -86,7 +86,8 @@ Your regular CLI configuration stays in its own directory.
 
 **Dots.** OpenAI's always-on agents reach apps through ChatGPT plugins, which sign in with OAuth or
 not at all and cannot send a token. The dialog gives Dots the generic steps; until Tico's MCP server
-offers OAuth, Dots is not expected to connect. ChatGPT itself (developer mode, **Settings > Security
+offers OAuth, Dots is not expected to connect. Once connected, [External agent sync](external-agent-sync.md#dots) puts
+it on the team chart under you. ChatGPT itself (developer mode, **Settings > Security
 and login > Developer mode**, then **Plugins > +**) is in the same position, so it has no tile.
 
 **Muse** (Meta)

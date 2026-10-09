@@ -136,6 +136,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "grokbot-own", "label": "grok bot's own model", "runtime": "grokbot", "provider": "",
      "efforts": ("as-configured",),
      "default_effort": "as-configured"},
+    {"id": "dots-own", "label": "dots' own model", "runtime": "dots", "provider": "",
+     "efforts": ("as-configured",),
+     "default_effort": "as-configured"},
 ))
 MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 

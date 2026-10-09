@@ -53,10 +53,10 @@ def presence(c, bot, harness=None, now=None):
     harness = harness or external_harness(c, bot)
     if not harness:
         return None
-    if harness == "grokbot":
-        from . import grokbot
+    from . import external_sync
+    if harness in external_sync.HARNESSES:
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        return grokbot.presence(c, bot, H._json(config["config_json"], {}) or {}, now)
+        return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
     credential = bool(record and not record["revoked_at"])

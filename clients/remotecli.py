@@ -146,6 +146,10 @@ def run(args, who=None):
         from clients import hubtools
         body = json.loads(Path(args.file).read_text())
         return hubtools.BY_NAME["hub_grokbot_sync"]["fn"](client, body)
+    if args.cmd == "external":
+        from clients import hubtools
+        body = json.loads(Path(args.file).read_text())
+        return hubtools.BY_NAME["hub_external_sync"]["fn"](client, {**body, "provider": args.provider})
     if args.cmd == "file":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
