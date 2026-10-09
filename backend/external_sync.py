@@ -38,6 +38,7 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 from pydantic import Field
 
+from . import access as Access
 from . import models as M
 from . import people as P
 from . import rooms
@@ -49,6 +50,7 @@ from .store import H, Problem, encode
 PRESENCE_GAP = 26 * 60 * 60
 NAMESPACE = uuid.UUID("5b0c7f1e-8d0a-4c55-9d0b-6f3a1c2e9a41")
 INBOX_LIMIT = 50
+IMAGE_FETCHES = 50      # image links one sync may download; the rest stay links (an inline image costs no download)
 
 
 IMAGE_BYTES = 10_000_000
@@ -85,6 +87,9 @@ class ExternalSync(M.Contract):
     provider: str = Field(default="grokbot", pattern=r"^(grokbot|dots)$")
     bots: list[SyncedBot] = Field(min_length=1, max_length=50)
     source: str = Field(default="", max_length=200)      # which bot ran the sync, for the page
+    # The caller hands `inbox` on to its bots. Only then is it filled, and its messages marked delivered: a routine
+    # from before the inbox existed ignores it, and what the person wrote would be marked delivered and never arrive.
+    inbox: bool = False
 
 
 TICO_WORD = re.compile(r"\bTico\b", re.I)
@@ -214,9 +219,29 @@ def allowed(who):
         raise Problem("forbidden", "A person syncs their own external agent's bots, with their own sign-in", 403)
 
 
+def precheck(c, settings_admin, who, body):
+    """Everything that would refuse the sync, before any image is fetched for it: who is asking, the body's shape, and
+    whether the bots it would add fit the person's bot limit (`create_bot` checks each again inside the sync)."""
+    allowed(who)
+    provider = PROVIDERS[body.provider]
+    check(provider, body)
+    person = H.actor_id(who.actor)
+    new = sum(1 for item in body.bots if not find(c, provider, person, external_id(provider, item)))
+    if not new:
+        return
+    settings_admin._creator(c, who)       # may they add bots at all, and is there room for one
+    if who.role == "owner" or settings_admin.auth.bot_admin(who):
+        return
+    limit = Access.load_access(c, settings_admin.settings)["member_bot_limit"]
+    have = settings_admin.counted_bots(c, who.actor)
+    if have + new > limit:
+        raise Problem("bot_limit", f"This sync would add {new} bots to your {have}; a member may have {limit}. "
+                      "Archive some, or ask an admin to raise the limit", 409)
+
+
 def prefetch_images(store, blobs, body, transport=None, person=""):
-    """Fetch and store the images of messages Tico does not have yet, outside any transaction.
-    {message id: [(digest, size, name, content type) or (None, url)]}."""
+    """Fetch and store the images of messages Tico does not have yet, outside any transaction, at most IMAGE_FETCHES
+    downloads a sync. {message id: [(digest, size, name, content type) or (None, url)]}."""
     provider = PROVIDERS[body.provider]
     wanted = {}
     for item in body.bots:
@@ -228,12 +253,18 @@ def prefetch_images(store, blobs, body, transport=None, person=""):
     with store.read() as c:
         marks = ",".join("?" * len(wanted))
         have = {r[0] for r in c.execute(f"SELECT id FROM messages WHERE id IN ({marks})", tuple(wanted))}
-    out = {}
+    out, fetches = {}, IMAGE_FETCHES
     for mid, images in wanted.items():
         if mid in have:
             continue
         rows = []
         for image in images:
+            if not image.content_base64:
+                if fetches <= 0:
+                    if image.url:
+                        rows.append((None, image.url))
+                    continue
+                fetches -= 1
             got = image_bytes(image, transport)
             if got:
                 data, kind, name = got
@@ -387,7 +418,7 @@ def sync(c, auth, settings_admin, who, body, images=None):
                     "messages_added": added, "messages_known": known,
                     "instructions_changed": record.get("instructions_updated") == now,
                     "synced_through": synced_through(c, provider, person, slug),
-                    "inbox": take_inbox(c, provider, person, slug)})
+                    "inbox": take_inbox(c, provider, person, slug) if body.inbox else []})
     return {"provider": provider.id, "person": person, "bots": out, "synced": now}
 
 

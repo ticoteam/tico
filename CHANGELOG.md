@@ -9,6 +9,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 - A synced Grok Bot or Dots joins its human's group, so it sits under them on the team chart instead of at the top when the human is in a group.
+- What you write to a Grok Bot in Tico is no longer lost by a routine set up before 0.3.36: only a sync that takes the inbox
+  (`hub_external_sync`, which sends `inbox: true`) receives those messages and marks them delivered. `hub_grokbot_sync` leaves them
+  waiting. `hub_external_sync` against an older server retries once without `inbox`.
+- "N messages wait for the next sync" now clears once a sync has handed them over.
+- External sync checks who is asking, the body and the member's bot limit before it fetches any image, and fetches at most 50 image
+  links per sync; the rest stay links.
 
 ## [0.3.36] - 2026-10-09
 

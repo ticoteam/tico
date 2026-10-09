@@ -25,11 +25,13 @@ human on a routine, so the sync runs on the platform, with the human's own sign-
   preserves it.
 - The transcript is copied into the human's own chat with the bot, already read, with no job queued. Resending a
   message adds nothing. Each bot in the reply carries `synced_through`: send only newer messages next time.
-- Each bot in the reply also carries `inbox`: what the human wrote to it in Tico since the last sync, oldest first,
-  given once. The routine hands those to that bot; its answer comes back with the next transcript. Messages from
-  other humans stay in Tico.
+- A sync with `inbox: true` (`hub_external_sync` sends it) also gets `inbox` on each bot: what the human wrote to it
+  in Tico since the last sync, oldest first, given once and then counted as delivered. The routine hands those to
+  that bot; its answer comes back with the next transcript. Without `inbox: true` (a routine set up before, on
+  `hub_grokbot_sync`), `inbox` is empty and the messages keep waiting. Messages from other humans stay in Tico.
 - Images in a message are fetched once (public https only, up to 10 MB each), stored like a chat attachment and
-  shown inline. One Tico cannot fetch stays in the message as a link.
+  shown inline. One Tico cannot fetch stays in the message as a link, as do links past the first 50 in one sync.
+  Nothing is fetched for a sync Tico would refuse (a bot, a malformed body, or new bots past the member's limit).
 - Grok Bots named "Tico …" in Grok read "Grok …" here: in Grok the word marks the Bot as one of ours; here it says
   where the bot runs. The Grok name is kept in `config_json.grok.name`.
 - Presence is the last sync: synced in the last 26 hours shows as synced, older as not synced lately. Nothing is
@@ -37,7 +39,7 @@ human on a routine, so the sync runs on the platform, with the human's own sign-
 
 The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
 `hub external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
-`provider: grokbot`, for routines set up before.
+`provider: grokbot` and no inbox, for routines set up before.
 
 ## Grok Bot
 
