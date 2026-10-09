@@ -1,9 +1,12 @@
 """An inbox bot gets a computer to itself: assignment is refused both ways, and Health warns about
 installs that already mix them."""
 
+import uuid
+
 from backend.store import encode
 from backend.tests.test_getting_started import add_bot, enrolled, SIGNED_IN, heartbeat  # noqa: F401
-from backend.tests.test_onboarding import PEOPLE, environment, machine, signed_in  # noqa: F401
+from backend.tests.test_onboarding import (PEOPLE, ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, LIBRARIAN_CARD,  # noqa: F401
+                                           environment, machine, signed_in)
 
 
 def setup(api):
@@ -38,3 +41,18 @@ def test_an_inbox_bot_and_another_bot_never_share_a_computer(environment):
     assert place(api, "mail", other).status_code == 200
     again = place(api, "helper", other, 1)
     assert again.status_code == 409 and again.json()["error"]["code"] == "inbox_isolation"
+
+
+def test_turning_on_a_helper_skips_the_computer_an_inbox_bot_keeps(environment):
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (LIBRARIAN_CARD, "# L\n")])
+    first = setup(api)
+    assert place(api, "mail", first).status_code == 200
+    turn_on = lambda: api.post("/api/v2/librarian/turn-on", json={},
+                               headers={**signed_in(), "Idempotency-Key": str(uuid.uuid4())})
+    refused = turn_on()
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbox_isolation"   # no other computer
+    other = machine(api, "Spare Mac")["runner_id"]
+    turned = turn_on()
+    assert turned.status_code == 200 and turned.json()["placed"], turned.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='librarian'").fetchone()[0] == other
