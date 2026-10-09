@@ -26,6 +26,7 @@ class NotesProvider(Provider):
         self.account_result = None
         self.account_calls = 0
         self.range_enum = ["custom", "last_30_days"]
+        self.transcript_calls = None             # a list advertises get_meeting_transcript and records its ids
         super().__init__(api)
         self.now = datetime(2026, 10, 2, tzinfo=timezone.utc).timestamp()
 
@@ -42,12 +43,18 @@ class NotesProvider(Provider):
                         "required": ["meeting_ids"], "additionalProperties": False}}]
                 if self.account_result is not None:
                     tools.append({"name": "get_account_info", "inputSchema": {"properties": {}}})
+                if self.transcript_calls is not None:
+                    tools.append({"name": "get_meeting_transcript", "inputSchema": {
+                        "properties": {"meeting_id": {}}, "required": ["meeting_id"]}})
                 return httpx.Response(200, json={"result": {"tools": tools}})
             name = body.get("params", {}).get("name")
             if name == "list_meetings":
                 self.ranges.append(body["params"]["arguments"])
                 return httpx.Response(200, json={"result": {"structuredContent": {
                     "meetings": [{"id": nid} for nid in self.ids]}}})
+            if name == "get_meeting_transcript":
+                self.transcript_calls.append(body["params"]["arguments"]["meeting_id"])
+                return httpx.Response(200, json={"result": {"structuredContent": {"transcript": "Ana: Ship it"}}})
             if name == "get_account_info":
                 self.account_calls += 1
                 return self.account_result
@@ -159,11 +166,15 @@ def test_repeated_throttling_backs_off_and_caps(api):
 
 
 def test_new_notes_are_fetched_before_imported_ones_are_revisited(api):
-    provider = NotesProvider(api, 12)
+    provider = DatedNotes(api, 12)
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    # Imported notes under a day old are still revisited for a late summary.
+    provider.dates.update({nid: (start - timedelta(hours=12 - i)).isoformat() for i, nid in enumerate(provider.ids)})
     provider.connect()
     provider.sync()
     assert provider.service.load("human:ana")[1]["imported_count"] == 12
     new = [str(uuid.UUID(int=100 + i)) for i in range(3)]
+    provider.dates.update({nid: start.isoformat() for nid in new})
     provider.ids = provider.ids + new           # later notes, listed after the overlap window's imported ones
     provider.notes_calls.clear()
     provider.responses = [None] + throttled()
@@ -188,10 +199,10 @@ class DatedNotes(NotesProvider):
 def test_a_throttled_sync_never_checkpoints_past_an_imported_note_not_yet_revisited(api):
     provider = DatedNotes(api, 12)
     start = datetime.fromtimestamp(provider.now, timezone.utc)
-    provider.dates.update({nid: (start - timedelta(hours=60 - 5 * i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.dates.update({nid: (start - timedelta(hours=20 - i)).isoformat() for i, nid in enumerate(provider.ids)})
     provider.connect()
     provider.sync()
-    provider.now += 7 * 86400                    # a week later: three new notes, then Granola throttles
+    provider.now += 6 * 3600                     # six hours later: three new notes, then Granola throttles
     later = datetime.fromtimestamp(provider.now, timezone.utc)
     new = [str(uuid.UUID(int=100 + i)) for i in range(3)]
     provider.dates.update({nid: (later - timedelta(hours=3 - i)).isoformat() for i, nid in enumerate(new)})
@@ -201,7 +212,7 @@ def test_a_throttled_sync_never_checkpoints_past_an_imported_note_not_yet_revisi
     meta = provider.service.load("human:ana")[1]
     assert meta["imported_count"] == 15, "the new notes came first"
     # Imported notes were left unrevisited: the next sync's window must still reach the oldest of them.
-    assert datetime.fromisoformat(meta["cursor"]) - timedelta(hours=72) <= datetime.fromisoformat(provider.dates[provider.ids[7]])
+    assert datetime.fromisoformat(meta["cursor"]) - timedelta(hours=72) <= datetime.fromisoformat(provider.dates[provider.ids[10]])
 
 
 class ThrottledList(NotesProvider):
@@ -361,3 +372,84 @@ def test_notes_left_untried_by_a_stopped_fallback_are_fetched_by_the_next_sync(a
     old = [nid for nid in untried if datetime.fromisoformat(provider.dates[nid]) < datetime.fromtimestamp(provider.now, timezone.utc) - timedelta(hours=72)]
     assert old, "notes older than the revisit window are among those imported"
     assert meta["skipped"] == 0 and meta["last_error"] is None
+
+
+def test_a_held_checkpoint_gives_up_after_three_syncs(api):
+    provider = DatedNotes(api, 12)
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    provider.dates.update({nid: (start - timedelta(hours=216 - 18 * i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.connect()
+    failure = lambda: httpx.Response(200, json={"error": {"code": 403, "message": "fake"}})  # noqa: E731
+    held = []
+    for _ in range(3):
+        provider.responses = [failure(), failure(), failure()]
+        provider.sync()
+        meta = provider.service.load("human:ana")[1]
+        held.append((meta["held_syncs"], datetime.fromisoformat(meta["cursor"]) < start))
+        provider.now += 3600
+    assert held == [(1, True), (2, True), (0, False)], "the cursor is held twice, then advances to the sync's end"
+    assert meta["skip_reasons"] == {"forbidden: get_meetings": 10, "held: gave up after 3 syncs": 8}
+    provider.notes_calls.clear()
+    provider.sync()
+    # Given-up notes now outside the 72-hour overlap are not requested again.
+    assert not {nid for _, ids in provider.notes_calls for nid in ids} & set(provider.ids[:9])
+
+
+def test_ids_left_out_of_a_reply_are_held_for_the_next_sync(api):
+    provider = DatedNotes(api, 3)
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    provider.dates.update({nid: (start - timedelta(days=5 - i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.connect()
+    provider.responses = [httpx.Response(200, json={"result": {"structuredContent": {"meetings": [
+        {"id": nid, "summary": "Shared notes"} for nid in (provider.ids[0], provider.ids[2])]}}})]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert meta["imported_count"] == 2 and meta["held_syncs"] == 1
+    assert meta["skipped"] == 1 and meta["skip_reasons"] == {"missing: get_meetings": 1}
+    assert datetime.fromisoformat(meta["cursor"]) <= datetime.fromisoformat(provider.dates[provider.ids[1]])
+    provider.now += 3600
+    provider.notes_calls.clear()
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert [ids for _, ids in provider.notes_calls] == [[provider.ids[1]]], "imported notes over a day old are not re-read"
+    assert meta["imported_count"] == 3 and meta["held_syncs"] == 0 and meta["last_error"] is None
+
+
+def test_imported_notes_over_a_day_old_are_not_re_read(api):
+    provider = DatedNotes(api, 10)
+    provider.transcript_calls = []
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    provider.dates.update({nid: (start - timedelta(hours=60 - 3 * i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.connect()
+    provider.sync()
+    assert provider.service.load("human:ana")[1]["imported_count"] == 10 and len(provider.transcript_calls) == 10
+    provider.now += 3600
+    new = [str(uuid.UUID(int=100 + i)) for i in range(2)]
+    provider.dates.update({nid: datetime.fromtimestamp(provider.now - 600, timezone.utc).isoformat() for nid in new})
+    provider.ids = provider.ids + new
+    provider.notes_calls.clear()
+    provider.transcript_calls.clear()
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert [sorted(ids) for _, ids in provider.notes_calls] == [sorted(new)]
+    assert sorted(provider.transcript_calls) == sorted(new)
+    assert meta["imported_count"] == 12 and meta["last_error"] is None
+
+
+def test_a_recent_imported_note_is_re_read_without_fetching_its_stored_transcript_again(api):
+    provider = DatedNotes(api, 1)
+    provider.transcript_calls = []
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    provider.dates[provider.ids[0]] = (start - timedelta(hours=2)).isoformat()
+    provider.connect()
+    provider.sync()
+    assert provider.transcript_calls == provider.ids
+    provider.now += 3600
+    provider.notes_calls.clear()
+    provider.sync()
+    assert [ids for _, ids in provider.notes_calls] == [provider.ids], "a note under a day old is re-read"
+    assert provider.transcript_calls == provider.ids, "its stored transcript is not fetched again"
+    with api.app.state.store.read() as c:
+        stored = c.execute("SELECT m.transcript_original FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
+                           "WHERE r.source='granola'").fetchone()[0]
+    assert "Ship it" in stored

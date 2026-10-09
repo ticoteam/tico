@@ -33,6 +33,8 @@ RATE_LIMIT_MAX = 6 * 3600          # repeated throttling backs off to this, unle
 RETRY_IN_SYNC = 60                 # a get_meetings throttle is waited out in the sync only when Granola says it is this short
 GET_MEETINGS_RETRIES = (20, 60)    # spaced waits for a get_meetings throttle with no named wait, or a short one
 FIRST_GET_MEETINGS_GAP = 10        # the first get_meetings waits this long after the sync's previous MCP call
+HOLD_MAX = 3                       # syncs a checkpoint is held for untried notes before they are given up
+REVISIT = 24 * 3600                # an imported note is re-read for a late summary only while its meeting is this recent
 DEBOUNCE = 120
 GET_MEETINGS_INTERVAL = 6
 SIGNALS = (("rate limit", r"rate[\s_-]*limit"), ("slow down", r"slow[\s_-]+down"), ("too many requests", r"too many requests"))
@@ -771,16 +773,17 @@ class GranolaMCP:
                              media_url=https_url(note.get("web_url"))) if summary or transcript else None
 
     def imported_ids(self, actor, ids):
-        """Which of these Granola notes this person already has as a meeting."""
+        """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
         keys = [f"{actor}:{nid}" for nid in ids]
-        found = set()
+        found = {}
         with self.store.read() as c:
             for start in range(0, len(keys), 500):
                 chunk = keys[start:start + 500]
-                found.update(r[0] for r in c.execute(
-                    "SELECT external_id FROM recording_source_refs WHERE source='granola' AND resource_type='meeting' "
-                    "AND external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
-        return {key[len(actor) + 1:] for key in found}
+                found.update((r[0], bool(r[1])) for r in c.execute(
+                    "SELECT r.external_id,m.transcript_original!='' FROM recording_source_refs r "
+                    "LEFT JOIN meetings m ON m.id=r.meeting_id WHERE r.source='granola' AND r.resource_type='meeting' "
+                    "AND r.external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        return {key[len(actor) + 1:]: value for key, value in found.items()}
 
     async def sync(self, actor):
         async with self.lock(actor):
@@ -895,7 +898,10 @@ class GranolaMCP:
                 # regenerated summary) must not spend a tight quota before new meetings arrive.
                 imported = await asyncio.to_thread(self.imported_ids, actor, ids)
                 by_date, done, position, untried = list(ids), set(), 0, set()
-                ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported]
+                # An imported note is re-read only while a late summary may still arrive; older ones count as done.
+                settled = {nid for nid in imported if dates[nid] < until - timedelta(seconds=REVISIT)}
+                done.update(settled)
+                ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported and nid not in settled]
                 if len(ids) > 5000:
                     raise GranolaError("import_limit")
                 id_properties = (tools["get_meetings"].get("inputSchema") or {}).get("properties", {})
@@ -908,7 +914,7 @@ class GranolaMCP:
                         await self.sleep(wait)
                 for offset in range(0, len(ids), batch_size):
                     batch = ids[offset:offset + batch_size]
-                    left = []                          # ids of this batch never requested on their own
+                    left, failed = [], set()           # left: ids of this batch without an answer, held for a later sync
                     step = "get_meetings"
                     try:
                         value = await self.call(row, meta, secret, session, tools["get_meetings"],
@@ -928,6 +934,7 @@ class GranolaMCP:
                                 if exc.code in ("unreachable", "rate_limited", "needs_signin"):
                                     raise
                                 skipped_error = skip(exc.code + ": get_meetings", error=exc)
+                                failed.add(nid)
                                 if index < 2:
                                     first_codes.append(exc.code)
                                 # The first two single fetches failing alike means a systemic error, not a bad ID:
@@ -936,13 +943,20 @@ class GranolaMCP:
                                     skip(skipped_error, len(batch) - 2, exc)
                                     left = batch[2:]
                                     break
+                    returned = {str(n.get("id") or n.get("meeting_id") or n.get("note_id")) for n in notes}
+                    missing = [nid for nid in batch if nid not in returned and nid not in failed and nid not in left]
+                    if missing:
+                        skipped_error = skip("missing: get_meetings", len(missing))
+                        left += missing
                     for note in notes:
                         transcript = ""
                         nid = note.get("id") or note.get("meeting_id") or note.get("note_id")
                         if not nid:
                             skipped_error = skip("bad_response: get_meetings")
                             continue
-                        if "get_meeting_transcript" in tools and not meta.get("transcripts_unavailable"):
+                        # A stored transcript is kept by the import; it is not fetched again.
+                        if ("get_meeting_transcript" in tools and not meta.get("transcripts_unavailable")
+                                and not imported.get(str(nid))):
                             step = "get_meeting_transcript"
                             try:
                                 data = await self.call(row, meta, secret, session, tools["get_meeting_transcript"],
@@ -1000,6 +1014,11 @@ class GranolaMCP:
                     return
                 meta["failures"] = 0
                 meta.pop("retry_after", None)
+                meta["held_syncs"] = meta.get("held_syncs", 0) + 1 if untried else 0
+                if meta["held_syncs"] >= HOLD_MAX:
+                    # Already counted as skipped; recorded under a fixed key once the checkpoint stops waiting for them.
+                    meta["skip_reasons"]["held: gave up after %d syncs" % HOLD_MAX] = len(untried)
+                    meta["held_syncs"], untried = 0, set()
                 meta.update(last_sync=H.now(), last_finished=self.clock(),
                             cursor=meta.get("cursor") if untried else until.isoformat(), last_error=skipped_error, last_error_detail=skipped_detail if skipped_error else None)
                 if skipped_error:

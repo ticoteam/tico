@@ -388,7 +388,7 @@ The free plan imports your own notes and AI summaries from the last 30 days, wit
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
 the note-taker are never imported. Imported meetings default to private. Tico syncs in the background
 every 25 minutes and when you open Meetings, reusing a sync from the last two minutes. Recent meetings
-are revisited for late summaries. Only an invalid or rejected OAuth grant requires sign-in again.
+are revisited for late summaries: an imported note is fetched again only while its meeting is under a day old, and a transcript already stored is not fetched again. Only an invalid or rejected OAuth grant requires sign-in again.
 Network failures, rate limits and server outages keep your connection and retry on the next schedule
 with backoff. Meetings and your Health page say
 **Granola needs sign-in again** when the grant is rejected; connect again to continue.
@@ -408,7 +408,9 @@ Notes are fetched in batches of up to ten, at least six seconds apart per connec
 individual requests used to recover from a failed batch. The first note fetch of a sync waits until ten
 seconds have passed since its previous MCP call. When a failed batch's first two individual requests fail
 with the same code, the rest of that batch is counted as skipped with that code without further requests;
-the sync keeps its checkpoint before those notes, so the next sync lists and fetches them.
+the sync keeps its checkpoint before those notes, so the next sync lists and fetches them. Notes missing from
+Granola's reply are held the same way (`missing: get_meetings`). After three syncs in a row end held, the
+checkpoint moves on and status records `held: gave up after 3 syncs` with the count.
 A rate-limited note fetch is retried up to twice in the sync, after 20 and then 60 seconds (or Granola's
 `Retry-After` when longer), unless Granola names a `Retry-After` over 60 seconds. If the limit
 persists, the sync stops with `rate_limited: get_meetings`, retains its checkpoint and does not count
