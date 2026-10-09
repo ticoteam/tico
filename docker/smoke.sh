@@ -125,6 +125,13 @@ step "the tunnel's route can be written for the cloudflared container"
 dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-config || fail "the server cannot write the tunnel's route"
 dc exec -T server cat /tunnel/cloudflared.yml | grep -q 'hostname: smoke.example.test' || fail "the tunnel's route names the wrong host"
 [ "$(dc exec -T server stat -c %a /tunnel/cloudflared.yml)" = 644 ] || fail "the tunnel's route is not readable by cloudflared"
+# A separate runner hostname is routed for the API and downloads only, ahead of the catch-all 404.
+dc exec -T -e TICO_DOMAIN=smoke.example.test -e TICO_RUNNER_URL=https://runner.smoke.example.test server tico-entrypoint tunnel-config \
+  || fail "the server cannot write the tunnel's route with a runner hostname"
+route="$(dc exec -T server cat /tunnel/cloudflared.yml)"
+printf '%s\n' "$route" | grep -A1 -x '  - hostname: runner.smoke.example.test' | grep -qF "path: '^/(?:api/v2|download)(?:/.*)?\$'" \
+  || fail "the tunnel does not route the runner hostname's API and downloads"
+[ "$(printf '%s\n' "$route" | tail -1)" = "  - service: http_status:404" ] || fail "the tunnel's catch-all 404 is not last"
 
 step "a malformed expected AWS account refuses to start, without calling AWS"
 out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"
