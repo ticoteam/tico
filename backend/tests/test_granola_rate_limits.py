@@ -1,4 +1,5 @@
 """Notes imports preserve progress when Granola throttles real MCP response shapes."""
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -225,3 +226,31 @@ def test_a_long_named_wait_ends_the_sync_and_a_short_one_is_waited_out(api):
     short.sync()
     meta = short.service.load("human:ana")[1]
     assert short.listed == 2 and 20 in short.sleeps and meta["last_error"] is None
+
+
+def test_a_wait_saved_before_the_cap_cannot_park_the_import_and_sync_now_retries(api):
+    from backend import granola_mcp as G
+    from backend.auth import Identity
+    provider = NotesProvider(api)
+    provider.connect()
+    who = Identity("human:ana", "human", "ana@acme.example")
+    row, meta, secret = provider.service.load("human:ana")
+    # Saved by the old code: a 30-day wait from an attempt two days ago.
+    meta.update(last_error="rate_limited: get_meetings", last_attempt=provider.now - 2 * 86400,
+                retry_after=provider.now + 30 * 86400, failures=4)
+    provider.service.save(row, meta, secret)
+    status = provider.service.status(who)
+    assert status["next_retry"] and status["last_attempt"] and status["failures"] == 4
+    assert provider.service.next_retry(meta) == meta["last_attempt"] + G.RETRY_AFTER_MAX < provider.now
+    result = api.portal.call(provider.service.trigger, who, G.SCHEDULE)
+    assert result["state"] == "syncing", "the scheduled tick retries once the capped wait has passed"
+
+    # Inside a fresh backoff, Sync now still makes a real attempt five minutes after the last one, not sooner.
+    api.portal.call(lambda: asyncio.wait_for(asyncio.shield(provider.service.jobs.get("human:ana") or asyncio.sleep(0)), 5))
+    row, meta, secret = provider.service.load("human:ana")
+    meta.update(last_error="rate_limited: get_meetings", last_attempt=provider.now - 60, retry_after=provider.now + 3600)
+    provider.service.save(row, meta, secret)
+    assert api.portal.call(provider.service.trigger, who)["state"] == "recent"
+    meta.update(last_attempt=provider.now - G.RATE_LIMIT_RETRY, last_finished=provider.now - G.RATE_LIMIT_RETRY)
+    provider.service.save(row, meta, secret)
+    assert api.portal.call(provider.service.trigger, who)["state"] == "syncing"
