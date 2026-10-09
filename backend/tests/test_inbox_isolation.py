@@ -51,6 +51,10 @@ def test_turning_on_a_helper_skips_the_computer_an_inbox_bot_keeps(environment):
                                headers={**signed_in(), "Idempotency-Key": str(uuid.uuid4())})
     refused = turn_on()
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbox_isolation"   # no other computer
+    code = api.post("/api/v2/enrollments", json={"operator": "quinn"}, headers=signed_in()).json()["code"]
+    quinns = api.post("/api/v2/runners/enroll", json={"code": code, "label": "Quinn's Mac", "platform": "test"},
+                      headers={"Idempotency-Key": str(uuid.uuid4())})                # a member's: not for the owner's bots
+    assert quinns.status_code == 200, quinns.text
     other = machine(api, "Spare Mac")["runner_id"]
     turned = turn_on()
     assert turned.status_code == 200 and turned.json()["placed"], turned.text

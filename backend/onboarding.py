@@ -689,7 +689,8 @@ class Onboarding:
         elif not row:
             self._define(c, who, slug, choice, card)
         if not c.execute("SELECT 1 FROM assignments WHERE bot=?", (slug,)).fetchone():
-            # BotOps' computer first, then the oldest; one an inbox bot keeps to itself is skipped.
+            # BotOps' computer first, then the oldest; one an inbox bot keeps to itself, or one that may not
+            # host this bot (another member's), is skipped.
             botops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
             machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created")]
             if botops and botops["runner_id"] in machines:
@@ -701,7 +702,7 @@ class Onboarding:
                     self.execution.assign(c, who, slug, SimpleNamespace(runner_id=runner_id, expected_generation=0))
                     break
                 except Problem as problem:
-                    if problem.code not in ("inbox_isolation", "shared_runner"):
+                    if problem.code not in ("inbox_isolation", "shared_runner", "forbidden", "computer_closed"):
                         raise
                     refusal = refusal or problem
             else:
