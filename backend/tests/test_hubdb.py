@@ -327,7 +327,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         focus = H.status(self.conn, "cmo")["focus"]
-        self.assertIn("escape", focus)
+        self.assertIn("Paused for review", focus)
         H.status_set(self.conn, H.KEEPER, "cmo", state="crashed", focus="Runner disconnected")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.status(self.conn, "cmo")["focus"], focus)

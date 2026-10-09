@@ -43,6 +43,8 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
 .bot-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 var(--s3);padding:8px 14px;border:1px solid color-mix(in srgb,var(--fail) 35%,var(--line));border-radius:var(--radius);background:var(--fail-bg);color:var(--fail);font-weight:600}
 .bot-limit a{color:inherit;text-decoration:underline}
 .bot-alert{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:1px 7px;border-radius:9px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-alert-resume{margin-left:8px;padding:1px 10px;font-size:var(--t-sm)}
+.bot-quarantine-text{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--line);background:var(--surface2);font-family:var(--mono);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
 .bot-goal{order:2;flex:0 1 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
 .bot-goal[data-status=none]{display:block;flex:0 1 auto}
 .bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;color:inherit}
@@ -179,7 +181,7 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
   #pane-more:not([hidden]){display:flex;flex-direction:column}
   #pane-more>#bot-goals-card{order:1}
   #pane-more>.bot-more-top{order:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 12px}
-  #pane-more>#bot-quarantine{order:3}
+  #pane-more>#bot-quarantine-host{order:3}
   #pane-more>#bot-setup-card{order:4}
   #pane-more>#bot-tools-card{order:5}
   #pane-more>#bot-access-card{order:6;margin-bottom:22px}

@@ -66,7 +66,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
-    if (p === '/api/employees') return json(bots);
+    if (p === '/api/employees') return json(data.bots || bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
@@ -249,18 +249,28 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await context.close();
     }
     {
-      // Anything else (an escape) waits for a person: no time is promised.
+      // An escape waits for a person, on a bot placed on a computer too: it says what the check matched, shows the
+      // refused words and task under More, and Resume bot sits beside the warning.
       const since = iso(-10 * 60e3);
-      const {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'quarantined',
-        bot_state: 'quarantined', since, focus: 'escape: a secrets path', quarantine: {since, auto: false, resumes_at: null}}});
-      await page.goto('https://tico-ui.test/#/bot/cmo');
-      const banner = page.locator('#conv-paused:not([hidden])');
-      await banner.waitFor();
-      assert.match(await banner.innerText(), /a person who manages it must check and resume it/);
-      assert.doesNotMatch(await banner.innerText(), /resumes by itself/);
+      const review = {what: 'task note', found: 'bot-coo/', preview: 'Paste this into bot-coo/tools.yaml: token=[hidden]', task: {id: 't9', title: 'Set up the tool'}};
+      const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {}, {bots: bots.map(b => ({...b, host: 'runner'})),
+        status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: 'escape: the task note reaches outside the hub',
+          quarantine: {since, auto: false, resumes_at: null, review}}});
+      await page.goto('https://tico-ui.test/#/bot/cmo/more');
+      const card = page.locator('#bot-quarantine');
+      await card.waitFor();
+      assert.match(await card.innerText(), /Paused for review[\s\S]*a task note that named another bot's folder \(bot-coo\/\)[\s\S]*the checks stay on/);
+      assert.match(await card.locator('.bot-quarantine-text').innerText(), /token=\[hidden\]/);
+      assert.equal(await card.locator('a[href="#/task/t9"]').innerText(), 'Set up the tool');
+      assert.doesNotMatch(await page.locator('#main').innerText(), /outside the hub|escape:/);
+      if (shots) await page.screenshot({path: path.join(shots, 'bot-quarantine-review.png'), fullPage: true});
+      assert.match(await page.locator('#bot-alert').innerText(), /Paused for review\s*Resume bot/);
+      await page.locator('#bot-alert [data-quarantine-resume]').click();
+      await page.locator('#bot-alert [data-quarantine-resume]').waitFor({state: 'detached'});
+      assert.deepEqual(cleared, ['/api/v2/bots/cmo/quarantine/clear']);
       assert.deepEqual(errors, [], 'escape banner errors');
       await context.close();
     }
-    console.log('bot page: Active, Updates, Files and Recurring; tools open under More; desktop and phone navigation; quarantine banner says when it resumes, Resume now');
+    console.log('bot page: Active, Updates, Files and Recurring; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

@@ -9,7 +9,7 @@
 // and every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
 const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
                  waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
-                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Quarantined'};
+                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
 // A bot the server has registered but not switched on yet. People read "Setting up"; the API value stays `planned`.
 const statusWord = status => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
@@ -90,18 +90,31 @@ async function v2Refresh() {
 // work continues. Redrawn from the 30 s refresh, never its own poll.
 const PAUSED_WHY = {limited: 'usage limit'};
 const clockTime = at => new Date(at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+// Why a quarantined bot is paused, in plain words. An escape says what the safety check matched in the
+// bot's own words, never that something was read or edited: the check reads only the text it refused.
+function quarantineWhy(slug) {
+  const q = v2StatusOf(slug)?.quarantine || {}, r = q.review || {};
+  if (q.auto) return `It hit repeated refused actions and resumes by itself ${q.resumes_at ? `at ${clockTime(q.resumes_at)}` : 'within an hour'}.`;
+  const found = r.found === 'secrets/' ? 'a secrets/ path' : r.found ? `another bot's folder (${r.found})` : "a secrets path or another bot's folder";
+  const what = r.what ? `${/^[aeiou]/i.test(r.what) ? 'an' : 'a'} ${r.what}` : 'repeated writes';
+  return `The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
+}
+const QUARANTINE_RESUME_NOTE = 'Resume releases this pause; the checks stay on.';
+async function quarantineResume(slug) {
+  await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
+  await v2Refresh();
+  toast(`${empName(slug)} resumed`);
+}
 function pausedNotice(slug) {
   const s = v2StatusOf(slug) || {};
   const when = since => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
     const q = s.quarantine || {}, e = S.emps.find(x => x.name === slug);
-    const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume now</button>' : '';
-    const at = q.since || s.since, paused = at ? ` paused at ${clockTime(at)}` : ' is paused';
-    const why = q.auto
-      ? `after repeated refused actions; it resumes by itself${q.resumes_at ? ` at ${clockTime(q.resumes_at)}` : ' within an hour'}`
-      : 'for review; a person who manages it must check and resume it';
-    return `${empName(slug)}${esc(paused)} ${esc(why)}. Your messages are saved and run when it's back.${resume}`;
+    const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
+    const at = q.since || s.since, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
+    const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
+    return `${empName(slug)}${esc(paused)}. ${esc(quarantineWhy(slug) + who)} Your messages are saved and run when it's back.${resume}`;
   }
   let why = PAUSED_WHY[s.state], since = s.since;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
@@ -145,10 +158,9 @@ function pausedRender() {
   if (resume) resume.onclick = async () => {
     resume.disabled = true;
     try {
-      await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
-      await v2Refresh();
+      await quarantineResume(slug);
       pausedRender();
-      toast(`${empName(slug)} resumed`);
+      if (typeof botAlertDraw === 'function') botAlertDraw();
     } catch (error) { resume.disabled = false; toast(error.message, true); }
   };
 }

@@ -1003,17 +1003,20 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
-def refuse(conn, actor, rule, detail="", severity="normal"):
-    """Record a refusal, escalate it (rule 8), and raise. Never returns."""
+def refuse(conn, actor, rule, detail="", severity="normal", context=None):
+    """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
+    reviewing the refusal reads (`escape_context`); a private task write keeps only what was refused."""
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
+    if context and PRIVATE_WRITE.get():
+        context = {"what": context.get("what")}
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
-           "detail_json": _dump({"detail": recorded}), "severity": severity}
+           "detail_json": _dump({"detail": recorded, **({"context": context} if context else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
     if rule != "quarantined":
         try:
-            _escalate(conn, actor, rule, recorded, severity, row["ts"])
+            _escalate(conn, actor, rule, recorded, severity, row["ts"], context)
         except Exception:       # an escalation must never hide the refusal it came from
             pass
     if writing_refusal(rule, detail):
@@ -1219,7 +1222,12 @@ def own_repos(conn, actor):
 
 
 def names_other_repo(text, actor, conn=None):
-    """Whether `text` names another bot's repository folder. `emp-<anything>/` always counts (the older prefix). A
+    """Whether `text` names another bot's repository folder (`other_repo_named`)."""
+    return bool(other_repo_named(text, actor, conn))
+
+
+def other_repo_named(text, actor, conn=None):
+    """The first other bot's repository folder `text` names, or "". `emp-<anything>/` always counts (the older prefix). A
     `bot-<name>/` counts only when it is a real bot's folder (known bots and their recorded repositories), so ordinary
     words such as "bot-driven/" are not an escape; with no `conn` to look them up, only the `emp-` form is checked."""
     mine = (f"emp-{actor_id(actor)}/", f"bot-{actor_id(actor)}/") if actor else ()
@@ -1231,12 +1239,12 @@ def names_other_repo(text, actor, conn=None):
         if name in mine:
             continue
         if name.startswith("emp-"):
-            return True
+            return match.group(0)
         if conn is not None:
             known = known_repos(conn) if known is None else known
             if name[:-1] in known:
-                return True
-    return False
+                return match.group(0)
+    return ""
 
 
 SENSITIVE_WORDS = re.compile(
@@ -1268,7 +1276,34 @@ def classify(text, kind=None, to_actor=None, where="item", actor=None, conn=None
     return "normal"
 
 
-def _escalate(conn, actor, rule, detail, severity, ts):
+def escape_found(text, actor=None, conn=None):
+    """What made `text` an escape: `secrets/`, or the other bot's folder it names."""
+    if SECRETS_PATH.search(str(text or "")):
+        return "secrets/"
+    return other_repo_named(text, actor, conn)
+
+
+ESCAPE_PREVIEW_MAX = 400
+
+
+def escape_preview(text):
+    """The refused words as a reviewer may see them: credential-shaped values masked, at most ESCAPE_PREVIEW_MAX."""
+    from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
+    out = str(text or "")
+    for pattern, label in SECRETS:
+        out = pattern.sub(label, out)
+    out = SECRET_FIELD.sub(lambda m: m.group(1) + "[hidden]", out)
+    out = LONG.sub(lambda m: "[hidden]" if _looks_secret(m.group(0)) else m.group(0), out)
+    out = out.strip()
+    return out if len(out) <= ESCAPE_PREVIEW_MAX else out[:ESCAPE_PREVIEW_MAX - 1] + "…"
+
+
+def escape_context(conn, actor, what, text, task_id=None):
+    """The `context` an escape refusal keeps for the person who reviews the pause it may cause."""
+    return {"what": what, "found": escape_found(text, actor, conn), "preview": escape_preview(text), "task": task_id}
+
+
+def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     """Rule 8: count the day's refusals, open review tasks, quarantine when it is bad enough."""
     if not is_bot(actor):
         return
@@ -1303,7 +1338,7 @@ def _escalate(conn, actor, rule, detail, severity, ts):
     escapes = conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND ts>=? AND severity='escape'",
                            (actor, since)).fetchone()[0]
     if severity == "escape" and escapes >= ESCAPE_QUARANTINE_AT:
-        quarantine(conn, slug, f"{rule}: {said}")
+        quarantine(conn, slug, f"{rule}: {said}", context)
     elif repeats >= QUARANTINE_AT:
         quarantine(conn, slug, f"{repeats} repeated refusals today")
     elif count >= QUARANTINE_TOTAL_AT:
@@ -1369,6 +1404,25 @@ def quarantine_is_escape(conn, slug):
     return not COUNT_QUARANTINE.fullmatch(quarantine_reason(conn, slug))
 
 
+# A quarantine recorded before its refusal was kept: "escape: the task note reaches outside the hub: <words>".
+LEGACY_ESCAPE = re.compile(r"escape: the (.+?) (?:payload )?reaches outside the hub: (.*)", re.S)
+
+
+def quarantine_review(conn, slug):
+    """What a person resuming an escape quarantine reads: what was being written (`what`), what the check
+    matched (`found`), the refused words with credential values masked (`preview`) and the task (`task`)."""
+    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
+                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    detail = (_json(row["detail_json"], {}) or {}) if row else {}
+    if detail.get("review"):
+        return detail["review"]
+    old = LEGACY_ESCAPE.fullmatch(detail.get("reason") or "")
+    if not old:
+        return None
+    return {"what": old.group(1), "found": escape_found(old.group(2), bot_actor(slug), conn),
+            "preview": escape_preview(old.group(2)), "task": None}
+
+
 def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     """A refusal-count quarantine is a cooldown: after an hour the bot runs again, with its count
     started over. Runs from the scheduler's tick. Returns the bots let out."""
@@ -1386,12 +1440,16 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     return lifted
 
 
-def quarantine(conn, slug, reason):
-    """Rule 8's stop: the bot writes nothing more until a human sets it active again."""
+def quarantine(conn, slug, reason, context=None):
+    """Rule 8's stop: the bot writes nothing more until a human sets it active again. `context` is the
+    refusal that stopped it, for the person who reviews it (`quarantine_review`)."""
     conn.execute("UPDATE bots SET state='quarantined' WHERE slug=?", (slug,))
-    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason})
+    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {})})
+    # The status line people read says what the check matched, not the rule's own words.
+    focus = (f"Paused for review: the safety check stopped a {context['what']} naming {context['found']}"
+             if context and context.get("found") else reason)
     try:
-        status_set(conn, KEEPER, slug, state="quarantined", focus=reason, reason=reason)
+        status_set(conn, KEEPER, slug, state="quarantined", focus=focus, reason=reason)
     except Refused:
         pass
     return bot(conn, slug)
@@ -1624,7 +1682,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         refuse(conn, actor, "kind", f"a message is {'|'.join(MESSAGE_KINDS)}, not {kind}")
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     if severity == "escape" and not (actor == KEEPER and kind == "notice"):
-        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape")
+        on_task = (refs or {}).get("task")
+        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape",
+               escape_context(conn, actor, "task note" if on_task else "message", body, on_task))
     # A person's message to a paused or quarantined bot is kept: runners claim only active bots' work
     # (execution.claim), so it runs when the bot is back. A bot still cannot write to one (rule 2).
     target = _reach(conn, actor, to_actor, allow_held=is_human(actor))
@@ -1852,7 +1912,8 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
         refuse(conn, actor, "identity", f"{message_id} was not addressed to {actor}")
     if classify(body if classify_text is None else classify_text, where="message", actor=actor, conn=conn) == "escape":
         refuse(conn, actor, "escape", "The reply includes a secrets path or another bot’s workspace path. Remove the restricted reference and retry; this did not send anything outside the Hub.",
-               "escape")
+               "escape", escape_context(conn, actor, "reply", body if classify_text is None else classify_text,
+                                        (comment_refs or {}).get("task")))
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
@@ -2916,7 +2977,7 @@ def task_comment_edit(conn, actor, task_id, message_id, text):
     if not text:
         refuse(conn, actor, "lint", "write the comment")
     if classify(text, to_actor=msg["to_actor"], where="message", actor=actor, conn=conn) == "escape":
-        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape")
+        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape", escape_context(conn, actor, "task note edit", text, task_id))
     if actor == "bot:librarian":
         text = librarian_text(text)
     if text == msg["body"]:
@@ -2998,7 +3059,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
     # rule 8 is about bots reaching outside the hub; a person's notes are not an escape
     if severity == "escape" and is_bot(actor):
-        refuse(conn, actor, "escape", f"the task reaches outside the hub: {_clip(body, 80)}", severity)
+        refuse(conn, actor, "escape", f"the task reaches outside the hub: {_clip(body, 80)}", severity,
+               escape_context(conn, actor, "new task", f"{title}\n{body}".strip()))
     if next_run and not is_bot(target):
         refuse(conn, actor, "next-run", "only a bot has a next run; file an ordinary task for a person")
     lane = _lane_for(conn, lane, target, actor)
@@ -3249,7 +3311,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             continue
         severity = classify(str(value), actor=actor, conn=conn) if field in checked and is_bot(actor) else "normal"
         if severity == "escape":
-            refuse(conn, actor, "escape", f"the task {field} reaches outside the hub: {_clip(value, 80)}", severity)
+            refuse(conn, actor, "escape", f"the task {field} reaches outside the hub: {_clip(value, 80)}", severity,
+                   escape_context(conn, actor, f"task {field}", str(value), task_id))
         sets.append(f"{field}=:{field}")
         args[field] = value
         _task_event(conn, task_id, actor, field, row.get(field), value, note or "")
@@ -3886,7 +3949,8 @@ def note_create(conn, actor, to, body):
     if len(body) > NOTE_MAX:
         refuse(conn, actor, "note", f"a note is at most {NOTE_MAX} characters; put the detail in a file or a task")
     if classify(body, to_actor=target, actor=actor, where="message", conn=conn) == "escape" and is_bot(actor):
-        refuse(conn, actor, "escape", f"the note reaches outside the hub: {_clip(body, 80)}", "escape")
+        refuse(conn, actor, "escape", f"the note reaches outside the hub: {_clip(body, 80)}", "escape",
+               escape_context(conn, actor, "note", body))
     row = {"id": new_id(), "from_actor": actor, "to_actor": target, "body": body, "created": now()}
     conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES "
                  "(:id,:from_actor,:to_actor,:body,:created)", row)
@@ -3980,7 +4044,8 @@ def approval_request(conn, actor, kind, payload, task_id=None):
     text = json.dumps(payload, sort_keys=True, default=str)
     severity = classify(text, kind=kind, conn=conn)
     if severity == "escape":
-        refuse(conn, actor, "escape", f"the {kind} payload reaches outside the hub: {_clip(text, 100)}", severity)
+        refuse(conn, actor, "escape", f"the {kind} payload reaches outside the hub: {_clip(text, 100)}", severity,
+               escape_context(conn, actor, f"{kind} approval", text, task_id))
     problems = lint_approval(kind, payload)
     if problems:
         refuse(conn, actor, "lint", "; ".join(problems), classify(text, kind=kind, conn=conn))
