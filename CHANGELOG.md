@@ -7,21 +7,23 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-10-09
+
 ### Added
-- **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel".
-- **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server, the Slack gateway and `restore` ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity".
+- **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel". ([#315](https://github.com/ticoteam/tico/pull/315))
+- **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server, the Slack gateway and `restore` ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity". ([#316](https://github.com/ticoteam/tico/pull/316))
 
 ### Fixed
-- External sync connects to the address it checked is public when it fetches an image, so a name that resolves differently on a second lookup (DNS rebinding) cannot point the download at Tico's own network. TLS and the `Host` header still use the name.
-- A synced Grok Bot or Dots joins its human's group, so it sits under them on the team chart instead of at the top when the human is in a group.
-- **Runner hostname on a Cloudflare tunnel:** when `TICO_RUNNER_URL` names a host other than `TICO_DOMAIN`, the tunnel config the server writes routes that host too, for `/api/v2/...` and `/download/...` only, so it can be served without Access as docs/connect-an-agent.md says. No hand-written tunnel config or compose override is needed. See docs/install.md, "Cloudflare Tunnel".
-- Runners of several company environments on one checkout each move to the server's release. The first to update moved the shared checkout and restarted only itself; the others reported the new release while still running the old code until restarted by hand. A runner now reports the release it started on and restarts onto a checkout that is already there.
+- External sync connects to the address it checked is public when it fetches an image, so a name that resolves differently on a second lookup (DNS rebinding) cannot point the download at Tico's own network. TLS and the `Host` header still use the name. ([#319](https://github.com/ticoteam/tico/pull/319))
+- A synced Grok Bot or Dots joins its human's group, so it sits under them on the team chart instead of at the top when the human is in a group. ([#317](https://github.com/ticoteam/tico/pull/317))
+- **Runner hostname on a Cloudflare tunnel:** when `TICO_RUNNER_URL` names a host other than `TICO_DOMAIN`, the tunnel config the server writes routes that host too, for `/api/v2/...` and `/download/...` only, so it can be served without Access as docs/connect-an-agent.md says. No hand-written tunnel config or compose override is needed. See docs/install.md, "Cloudflare Tunnel". ([#313](https://github.com/ticoteam/tico/pull/313))
+- Runners of several company environments on one checkout each move to the server's release. The first to update moved the shared checkout and restarted only itself; the others reported the new release while still running the old code until restarted by hand. A runner now reports the release it started on and restarts onto a checkout that is already there. ([#314](https://github.com/ticoteam/tico/pull/314))
 - What you write to a Grok Bot in Tico is no longer lost by a routine set up before 0.3.36: only a sync that takes the inbox
   (`hub_external_sync`, which sends `inbox: true`) receives those messages and marks them delivered. `hub_grokbot_sync` leaves them
-  waiting. `hub_external_sync` against an older server retries once without `inbox`.
-- "N messages wait for the next sync" now clears once a sync has handed them over.
+  waiting. `hub_external_sync` against an older server retries once without `inbox`. ([#318](https://github.com/ticoteam/tico/pull/318))
+- "N messages wait for the next sync" now clears once a sync has handed them over. ([#318](https://github.com/ticoteam/tico/pull/318))
 - External sync checks who is asking, the body and the member's bot limit before it fetches any image, and fetches at most 50 image
-  links per sync; the rest stay links.
+  links per sync; the rest stay links. ([#318](https://github.com/ticoteam/tico/pull/318))
 
 ## [0.3.36] - 2026-10-09
 
