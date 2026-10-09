@@ -10,6 +10,7 @@ the runner it restarts, and it is the one thing that can put the old code back w
 does not come up.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -29,6 +30,8 @@ RETRY_AFTER_S = 6 * 3600     # after a failed or refused update, until the serve
 HEALTH_S = 180
 DRAIN_S = 20 * 60            # a long turn may not hold the update back for ever: after this, stop claiming
 STALE_UPDATING_S = 15 * 60   # an update that has said "updating" this long without an outcome died
+LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under STALE_UPDATING_S
+LOCK_FILE = "tico-update.lock"
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 NO_SUPERVISOR = ("no supervisor would start this runner again after an update: run `scripts/tico install` "
@@ -74,6 +77,16 @@ def checkout_release(root=ROOT, run=subprocess.run):
     return tag if not done.returncode and key(tag) else ""
 
 
+def checkout_commit(root=ROOT, run=subprocess.run):
+    """The commit HEAD names, or "" when git cannot say."""
+    try:
+        done = git(root, "rev-parse", "HEAD", run=run, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    commit = done.stdout.strip()
+    return commit if not done.returncode and re.fullmatch(r"[0-9a-f]{40,64}", commit) else ""
+
+
 def current_release(env=os.environ, root=ROOT, run=subprocess.run):
     if kind(env) == "docker":
         value = env.get("TICO_VERSION", "").strip().lstrip("v")   # the image sets it; `latest` and `dev` are no release
@@ -115,7 +128,8 @@ def changed_files(root, old, new, run=subprocess.run):
 
 
 def pip_install(root, old, new, run=subprocess.run):
-    """The install step: dependencies, when the release changed them. Returns an error or ""."""
+    """The install step: dependencies, when the release changed them. Returns an error or "". `sys.executable` is the
+    runner's own interpreter: spawn starts the update process with it (TICO_RUNNER_PYTHON when that is set)."""
     if "backend/requirements.txt" not in changed_files(root, old, new, run):
         return ""
     done = run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r",
@@ -259,11 +273,56 @@ def read_json(path):
         return {}
 
 
-def apply(root, version, directory, *, run=subprocess.run, install=pip_install, restart=None, healthy=None,
-          busy=None, clock=time.time, helpers=None):
+def lock_path(root, run=subprocess.run):
+    """The update lock of a checkout, in git's common directory so every worktree of it shares one; None if git cannot say."""
+    try:
+        done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    common = done.stdout.strip()
+    return Path(root) / common / LOCK_FILE if not done.returncode and common else None
+
+
+def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S, clock=time.time, **kw):
+    """`update` (below) under the checkout's update lock. Runners of several company environments may share one checkout,
+    and their updates must not interleave: one's rollback would move the checkout under another that already restarted.
+    The second waits, saying "updating" so its runner does not start another, then sees where the first left the checkout.
+    After `lock_wait` seconds it gives up with "waiting" and its runner tries again later."""
+    path = lock_path(root, run)
+    if path is None:
+        return update(root, version, directory, run=run, clock=clock, **kw)
+    target = version.lstrip("v")
+    with open(path, "a") as handle:
+        deadline, said = time.time() + lock_wait, False
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    write_status(directory, state="waiting", target=target, error="", at=clock())
+                    return {"state": "waiting", "target": target, "error": ""}
+                if not said:
+                    write_status(directory, state="updating", target=target, error="", at=clock())
+                    said = True
+                time.sleep(1)
+        try:
+            result = update(root, version, directory, run=run, clock=clock, **kw)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    if said and result["state"] == "waiting":     # not left saying "updating" while nothing is under way
+        write_status(directory, state="waiting", target=target, error="", at=clock())
+    return result
+
+
+def update(root, version, directory, *, run=subprocess.run, install=pip_install, restart=None, healthy=None,
+           busy=None, clock=time.time, helpers=None, started=""):
     """Move the checkout to release `version` and bring the runner back on it; undo that if it does not
     come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
+    `started` is the commit the runner process started on. A checkout that is already on the release while the
+    runner still runs other code (another runner sharing the checkout moved it, or a person did) only needs
+    the restart.
     Returns the status written: healthy, waiting, blocked, failed or rolled_back."""
     tag = "v" + version.lstrip("v")
     version = tag[1:]
@@ -301,9 +360,30 @@ def apply(root, version, directory, *, run=subprocess.run, install=pip_install, 
         return say("failed", f"release {tag} does not name a commit")
     if busy and busy():
         return {"state": "waiting", "target": version, "error": ""}
-    if target == old:
+    if target == old and started in ("", target):
         return say("healthy")
     say("updating")
+
+    def restarted_helpers():
+        if helpers:
+            try:
+                helpers()
+            except Exception as exc:     # the runner is on the new release; a helper that is missed follows on its own
+                print(f"Tico update: could not restart the helper jobs: {type(exc).__name__}", flush=True)
+
+    if target == old:
+        # Nothing to switch. The dependencies may still differ from the ones this runner started with (a runner with
+        # its own interpreter); going back would only restart onto this same code, so a failure is reported as it is.
+        error = install(root, started, target)
+        if error:
+            return say("failed", error)
+        since = clock()
+        restart and restart()
+        if healthy and not healthy(target, since):
+            return say("failed", f"the runner did not report in within {HEALTH_S} seconds on {tag}")
+        result = say("healthy")
+        restarted_helpers()
+        return result
     back = branch if branch != "HEAD" else old
 
     def back_out(reason):
@@ -328,15 +408,11 @@ def apply(root, version, directory, *, run=subprocess.run, install=pip_install, 
     if healthy and not healthy(target, since):
         return back_out(f"the runner did not report in within {HEALTH_S} seconds on {tag}")
     result = say("healthy")
-    if helpers:
-        try:
-            helpers()
-        except Exception as exc:     # the runner is on the new release; a helper that is missed follows on its own
-            print(f"Tico update: could not restart the helper jobs: {type(exc).__name__}", flush=True)
+    restarted_helpers()
     return result
 
 
-def spawn(root, version, directory, pid, env=os.environ, run=subprocess.run):
+def spawn(root, version, directory, pid, started="", env=os.environ, run=subprocess.run):
     """Start the update as its own process, so it survives the runner it restarts. Under systemd the runner's unit
     kills every process in its cgroup when it restarts, so the update is started as a transient unit of its own."""
     unit = systemd_unit(env)
@@ -348,14 +424,14 @@ def spawn(root, version, directory, pid, env=os.environ, run=subprocess.run):
                    *(f"--setenv={name}={value}" for name, value in keep.items()),
                    "-p", f"StandardOutput=append:{log}", "-p", f"StandardError=append:{log}",
                    sys.executable, "-m", "runner.release_update", "--root", str(root), "--version", version,
-                   "--state-dir", str(directory), "--pid", str(pid)]
+                   "--state-dir", str(directory), "--pid", str(pid), "--started", started]
         done = run(command, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
         if done.returncode:
             raise OSError("systemd-run exited " + str(done.returncode))
         return done
     log = open(Path(directory) / "update.log", "ab")
     return subprocess.Popen([sys.executable, "-m", "runner.release_update", "--root", str(root), "--version", version,
-                             "--state-dir", str(directory), "--pid", str(pid)], cwd=str(root), stdin=subprocess.DEVNULL,
+                             "--state-dir", str(directory), "--pid", str(pid), "--started", started], cwd=str(root), stdin=subprocess.DEVNULL,
                             stdout=log, stderr=log, start_new_session=True)
 
 
@@ -365,6 +441,7 @@ def main(argv=None):
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--pid", type=int, required=True)
+    parser.add_argument("--started", default="")     # the commit the runner started on; "" from an older runner
     args = parser.parse_args(argv)
     deadline = time.time() + 600
     while in_flight(args.state_dir) and time.time() < deadline:   # the runner waits for quiet first; this is the second look
@@ -373,7 +450,7 @@ def main(argv=None):
     result = apply(args.root, args.version, args.state_dir, busy=lambda: in_flight(args.state_dir),
                    restart=lambda: restart_runner(args.pid),
                    healthy=lambda commit, since: wait_healthy(args.state_dir, commit or "", since),
-                   helpers=helpers)
+                   helpers=helpers, started=args.started)
     print(json.dumps(result))
     return 0 if result["state"] == "healthy" else 1
 
@@ -391,7 +468,11 @@ class Follower:
         self.clock, self.wall = clock, wall
         self.kind = kind(env)
         self.desired = None          # None: the server does not know this (an older server); "" a build with no release
-        self.release, self.state, self.error, self.target = "", "idle", "", ""
+        # What this process runs is what it started on, not what the checkout names now: runners of several
+        # company environments may share one checkout, and the first to update moves it under the others.
+        self.release = current_release(env, root, run)
+        self.started = "" if self.kind == "docker" else checkout_commit(root, run)
+        self.state, self.error, self.target = "idle", "", ""
         self.pending = None          # a release to move to as soon as nothing runs
         self.pending_since = None
         self.running = False         # an update is under way; nothing may be claimed
@@ -421,7 +502,6 @@ class Follower:
             self.desired = None          # a server from before this existed: nothing is sent it, main is followed
         except Exception:
             return
-        self.release = current_release(self.env, self.root, self.run)
         self.decide()
 
     def space_freed(self, status, error):
@@ -514,7 +594,7 @@ class Follower:
             if self.kind == "docker":
                 self.sidecar.start(want)
             else:
-                self._launch(self.root, want, self.directory, os.getpid())
+                self._launch(self.root, want, self.directory, os.getpid(), self.started)
         except urllib.error.HTTPError as exc:
             if exc.code != 409:      # 409: the updater is already on it
                 return self.launch_failed(want, f"the updater answered {exc.code}")
