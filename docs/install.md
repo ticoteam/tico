@@ -745,6 +745,22 @@ bucket, so with the default local-only backups you can only rebuild on the same 
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
 
+### Check the AWS identity
+
+On AWS, the server's default AWS credentials (an instance or task role, usually) decide which account its KMS key,
+Secrets Manager secrets and attachments bucket are used in. To make sure a start never runs with another account's
+credentials (a changed role, a copied server), set the account it must run as:
+
+```
+TICO_EXPECTED_AWS_ACCOUNT=123456789012
+TICO_EXPECTED_AWS_ROLE=tico-server        # optional: a role name, or arn:aws:iam::123456789012:role/path/tico-server
+```
+
+Before the server and the Slack gateway start, and before `restore` reads the backup, each asks AWS STS who it is
+(`GetCallerIdentity`, which needs no IAM permission). It refuses, with one line in the log naming the expected and the
+actual account or role, when the account differs, the caller is not that role, no credentials are found, or STS does not answer (about
+10 seconds a try, two tries). A rehearsal checks too. Unset, nothing is checked and nothing is called.
+
 ### Rehearse a migration
 
 To try a move (a new server, a new release, a new host) on a copy of the real data first, start the copy with

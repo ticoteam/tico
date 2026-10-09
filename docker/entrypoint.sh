@@ -206,11 +206,21 @@ PY
   export TICO_ENVIRONMENT_ID
 }
 
+# TICO_EXPECTED_AWS_ACCOUNT (and TICO_EXPECTED_AWS_ROLE): refuse to start as any other AWS identity, before anything
+# reads a backup, bucket, key or secret with it (backend/aws_identity.py). Unset, nothing is checked or called.
+aws_identity() {
+  [ -n "${TICO_EXPECTED_AWS_ACCOUNT:-}${TICO_EXPECTED_AWS_ROLE:-}" ] || return 0
+  local confirmed
+  confirmed="$(python -m backend.aws_identity check)" || die "refusing to start: ${confirmed:-could not confirm the AWS identity}"
+  log "$confirmed"
+}
+
 prepare() {  # everything `server` does before it starts serving: also what the tests run
   server_environment
   for arg in "$@"; do
     case "$arg" in --initialize-empty) export TICO_INITIALIZE_EMPTY=1 ;; *) die "unknown option $arg" ;; esac
   done
+  aws_identity
   seed
   environment_identity
   tunnel_config
@@ -247,6 +257,7 @@ slack_gateway() {
     exec sleep infinity
   fi
   server_environment
+  aws_identity
   local waited=0
   until [ -s "$TICO_DB" ]; do
     [ "$waited" -lt 120 ] || die "the server has not created $TICO_DB; is it running?"
@@ -276,6 +287,7 @@ PY
 restore() {
   local force=0
   case "${1:-}" in --force) force=1 ;; '') ;; *) die "usage: restore [--force]" ;; esac
+  aws_identity  # before the backup or the credential key is read, or a database is moved aside
   export TICO_DB=$DATA/hub.sqlite TICO_BLOB_DIR=$DATA/blobs
   if ! python -m backend.replication is-empty "$DATA"; then
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
@@ -316,6 +328,7 @@ case "${1:-server}" in
   server) shift; server "$@" ;;
   prepare) shift; prepare "$@" ;;
   tunnel-config) tunnel_config ;;
+  aws-identity) aws_identity ;;
   demo) demo "$@" ;;
   restore) shift; restore "$@" ;;
   slack-gateway) slack_gateway ;;
