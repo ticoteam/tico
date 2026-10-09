@@ -1,5 +1,9 @@
 """A runner follows its server's release: the checkout update against a temp repository, and the runner's decisions."""
+import fcntl
 import subprocess
+import sys
+import threading
+import time
 
 import pytest
 
@@ -214,11 +218,38 @@ def test_a_checkout_already_on_the_release_restarts_a_runner_that_started_on_oth
     restarted = []
     result, calls = run_apply(checkout, state, started=started, helpers=lambda: restarted.append("all"))
     assert result["state"] == "healthy" and ru.read_status(state)["state"] == "healthy"
-    assert calls.restarts == 1 and calls.installs == [] and calls.checks == [on_release] and restarted == ["all"]
+    assert calls.restarts == 1 and calls.checks == [on_release] and restarted == ["all"]
+    assert calls.installs == [(started, on_release)]          # this runner's interpreter may not have the new dependencies
     assert head(checkout) == on_release
     result, calls = run_apply(checkout, state, calls=Calls(healthy=(False,)), started=started)
     assert result["state"] == "failed" and "did not report in" in result["error"] and calls.restarts == 1
     assert head(checkout) == on_release                                             # no going back from a restart
+
+
+def test_a_failed_install_on_a_checkout_already_moved_leaves_the_runner_running(repos):
+    public, checkout, state = repos
+    started = head(checkout)
+    run_apply(checkout, state)
+    result, calls = run_apply(checkout, state, calls=Calls(install_error="pip install failed: no network"), started=started)
+    assert result["state"] == "failed" and result["error"] == "pip install failed: no network"
+    assert calls.restarts == 0 and ru.read_status(state)["state"] == "failed"
+
+
+def test_the_install_step_uses_the_update_process_interpreter(repos, monkeypatch):
+    public, checkout, state = repos
+    started = head(checkout)
+    run_apply(checkout, state)
+    pips = []
+
+    def run(cmd, **kw):
+        if cmd[0] == "git":
+            return subprocess.run(cmd, **kw)
+        pips.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
+    assert ru.pip_install(checkout, started, head(checkout), run=run) == ""
+    assert pips[0][:4] == ["/opt/env-python/bin/python3", "-m", "pip", "install"]
+    assert pips[0][-1] == str(checkout / "backend" / "requirements.txt")
 
 
 def test_a_runner_already_on_the_release_is_not_restarted(repos):
@@ -237,6 +268,32 @@ def test_the_update_process_is_told_the_commit_the_runner_started_on(tmp_path):
         return subprocess.CompletedProcess(cmd, 0, "", "")
     ru.spawn("/srv/tico", "0.2.0", tmp_path, 4242, "a" * 40, env=SYSTEMD, run=run)
     assert calls[0][calls[0].index("--started") + 1] == "a" * 40
+    assert calls[0][calls[0].index("-m") - 1] == sys.executable     # the runner's interpreter runs the update and its pip
+
+
+def hold(checkout):
+    handle = open(ru.lock_path(checkout), "a")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
+    public, checkout, state = repos
+    before = head(checkout)
+    held = hold(checkout)                                         # another environment's update holds the checkout
+    result, calls = run_apply(checkout, state, lock_wait=0)
+    assert result["state"] == "waiting" and ru.read_status(state)["state"] == "waiting"
+    assert head(checkout) == before and calls.restarts == 0 and calls.installs == []
+    seen = []
+
+    def release():
+        time.sleep(1.5)
+        seen.append(ru.read_status(state)["state"])
+        held.close()
+    threading.Thread(target=release).start()
+    result, calls = run_apply(checkout, state, lock_wait=30)
+    assert seen == ["updating"]                                    # its runner starts no second update meanwhile
+    assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.2.0" and calls.restarts == 1
 
 
 # -- helper jobs follow the release --------------------------------------------------------------

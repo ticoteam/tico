@@ -10,6 +10,7 @@ the runner it restarts, and it is the one thing that can put the old code back w
 does not come up.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -29,6 +30,8 @@ RETRY_AFTER_S = 6 * 3600     # after a failed or refused update, until the serve
 HEALTH_S = 180
 DRAIN_S = 20 * 60            # a long turn may not hold the update back for ever: after this, stop claiming
 STALE_UPDATING_S = 15 * 60   # an update that has said "updating" this long without an outcome died
+LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under STALE_UPDATING_S
+LOCK_FILE = "tico-update.lock"
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 NO_SUPERVISOR = ("no supervisor would start this runner again after an update: run `scripts/tico install` "
@@ -125,7 +128,8 @@ def changed_files(root, old, new, run=subprocess.run):
 
 
 def pip_install(root, old, new, run=subprocess.run):
-    """The install step: dependencies, when the release changed them. Returns an error or ""."""
+    """The install step: dependencies, when the release changed them. Returns an error or "". `sys.executable` is the
+    runner's own interpreter: spawn starts the update process with it (TICO_RUNNER_PYTHON when that is set)."""
     if "backend/requirements.txt" not in changed_files(root, old, new, run):
         return ""
     done = run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r",
@@ -269,8 +273,50 @@ def read_json(path):
         return {}
 
 
-def apply(root, version, directory, *, run=subprocess.run, install=pip_install, restart=None, healthy=None,
-          busy=None, clock=time.time, helpers=None, started=""):
+def lock_path(root, run=subprocess.run):
+    """The update lock of a checkout, in git's common directory so every worktree of it shares one; None if git cannot say."""
+    try:
+        done = git(root, "rev-parse", "--git-common-dir", run=run, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    common = done.stdout.strip()
+    return Path(root) / common / LOCK_FILE if not done.returncode and common else None
+
+
+def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S, clock=time.time, **kw):
+    """`update` (below) under the checkout's update lock. Runners of several company environments may share one checkout,
+    and their updates must not interleave: one's rollback would move the checkout under another that already restarted.
+    The second waits, saying "updating" so its runner does not start another, then sees where the first left the checkout.
+    After `lock_wait` seconds it gives up with "waiting" and its runner tries again later."""
+    path = lock_path(root, run)
+    if path is None:
+        return update(root, version, directory, run=run, clock=clock, **kw)
+    target = version.lstrip("v")
+    with open(path, "a") as handle:
+        deadline, said = time.time() + lock_wait, False
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    write_status(directory, state="waiting", target=target, error="", at=clock())
+                    return {"state": "waiting", "target": target, "error": ""}
+                if not said:
+                    write_status(directory, state="updating", target=target, error="", at=clock())
+                    said = True
+                time.sleep(1)
+        try:
+            result = update(root, version, directory, run=run, clock=clock, **kw)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    if said and result["state"] == "waiting":     # not left saying "updating" while nothing is under way
+        write_status(directory, state="waiting", target=target, error="", at=clock())
+    return result
+
+
+def update(root, version, directory, *, run=subprocess.run, install=pip_install, restart=None, healthy=None,
+           busy=None, clock=time.time, helpers=None, started=""):
     """Move the checkout to release `version` and bring the runner back on it; undo that if it does not
     come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
@@ -326,7 +372,11 @@ def apply(root, version, directory, *, run=subprocess.run, install=pip_install, 
                 print(f"Tico update: could not restart the helper jobs: {type(exc).__name__}", flush=True)
 
     if target == old:
-        # Nothing to switch or install; going back would only restart onto this same code.
+        # Nothing to switch. The dependencies may still differ from the ones this runner started with (a runner with
+        # its own interpreter); going back would only restart onto this same code, so a failure is reported as it is.
+        error = install(root, started, target)
+        if error:
+            return say("failed", error)
         since = clock()
         restart and restart()
         if healthy and not healthy(target, since):

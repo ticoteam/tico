@@ -117,8 +117,9 @@ The runner is a git checkout. When the server's release is newer, the runner:
 
 A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
 environments (`scripts/tico -e <env> install`) may share one checkout: the first to update moves it, and each other
-runner, still on the old release, finds the checkout already there and only restarts onto it (with its own jobs). The same
-happens after a `git checkout` of a release by hand.
+runner, still on the old release, finds the checkout already there, runs the install step for its own Python and
+restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
+turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
 
 ### Linux from a checkout: run `scripts/tico install` once
 
