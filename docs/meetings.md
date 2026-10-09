@@ -407,7 +407,8 @@ OAuth calls have a separate paced queue so Connect and sign-in polling can finis
 Notes are fetched in batches of up to ten, at least six seconds apart per connection, including
 individual requests used to recover from a failed batch. The first note fetch of a sync waits until ten
 seconds have passed since its previous MCP call. When a failed batch's first two individual requests fail
-with the same code, the rest of that batch is counted as skipped with that code without further requests.
+with the same code, the rest of that batch is counted as skipped with that code without further requests;
+the sync keeps its checkpoint before those notes, so the next sync lists and fetches them.
 A rate-limited note fetch is retried up to twice in the sync, after 20 and then 60 seconds (or Granola's
 `Retry-After` when longer), unless Granola names a `Retry-After` over 60 seconds. If the limit
 persists, the sync stops with `rate_limited: get_meetings`, retains its checkpoint and does not count

@@ -334,3 +334,30 @@ def test_the_first_note_fetch_waits_ten_seconds_after_the_previous_mcp_call(api)
     assert names[first - 1] == "list_meetings"
     assert seen[first][0] - seen[first - 1][0] == 10
     assert provider.service.load("human:ana")[1]["imported_count"] == 2
+
+
+def test_notes_left_untried_by_a_stopped_fallback_are_fetched_by_the_next_sync(api):
+    provider = DatedNotes(api, 12)
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    # Twelve notes over nine days: most of the first batch is older than the 72-hour revisit window.
+    provider.dates.update({nid: (start - timedelta(hours=216 - 18 * i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.connect()
+    failure = lambda: httpx.Response(200, json={"error": {"code": -32603, "message": "fake"}})  # noqa: E731
+    provider.responses = [failure(), failure(), failure()]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert [len(ids) for _, ids in provider.notes_calls] == [10, 1, 1, 2]
+    assert meta["skipped"] == 10 and meta["skip_reasons"] == {"provider_error: get_meetings": 10}
+    assert meta["imported_count"] == 2 and meta["last_sync"]
+    untried = provider.ids[2:10]
+    # The cursor stops before the first untried note instead of moving to the end of the sync.
+    assert datetime.fromisoformat(meta["cursor"]) <= datetime.fromisoformat(provider.dates[untried[0]])
+    provider.now += 3600
+    provider.notes_calls.clear()
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    fetched = {nid for _, ids in provider.notes_calls for nid in ids}
+    assert set(untried) <= fetched and meta["imported_count"] == 12
+    old = [nid for nid in untried if datetime.fromisoformat(provider.dates[nid]) < datetime.fromtimestamp(provider.now, timezone.utc) - timedelta(hours=72)]
+    assert old, "notes older than the revisit window are among those imported"
+    assert meta["skipped"] == 0 and meta["last_error"] is None

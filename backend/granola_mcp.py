@@ -894,7 +894,7 @@ class GranolaMCP:
                 # Notes not imported yet go first: re-reading the overlap window's imported notes (for a
                 # regenerated summary) must not spend a tight quota before new meetings arrive.
                 imported = await asyncio.to_thread(self.imported_ids, actor, ids)
-                by_date, done, position = list(ids), set(), 0
+                by_date, done, position, untried = list(ids), set(), 0, set()
                 ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported]
                 if len(ids) > 5000:
                     raise GranolaError("import_limit")
@@ -908,6 +908,7 @@ class GranolaMCP:
                         await self.sleep(wait)
                 for offset in range(0, len(ids), batch_size):
                     batch = ids[offset:offset + batch_size]
+                    left = []                          # ids of this batch never requested on their own
                     step = "get_meetings"
                     try:
                         value = await self.call(row, meta, secret, session, tools["get_meetings"],
@@ -933,6 +934,7 @@ class GranolaMCP:
                                 # the rest of the batch is counted as skipped without spending more calls.
                                 if index == 1 and first_codes == [exc.code, exc.code] and len(batch) > 2:
                                     skip(skipped_error, len(batch) - 2, exc)
+                                    left = batch[2:]
                                     break
                     for note in notes:
                         transcript = ""
@@ -985,7 +987,9 @@ class GranolaMCP:
                         await asyncio.to_thread(self.save, row, meta, secret)
                     # New notes go first, so the checkpoint is the last note in list-date order with every
                     # earlier one processed: it never passes an imported note not yet revisited.
-                    done.update(batch)
+                    # Ids left untried stay out of `done`, so the checkpoint stops before them and a later sync lists them again.
+                    done.update(nid for nid in batch if nid not in left)
+                    untried.update(left)
                     while position < len(by_date) and by_date[position] in done:
                         position += 1
                     checkpoint = dates[by_date[position - 1]] if position else None
@@ -996,8 +1000,8 @@ class GranolaMCP:
                     return
                 meta["failures"] = 0
                 meta.pop("retry_after", None)
-                meta.update(last_sync=H.now(), last_finished=self.clock(), cursor=until.isoformat(),
-                            last_error=skipped_error, last_error_detail=skipped_detail if skipped_error else None)
+                meta.update(last_sync=H.now(), last_finished=self.clock(),
+                            cursor=meta.get("cursor") if untried else until.isoformat(), last_error=skipped_error, last_error_detail=skipped_detail if skipped_error else None)
                 if skipped_error:
                     log.warning("%s", skipped_error)
             except GranolaError as exc:
