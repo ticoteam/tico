@@ -80,12 +80,15 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
-      # Naming, a mounted integrations folder and the AWS region (KMS, Secrets Manager, S3). Unset keeps the defaults.
+      # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
+      # must run as. Unset keeps the defaults.
       TICO_APP_NAME:
       TICO_ASSISTANT_NAME:
       TICO_INTEGRATIONS_DIR:
       AWS_REGION:
       AWS_DEFAULT_REGION:
+      TICO_EXPECTED_AWS_ACCOUNT:
+      TICO_EXPECTED_AWS_ROLE:
     volumes:
       - tico-data:/data
       - tico-control:/control
@@ -158,6 +161,8 @@ services:
       TICO_INTEGRATIONS_DIR:
       AWS_REGION:
       AWS_DEFAULT_REGION:
+      TICO_EXPECTED_AWS_ACCOUNT:
+      TICO_EXPECTED_AWS_ROLE:
     volumes:
       - tico-data:/data
     depends_on:

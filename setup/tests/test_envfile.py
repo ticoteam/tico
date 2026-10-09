@@ -30,3 +30,23 @@ def test_redact_masks_every_secret_key_and_only_those():
 def test_scrub_removes_secret_values_from_free_text():
     assert envfile.scrub("boom tok-999 boom", ["tok-999"]) == "boom ******** boom"
 
+
+def test_runner_hostname_sets_the_runner_url_for_a_tunnel_only():
+    tunnel = dict(front_door="cloudflared", auth="cloudflare", tunnel_token="tok")
+    assert s(**tunnel, runner_host="runner.t.example.com").to_env()["TICO_RUNNER_URL"] == "https://runner.t.example.com"
+    assert "TICO_RUNNER_URL" not in s(**tunnel, runner_host="none").to_env()
+    assert "TICO_RUNNER_URL" not in s(**tunnel).to_env()
+    assert "TICO_RUNNER_URL" not in s(runner_host="runner.t.example.com").to_env()     # caddy
+
+
+def test_runner_hostname_defaults_to_a_name_the_universal_certificate_covers():
+    from setup.settings import default_runner_host
+    assert default_runner_host("example.com", "example.com") == "runner.example.com"
+    assert default_runner_host("tico.example.com", "example.com") == "tico-runner.example.com"
+    assert default_runner_host("tico.example.com") == "runner.tico.example.com"      # zone unknown
+
+
+def test_the_runner_hostname_comes_back_from_the_saved_env():
+    from setup.settings import from_saved
+    env = envfile.render(s(front_door="cloudflared", runner_host="r.example.com").to_env())
+    assert from_saved({"domain": "t.example.com", "front_door": "cloudflared"}, env).runner() == "r.example.com"

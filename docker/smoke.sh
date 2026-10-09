@@ -133,6 +133,10 @@ printf '%s\n' "$route" | grep -A1 -x '  - hostname: runner.smoke.example.test' |
   || fail "the tunnel does not route the runner hostname's API and downloads"
 [ "$(printf '%s\n' "$route" | tail -1)" = "  - service: http_status:404" ] || fail "the tunnel's catch-all 404 is not last"
 
+step "a malformed expected AWS account refuses to start, without calling AWS"
+out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"
+grep -q '12-digit' <<<"$out" || fail "a malformed TICO_EXPECTED_AWS_ACCOUNT gave no clear error: $out"
+
 step "runner joins with a one-time code"
 join_runner
 retry 120 online || fail "the runner did not enroll and come online"
