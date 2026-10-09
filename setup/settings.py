@@ -25,6 +25,8 @@ AUTHS = {"google": "Google sign-in (OIDC)", "microsoft": "Microsoft sign-in (OID
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
 SECRET_FIELDS = ("client_secret", "decisions_key", "cf_token", "tunnel_token", "backup_secret")
+# This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
+TRANSIENT_FIELDS = ("runner_given",)
 
 
 @dataclass
@@ -70,12 +72,13 @@ class Settings:
     server_url: str = ""
     runner_label: str = ""
     runner_host: str = ""   # cloudflared only: a hostname without Access for computers and outside agents; "none" declines the default
+    runner_given: bool = False   # --runner-hostname named it on this run, so its DNS record may be repointed
     runner_tag: str = "latest"
     tag: str = "latest"
     compose_ref: str = "main"
 
     def public(self) -> dict:
-        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS}
+        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
 
     def runner(self) -> str:
         return "" if self.front_door != "cloudflared" or self.runner_host in ("", "none") else self.runner_host
@@ -119,7 +122,7 @@ def default_runner_host(domain: str, zone: str = "") -> str:
 def from_saved(saved: dict, env_text: str) -> Settings:
     known = {f.name for f in fields(Settings)}
     saved = {"decisions_provider" if k == "judge_provider" else k: v for k, v in saved.items()}   # state.json from before 0.2.4
-    s = Settings(**{k: v for k, v in saved.items() if k in known})
+    s = Settings(**{k: v for k, v in saved.items() if k in known and k not in TRANSIENT_FIELDS})
     e = envfile.parse(env_text)
     s.client_secret = e.get("TICO_OIDC_CLIENT_SECRET", "")
     s.tunnel_token = e.get("CLOUDFLARE_TUNNEL_TOKEN", "")

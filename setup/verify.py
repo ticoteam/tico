@@ -121,10 +121,11 @@ def check_runner_host(host: str, get=_get) -> Check:
         return Check(name, False, f"HTTP {code}, redirect to {where}",
                      f"Leave {host} out of the Access application (or give it a Bypass policy): Tico checks the computers' and agents' "
                      "tokens itself, and the tunnel routes only /api/v2 and /download there.")
+    old = f" A 404 may also be a server too old to serve {contract.RUNNER_PROBE_PATH}: update it, then check again." if code == 404 else ""
     return Check(name, False, f"HTTP {code} from the tunnel",
                  f"The tunnel has no route for {host}: re-run `tico setup` (it stores the route in Cloudflare), or in Zero Trust > Networks > "
                  f"Tunnels > your tunnel > Public Hostname add {host}, path {contract.RUNNER_ROUTE_PATH}, HTTP "
-                 f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}.")
+                 f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}." + old)
 
 
 def check_signin(domain: str, provider: str, client_id: str, get=_get) -> Check:

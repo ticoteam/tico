@@ -151,6 +151,7 @@ def gather_runner_host(io: IO, args, s: Settings, zone: dnsmod.Zone | None, dry:
                                     flag="--runner-hostname", required=False, default=default,
                                     validate=lambda v: v.lower() == "none" or bool(st.DOMAIN_RE.match(v.lower())))
     s.runner_host = s.runner_host.lower()
+    s.runner_given = bool(given) and given != "none"
     host = s.runner()
     if host == s.domain:
         raise MissingInput("--runner-hostname must differ from --domain")
@@ -304,7 +305,7 @@ def ensure_dns(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone | None, record
             if z:
                 for r in records:
                     if r.type == "CNAME":
-                        res = cf.upsert_cname(z["id"], r.name, r.value)
+                        res = cf.upsert_cname(z["id"], r.name, r.value, repoint=r.name != s.runner() or s.runner_given)
                     else:
                         res = cf.upsert_address(z["id"], r.type, r.name, r.value)
                     io.say(f"  Cloudflare DNS {r.type} {r.name}: {res}")
@@ -429,6 +430,8 @@ def run(args, io: IO, deps: Deps) -> int:
         return 1
 
     cf = deps.cloudflare(s.cf_token) if s.cf_token else None
+    if cf and s.runner() and not s.runner_given:
+        runner_record_free(s, cf)
     if not provision_backup(io, s, deps, cf):
         return 1
     if s.front_door == "cloudflared":
@@ -477,6 +480,20 @@ def run(args, io: IO, deps: Deps) -> int:
         return _command(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
 
     return finish(io, s, deps, records, runner)
+
+
+def runner_record_free(s: Settings, cf: Cloudflare) -> None:
+    """The default runner hostname must not take over a record that serves something else. Checked before anything is
+    created or written, so TICO_RUNNER_URL never names a host that is not this tunnel's; --runner-hostname may repoint."""
+    z = cf.find_zone(s.domain)
+    rec = cf.find_record(z["id"], s.runner()) if z else None
+    if not rec:
+        return
+    tid = cf.find_tunnel(z["account_id"], f"tico-{awsmod.slug(s.domain)}")
+    if rec["type"] != "CNAME" or not tid or rec["content"] != f"{tid}.cfargotunnel.com":
+        raise MissingInput(f"{s.runner()}, the default runner hostname, already has a {rec['type']} record pointing at {rec['content']}. "
+                           f"Setup does not take it over: pass --runner-hostname {s.runner()} to repoint it to this tunnel, "
+                           "--runner-hostname <another name>, or --runner-hostname none.")
 
 
 def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) -> str:

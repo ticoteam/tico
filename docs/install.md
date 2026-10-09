@@ -348,6 +348,9 @@ without a bypass, add a second proxied CNAME, `runner.<domain>`, to the same tun
 create no Access application for it, and set `TICO_RUNNER_URL=https://runner.<domain>` in `.env`. The server then also
 routes that hostname in the config it writes, for `/api/v2/...` and `/download/...` only (both check their own tokens);
 anything else on it gets the 404. A remotely managed tunnel needs the same route added in the dashboard.
+That hostname has no Access in front of it: it exposes every `/api/v2` route, each of which checks its own token, and
+the few that need none: the team icon (public), and agent pairing and setup, runner enrollment, the GitHub webhook and
+local sign-in, each protected by its own one-time code, an HMAC or a long secret.
 
 Otherwise computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
 service token for `/api/v2/runners/*` (the runner authenticates itself with its own token), and give `/api/v2/mcp` a

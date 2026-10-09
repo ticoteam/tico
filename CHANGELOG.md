@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel".
+
 ## [0.3.36] - 2026-10-09
 
 ### Changed
@@ -25,9 +28,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 - **Runner hostname on a Cloudflare tunnel:** when `TICO_RUNNER_URL` names a host other than `TICO_DOMAIN`, the tunnel config the server writes routes that host too, for `/api/v2/...` and `/download/...` only, so it can be served without Access as docs/connect-an-agent.md says. No hand-written tunnel config or compose override is needed. See docs/install.md, "Cloudflare Tunnel".
-
-### Added
-- **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel".
 
 ## [0.3.35] - 2026-10-09
 

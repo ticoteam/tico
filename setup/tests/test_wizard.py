@@ -101,11 +101,14 @@ ACCESS = ["--non-interactive", "--domain", "tico.example.com", "--auth", "cloudf
           "--access-audience", "aud1", "--company", "Acme", "--owner-email", "me@example.com"]
 
 
-def _tunnel_run(argv):
+def _tunnel_run(argv, runner_record=None, tunnels=()):
     from setup.tests.test_cloudflare import Api
-    api = Api({("GET", "/zones?name=tico.example.com"): [],
+    api = Api({("GET", "/zones/z1/dns_records?name=tico-runner.example.com"): [runner_record] if runner_record else [],
+               ("PUT", "/zones/z1/dns_records/r1"): {},
+               ("GET", "/zones?name=tico.example.com"): [],
                ("GET", "/zones?name=example.com"): [{"id": "z1", "name": "example.com", "account": {"id": "a1"}}],
-               ("GET", "/accounts/a1/cfd_tunnel?"): [], ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
+               ("GET", "/accounts/a1/cfd_tunnel/t9/token"): "TUNTOK",
+               ("GET", "/accounts/a1/cfd_tunnel?"): list(tunnels), ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
                ("PUT", "/accounts/a1/cfd_tunnel/t9/configurations"): {},
                ("GET", "/zones/z1/dns_records?"): [], ("POST", "/zones/z1/dns_records"): {}})
     shell = FakeShell()
@@ -116,7 +119,7 @@ def _tunnel_run(argv):
     code, out = go(["--target", "ssh", "--ssh", "root@h", "--front-door", "cloudflared", "--yes", *argv], deps=d)
     env = next((i for c, i in shell.calls if i and b"TICO_DOMAIN" in i), b"").decode()
     ingress = next((b["config"]["ingress"] for m, p, b in api.calls if m == "PUT" and p.endswith("/configurations")), [])
-    cnames = [b["name"] for m, p, b in api.calls if m == "POST" and p == "/zones/z1/dns_records"]
+    cnames = [b["name"] for m, p, b in api.calls if m in ("POST", "PUT") and p.startswith("/zones/z1/dns_records")]
     return code, out, env, ingress, cnames
 
 
@@ -159,3 +162,21 @@ def test_dry_run_with_access_plans_the_runner_record_and_env():
     assert code == 0, out
     assert "CNAME runner.tico.example.com -> <tunnel-id>.cfargotunnel.com (proxied)" in out
     assert "TICO_RUNNER_URL=https://runner.tico.example.com" in out
+
+
+def test_the_default_runner_hostname_never_takes_over_a_record_that_points_elsewhere(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-secret-token")
+    elsewhere = {"id": "r1", "type": "CNAME", "name": "tico-runner.example.com", "content": "app.other.net", "proxied": True}
+    code, out, env, ingress, cnames = _tunnel_run(ACCESS, runner_record=elsewhere)
+    assert code == 2 and "tico-runner.example.com, the default runner hostname, already has a CNAME record pointing at app.other.net" in out
+    assert "--runner-hostname tico-runner.example.com" in out
+    assert env == "" and ingress == [] and cnames == [] and not (tmp_path / "home" / "tico.example.com").exists()
+    # Already this tunnel's (a re-run): kept, and the run goes on.
+    code, out, env, ingress, cnames = _tunnel_run(ACCESS, runner_record={**elsewhere, "content": "t9.cfargotunnel.com"},
+                                                  tunnels=[{"id": "t9"}])
+    assert code == 0, out
+    assert "Cloudflare DNS CNAME tico-runner.example.com: unchanged" in out and "TICO_RUNNER_URL=https://tico-runner.example.com" in env
+    # Named with the flag: repointed, and the output says so.
+    code, out, env, ingress, cnames = _tunnel_run(["--runner-hostname", "tico-runner.example.com", *ACCESS], runner_record=elsewhere)
+    assert code == 0, out
+    assert "Cloudflare DNS CNAME tico-runner.example.com: repointed from app.other.net" in out and "tico-runner.example.com" in cnames
