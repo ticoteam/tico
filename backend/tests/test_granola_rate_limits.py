@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from backend.granola_mcp import GranolaMCP
-from backend.tests.test_granola_mcp import Provider, api  # noqa: F401
+from backend.tests.test_granola_mcp import BASE, Provider, api, headers  # noqa: F401
 
 
 PREFIXED_NOTES = '''Here are the shared notes for this meeting:
@@ -87,20 +87,24 @@ def test_text_before_xml_is_ignored(raw, expected):
     assert GranolaMCP.xml_content(raw) == expected
 
 
-def test_a_rate_limit_without_a_wait_stops_at_once_without_skipping_or_advancing_cursor(api, caplog):
+def throttled(count=3, *args, **kwargs):
+    return [rate_limit(*args, **kwargs) for _ in range(count)]
+
+
+def test_a_persistent_rate_limit_stops_after_two_spaced_retries_without_skipping_or_advancing_cursor(api, caplog):
     kind = "tool"
     provider = NotesProvider(api)
     provider.connect()
     saved = provider.service.load("human:ana")
     saved[1].update(cursor="2026-10-01T00:00:00+00:00", skipped=7, imported_count=4, last_sync="previous")
     provider.service.save(*saved)
-    provider.responses = [rate_limit(kind, "Rate limit exceeded fake-provider-sensitive")]
+    provider.responses = throttled(3, kind, "Rate limit exceeded fake-provider-sensitive")
     provider.sync()
     meta = provider.service.load("human:ana")[1]
     assert meta["last_error"] == "rate_limited: get_meetings"
     assert meta["cursor"] == saved[1]["cursor"] and meta["skipped"] == 0
     assert meta["imported_count"] == 4 and meta["last_sync"] == "previous" and meta["state"] == "connected"
-    assert len(provider.notes_calls) == 1, "no guessed retries spending the same exhausted quota"
+    assert [b[0] - a[0] for a, b in zip(provider.notes_calls, provider.notes_calls[1:])] == [20, 60]
     assert "fake-provider-sensitive" not in caplog.text and "fake-provider-sensitive" not in json.dumps(meta)
     provider.sync()
     assert provider.service.load("human:ana")[1]["last_error"] is None
@@ -109,7 +113,7 @@ def test_a_rate_limit_without_a_wait_stops_at_once_without_skipping_or_advancing
 def test_completed_batch_checkpoint_survives_a_rate_limit_and_resumes(api):
     provider = NotesProvider(api, 20)
     provider.connect()
-    provider.responses = [None, rate_limit()]
+    provider.responses = [None] + throttled()
     provider.sync()
     meta = provider.service.load("human:ana")[1]
     assert meta["imported_count"] == 10 and meta["cursor"] and not meta.get("last_sync")
@@ -136,7 +140,7 @@ def test_repeated_throttling_backs_off_and_caps(api):
     provider.connect()
     delays = []
     for _ in range(9):
-        provider.responses = [rate_limit()]
+        provider.responses = throttled()
         provider.sync()
         meta = provider.service.load("human:ana")[1]
         delays.append(round(meta["retry_after"] - provider.now))
@@ -162,7 +166,7 @@ def test_new_notes_are_fetched_before_imported_ones_are_revisited(api):
     new = [str(uuid.UUID(int=100 + i)) for i in range(3)]
     provider.ids = provider.ids + new           # later notes, listed after the overlap window's imported ones
     provider.notes_calls.clear()
-    provider.responses = [None, rate_limit()]
+    provider.responses = [None] + throttled()
     provider.sync()
     meta = provider.service.load("human:ana")[1]
     assert set(new) <= set(provider.notes_calls[0][1]), "the first call spends the quota on notes not yet imported"
@@ -192,7 +196,7 @@ def test_a_throttled_sync_never_checkpoints_past_an_imported_note_not_yet_revisi
     new = [str(uuid.UUID(int=100 + i)) for i in range(3)]
     provider.dates.update({nid: (later - timedelta(hours=3 - i)).isoformat() for i, nid in enumerate(new)})
     provider.ids = provider.ids + new
-    provider.responses = [None, rate_limit()]
+    provider.responses = [None] + throttled()
     provider.sync()
     meta = provider.service.load("human:ana")[1]
     assert meta["imported_count"] == 15, "the new notes came first"
@@ -256,3 +260,77 @@ def test_a_wait_saved_before_the_cap_cannot_park_the_import_and_sync_now_retries
     # Opening Meetings asks for a sync too: it keeps to the backoff. Only the button (now) retries.
     assert api.portal.call(provider.service.trigger, who)["state"] == "recent"
     assert api.portal.call(lambda: provider.service.trigger(who, now=True))["state"] == "syncing"
+
+
+def test_a_throttle_without_a_named_wait_is_retried_after_spaced_waits(api):
+    provider = NotesProvider(api)
+    provider.connect()
+    provider.responses = [rate_limit("http")]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert meta["last_error"] is None and meta["last_error_detail"] is None and meta["imported_count"] == 2
+    assert [b[0] - a[0] for a, b in zip(provider.notes_calls, provider.notes_calls[1:])] == [20]
+
+
+def test_three_throttles_fail_with_a_detail_naming_only_fixed_facts(api):
+    provider = NotesProvider(api)
+    provider.connect()
+    provider.responses = throttled(3, "http")
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert meta["last_error"] == "rate_limited: get_meetings" and len(provider.notes_calls) == 3
+    assert meta["last_error_detail"] == {"step": "get_meetings", "http_status": 429, "rpc_code": None, "tool_error": False,
+                                         "retry_after": None, "signal": None, "batch": 2}
+
+
+def test_a_tool_error_throttle_names_its_signal_and_status_shows_no_provider_text(api):
+    provider = NotesProvider(api)
+    provider.connect()
+    provider.responses = throttled(3, "tool", "Rate limit exceeded fake-provider-sensitive")
+    provider.sync()
+    status = api.get(BASE, headers=headers("ana-test")).json()
+    assert status["last_error"] == "rate_limited: get_meetings"
+    assert status["last_error_detail"] == {"step": "get_meetings", "http_status": 200, "rpc_code": None, "tool_error": True,
+                                           "retry_after": None, "signal": "rate limit", "batch": 2}
+    assert status["skip_reasons"] == {}
+    assert "fake-provider-sensitive" not in json.dumps(status)
+    assert "fake-provider-sensitive" not in json.dumps(provider.service.load("human:ana")[1])
+
+
+def test_a_systemic_error_stops_the_per_id_fallback_and_counts_the_batch(api):
+    provider = NotesProvider(api, 10)
+    provider.connect()
+    failure = lambda: httpx.Response(200, json={"error": {"code": -32603, "message": "fake-provider-sensitive"}})  # noqa: E731
+    provider.responses = [failure(), failure(), failure()]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert [len(ids) for _, ids in provider.notes_calls] == [10, 1, 1], "two alike single failures end the fallback"
+    assert meta["skipped"] == 10 and meta["skip_reasons"] == {"provider_error: get_meetings": 10}
+    assert meta["last_error"] == "provider_error: get_meetings" and meta["imported_count"] == 0
+    assert meta["last_error_detail"] == {"step": "get_meetings", "http_status": 200, "rpc_code": -32603, "tool_error": False,
+                                         "retry_after": None, "signal": None, "batch": 1}
+    assert "fake-provider-sensitive" not in json.dumps(meta)
+    # When a single fetch succeeds, the error is not systemic and the fallback covers the rest of the batch.
+    provider.responses = [failure(), failure(), None]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert meta["skipped"] == 1 and meta["skip_reasons"] == {"provider_error: get_meetings": 1}
+    assert len(provider.notes_calls) == 3 + 11
+
+
+def test_the_first_note_fetch_waits_ten_seconds_after_the_previous_mcp_call(api):
+    provider = NotesProvider(api)
+    provider.connect()
+    seen = []
+
+    def handle(request):
+        body = json.loads(request.content) if request.url.path == "/mcp" else {}
+        seen.append((provider.now, body.get("params", {}).get("name") or body.get("method")))
+        return provider.handle(request)
+    provider.service.transport = httpx.MockTransport(handle)
+    provider.sync()
+    names = [name for _, name in seen]
+    first = names.index("get_meetings")
+    assert names[first - 1] == "list_meetings"
+    assert seen[first][0] - seen[first - 1][0] == 10
+    assert provider.service.load("human:ana")[1]["imported_count"] == 2
