@@ -247,6 +247,16 @@ class GranolaMCP:
             return {k: value[k] for k in ("user_code", "verification_uri", "verification_uri_complete", "expires_in")
                     if k in value} | {"interval": interval, "expires_in": self.seconds(value["expires_in"], 600)}
 
+    def next_retry(self, meta):
+        """When a backed-off connection may sync again. A wait saved before the 24 h cap existed (or any longer one)
+        is held to the cap from the last attempt, so an old huge Retry-After cannot park an import."""
+        at = meta.get("retry_after") or 0
+        return min(at, (meta.get("last_attempt") or self.clock()) + RETRY_AFTER_MAX) if at else 0
+
+    @staticmethod
+    def stamp(at):
+        return datetime.fromtimestamp(at, timezone.utc).isoformat() if at else None
+
     def status(self, who):
         # Reading status does not decrypt a token.
         with self.store.read() as c:
@@ -258,7 +268,8 @@ class GranolaMCP:
                 "plan_hint": meta.get("plan_hint"), "last_sync": meta.get("last_sync"),
                 "last_error": meta.get("last_error"), "imported_count": meta.get("imported_count", 0),
                 "needs_signin": meta.get("needs_signin", False), "syncing": who.actor in self.jobs,
-                "skipped": meta.get("skipped", 0)}
+                "skipped": meta.get("skipped", 0), "last_attempt": self.stamp(meta.get("last_attempt")),
+                "next_retry": self.stamp(self.next_retry(meta)), "failures": meta.get("failures", 0)}
 
     def failed_signin(self, row, meta, secret):
         meta.update(state="needs_signin", needs_signin=True, last_error="Granola needs sign-in again")
@@ -963,7 +974,7 @@ class GranolaMCP:
                 log.warning("%s", meta["last_error"])
             await asyncio.to_thread(self.save, row, meta, secret)
 
-    async def trigger(self, who, interval=DEBOUNCE):
+    async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
             return {"state": "off", "last_sync": None}
         if not await asyncio.to_thread(self.eligible, who):
@@ -979,7 +990,11 @@ class GranolaMCP:
         if not meta or meta["state"] != "connected":
             return {"state": "needs_signin" if status["needs_signin"] else "off", "last_sync": status["last_sync"]}
         throttled = (meta.get("last_error") or "").startswith("rate_limited:")
-        retry_at = meta.get("retry_after", 0) if interval == SCHEDULE or throttled else 0
+        retry_at = self.next_retry(meta) if interval == SCHEDULE or throttled else 0
+        # A person pressing Sync now (`now`, the button only) gets a real attempt once five minutes have passed since
+        # the last one, even inside a backoff. Opening Meetings also asks for a sync; that one keeps to the backoff.
+        if retry_at and now and self.clock() - meta.get("last_attempt", 0) >= RATE_LIMIT_RETRY:
+            retry_at = 0
         if retry_at and self.clock() < retry_at:
             return {"state": "recent", "last_sync": status["last_sync"]}
         if not retry_at and self.clock() - max(meta.get("last_attempt", 0), meta.get("last_finished", 0)) < interval:
@@ -1076,5 +1091,6 @@ def install_granola(app):
         return await safe(service.disconnect(person(request)))
 
     @app.post("/api/v2/meetings/granola/sync")
-    async def sync(request: Request):
-        return await service.trigger(person(request))
+    async def sync(request: Request, now: bool = False):
+        """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
+        return await service.trigger(person(request), now=now)

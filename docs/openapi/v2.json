@@ -7536,6 +7536,27 @@
       "post": {
         "summary": "Start a background sync; reuse the last two minutes",
         "operationId": "syncGranola",
+        "parameters": [
+          {
+            "name": "now",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Now"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -7570,17 +7591,6 @@
         },
         "tags": [
           "Meetings"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
-          }
         ]
       }
     },
