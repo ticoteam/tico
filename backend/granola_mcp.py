@@ -773,17 +773,16 @@ class GranolaMCP:
                              media_url=https_url(note.get("web_url"))) if summary or transcript else None
 
     def imported_ids(self, actor, ids):
-        """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
+        """Which of these Granola notes this person already has as a meeting."""
         keys = [f"{actor}:{nid}" for nid in ids]
-        found = {}
+        found = set()
         with self.store.read() as c:
             for start in range(0, len(keys), 500):
                 chunk = keys[start:start + 500]
-                found.update((r[0], bool(r[1])) for r in c.execute(
-                    "SELECT r.external_id,m.transcript_original!='' FROM recording_source_refs r "
-                    "LEFT JOIN meetings m ON m.id=r.meeting_id WHERE r.source='granola' AND r.resource_type='meeting' "
-                    "AND r.external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
-        return {key[len(actor) + 1:]: value for key, value in found.items()}
+                found.update(r[0] for r in c.execute(
+                    "SELECT external_id FROM recording_source_refs WHERE source='granola' AND resource_type='meeting' "
+                    "AND external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        return {key[len(actor) + 1:] for key in found}
 
     async def sync(self, actor):
         async with self.lock(actor):
@@ -898,7 +897,8 @@ class GranolaMCP:
                 # regenerated summary) must not spend a tight quota before new meetings arrive.
                 imported = await asyncio.to_thread(self.imported_ids, actor, ids)
                 by_date, done, position, untried = list(ids), set(), 0, set()
-                # An imported note is re-read only while a late summary may still arrive; older ones count as done.
+                # An imported note's summary and transcript are re-read only while its meeting (listed start) is under
+                # a day old and they may still change; older ones count as done.
                 settled = {nid for nid in imported if dates[nid] < until - timedelta(seconds=REVISIT)}
                 done.update(settled)
                 ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported and nid not in settled]
@@ -943,20 +943,21 @@ class GranolaMCP:
                                     skip(skipped_error, len(batch) - 2, exc)
                                     left = batch[2:]
                                     break
-                    returned = {str(n.get("id") or n.get("meeting_id") or n.get("note_id")) for n in notes}
-                    missing = [nid for nid in batch if nid not in returned and nid not in failed and nid not in left]
-                    if missing:
-                        skipped_error = skip("missing: get_meetings", len(missing))
-                        left += missing
+                    returned = [n.get("id") or n.get("meeting_id") or n.get("note_id") for n in notes]
+                    missing = [nid for nid in batch if nid not in {str(r) for r in returned if r}
+                               and nid not in failed and nid not in left]
+                    # A row without an id is skipped below as bad_response and stands for one missing id: count each once.
+                    unexplained = len(missing) - sum(1 for r in returned if not r)
+                    if unexplained > 0:
+                        skipped_error = skip("missing: get_meetings", unexplained)
+                    left += missing
                     for note in notes:
                         transcript = ""
                         nid = note.get("id") or note.get("meeting_id") or note.get("note_id")
                         if not nid:
                             skipped_error = skip("bad_response: get_meetings")
                             continue
-                        # A stored transcript is kept by the import; it is not fetched again.
-                        if ("get_meeting_transcript" in tools and not meta.get("transcripts_unavailable")
-                                and not imported.get(str(nid))):
+                        if "get_meeting_transcript" in tools and not meta.get("transcripts_unavailable"):
                             step = "get_meeting_transcript"
                             try:
                                 data = await self.call(row, meta, secret, session, tools["get_meeting_transcript"],

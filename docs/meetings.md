@@ -388,7 +388,9 @@ The free plan imports your own notes and AI summaries from the last 30 days, wit
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
 the note-taker are never imported. Imported meetings default to private. Tico syncs in the background
 every 25 minutes and when you open Meetings, reusing a sync from the last two minutes. Recent meetings
-are revisited for late summaries: an imported note is fetched again only while its meeting is under a day old, and a transcript already stored is not fetched again. Only an invalid or rejected OAuth grant requires sign-in again.
+are revisited for late summaries: an imported note's summary and transcript are fetched again only while
+its meeting is under a day old, counted from the meeting date Granola lists (its `created_at`, `date` or `start_time`,
+the meeting's start). An older imported note is not fetched again. A re-read without a transcript keeps the stored one. Only an invalid or rejected OAuth grant requires sign-in again.
 Network failures, rate limits and server outages keep your connection and retry on the next schedule
 with backoff. Meetings and your Health page say
 **Granola needs sign-in again** when the grant is rejected; connect again to continue.

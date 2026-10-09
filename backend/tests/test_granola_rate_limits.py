@@ -419,7 +419,7 @@ def test_imported_notes_over_a_day_old_are_not_re_read(api):
     provider = DatedNotes(api, 10)
     provider.transcript_calls = []
     start = datetime.fromtimestamp(provider.now, timezone.utc)
-    provider.dates.update({nid: (start - timedelta(hours=60 - 3 * i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.dates.update({nid: (start - timedelta(hours=60 - 3 * i)).isoformat() for i, nid in enumerate(provider.ids)})  # 33-60h
     provider.connect()
     provider.sync()
     assert provider.service.load("human:ana")[1]["imported_count"] == 10 and len(provider.transcript_calls) == 10
@@ -436,20 +436,38 @@ def test_imported_notes_over_a_day_old_are_not_re_read(api):
     assert meta["imported_count"] == 12 and meta["last_error"] is None
 
 
-def test_a_recent_imported_note_is_re_read_without_fetching_its_stored_transcript_again(api):
-    provider = DatedNotes(api, 1)
+def test_an_imported_note_under_a_day_old_is_re_read_with_its_transcript_and_an_older_one_is_not(api):
+    provider = DatedNotes(api, 2)
     provider.transcript_calls = []
     start = datetime.fromtimestamp(provider.now, timezone.utc)
-    provider.dates[provider.ids[0]] = (start - timedelta(hours=2)).isoformat()
+    recent, old = provider.ids
+    # The day counts from the listed meeting date (its start); the second sync runs an hour later.
+    provider.dates.update({recent: (start - timedelta(hours=22, minutes=55)).isoformat(),
+                           old: (start - timedelta(hours=23, minutes=5)).isoformat()})
     provider.connect()
     provider.sync()
-    assert provider.transcript_calls == provider.ids
+    assert sorted(provider.transcript_calls) == sorted(provider.ids)
     provider.now += 3600
     provider.notes_calls.clear()
+    provider.transcript_calls.clear()
     provider.sync()
-    assert [ids for _, ids in provider.notes_calls] == [provider.ids], "a note under a day old is re-read"
-    assert provider.transcript_calls == provider.ids, "its stored transcript is not fetched again"
+    assert [ids for _, ids in provider.notes_calls] == [[recent]], "only the note under a day old is re-read"
+    assert provider.transcript_calls == [recent], "with its transcript, which may have been partial"
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT m.transcript_original FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
-                           "WHERE r.source='granola'").fetchone()[0]
-    assert "Ship it" in stored
+        stored = [r[0] for r in c.execute("SELECT m.transcript_original FROM meetings m JOIN recording_source_refs r "
+                                          "ON r.meeting_id=m.id WHERE r.source='granola'")]
+    assert len(stored) == 2 and all("Ship it" in t for t in stored)
+
+
+def test_a_reply_row_without_an_id_is_not_also_counted_missing(api):
+    provider = DatedNotes(api, 3)
+    start = datetime.fromtimestamp(provider.now, timezone.utc)
+    provider.dates.update({nid: (start - timedelta(days=5 - i)).isoformat() for i, nid in enumerate(provider.ids)})
+    provider.connect()
+    provider.responses = [httpx.Response(200, json={"result": {"structuredContent": {"meetings": [
+        {"id": provider.ids[0], "summary": "Shared notes"}, {"summary": "Shared notes"}]}}})]
+    provider.sync()
+    meta = provider.service.load("human:ana")[1]
+    assert meta["skipped"] == 2, "two requested ids unanswered, each counted once"
+    assert meta["skip_reasons"] == {"bad_response: get_meetings": 1, "missing: get_meetings": 1}
+    assert meta["held_syncs"] == 1 and meta["imported_count"] == 1
