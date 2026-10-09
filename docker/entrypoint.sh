@@ -71,13 +71,33 @@ server_environment() {
 # tunnel has none. docs/install.md, "Cloudflare Tunnel".
 TUNNEL_DIR=${TICO_TUNNEL_DIR:-/tunnel}
 
+# The host of TICO_RUNNER_URL when the tunnel should serve it too: a plain hostname other than TICO_DOMAIN.
+# A loopback or IP address never reaches the tunnel, so it adds nothing.
+runner_host() {
+  local host=${TICO_RUNNER_URL:-}
+  host=${host#*://}; host=${host%%/*}; host=${host##*@}; host=${host%%:*}
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  case "$host" in *[!a-z0-9.-]*|.*|*.|''|localhost) return 0 ;; esac
+  case "$host" in *[!0-9.]*) ;; *) return 0 ;; esac
+  [ "$host" = "$(printf '%s' "$TICO_DOMAIN" | tr '[:upper:]' '[:lower:]')" ] || printf '%s' "$host"
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
+  local runner
+  runner=$(runner_host)
   {
     echo "ingress:"
     echo "  - hostname: $TICO_DOMAIN"
     echo "    service: http://server:8765"
+    if [ -n "$runner" ]; then
+      # A separate runner hostname has no sign-in page in front of it, so it serves only what runners and
+      # external agents call: the API (which checks their tokens) and the runner download.
+      echo "  - hostname: $runner"
+      echo "    path: '^/(?:api/v2|download)(?:/.*)?\$'"
+      echo "    service: http://server:8765"
+    fi
     echo "  - service: http_status:404"
   } > "$TUNNEL_DIR/cloudflared.yml.new"
   chmod 0644 "$TUNNEL_DIR/cloudflared.yml.new"

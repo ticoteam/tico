@@ -343,7 +343,13 @@ it. Before this was shipped such a tunnel logged `No ingress rules ... cloudflar
 request with a 503 while its container showed as running. `python3 -m setup doctor` now fails on that 503 and on that log
 line, and says what to run: `docker compose pull && docker compose up -d` in `/opt/tico`.
 
-Computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
+**A runner hostname without Access.** To keep Access on the team hostname and let computers and external agents in
+without a bypass, add a second proxied CNAME, `runner.<domain>`, to the same tunnel (`<tunnel id>.cfargotunnel.com`),
+create no Access application for it, and set `TICO_RUNNER_URL=https://runner.<domain>` in `.env`. The server then also
+routes that hostname in the config it writes, for `/api/v2/...` and `/download/...` only (both check their own tokens);
+anything else on it gets the 404. A remotely managed tunnel needs the same route added in the dashboard.
+
+Otherwise computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
 service token for `/api/v2/runners/*` (the runner authenticates itself with its own token), and give `/api/v2/mcp` a
 Bypass policy so humans' own external agents can connect with their tokens ([Connect an external agent](connect-an-agent.md)).
 
