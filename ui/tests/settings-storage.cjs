@@ -57,6 +57,9 @@ const shots = process.env.TICO_SHOTS || '';
     });
     const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
     const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
+    // The fake server's data changes with no write, so a refresh would join a health read already on its way (from
+    // before the change): every change waits for the page's own health read to land first.
+    const settled = () => page.waitForFunction(() => !GET_INFLIGHT.has('/v2/health'), null, {timeout: t(5000)});
     const redraw = () => page.evaluate(() => hlRefresh());
 
     await page.goto('https://tico-ui.test/#/settings');
@@ -80,6 +83,7 @@ const shots = process.env.TICO_SHOTS || '';
     assert.equal(await page.locator('#hl-page .hl-table').count(), 2);
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`storage-s3-desktop-${mode}`); }
     // local disk: no copy line, a docs link
+    await settled();
     health = {...health, storage: {mode: 'local', bucket: null, region: null, files: 1, bytes: 2048, copy: {done: 0, total: 0, failed: 0}}};
     await redraw();
     assert.match((await row.locator('.hl-storage-main').innerText()).replace(/\s+/g, ' '), /^Storage Local disk 1 file · 2 KB Set up S3$/);
@@ -88,6 +92,7 @@ const shots = process.env.TICO_SHOTS || '';
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`storage-local-desktop-${mode}`); }
     // a phone: one row that wraps, no sideways scroll
     await page.setViewportSize({width: 390, height: 844});
+    await settled();
     health = {...health, storage: {mode: 's3', bucket: 'acme-tico-files', region: 'us-east-1', files: 1204, bytes: 3435973837, copy: {done: 120, total: 400, failed: 3}}};
     await redraw();
     await row.locator('[data-hl-copy]').waitFor();
@@ -97,6 +102,7 @@ const shots = process.env.TICO_SHOTS || '';
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`storage-s3-phone-${mode}`); }
     // a bot admin's Health has no storage field and no row
+    await settled();
     health = {...health, audience: 'admin', storage: undefined};
     await redraw();
     assert.equal(await page.locator('#hl-page .hl-storage').count(), 0);
