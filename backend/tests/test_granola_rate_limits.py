@@ -436,7 +436,7 @@ def test_imported_notes_over_a_day_old_are_not_re_read(api):
     assert meta["imported_count"] == 12 and meta["last_error"] is None
 
 
-def test_an_imported_note_under_a_day_old_is_re_read_with_its_transcript_and_an_older_one_is_not(api):
+def test_an_imported_note_under_a_day_old_is_re_read_without_its_stored_transcript_and_an_older_one_is_not(api):
     provider = DatedNotes(api, 2)
     provider.transcript_calls = []
     start = datetime.fromtimestamp(provider.now, timezone.utc)
@@ -452,7 +452,7 @@ def test_an_imported_note_under_a_day_old_is_re_read_with_its_transcript_and_an_
     provider.transcript_calls.clear()
     provider.sync()
     assert [ids for _, ids in provider.notes_calls] == [[recent]], "only the note under a day old is re-read"
-    assert provider.transcript_calls == [recent], "with its transcript, which may have been partial"
+    assert provider.transcript_calls == [], "a stored transcript is not fetched again"
     with api.app.state.store.read() as c:
         stored = [r[0] for r in c.execute("SELECT m.transcript_original FROM meetings m JOIN recording_source_refs r "
                                           "ON r.meeting_id=m.id WHERE r.source='granola'")]

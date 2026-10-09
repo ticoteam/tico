@@ -773,16 +773,17 @@ class GranolaMCP:
                              media_url=https_url(note.get("web_url"))) if summary or transcript else None
 
     def imported_ids(self, actor, ids):
-        """Which of these Granola notes this person already has as a meeting."""
+        """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
         keys = [f"{actor}:{nid}" for nid in ids]
-        found = set()
+        found = {}
         with self.store.read() as c:
             for start in range(0, len(keys), 500):
                 chunk = keys[start:start + 500]
-                found.update(r[0] for r in c.execute(
-                    "SELECT external_id FROM recording_source_refs WHERE source='granola' AND resource_type='meeting' "
-                    "AND external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
-        return {key[len(actor) + 1:] for key in found}
+                found.update((r[0], bool(r[1])) for r in c.execute(
+                    "SELECT r.external_id,m.transcript_original!='' FROM recording_source_refs r "
+                    "LEFT JOIN meetings m ON m.id=r.meeting_id WHERE r.source='granola' AND r.resource_type='meeting' "
+                    "AND r.external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        return {key[len(actor) + 1:]: value for key, value in found.items()}
 
     async def sync(self, actor):
         async with self.lock(actor):
@@ -897,8 +898,8 @@ class GranolaMCP:
                 # regenerated summary) must not spend a tight quota before new meetings arrive.
                 imported = await asyncio.to_thread(self.imported_ids, actor, ids)
                 by_date, done, position, untried = list(ids), set(), 0, set()
-                # An imported note's summary and transcript are re-read only while its meeting (listed start) is under
-                # a day old and they may still change; older ones count as done.
+                # An imported note is re-read for a late summary only while its meeting (listed start) is under a day
+                # old; older ones count as done.
                 settled = {nid for nid in imported if dates[nid] < until - timedelta(seconds=REVISIT)}
                 done.update(settled)
                 ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported and nid not in settled]
@@ -957,7 +958,9 @@ class GranolaMCP:
                         if not nid:
                             skipped_error = skip("bad_response: get_meetings")
                             continue
-                        if "get_meeting_transcript" in tools and not meta.get("transcripts_unavailable"):
+                        # A re-import keeps a stored transcript and ignores a new one, so it is not fetched again.
+                        if ("get_meeting_transcript" in tools and not meta.get("transcripts_unavailable")
+                                and not imported.get(str(nid))):
                             step = "get_meeting_transcript"
                             try:
                                 data = await self.call(row, meta, secret, session, tools["get_meeting_transcript"],
