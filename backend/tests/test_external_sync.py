@@ -86,6 +86,39 @@ def test_tico_fetches_only_public_https_images():
     assert G.fetch_image("https://127.0.0.1/a.png") is None
 
 
+def test_an_image_is_fetched_from_the_address_that_was_checked_not_a_second_lookup(monkeypatch):
+    import socket
+
+    import httpx
+    from backend import external_sync as G
+    # A rebinding name: public when Tico checks it, private on any later lookup.
+    answers = iter(["93.184.216.34", "10.0.0.5", "10.0.0.5"])
+    lookups = []
+
+    def resolve(host, port, *args, **kwargs):
+        lookups.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (next(answers), port))]
+    monkeypatch.setattr(G.socket, "getaddrinfo", resolve)
+    seen = []
+
+    def connect(request):
+        seen.append(request)
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=b"png")
+    assert G.fetch_image("https://rebind.example:8443/a.png?v=1", httpx.MockTransport(connect)) == (b"png", "image/png")
+    [request] = seen
+    assert lookups == ["rebind.example"]
+    assert request.url.host == "93.184.216.34" and request.url.port == 8443 and request.url.raw_path == b"/a.png?v=1"
+    assert request.headers["host"] == "rebind.example:8443"
+    assert request.extensions["sni_hostname"] == "rebind.example"     # TLS still checks the name's certificate
+    # A redirect is checked and pinned again: here the next lookup is private, so nothing is fetched there.
+    answers = iter(["93.184.216.34", "10.0.0.5"])
+    seen.clear()
+    monkeypatch.setattr(G.socket, "getaddrinfo", resolve)
+    hop = lambda request: (seen.append(request), httpx.Response(302, headers={"location": "https://inside.example/a.png"}))[1]
+    assert G.fetch_image("https://rebind.example/a.png", httpx.MockTransport(hop)) is None
+    assert [r.url.host for r in seen] == ["93.184.216.34"]
+
+
 def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_history(api, monkeypatch):
     sync(api, designer())
     old = H.now()
