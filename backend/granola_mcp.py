@@ -974,7 +974,7 @@ class GranolaMCP:
                 log.warning("%s", meta["last_error"])
             await asyncio.to_thread(self.save, row, meta, secret)
 
-    async def trigger(self, who, interval=DEBOUNCE):
+    async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
             return {"state": "off", "last_sync": None}
         if not await asyncio.to_thread(self.eligible, who):
@@ -991,9 +991,9 @@ class GranolaMCP:
             return {"state": "needs_signin" if status["needs_signin"] else "off", "last_sync": status["last_sync"]}
         throttled = (meta.get("last_error") or "").startswith("rate_limited:")
         retry_at = self.next_retry(meta) if interval == SCHEDULE or throttled else 0
-        # A person pressing Sync now gets a real attempt once five minutes have passed since the last one, even
-        # inside a backoff: a wait they cannot see must not make the button do nothing for hours.
-        if retry_at and interval != SCHEDULE and self.clock() - meta.get("last_attempt", 0) >= RATE_LIMIT_RETRY:
+        # A person pressing Sync now (`now`, the button only) gets a real attempt once five minutes have passed since
+        # the last one, even inside a backoff. Opening Meetings also asks for a sync; that one keeps to the backoff.
+        if retry_at and now and self.clock() - meta.get("last_attempt", 0) >= RATE_LIMIT_RETRY:
             retry_at = 0
         if retry_at and self.clock() < retry_at:
             return {"state": "recent", "last_sync": status["last_sync"]}
@@ -1091,5 +1091,6 @@ def install_granola(app):
         return await safe(service.disconnect(person(request)))
 
     @app.post("/api/v2/meetings/granola/sync")
-    async def sync(request: Request):
-        return await service.trigger(person(request))
+    async def sync(request: Request, now: bool = False):
+        """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
+        return await service.trigger(person(request), now=now)

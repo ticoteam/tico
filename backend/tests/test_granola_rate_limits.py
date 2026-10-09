@@ -250,7 +250,9 @@ def test_a_wait_saved_before_the_cap_cannot_park_the_import_and_sync_now_retries
     row, meta, secret = provider.service.load("human:ana")
     meta.update(last_error="rate_limited: get_meetings", last_attempt=provider.now - 60, retry_after=provider.now + 3600)
     provider.service.save(row, meta, secret)
-    assert api.portal.call(provider.service.trigger, who)["state"] == "recent"
+    assert api.portal.call(lambda: provider.service.trigger(who, now=True))["state"] == "recent"
     meta.update(last_attempt=provider.now - G.RATE_LIMIT_RETRY, last_finished=provider.now - G.RATE_LIMIT_RETRY)
     provider.service.save(row, meta, secret)
-    assert api.portal.call(provider.service.trigger, who)["state"] == "syncing"
+    # Opening Meetings asks for a sync too: it keeps to the backoff. Only the button (now) retries.
+    assert api.portal.call(provider.service.trigger, who)["state"] == "recent"
+    assert api.portal.call(lambda: provider.service.trigger(who, now=True))["state"] == "syncing"

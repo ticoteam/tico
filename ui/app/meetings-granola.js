@@ -45,12 +45,12 @@ async function granolaInit(state) {
 const granolaReady = s => !!(s?.connected && !s.needs_signin);
 
 // Ask for one sync, then follow it.
-async function granolaSync(state) {
+async function granolaSync(state, now = false) {
   if (state.gSyncing) return;
   state.gSyncing = true; state.gmsg = '';
   granolaPaint(state);
   let r;
-  try { r = await post(GRANOLA + '/sync', {}); }
+  try { r = await post(GRANOLA + '/sync' + (now ? '?now=true' : ''), {}); }
   catch (e) {
     if (MEET !== state) return;
     state.gSyncing = false; state.gmsg = e.message;
@@ -267,7 +267,7 @@ function granolaWire(state, row) {
       if (act === 'connect') granolaConnect(state);
       else if (act === 'cancel') granolaCancel(state);
       else if (act === 'copy') void copyText(state.gflow?.code || '').then(() => toast('Code copied'), () => toast('Could not copy', true));
-      else if (act === 'sync') granolaSync(state);
+      else if (act === 'sync') granolaSync(state, true);   // the button: may retry inside a backoff
       else if (act === 'disconnect') granolaDisconnect(state);
       else if (act === 'key') { granolaCancel(state); window.openMeetingImporter?.('granola', 'Granola', () => meetSources(state)); }
     };
