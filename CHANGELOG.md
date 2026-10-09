@@ -8,7 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server and the Slack gateway ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity".
+- **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server, the Slack gateway and `restore` ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity".
 
 ## [0.3.36] - 2026-10-09
 

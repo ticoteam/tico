@@ -6,7 +6,7 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
 
 from backend import aws_identity
-from backend.tests.test_replication import ROOT, prepare
+from backend.tests.test_replication import ROOT, entrypoint, prepare
 
 ACCOUNT = "123456789012"
 ASSUMED = f"arn:aws:sts::{ACCOUNT}:assumed-role/tico-server/i-0abc"
@@ -94,8 +94,9 @@ def test_the_client_has_short_timeouts(monkeypatch):
     assert config.connect_timeout <= 10 and config.read_timeout <= 10 and config.retries["max_attempts"] <= 3
 
 
-def test_a_mismatch_stops_prepare_before_the_volume_is_touched(tmp_path):
-    fake = tmp_path / "fake" / "boto3"     # shadows boto3 for the entrypoint's python, so no real STS is reached
+def other_account(tmp_path):
+    """Environment whose python sees a boto3 stub reporting another account, so no real STS is reached."""
+    fake = tmp_path / "fake" / "boto3"
     fake.mkdir(parents=True)
     (fake / "__init__.py").write_text(textwrap.dedent("""\
         class _STS:
@@ -105,8 +106,26 @@ def test_a_mismatch_stops_prepare_before_the_volume_is_touched(tmp_path):
             assert service == "sts"
             return _STS()
     """))
-    result, data = prepare(tmp_path, TICO_EXPECTED_AWS_ACCOUNT=ACCOUNT, PYTHONPATH=f"{fake.parent}:{ROOT}",
-                           AWS_CONFIG_FILE="/dev/null", AWS_SHARED_CREDENTIALS_FILE="/dev/null")
-    assert result.returncode != 0
-    assert f"refusing to start: AWS account is 999999999999, expected {ACCOUNT}" in result.stderr
+    return {"TICO_EXPECTED_AWS_ACCOUNT": ACCOUNT, "PYTHONPATH": f"{fake.parent}:{ROOT}",
+            "AWS_CONFIG_FILE": "/dev/null", "AWS_SHARED_CREDENTIALS_FILE": "/dev/null"}
+
+
+REFUSED = f"refusing to start: AWS account is 999999999999, expected {ACCOUNT}"
+
+
+def test_a_mismatch_stops_prepare_before_the_volume_is_touched(tmp_path):
+    result, data = prepare(tmp_path, **other_account(tmp_path))
+    assert result.returncode != 0 and REFUSED in result.stderr
     assert not (data / "hub.sqlite").exists()
+
+
+def test_a_mismatch_stops_restore_before_the_backup_is_read_or_the_database_moved(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "hub.sqlite").write_bytes(b"current")
+    (data / "credential.key").write_bytes(b"\x01" * 32)
+    result = entrypoint(tmp_path, "--force", command="restore", env=other_account(tmp_path))
+    assert result.returncode != 0 and REFUSED in result.stderr
+    assert sorted(item.name for item in data.iterdir()) == ["credential.key", "hub.sqlite"]
+    assert (data / "hub.sqlite").read_bytes() == b"current" and (data / "credential.key").read_bytes() == b"\x01" * 32
+    assert not (tmp_path / "stub.log").exists()          # litestream was never run

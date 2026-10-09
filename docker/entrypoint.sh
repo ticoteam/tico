@@ -287,6 +287,7 @@ PY
 restore() {
   local force=0
   case "${1:-}" in --force) force=1 ;; '') ;; *) die "usage: restore [--force]" ;; esac
+  aws_identity  # before the backup or the credential key is read, or a database is moved aside
   export TICO_DB=$DATA/hub.sqlite TICO_BLOB_DIR=$DATA/blobs
   if ! python -m backend.replication is-empty "$DATA"; then
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
