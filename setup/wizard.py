@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import aws as awsmod, backup as bk, cloud as cloudmod, cloudinit, contract, dns as dnsmod, envfile, remote, route53, settings as st, signin, state, verify
-from .cloudflare import DASHBOARD_STEPS, TOKEN_URL, Cloudflare, CloudflareError
+from .cloudflare import DASHBOARD_STEPS, RUNNER_DASHBOARD_STEP, TOKEN_URL, Cloudflare, CloudflareError
 from .settings import Asker, Settings
 from .ui import IO, USAGE_NOTICE, MissingInput
 
@@ -136,6 +136,28 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
         a.get("decisions_key", f"{contract.DECISIONS_KEYS[s.decisions_provider]} (hidden)", secret=True, env=contract.DECISIONS_KEYS[s.decisions_provider])
 
 
+def gather_runner_host(io: IO, args, s: Settings, zone: dnsmod.Zone | None, dry: bool) -> None:
+    """A tunnel hostname that Access does not guard, so computers and outside agents connect with their tokens and no bypass.
+    Asked for with Access in front; opt-in otherwise, since the domain itself already lets them in."""
+    given = (getattr(args, "runner_host", None) or "").lower()
+    if s.front_door != "cloudflared":
+        if given and given != "none":
+            raise MissingInput("--runner-hostname needs --front-door cloudflared: with Caddy, computers connect to the domain itself")
+        s.runner_host = ""
+        return
+    if s.auth == "cloudflare" or given:
+        default = "" if s.domain.startswith("<") else st.default_runner_host(s.domain, zone.name if zone else "")
+        Asker(io, args, s, dry).get("runner_host", "Runner hostname, served without Access for computers and outside agents ('none' to skip)",
+                                    flag="--runner-hostname", required=False, default=default,
+                                    validate=lambda v: v.lower() == "none" or bool(st.DOMAIN_RE.match(v.lower())))
+    s.runner_host = s.runner_host.lower()
+    host = s.runner()
+    if host == s.domain:
+        raise MissingInput("--runner-hostname must differ from --domain")
+    if host and zone and not host.endswith("." + zone.name) and host != zone.name:
+        raise MissingInput(f"--runner-hostname must be in the domain's DNS zone, {zone.name}")
+
+
 def gather_backup(io: IO, args, s: Settings, dry: bool) -> None:
     """Backups are never skipped silently: pick a bucket, or say out loud that copies stay on the server."""
     a = Asker(io, args, s, dry)
@@ -241,6 +263,8 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     if s.front_door == "cloudflared":
         add("Cloudflare tunnel: " + ("create the tunnel, its hostname route and DNS record through the API" if cf_token
                                      else "you create it in the dashboard (exact steps shown) and paste the token"))
+        if s.runner():
+            L.append(f"       - runner hostname {s.runner()}: /api/v2 and /download only, without Access (TICO_RUNNER_URL)")
     if zone:
         add(f"DNS: {s.domain} is served by {zone.provider.name} ({', '.join(zone.nameservers[:2])}{', ...' if len(zone.nameservers) > 2 else ''})")
     else:
@@ -264,7 +288,7 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
         add("Backups: local only")
         L.append(f"       ! {bk.LOCAL_WARNING}")
     add(f"Team {s.company!r}, owner {s.owner_email}" + (f", decisions key {contract.DECISIONS_KEYS[s.decisions_provider]} (server only)" if s.decisions_provider else ""))
-    add("Verify: HTTPS certificate, /healthz, sign-in redirect, server container up")
+    add("Verify: HTTPS certificate, /healthz, sign-in redirect, server container up" + (", runner hostname" if s.runner() else ""))
     return L
 
 
@@ -363,6 +387,7 @@ def run(args, io: IO, deps: Deps) -> int:
     zone = dnsmod.detect_zone(s.domain, deps.resolver)
     if zone:
         io.say(f"  {zone.name}: {zone.provider.name}  ({', '.join(zone.nameservers)})")
+    gather_runner_host(io, args, s, zone, dry)
     if s.target == "ssh" and s.front_door == "caddy":
         default_ip = ""
         try:
@@ -386,7 +411,8 @@ def run(args, io: IO, deps: Deps) -> int:
 
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     ip = "<elastic-ip>" if s.target == "aws" else "<reserved-ip>" if s.target in cloudmod.PROVIDERS else s.server_ip
-    records = dnsmod.plan_records(s.domain, s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id)
+    records = dnsmod.plan_records(s.domain, s.front_door, ipv4=ip if s.front_door == "caddy" else "", tunnel_id=tunnel_id,
+                                  runner_host=s.runner())
 
     io.say("\nPlan")
     for line in plan_lines(s, zone, records, bool(s.cf_token)):
@@ -407,7 +433,7 @@ def run(args, io: IO, deps: Deps) -> int:
         return 1
     if s.front_door == "cloudflared":
         tunnel_id = _tunnel(io, args, s, deps, zone, cf) or tunnel_id
-        records = dnsmod.plan_records(s.domain, s.front_door, tunnel_id=tunnel_id)
+        records = dnsmod.plan_records(s.domain, s.front_door, tunnel_id=tunnel_id, runner_host=s.runner())
 
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), env_text)
@@ -460,14 +486,16 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
         if not z:
             raise SystemExit("That Cloudflare token cannot see a zone for this domain (needs Zone > DNS > Edit on it).")
         tid, token = cf.ensure_tunnel(z["account_id"], f"tico-{awsmod.slug(s.domain)}")
-        cf.configure_tunnel(z["account_id"], tid, s.domain)
+        cf.configure_tunnel(z["account_id"], tid, s.domain, s.runner())
         s.tunnel_token, s.tunnel_id = token, tid
-        io.say(f"  tunnel {tid} ready, routing {s.domain} to http://server:8765")
+        io.say(f"  tunnel {tid} ready, routing {s.domain} to http://server:8765"
+               + (f", and {s.runner()} for /api/v2 and /download" if s.runner() else ""))
         return tid
     if not s.tunnel_token:
         io.say("\nCloudflare tunnel (dashboard steps)")
-        for i, t in enumerate(DASHBOARD_STEPS, 1):
-            io.say(f"  {i}. {t.format(domain=s.domain)}")
+        steps = DASHBOARD_STEPS + ([RUNNER_DASHBOARD_STEP] if s.runner() else [])
+        for i, t in enumerate(steps, 1):
+            io.say(f"  {i}. {t.format(domain=s.domain, runner=s.runner(), path=contract.RUNNER_ROUTE_PATH)}")
         Asker(io, args, s, False).get("tunnel_token", "Tunnel token (hidden)", secret=True, env="CLOUDFLARE_TUNNEL_TOKEN")
     s.tunnel_id = tunnel_id_from_token(s.tunnel_token)
     return s.tunnel_id
@@ -552,7 +580,7 @@ def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeo
         io.say("  No SSH key found in the account, so the server gets no SSH access (use the provider's console, or add a key and pass --cloud-ssh-key).")
     if s.front_door == "cloudflared":
         tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
-        records = dnsmod.plan_records(s.domain, "cloudflared", tunnel_id=tunnel_id)
+        records = dnsmod.plan_records(s.domain, "cloudflared", tunnel_id=tunnel_id, runner_host=s.runner())
     try:
         made = c.create(lambda ip: cloudinit.server_user_data(env, version=version, server_ip=ip, allow_ssh=bool(keys)), bool(keys), keys)
     except cloudmod.CloudError as e:
@@ -605,7 +633,7 @@ HTTPS_WAIT_SECONDS = 180
 def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None) -> int:
     io.say("\nChecking it works")
     checks = verify.run_all(domain=s.domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
-                            records=records, resolvers=deps.public_resolvers(), shell=runner,
+                            records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner(),
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
     if all(c.ok for c in checks):
@@ -638,7 +666,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
     s = st.from_saved(saved, env_text)
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
-    records = dnsmod.plan_records(domain, s.front_door, ipv4=s.server_ip, tunnel_id=tunnel_id)
+    records = dnsmod.plan_records(domain, s.front_door, ipv4=s.server_ip, tunnel_id=tunnel_id, runner_host=s.runner())
     runner = None
     if s.target == "ssh":
         runner = deps.ssh_shell(s.ssh_host, s.ssh_port, s.ssh_identity)
@@ -647,7 +675,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         runner = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep)
     io.say(f"tico setup doctor for {domain}")
     checks = verify.run_all(domain=domain, provider=s.auth, client_id=s.client_id, front_door=s.front_door,
-                            records=records, resolvers=deps.public_resolvers(), shell=runner)
+                            records=records, resolvers=deps.public_resolvers(), shell=runner, runner_host=s.runner())
     show(io, checks)
     ok = all(c.ok for c in checks)
     if args.runner:

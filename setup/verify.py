@@ -104,6 +104,29 @@ def check_tunnel_route(r: Shell, domain: str) -> Check:
     return Check("Tunnel route", True, "cloudflared has a route")
 
 
+def check_runner_host(host: str, get=_get) -> Check:
+    """Computers and outside agents cannot pass a sign-in page, so the runner hostname must answer from the server itself:
+    an /api/v2 route that needs no sign-in returns 200 there, not a redirect to a login."""
+    name = "Runner hostname"
+    try:
+        code, headers, _ = get(f"https://{host}{contract.RUNNER_PROBE_PATH}", follow=False)
+    except (OSError, urllib.error.URLError) as e:
+        return Check(name, False, f"request failed ({getattr(e, 'reason', e)})",
+                     f"{host} needs a proxied CNAME to the tunnel (`tico setup` creates it) and a Cloudflare certificate that covers it.")
+    if code == 200:
+        return Check(name, True, f"{host} answers /api/v2 from the server, no sign-in in front")
+    loc = {k.lower(): v for k, v in headers.items()}.get("location", "")
+    if code in (301, 302, 303, 307, 308) or code in (401, 403) and "cloudflareaccess" in loc:
+        where = urllib.parse.urlparse(loc).hostname or "a sign-in page"
+        return Check(name, False, f"HTTP {code}, redirect to {where}",
+                     f"Leave {host} out of the Access application (or give it a Bypass policy): Tico checks the computers' and agents' "
+                     "tokens itself, and the tunnel routes only /api/v2 and /download there.")
+    return Check(name, False, f"HTTP {code} from the tunnel",
+                 f"The tunnel has no route for {host}: re-run `tico setup` (it stores the route in Cloudflare), or in Zero Trust > Networks > "
+                 f"Tunnels > your tunnel > Public Hostname add {host}, path {contract.RUNNER_ROUTE_PATH}, HTTP "
+                 f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}.")
+
+
 def check_signin(domain: str, provider: str, client_id: str, get=_get) -> Check:
     want_uri = signin.redirect_uri(domain)
     try:
@@ -159,7 +182,7 @@ def _https_checks(domain, provider, client_id, front_door="") -> list[Check]:
 
 
 def run_all(*, domain: str, provider: str, client_id: str, front_door: str, records, resolvers,
-            shell: Shell | None, wait_https: float = 0, sleep: Callable[[float], None] = time.sleep,
+            shell: Shell | None, runner_host: str = "", wait_https: float = 0, sleep: Callable[[float], None] = time.sleep,
             say: Callable[[str], None] | None = None) -> list[Check]:
     """`wait_https` seconds of retrying the HTTPS checks: right after `docker compose up` Caddy has no certificate yet."""
     dns_check = check_dns(domain, records, resolvers)
@@ -175,6 +198,8 @@ def run_all(*, domain: str, provider: str, client_id: str, front_door: str, reco
         delay = min(delay + 3, 15)
         https = _https_checks(domain, provider, client_id, front_door)
     out = [dns_check, *https]
+    if runner_host:
+        out.append(check_runner_host(runner_host))
     if shell is not None:
         out.append(check_service(shell, contract.SERVICE_SERVER, "Server container"))
         if front_door == "cloudflared":

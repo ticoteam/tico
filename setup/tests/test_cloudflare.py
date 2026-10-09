@@ -33,3 +33,15 @@ def test_errors_never_include_the_token():
     with pytest.raises(CloudflareError) as e:
         Cloudflare("SECRET-TOKEN", api).call("GET", "/zones")
     assert "SECRET-TOKEN" not in str(e.value)
+
+
+def test_a_runner_hostname_gets_the_api_and_downloads_only_before_the_404():
+    from setup.cloudflare import ingress_config
+    assert ingress_config("t.example.com") == {"ingress": [{"hostname": "t.example.com", "service": "http://server:8765"},
+                                                          {"service": "http_status:404"}]}
+    ing = ingress_config("t.example.com", "t-runner.example.com")["ingress"]
+    assert ing[1] == {"hostname": "t-runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://server:8765"}
+    assert [r.get("hostname") for r in ing] == ["t.example.com", "t-runner.example.com", None]
+    api = Api({("PUT", "/accounts/a1/cfd_tunnel/t2/configurations"): {}})
+    Cloudflare("tok", api).configure_tunnel("a1", "t2", "t.example.com", "t-runner.example.com")
+    assert api.calls[-1][2]["config"]["ingress"] == ing

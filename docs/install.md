@@ -325,6 +325,10 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
 2. Nothing to route by hand: the compose file runs cloudflared with a small config that sends `TICO_DOMAIN` to
    `http://server:8765` and answers anything else with a 404. The server writes it at every start. Only the DNS
    record is yours: a proxied CNAME for the hostname to `<tunnel id>.cfargotunnel.com` (the wizard creates it).
+   With Access in front, the wizard also gives the tunnel a runner hostname without Access (`--runner-hostname`; default
+   `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
+   `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
+   external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag.
 4. In `.env`: `COMPOSE_PROFILES=cloudflared,updater`, `TICO_DOMAIN=<hostname>`, `CLOUDFLARE_TUNNEL_TOKEN=<token>`,

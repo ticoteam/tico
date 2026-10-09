@@ -31,13 +31,18 @@ def _urllib_transport(method: str, url: str, headers: dict, body: bytes | None) 
             return e.code, {}
 
 
-def ingress_config(hostname: str) -> dict:
-    """The route a Tico tunnel needs: the hostname to the server, anything else a 404. It is what setup stores in a tunnel it
-    creates through the API, and what the server writes for the cloudflared container from TICO_DOMAIN at every start
-    (docker/entrypoint.sh `tunnel-config`, read by compose.yaml's cloudflared service), so a tunnel run with only its token
-    still has a route. A tunnel managed in the Cloudflare dashboard keeps its own: cloudflared prefers it to the local file."""
-    return {"ingress": [{"hostname": hostname, "service": f"http://{contract.SERVICE_SERVER}:{contract.SERVER_PORT}"},
-                        {"service": "http_status:404"}]}
+def ingress_config(hostname: str, runner_host: str = "") -> dict:
+    """The route a Tico tunnel needs: the hostname to the server, anything else a 404. With a runner hostname (served without
+    Access, for computers and outside agents) that host goes to the server too, for /api/v2 and /download only. It is what
+    setup stores in a tunnel it creates through the API, and what the server writes for the cloudflared container from
+    TICO_DOMAIN and TICO_RUNNER_URL at every start (docker/entrypoint.sh `tunnel-config`, read by compose.yaml's cloudflared
+    service), so a tunnel run with only its token still has a route. A tunnel managed in Cloudflare (the dashboard, or setup
+    through the API) keeps its own: cloudflared prefers it to the local file."""
+    service = f"http://{contract.SERVICE_SERVER}:{contract.SERVER_PORT}"
+    rules = [{"hostname": hostname, "service": service}]
+    if runner_host:
+        rules.append({"hostname": runner_host, "path": contract.RUNNER_ROUTE_PATH, "service": service})
+    return {"ingress": [*rules, {"service": "http_status:404"}]}
 
 
 class Cloudflare:
@@ -70,8 +75,8 @@ class Cloudflare:
         made = self.call("POST", f"/accounts/{account_id}/cfd_tunnel", {"name": name, "config_src": "cloudflare"})
         return made["id"], made["token"]
 
-    def configure_tunnel(self, account_id: str, tunnel_id: str, hostname: str) -> None:
-        self.call("PUT", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", {"config": ingress_config(hostname)})
+    def configure_tunnel(self, account_id: str, tunnel_id: str, hostname: str, runner_host: str = "") -> None:
+        self.call("PUT", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", {"config": ingress_config(hostname, runner_host)})
 
     def upsert_cname(self, zone_id: str, name: str, target: str) -> str:
         body = {"type": "CNAME", "name": name, "content": target, "proxied": True, "ttl": 1}
@@ -105,3 +110,5 @@ DASHBOARD_STEPS = [
     "Name it, then copy the token from the install command (the long string after `--token`).",
     "In the tunnel's Public Hostname tab add: hostname {domain}, service type HTTP, URL server:8765.",
 ]
+RUNNER_DASHBOARD_STEP = ("Add a second Public Hostname: hostname {runner}, path {path}, service type HTTP, URL server:8765. "
+                         "Leave it out of the Access application: Tico checks the computers' and agents' tokens itself.")
