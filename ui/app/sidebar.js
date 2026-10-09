@@ -453,32 +453,37 @@ function orgTreeWithHelpers(byParent) {
   }
   return out;
 }
-// A human's synced Grok Bots (backend/grokbot.py) are their own agents: small chips beside their name, not rows under
-// them. One moved elsewhere on the chart, or with bots under it, stays an ordinary row.
-const isSyncedAgent = e => e.harness === 'grokbot' || e.agent?.harness === 'grokbot';
-function orgAgentChips(byParent) {
-  const tree = {}, chips = {};
+// A human's synced bots from a platform that holds many of them (Grok Bot: backend/external_sync.py) sit in one
+// cluster under that human, the platform's own sections nested inside. A single agent (Dots) is an ordinary row.
+// One moved elsewhere on the chart, or with bots under it, stays an ordinary row.
+const CLUSTER_PROVIDERS = {grokbot: {label: 'Grok Bot', logo: 'xai'}};
+const clusterProvider = e => CLUSTER_PROVIDERS[e.harness] ? e.harness : CLUSTER_PROVIDERS[e.agent?.harness] ? e.agent.harness : '';
+const PINNED = /^pinned$/i;
+function orgAgentClusters(byParent) {
+  const tree = {}, clusters = {};
   for (const [parent, kids] of Object.entries(byParent)) {
     const rows = parent.startsWith('p:') ? kids.filter(n => {
-      const chip = n.kind === 'bot' && isSyncedAgent(n) && !byParent['b:' + n.name];
-      if (chip) (chips[parent] ||= []).push(n);
-      return !chip;
+      const provider = n.kind === 'bot' && !byParent['b:' + n.name] && clusterProvider(n);
+      if (!provider) return true;
+      const id = parent + '|' + provider, section = (n.agent?.section || '').trim();
+      if (!clusters[id]) {
+        clusters[id] = {kind: 'cluster', id, provider, name: CLUSTER_PROVIDERS[provider].label, count: 0};
+        (tree[parent] ||= []).push(clusters[id]);
+      }
+      clusters[id].count++;
+      if (!section) { (tree['c:' + id] ||= []).push(n); return false; }
+      const sid = id + '|' + section;
+      if (!clusters[sid]) {
+        clusters[sid] = {kind: 'cluster', id: sid, provider, name: section, section: true, count: 0};
+        (tree['c:' + id] ||= []).push(clusters[sid]);
+      }
+      clusters[sid].count++;
+      (tree['c:' + sid] ||= []).push(n);
+      return false;
     }) : kids;
-    if (rows.length) tree[parent] = rows;
+    if (rows.length) (tree[parent] ||= []).unshift(...rows);
   }
-  return {tree, chips};
-}
-const AGENT_CHIPS_SHOWN = 1;                 // the rail fits one name; "+N" opens their page
-const agentChipName = e => (e.display_name || e.name).replace(/^Grok\s+/i, '') || e.display_name || e.name;
-function agentChipsHTML(p, list, curBot) {
-  if (!list?.length) return '';
-  const sorted = list.slice().sort((a, b) => agentChipName(a).localeCompare(agentChipName(b)));
-  const shown = sorted.slice(0, AGENT_CHIPS_SHOWN), rest = sorted.slice(AGENT_CHIPS_SHOWN);
-  const mark = window.toolIcons?.markup({logo_key: 'xai', name: 'Grok'}) || '';
-  return `<span class="org-agents">${shown.map(e => `<a class="org-agent${curBot === e.name ? ' cur' : ''}" href="#/bot/${encodeURIComponent(e.name)}"
-      data-org="b:${esc(e.name)}"${orgMayDrag('b:' + e.name) ? ' draggable="true"' : ''} title="${esc(`${e.display_name || e.name} · Grok Bot`)}"
-      aria-label="${esc(`${p.name || p.id}'s Grok Bot ${agentChipName(e)}`)}">${mark}<span>${esc(agentChipName(e))}</span></a>`).join('')}${rest.length
-    ? `<a class="org-agent more" href="#/person/${encodeURIComponent(p.id)}" title="${esc(rest.map(agentChipName).join(', '))}">+${rest.length}</a>` : ''}</span>`;
+  return tree;
 }
 // Whether one of my personal tokens has reached Tico (GET /v2/me/tokens): undefined before asking, null when I may not
 // hold tokens (no button), else true or false. Without one, my row offers Connect (ui/connect-agent.js).
@@ -498,7 +503,7 @@ function renderTree() {
   ensureCollapsed();
   if (MY_AGENT === undefined && S.me?.id) { MY_AGENT = null; void loadMyAgent(); }
   const full = orgTreeWithHelpers(orgTreeByParent());
-  const {tree: byParent, chips} = orgAgentChips(full);
+  const byParent = orgAgentClusters(full);
   const myId = mePerson()?.id;
   const curBot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
   const curPerson = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
@@ -506,7 +511,8 @@ function renderTree() {
   const subtreeNeeds = key => (byParent[key] || []).some(c =>
     (c.kind === 'bot' && (stateOf(c.name) === 'needs' || needsMeCount(c.name) || subtreeNeeds('b:' + c.name))) ||
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
-    (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
+    (c.kind === 'group' && subtreeNeeds('g:' + c.id)) ||
+    (c.kind === 'cluster' && subtreeNeeds('c:' + c.id)));
   const isTemp = e => e.kind === 'bot' && isTempBot(e);
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : (n.display_name || '').replace(TEMP_RE, '');
   const sources = {};
@@ -518,15 +524,20 @@ function renderTree() {
       // A group's own humans and bots come first, then the groups nested in it.
       if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
       if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
+      // A cluster follows its human's own bots. Inside one, as on the platform, its sections (Pinned first) come
+      // before the bots in none.
+      if ((a.kind === 'cluster') !== (b.kind === 'cluster')) return (a.kind === 'cluster') === !parent.startsWith('c:') ? 1 : -1;
+      if (a.kind === 'cluster' && b.kind === 'cluster' && PINNED.test(a.name) !== PINNED.test(b.name)) return PINNED.test(a.name) ? -1 : 1;
       if ((a.kind === 'person') !== (b.kind === 'person')) return a.kind === 'person' ? -1 : 1;
       if (isTemp(a) !== isTemp(b)) return isTemp(a) - isTemp(b);
       if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
       if (a.kind === 'bot' && b.kind === 'bot' && byBotOrder(a, b)) return byBotOrder(a, b);
       return nameOf(a).localeCompare(nameOf(b));
     })
-    .map(node => row(node, depth)).join('');
+    .map(node => row(node, depth, false, parent.startsWith('c:'))).join('');
   // flat: the history list, one row per bot and person, no children and nothing to drag
-  const row = (node, depth, flat = false) => {
+  // inCluster: the cluster's own row already says which platform, so its bots carry no runtime mark
+  const row = (node, depth, flat = false, inCluster = false) => {
     if (node.kind === 'group') {
       const key = 'g:' + node.id, manage = !node.helpers && orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
@@ -539,6 +550,15 @@ function renderTree() {
         ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button><button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
     }
+    if (node.kind === 'cluster') {
+      const key = 'c:' + node.id, isCol = collapsed.has(key);
+      const mark = node.section ? '' : window.toolIcons?.markup({logo_key: CLUSTER_PROVIDERS[node.provider].logo, name: node.name}) || '';
+      return `<li class="dept org-cluster${node.section ? ' org-cluster-section' : ''}"><div class="noderow">
+        <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
+        <span class="org-cluster-label" data-toggle="${esc(key)}" role="button" tabindex="0">${mark}<span class="nm">${esc(node.name)}</span><span class="org-cluster-n">${node.count}</span></span>
+        ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</div>
+        <ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul></li>`;
+    }
     if (node.kind === 'person') {
       const p = node.person, key = 'p:' + p.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
@@ -546,8 +566,7 @@ function renderTree() {
         <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${!flat && orgMayDrag(key) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
-        ${flat ? '' : agentChipsHTML(p, chips[key], curBot)}
-        ${!flat && p.id === myId && MY_AGENT === false && !chips[key] ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
+        ${!flat && p.id === myId && MY_AGENT === false && !(kids || []).some(n => n.kind === 'cluster') ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
         ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
@@ -558,7 +577,7 @@ function renderTree() {
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
       <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : ''}${!flat && !helper && orgMayDrag(key) ? ' draggable="true"' : ''}>
-        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
+        ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${inCluster ? '' : runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${treeLimitMark(e.name)}${treeBadge(n, st)}</a></div>
@@ -568,7 +587,7 @@ function renderTree() {
   // Every bot and person, the one you opened last on top; ones you never opened follow by name.
   const history = () => {
     const seen = orgHistory(), at = n => { const i = seen.indexOf(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name); return i < 0 ? Infinity : i; };
-    return Object.values(full).flat().filter(n => n.kind !== 'group')
+    return Object.values(full).flat().filter(n => n.kind !== 'group' && n.kind !== 'cluster')
       .sort((a, b) => (at(a) - at(b)) || nameOf(a).localeCompare(nameOf(b)))
       .map(node => row(node, 0, true)).join('');
   };

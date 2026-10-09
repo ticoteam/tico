@@ -19,9 +19,11 @@ HARNESS_CATALOG = (
     # OpenClaw is the same kind of agent (docs/openclaw-agents.md): its own model, a standing credential,
     # a heartbeat, no computer.
     {"id": "openclaw", "label": "openclaw", "runtime": "openclaw", "external": True},
-    # A Grok Bot (xAI's cloud agent): the person's own routine syncs it in with their token;
-    # it never holds a credential of its own (backend/grokbot.py, docs/grok-bot-sync.md).
+    # Bots on their maker's platform, synced in by the agent itself with its person's sign-in;
+    # they never hold a credential of their own (backend/external_sync.py, docs/external-agent-sync.md).
+    # A Grok Bot is one of many on a Grok account; Dots is the one always-on agent on a ChatGPT account.
     {"id": "grokbot", "label": "grok bot", "runtime": "grokbot", "external": True},
+    {"id": "dots", "label": "dots", "runtime": "dots", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
 EXTERNAL_HARNESSES = tuple(row["id"] for row in HARNESS_CATALOG if row.get("external"))

@@ -2423,38 +2423,57 @@ def recent(api, args):
     return api.get("me/recent", days=args.get("days") or 7, limit=args.get("limit") or 10)
 
 
-# ----------------------------------------------------------------------------- grok bot sync
-_GROK_MESSAGE = {"type": "object", "additionalProperties": False, "required": ["role", "text"], "properties": {
-    "role": _s("user (the person) or bot (the Grok Bot)", enum=["user", "bot"]),
+# ----------------------------------------------------------------------------- external agent sync
+_SYNCED_MESSAGE = {"type": "object", "additionalProperties": False, "required": ["role", "text"], "properties": {
+    "role": _s("user (the person) or bot (the agent)", enum=["user", "bot"]),
     "text": _s("The message, verbatim"),
     "at": _s("When it was sent, ISO 8601"),
-    "id": _s("Grok's id for the message, if you have one"),
+    "id": _s("The platform's id for the message, if you have one"),
     "images": {"type": "array", "maxItems": 10, "description": "Images shown in this message: each a public "
                "https `url` Tico can download, or for a file on your computer `content_base64` (under 5 MB) "
                "with a `name`. Tico stores them and shows them inline.",
                "items": {"type": "object", "additionalProperties": False, "properties": {
                    "url": _s("The image's https address"), "name": _s("A file name, e.g. poster.png"),
                    "content_base64": _s("The image itself, base64")}}}}}
-_GROK_BOT = {"type": "object", "additionalProperties": False, "required": ["grok_id", "name"], "properties": {
-    "grok_id": _s("The Grok Bot's id (the uuid in grok.com/bot/<id>)"),
-    "name": _s("Its name in Grok"),
+_SYNCED_BOT = {"type": "object", "additionalProperties": False, "required": ["name"], "properties": {
+    "id": _s("The bot's id on its platform: for a Grok Bot the uuid in grok.com/bot/<id>. Dots may leave it out"),
+    "grok_id": _s("Older name for id, for a Grok Bot"),
+    "name": _s("Its name there"),
     "description": _s("Its short description"),
     "instructions": _s("Its full instructions, verbatim"),
-    "messages": {"type": "array", "maxItems": 500, "items": _GROK_MESSAGE,
+    "section": _s("The section it sits in on its platform's own list (Grok: Pinned, or a section you made); "
+                  "empty when it is in none"),
+    "messages": {"type": "array", "maxItems": 500, "items": _SYNCED_MESSAGE,
                  "description": "Transcript messages newer than the synced_through the last sync returned "
                                 "(all of them the first time), oldest first"}}}
+_SYNC_DOC = ("A bot Tico has not seen becomes a bot under you on the team chart; its name, description, section and "
+             "full instructions are kept, and its transcript is copied into your chat with it. Idempotent: "
+             "resending messages adds nothing. Each bot in the reply has `synced_through`, the newest message "
+             "Tico has (next time send only newer ones), and `inbox`, what you wrote to it in Tico since the "
+             "last sync, oldest first: give those to that bot.")
 
 
-@tool("hub_grokbot_sync", "Sync your (a person's) Grok Bots into Tico. A Bot Tico has not seen becomes a "
-      "bot under you on the Org chart; its name, description and full instructions are kept, and its "
-      "transcript is copied into your chat with it. Idempotent: resending messages adds nothing. Each "
-      "bot in the reply has `synced_through`, the newest message Tico has; next time send only newer ones.",
-      {"bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _GROK_BOT},
+def _sync_body(args, provider):
+    return {k: v for k, v in (("provider", provider), ("bots", args["bots"]), ("source", args.get("source")))
+            if v is not None}
+
+
+@tool("hub_external_sync", "Sync your (a person's) bots on another platform into Tico: your Grok Bots "
+      "(provider grokbot, every Bot on the account) or your Dots (provider dots, one bot). " + _SYNC_DOC,
+      {"provider": _s("grokbot or dots", enum=["grokbot", "dots"]),
+       "bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _SYNCED_BOT},
+       "source": _s("Which of your bots ran this sync")},
+      required=("provider", "bots"), writes=True)
+def external_sync(api, args):
+    return api.post("external/sync", _sync_body(args, args["provider"]), key=_key(args))
+
+
+@tool("hub_grokbot_sync", "Sync your Grok Bots into Tico: hub_external_sync with provider grokbot. " + _SYNC_DOC,
+      {"bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _SYNCED_BOT},
        "source": _s("Which of your Bots ran this sync")},
       required=("bots",), writes=True)
 def grokbot_sync(api, args):
-    return api.post("grokbot/sync", {k: v for k, v in (("bots", args["bots"]), ("source", args.get("source")))
-                                     if v is not None}, key=_key(args))
+    return api.post("external/sync", _sync_body(args, "grokbot"), key=_key(args))
 
 
 # ----------------------------------------------------------------------------- updates
@@ -3071,7 +3090,7 @@ AUDIENCE = {
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "hub_brief": HUMANS_AND_ASSISTANT, "hub_bot_recent": HUMANS_AND_ASSISTANT,
     "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTOPS,
-    "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": ("owner", "admin"),
+    "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": PEOPLE,
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
