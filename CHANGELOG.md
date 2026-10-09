@@ -23,6 +23,9 @@ All notable changes to Tico are recorded here. The format follows
 - On a phone, the Tasks toolbar fits on one line whatever the font. ([#303](https://github.com/ticoteam/tico/pull/303))
 - Phone screenshots of Docs work with the current reader. ([#302](https://github.com/ticoteam/tico/pull/302))
 
+### Fixed
+- **Runner hostname on a Cloudflare tunnel:** when `TICO_RUNNER_URL` names a host other than `TICO_DOMAIN`, the tunnel config the server writes routes that host too, for `/api/v2/...` and `/download/...` only, so it can be served without Access as docs/connect-an-agent.md says. No hand-written tunnel config or compose override is needed. See docs/install.md, "Cloudflare Tunnel".
+
 ## [0.3.35] - 2026-10-09
 
 ### Added
