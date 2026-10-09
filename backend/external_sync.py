@@ -8,7 +8,8 @@ Tico does the rest here:
 
 - A bot it has not seen becomes a bot with that provider's harness, placed under the person who
   synced it (`reports_to: human:<them>`). They may move it anywhere on the chart afterwards; a
-  later sync never moves it back.
+  later sync never moves it back. It joins their group too (a bot reporting to a human does not
+  inherit the human's group on its own), so it sits under them on the chart.
 - Its name, description, section (where it sits in the maker's own list, e.g. Grok's "Pinned")
   and full instructions are kept in `config_json[<provider key>]`, so the bot can be rebuilt
   somewhere else if the account goes away.
@@ -38,6 +39,7 @@ import httpx
 from pydantic import Field
 
 from . import models as M
+from . import people as P
 from . import rooms
 from .blobs import register
 from .store import H, Problem, encode
@@ -341,6 +343,10 @@ def sync(c, auth, settings_admin, who, body, images=None):
     provider = PROVIDERS[body.provider]
     check(provider, body)
     person = H.actor_id(who.actor)
+    from . import views
+    roster = views.roster(c)
+    group = (P.person(person, roster) or {}).get("team") or ""
+    group = group if group in (roster.get("org_groups") or {}) else ""
     now = H.now()
     out = []
     for item in body.bots:
@@ -369,6 +375,9 @@ def sync(c, auth, settings_admin, who, body, images=None):
                 record["instructions_updated"] = now
         config[provider.key] = record
         config["display_name"] = name
+        if group and "team" not in config:      # never set, so not moved since: in its human's group
+            config["team"] = group
+            c.execute("UPDATE bot_config SET team=? WHERE bot=?", (group, slug))
         c.execute("UPDATE bot_config SET config_json=?,description=? WHERE bot=?",
                   (encode(config), item.description if "description" in item.model_fields_set else row["description"], slug))
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", (name, slug))

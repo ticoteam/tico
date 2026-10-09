@@ -101,3 +101,14 @@ def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_histo
         assert issue['since'] == config['grok']['last_sync'] < later
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='grok-designer'").fetchone()[0] == 0
     assert len(room_messages(api, 'grok-designer')) == 2
+
+
+def test_a_synced_bot_joins_its_humans_group_until_moved(api):
+    group = post(api, "groups", {"name": "Leadership", "add": {"people": ["ana"]}})
+    gid = group.get("id") or group["group"]["id"]
+    sync(api, designer())
+    team = lambda: next(b for b in get(api, "bots") if b["slug"] == "grok-designer")["team"]
+    assert team() == gid                      # under Ana on the chart, not loose at the top
+    api.patch(f"/api/v2/groups/{gid}", json={"remove": {"bots": ["grok-designer"]}}, headers=headers())
+    sync(api, designer(messages=[]))
+    assert team() != gid                      # moved out by a person: a later sync leaves it there
