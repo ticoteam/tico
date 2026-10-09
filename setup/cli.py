@@ -31,6 +31,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--tico-version", help="release to install, such as v1.2.3 (cloud targets: default the latest release; local: what scripts/install.sh pins)")
     p.add_argument("--domain")
     p.add_argument("--front-door", choices=list(st.FRONT_DOORS))
+    p.add_argument("--runner-hostname", dest="runner_host", metavar="HOST",
+                   help="cloudflared: a hostname without Access where computers and outside agents connect (only /api/v2 and "
+                        "/download are routed there); default with --auth cloudflare: runner.<domain>, or <name>-runner.<zone> "
+                        "when the domain is a subdomain; 'none' for no runner hostname")
     p.add_argument("--ssh", dest="ssh_host", metavar="USER@HOST")
     p.add_argument("--ssh-port", type=int)
     p.add_argument("--ssh-identity")

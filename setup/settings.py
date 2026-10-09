@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import urllib.parse
 from dataclasses import asdict, dataclass, fields
 
 from . import contract, envfile
@@ -24,6 +25,8 @@ AUTHS = {"google": "Google sign-in (OIDC)", "microsoft": "Microsoft sign-in (OID
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
 SECRET_FIELDS = ("client_secret", "decisions_key", "cf_token", "tunnel_token", "backup_secret")
+# This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
+TRANSIENT_FIELDS = ("runner_given",)
 
 
 @dataclass
@@ -68,12 +71,17 @@ class Settings:
     cloud_version: str = ""
     server_url: str = ""
     runner_label: str = ""
+    runner_host: str = ""   # cloudflared only: a hostname without Access for computers and outside agents; "none" declines the default
+    runner_given: bool = False   # --runner-hostname named it on this run, so its DNS record may be repointed
     runner_tag: str = "latest"
     tag: str = "latest"
     compose_ref: str = "main"
 
     def public(self) -> dict:
-        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS}
+        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
+
+    def runner(self) -> str:
+        return "" if self.front_door != "cloudflared" or self.runner_host in ("", "none") else self.runner_host
 
     def to_env(self) -> dict[str, str]:
         # Keep the alias too: a pinned older server can use the generated settings.
@@ -83,6 +91,8 @@ class Settings:
              "TICO_TAG": self.tag if self.tag != "latest" else "", "TICO_UPDATER_URL": contract.UPDATER_URL if self.updater else ""}
         if self.front_door == "cloudflared":
             e["CLOUDFLARE_TUNNEL_TOKEN"] = self.tunnel_token
+            if self.runner():
+                e["TICO_RUNNER_URL"] = f"https://{self.runner()}"
         if self.auth == "cloudflare":
             e.update(TICO_AUTH_PROXY="cloudflare", TICO_ACCESS_ISSUER=self.access_issuer, TICO_ACCESS_AUDIENCE=self.access_audience)
         else:
@@ -100,13 +110,25 @@ class Settings:
         return [v for v in (self.client_secret, self.decisions_key, self.cf_token, self.tunnel_token, self.backup_secret) if v]
 
 
+def default_runner_host(domain: str, zone: str = "") -> str:
+    """runner.<domain> at a zone's apex; beside the domain (tico-runner.example.com for tico.example.com) under it, because
+    Cloudflare's universal certificate covers the zone and one label below it, not two."""
+    if zone and domain != zone and domain.endswith("." + zone):
+        label, parent = domain.split(".", 1)
+        return f"{label}-runner.{parent}"
+    return f"runner.{domain}"
+
+
 def from_saved(saved: dict, env_text: str) -> Settings:
     known = {f.name for f in fields(Settings)}
     saved = {"decisions_provider" if k == "judge_provider" else k: v for k, v in saved.items()}   # state.json from before 0.2.4
-    s = Settings(**{k: v for k, v in saved.items() if k in known})
+    s = Settings(**{k: v for k, v in saved.items() if k in known and k not in TRANSIENT_FIELDS})
     e = envfile.parse(env_text)
     s.client_secret = e.get("TICO_OIDC_CLIENT_SECRET", "")
     s.tunnel_token = e.get("CLOUDFLARE_TUNNEL_TOKEN", "")
+    runner = urllib.parse.urlsplit(e.get("TICO_RUNNER_URL", "")).hostname or ""
+    if not s.runner_host and runner and runner != s.domain:
+        s.runner_host = runner
     s.backup_url, s.backup_endpoint, s.backup_region = (e.get(k, "") for k in ("TICO_BACKUP_URL", "TICO_BACKUP_ENDPOINT", "TICO_BACKUP_REGION"))
     s.backup_key_id, s.backup_secret = e.get("LITESTREAM_ACCESS_KEY_ID", ""), e.get("LITESTREAM_SECRET_ACCESS_KEY", "")
     for prov, key in contract.DECISIONS_KEYS.items():
