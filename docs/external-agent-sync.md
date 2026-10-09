@@ -16,7 +16,8 @@ human on a routine, so the sync runs on the platform, with the human's own sign-
 
 - A bot it has not seen becomes a bot with the `grokbot` or `dots` harness, **under the human who synced it**
   (`reports_to: human:<them>`), active, with them as owner. Move it anywhere on the team chart afterwards and it
-  becomes an ordinary row there; a later sync never moves it back.
+  becomes an ordinary row there; a later sync never moves it back. It also joins its human's group (a bot reporting to a
+  human does not inherit their group on its own), until someone puts it in another group or none.
 - Any human may link their own bots. A new bot counts toward a member's bot limit, like any bot they add.
 - Name, description and section follow the platform. The full instructions are kept in the bot's
   `config_json.grok.instructions` (Dots: `config_json.dots`), with when they last changed, so the bot can be rebuilt
