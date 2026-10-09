@@ -126,6 +126,10 @@ dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-confi
 dc exec -T server cat /tunnel/cloudflared.yml | grep -q 'hostname: smoke.example.test' || fail "the tunnel's route names the wrong host"
 [ "$(dc exec -T server stat -c %a /tunnel/cloudflared.yml)" = 644 ] || fail "the tunnel's route is not readable by cloudflared"
 
+step "a malformed expected AWS account refuses to start, without calling AWS"
+out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"
+grep -q '12-digit' <<<"$out" || fail "a malformed TICO_EXPECTED_AWS_ACCOUNT gave no clear error: $out"
+
 step "runner joins with a one-time code"
 join_runner
 retry 120 online || fail "the runner did not enroll and come online"
