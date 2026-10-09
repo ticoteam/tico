@@ -190,6 +190,55 @@ def test_a_docker_runner_asks_its_sidecar_when_quiet(repos):
     assert f.blocks_claims(active=False) and sidecar.started == ["0.2.0"]
 
 
+# -- runners that share one checkout -------------------------------------------------------------
+
+def test_a_runner_whose_shared_checkout_was_moved_under_it_still_updates(repos):
+    public, checkout, state = repos
+    started = head(checkout)
+    f, launched = follower(checkout, state)
+    other = state.parent / "other"
+    other.mkdir()
+    run_apply(checkout, other)                       # another environment's runner, on the same checkout, updated first
+    assert ru.checkout_release(checkout) == "0.2.0"
+    f.poll()
+    assert (f.release, f.state, f.pending) == ("0.1.0", "waiting", "0.2.0")      # what this process runs, not the checkout
+    assert f.fields()["release"] == "0.1.0"
+    assert f.blocks_claims(active=False) and launched[0][1] == "0.2.0" and launched[0][4] == started
+
+
+def test_a_checkout_already_on_the_release_restarts_a_runner_that_started_on_other_code(repos):
+    public, checkout, state = repos
+    started = head(checkout)
+    run_apply(checkout, state)
+    on_release = head(checkout)
+    restarted = []
+    result, calls = run_apply(checkout, state, started=started, helpers=lambda: restarted.append("all"))
+    assert result["state"] == "healthy" and ru.read_status(state)["state"] == "healthy"
+    assert calls.restarts == 1 and calls.installs == [] and calls.checks == [on_release] and restarted == ["all"]
+    assert head(checkout) == on_release
+    result, calls = run_apply(checkout, state, calls=Calls(healthy=(False,)), started=started)
+    assert result["state"] == "failed" and "did not report in" in result["error"] and calls.restarts == 1
+    assert head(checkout) == on_release                                             # no going back from a restart
+
+
+def test_a_runner_already_on_the_release_is_not_restarted(repos):
+    public, checkout, state = repos
+    run_apply(checkout, state)
+    for started in (head(checkout), ""):                                            # "": a runner from before --started
+        result, calls = run_apply(checkout, state, started=started)
+        assert result["state"] == "healthy" and calls.restarts == 0 and calls.checks == []
+
+
+def test_the_update_process_is_told_the_commit_the_runner_started_on(tmp_path):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    ru.spawn("/srv/tico", "0.2.0", tmp_path, 4242, "a" * 40, env=SYSTEMD, run=run)
+    assert calls[0][calls[0].index("--started") + 1] == "a" * 40
+
+
 # -- helper jobs follow the release --------------------------------------------------------------
 
 @pytest.mark.slow

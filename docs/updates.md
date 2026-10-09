@@ -115,6 +115,11 @@ The runner is a git checkout. When the server's release is newer, the runner:
    `scripts/tico update` or a pull by hand. Each restart is a line in the job's log
    (`scripts/tico logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
 
+A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
+environments (`scripts/tico -e <env> install`) may share one checkout: the first to update moves it, and each other
+runner, still on the old release, finds the checkout already there and only restarts onto it (with its own jobs). The same
+happens after a `git checkout` of a release by hand.
+
 ### Linux from a checkout: run `scripts/tico install` once
 
 A Mac has launchd to start the runner again after an update. A Linux computer running from a Tico checkout has nothing

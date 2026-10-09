@@ -14,6 +14,9 @@ All notable changes to Tico are recorded here. The format follows
 - On a phone, Tasks is in the bottom bar (Team, Search, Tasks, Updates, More). Phone task rows are denser: titles wrap to two lines, a task's note shows under its title, and a lone subtask's 0/1 is hidden. A task waiting on you shows Waiting once, not twice (desktop too).
 - A task's header has Done (for its owner) and Close buttons: one tap, no reason asked, and the task window closes back to where you were. Closing a request a bot made no longer asks why. The header's icons match (no stray lock, a drawn ✕), and the Private setting always reads Private, with a line saying who can see the task.
 
+### Fixed
+- Runners of several company environments on one checkout each move to the server's release. The first to update moved the shared checkout and restarted only itself; the others reported the new release while still running the old code until restarted by hand. A runner now reports the release it started on and restarts onto a checkout that is already there.
+
 ## [0.3.35] - 2026-10-09
 
 ### Added
