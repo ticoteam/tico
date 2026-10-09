@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A synced Grok Bot or Dots joins its human's group, so it sits under them on the team chart instead of at the top when the human is in a group.
+
 ## [0.3.36] - 2026-10-09
 
 ### Changed
