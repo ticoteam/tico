@@ -101,3 +101,27 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
     assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "waiting"]}) == [{"id": "t1"}]
     assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,waiting", "lane": None, "label": None})
 
+
+
+class _Sync:
+    """external/sync on a server with or without `inbox`: one from before it refuses the field."""
+    def __init__(self, knows_inbox):
+        self.knows_inbox, self.bodies = knows_inbox, []
+
+    def post(self, path, body=None, key=None):
+        assert path == "external/sync"
+        self.bodies.append(body)
+        if "inbox" in body and not self.knows_inbox:
+            raise hubtools.APIError("validation", "body.inbox: Extra inputs are not permitted", 422)
+        return {"bots": []}
+
+
+def test_only_the_new_sync_tool_takes_the_inbox_and_an_older_server_still_syncs():
+    bots = [{"id": "g1", "name": "Designer"}]
+    for knows in (True, False):
+        api = _Sync(knows)
+        assert hubtools.BY_NAME["hub_external_sync"]["fn"](api, {"provider": "grokbot", "bots": bots}) == {"bots": []}
+        assert [b.get("inbox") for b in api.bodies] == ([True] if knows else [True, None])
+    api = _Sync(True)
+    hubtools.BY_NAME["hub_grokbot_sync"]["fn"](api, {"bots": bots})     # routines from before the inbox ignore it
+    assert api.bodies == [{"provider": "grokbot", "bots": bots}]

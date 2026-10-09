@@ -70,12 +70,99 @@ def test_a_member_links_their_own_dots_as_one_bot_under_them(api):
          token="cara-test", expected=422)
 
 
-def test_what_the_person_wrote_in_tico_comes_back_once_in_the_next_sync(api):
+def waiting(api):
+    issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i["bot"] == "grok-designer")
+    return issue["detail"]
+
+
+def test_what_the_person_wrote_in_tico_comes_back_once_to_a_sync_that_takes_the_inbox(api, monkeypatch):
     sync(api, designer())
     post(api, "chat/grok-designer", {"text": "Try a warmer palette."})
-    [bot] = sync(api, designer(messages=[]))["bots"]
-    assert [m["text"] for m in bot["inbox"]] == ["Try a warmer palette."]
+    # A routine from before the inbox ignores it: its sync leaves the message waiting.
     assert sync(api, designer(messages=[]))["bots"][0]["inbox"] == []
+    later = H.shift(H.now(), hours=27)
+    monkeypatch.setattr(H, "now", staticmethod(lambda: later))
+    assert "1 message waits for the next sync" in waiting(api)
+    take = lambda: post(api, "external/sync", {"provider": "grokbot", "inbox": True,
+                                               "bots": [designer(id=GROK_ID, grok_id="", messages=[])]})["bots"][0]
+    assert [m["text"] for m in take()["inbox"]] == ["Try a warmer palette."]
+    assert take()["inbox"] == []
+    later = H.shift(later, hours=27)
+    assert "wait" not in waiting(api)               # handed over: no longer counted as waiting
+
+
+def test_a_bot_may_not_sync_and_nothing_is_fetched_for_it(api, monkeypatch):
+    from backend import external_sync as G
+    from backend.auth import Identity
+    fetched = []
+    monkeypatch.setattr(G, "fetch_image", lambda url, transport=None: fetched.append(url))
+    with api.app.state.store.transaction() as c:      # a signed-in agent, as a Hermes bot is
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('coo','hermes','x',?,'human:ana')",
+                  (H.now(),))
+    api.app.state.store.settings.test_identities["coo-test"] = Identity("bot:coo", "bot", agent="hermes")
+    image = {"role": "bot", "text": "See", "at": "2026-09-27T10:00:00Z", "images": [{"url": "https://imagine.example/a.png"}]}
+    assert sync(api, designer(messages=[image]), token="coo-test", expected=403)["error"]["code"] == "forbidden"
+    assert fetched == []
+
+
+def test_a_member_past_their_bot_limit_is_refused_before_any_image_is_fetched(api, monkeypatch):
+    from backend import external_sync as G
+    fetched = []
+    monkeypatch.setattr(G, "fetch_image", lambda url, transport=None: fetched.append(url))
+    assert api.put("/api/v2/access/limits", json={"member_bot_limit": 1}, headers=headers("ben-test")).status_code == 200
+    image = lambda n: {"role": "bot", "text": f"See {n}", "at": "2026-09-27T10:00:00Z",
+                       "images": [{"url": f"https://imagine.example/{n}.png"}]}
+    two = [designer(messages=[image(1)]), designer(grok_id="other-grok-id", messages=[image(2)])]
+    assert sync(api, *two, token="cara-test", expected=409)["error"]["code"] == "bot_limit"
+    assert fetched == [] and not [b for b in get(api, "bots") if b["slug"].startswith("grok-")]
+    sync(api, designer(messages=[image(1)]), token="cara-test")             # one fits
+    assert fetched == ["https://imagine.example/1.png"]
+    assert sync(api, designer(grok_id="other-grok-id", messages=[image(2)]), token="cara-test",
+                expected=409)["error"]["code"] == "bot_limit"
+    assert len(fetched) == 1
+    sync(api, designer(messages=[image(3)]), token="cara-test")             # a bot they have already is no new bot
+    assert len(fetched) == 2
+
+
+def test_one_sync_fetches_at_most_its_share_of_images_and_keeps_the_rest_as_links(api, monkeypatch):
+    from backend import external_sync as G
+    fetched = []
+    monkeypatch.setattr(G, "fetch_image", lambda url, transport=None: fetched.append(url))
+    many = [{"role": "bot", "text": f"Image {n}", "at": f"2026-09-27T10:{n // 60:02d}:{n % 60:02d}Z",
+             "images": [{"url": f"https://imagine.example/{n}.png"}] * 2} for n in range(G.IMAGE_FETCHES)]
+    sync(api, designer(messages=many))
+    assert len(fetched) == G.IMAGE_FETCHES and len(room_messages(api, "grok-designer")) == G.IMAGE_FETCHES
+
+
+def test_two_people_syncing_the_same_grok_bot_get_their_own_bot_and_chat(api):
+    ana = sync(api, designer())["bots"][0]
+    cara = sync(api, designer(), token="cara-test")["bots"][0]
+    assert ana["bot"] != cara["bot"] and ana["created"] and cara["created"] and cara["messages_added"] == 2
+    rows = {b["slug"]: b for b in get(api, "bots")}
+    assert rows[ana["bot"]]["reports_to"] == "human:ana" and rows[cara["bot"]]["reports_to"] == "human:cara"
+    with api.app.state.store.read() as c:
+        rooms = c.execute("SELECT owner_actor, room_key FROM conversations WHERE scope='personal' AND room_key IN (?,?)",
+                          (ana["bot"], cara["bot"])).fetchall()
+    assert sorted(map(tuple, rooms)) == sorted([("human:ana", ana["bot"]), ("human:cara", cara["bot"])])
+    post(api, "chat/" + ana["bot"], {"text": "Only for Ana's."})
+    take = lambda token, bot: post(api, "external/sync", {"provider": "grokbot", "inbox": True, "bots": [
+        designer(messages=[])]}, token=token)["bots"][0]["inbox"]
+    assert take("cara-test", cara["bot"]) == [] and [m["text"] for m in take("ana-test", ana["bot"])] == ["Only for Ana's."]
+
+
+def test_an_old_routine_sending_grok_id_keeps_the_message_ids_it_had_before_other_providers(api):
+    import hashlib
+    import json
+    import uuid
+    from backend import external_sync as G
+    sync(api, designer())
+    first = designer()["messages"][0]
+    key = hashlib.sha256(json.dumps([first["role"], first["at"], first["text"], []], sort_keys=True,
+                                    ensure_ascii=False).encode()).hexdigest()
+    before = "grok-" + str(uuid.uuid5(G.NAMESPACE, json.dumps(["ana", GROK_ID, key])))     # 0.3.35's id
+    assert room_messages(api, "grok-designer")[0]["id"] == before
+    again = post(api, "external/sync", {"provider": "grokbot", "bots": [designer(id=GROK_ID, grok_id="")]})["bots"][0]
+    assert again["bot"] == "grok-designer" and again["messages_added"] == 0
 
 
 def test_tico_fetches_only_public_https_images():

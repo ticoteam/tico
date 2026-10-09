@@ -3710,8 +3710,9 @@ def create_app(settings=None):
     # A person's bots on another platform (Grok Bot, Dots), synced in by the agent itself with the
     # person's own sign-in: created under them on the chart, transcripts copied, instructions kept.
     def external_sync_run(request, body):
-        # Images are fetched before the write, never while holding it.
-        external_sync.allowed(request.state.identity)
+        # Images are fetched before the write, never while holding it, and only for a sync that would be accepted.
+        with store.read() as c:
+            external_sync.precheck(c, settings_admin, request.state.identity, body)
         images = external_sync.prefetch_images(store, app.state.blobs, body,
                                                person=H.actor_id(request.state.identity.actor))
         return mutate(request, body, lambda c: external_sync.sync(c, auth, settings_admin,

@@ -322,8 +322,10 @@ def operation_issues(c, who, auth):
                         severity="warning", needs_person=False)
         queued = privacy.job_count(c, who, slug)
         if location.get("agent"):
+            # A synced agent is handed its messages at a sync, which marks them delivered; it never reads them in Tico.
+            unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
             queued = sum(privacy.message_readable(c, privacy.actor(who), m) for m in c.execute(
-                "SELECT * FROM messages WHERE to_actor=? AND read_at IS NULL "
+                "SELECT * FROM messages WHERE to_actor=? AND " + unread + " "
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now())))
         uncertain = privacy.job_count(c, who, slug, ("uncertain",))
         if uncertain and not mac_offline:

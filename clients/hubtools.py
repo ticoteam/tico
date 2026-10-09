@@ -2449,8 +2449,9 @@ _SYNCED_BOT = {"type": "object", "additionalProperties": False, "required": ["na
 _SYNC_DOC = ("A bot Tico has not seen becomes a bot under you on the team chart; its name, description, section and "
              "full instructions are kept, and its transcript is copied into your chat with it. Idempotent: "
              "resending messages adds nothing. Each bot in the reply has `synced_through`, the newest message "
-             "Tico has (next time send only newer ones), and `inbox`, what you wrote to it in Tico since the "
-             "last sync, oldest first: give those to that bot.")
+             "Tico has: next time send only newer ones.")
+_INBOX_DOC = (" Each bot in the reply also has `inbox`, what you wrote to it in Tico since the last sync, oldest "
+              "first: give those to that bot. Tico counts them as delivered once they are in a reply.")
 
 
 def _sync_body(args, provider):
@@ -2458,17 +2459,28 @@ def _sync_body(args, provider):
             if v is not None}
 
 
+def _sync_with_inbox(api, body, key):
+    """Sync and take the inbox. A server from before `inbox` refuses the field; it hands the inbox to every sync."""
+    try:
+        return api.post("external/sync", {**body, "inbox": True}, key=key)
+    except APIError as exc:
+        if exc.status == 422 and exc.code == "validation" and "inbox" in str(exc.detail):
+            return api.post("external/sync", body, key=key)
+        raise
+
+
 @tool("hub_external_sync", "Sync your (a person's) bots on another platform into Tico: your Grok Bots "
-      "(provider grokbot, every Bot on the account) or your Dots (provider dots, one bot). " + _SYNC_DOC,
+      "(provider grokbot, every Bot on the account) or your Dots (provider dots, one bot). " + _SYNC_DOC + _INBOX_DOC,
       {"provider": _s("grokbot or dots", enum=["grokbot", "dots"]),
        "bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _SYNCED_BOT},
        "source": _s("Which of your bots ran this sync")},
       required=("provider", "bots"), writes=True)
 def external_sync(api, args):
-    return api.post("external/sync", _sync_body(args, args["provider"]), key=_key(args))
+    return _sync_with_inbox(api, _sync_body(args, args["provider"]), _key(args))
 
 
-@tool("hub_grokbot_sync", "Sync your Grok Bots into Tico: hub_external_sync with provider grokbot. " + _SYNC_DOC,
+@tool("hub_grokbot_sync", "Sync your Grok Bots into Tico: hub_external_sync with provider grokbot, for routines set "
+      "up before the inbox, so it leaves what you wrote to them waiting. " + _SYNC_DOC,
       {"bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _SYNCED_BOT},
        "source": _s("Which of your Bots ran this sync")},
       required=("bots",), writes=True)
