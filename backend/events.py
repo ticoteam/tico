@@ -563,8 +563,9 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-def status_line(c, who, slug, default=None, inputs=None):
-    """A bot's status as `GET /api/v2/status` lists it to `who`; None for no status row."""
+def status_line(c, who, slug, default=None, inputs=None, auth=None):
+    """A bot's status as `GET /api/v2/status` lists it to `who`; None for no status row. With `auth`, a
+    person who manages a quarantined bot is also sent what was refused (`review`)."""
     from . import task_privacy as privacy
     from . import usage_limits
     row = H.status(c, slug)
@@ -579,6 +580,12 @@ def status_line(c, who, slug, default=None, inputs=None):
         auto = not H.quarantine_is_escape(c, row["bot"])
         row["quarantine"] = {"since": since, "auto": auto,
                              "resumes_at": H.shift(since, seconds=H.QUARANTINE_COOLDOWN_S) if auto and since else None}
+        if not auto and auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"])):
+            review = dict(H.quarantine_review(c, row["bot"]) or {})
+            task = H.task(c, review["task"]) if review.get("task") else None
+            # The task is named only to someone who may read it; the refused words are theirs to review.
+            review["task"] = {"id": task["id"], "title": task["title"]} if task and privacy.task_readable(c, who, task) else None
+            row["quarantine"]["review"] = review
     return usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default)
 
 
@@ -753,7 +760,7 @@ def _bots(view, rows):
         if default is None:
             from . import usage_limits
             default = usage_limits.company(view.c)
-        out.append((row, {"bot": slug, "status": status_line(view.c, view.who, slug, default)}))
+        out.append((row, {"bot": slug, "status": status_line(view.c, view.who, slug, default, auth=view.auth)}))
     return out
 
 

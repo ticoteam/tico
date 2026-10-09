@@ -134,3 +134,35 @@ def test_a_quarantined_bots_status_says_when_it_resumes_and_a_persons_message_wa
         H.quarantine(c, "ops", "escape: a secrets path")
     q = next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")["quarantine"]
     assert q["auto"] is False and q["resumes_at"] is None, "an escape waits for a person"
+
+
+def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resumes_it(api):
+    from backend import hubdb as H
+    from backend.tests.test_api import assign, ready, runner
+    computer = runner(api)                                        # placed on a computer, not the keeper
+    assign(api, computer, "ops")
+    ready(api, computer, ["ops"])
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Set up the tool", "Please.", "bot:ops")["id"]
+
+    def refused_notes():
+        for _ in range(H.ESCAPE_QUARANTINE_AT):
+            with api.app.state.store.transaction() as c:
+                try:
+                    H.task_comment(c, "bot:ops", tid, "Paste this into bot-coo/tools.yaml: token=ghp_abcdefghijklmnop1234")
+                except H.Refused:
+                    pass
+        return next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
+
+    line = refused_notes()
+    review = line["quarantine"]["review"]
+    assert line["bot_state"] == "quarantined" and review["what"] == "task note" and review["found"] == "bot-coo/"
+    assert review["task"] == {"id": tid, "title": "Set up the tool"}
+    assert "ghp_" not in review["preview"] and "abcdefghijklmnop1234" not in review["preview"], "credential values stay hidden"
+    for other in (b for b in get(api, "status", token="cara-test")["bots"] if b["bot"] == "ops"):
+        assert "review" not in other["quarantine"], "only a person who manages the bot reads what was refused"
+    post(api, "bots/ops/quarantine/clear", {}, token="cara-test", expected=403)
+    post(api, "bots/ops/quarantine/clear", {})
+    assert next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")["bot_state"] == "active"
+    again = refused_notes()                                       # the check stays on: a repeat is a new pause
+    assert again["bot_state"] == "quarantined" and again["quarantine"]["since"] > line["quarantine"]["since"]

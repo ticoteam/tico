@@ -2882,13 +2882,13 @@ def create_app(settings=None):
                 auth.target(c, who, bot, need="read")
                 from .views import since_time
                 inputs = privacy.status_inputs(c, [bot])[bot]
-                return {"bot": bot, "status": status_line(c, who, bot, default, inputs),
+                return {"bot": bot, "status": status_line(c, who, bot, default, inputs, auth=auth),
                         "history": [privacy.status(c, who, r, **inputs) for r in H.status_history(c, bot, since=since_time(since))]}
             from .views import updating
             readable = auth.bot_accesses(c, who)
             statuses = [s for s in H.status_all(c) if readable.get(s["bot"], auth.FULL)["read"]]
             inputs = privacy.status_inputs(c, [s["bot"] for s in statuses])
-            return {"bots": [status_line(c, who, s["bot"], default, inputs[s["bot"]]) for s in statuses],
+            return {"bots": [status_line(c, who, s["bot"], default, inputs[s["bot"]], auth=auth) for s in statuses],
                     # Tico updating itself, shown beside the status line
                     "updating": updating(c)}
 
