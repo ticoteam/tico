@@ -7,12 +7,24 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.36] - 2026-10-09
+
 ### Changed
-- A human's Grok Bots sit in one framed **Grok Bot** cluster under them on the team chart, with Grok's own sections (Pinned first) nested inside, instead of chips beside their name. The sync now takes every Bot on the account and its section. Dots links the same way as a single bot under its human (`hub_external_sync` with `provider` `dots`). Any human may link their own bots, within a member's bot limit. What you write to a synced bot in Tico comes back to its routine in the next sync's `inbox`, so it can answer. `hub_grokbot_sync` keeps working. See docs/external-agent-sync.md.
-- A bot paused by the safety check says why in plain words (what it wrote and the secrets path or other bot's folder it named), shows the refused text with credential values masked and the task it was on, and has a one-click Resume bot beside the warning and under More, for every bot you manage, including bots on a computer.
-- A bot's Tools list is one line per tool (icon, name, key values, status) that opens to its details, and two or more GitHub repositories share one line ("GitHub · N repositories", access added up) that opens to a short line each.
-- On a phone, Tasks is in the bottom bar (Team, Search, Tasks, Updates, More). Phone task rows are denser: titles wrap to two lines, a task's note shows under its title, and a lone subtask's 0/1 is hidden. A task waiting on you shows Waiting once, not twice (desktop too).
-- A task's header has Done (for its owner) and Close buttons: one tap, no reason asked, and the task window closes back to where you were. Closing a request a bot made no longer asks why. The header's icons match (no stray lock, a drawn ✕), and the Private setting always reads Private, with a line saying who can see the task.
+- A human's Grok Bots sit in one framed **Grok Bot** cluster under them on the team chart, with Grok's own sections (Pinned first) nested inside, instead of chips beside their name. The sync now takes every Bot on the account and its section. Dots links the same way as a single bot under its human (`hub_external_sync` with `provider` `dots`). Any human may link their own bots, within a member's bot limit. What you write to a synced bot in Tico comes back to its routine in the next sync's `inbox`, so it can answer. `hub_grokbot_sync` keeps working. See docs/external-agent-sync.md. ([#311](https://github.com/ticoteam/tico/pull/311))
+- A bot paused by the safety check says why in plain words (what it wrote and the secrets path or other bot's folder it named), shows the refused text with credential values masked and the task it was on, and has a one-click Resume bot beside the warning and under More, for every bot you manage, including bots on a computer. ([#309](https://github.com/ticoteam/tico/pull/309))
+- A bot's Tools list is one line per tool (icon, name, key values, status) that opens to its details, and two or more GitHub repositories share one line ("GitHub · N repositories", access added up) that opens to a short line each. ([#301](https://github.com/ticoteam/tico/pull/301))
+- On a phone, Tasks is in the bottom bar (Team, Search, Tasks, Updates, More). Phone task rows are denser: titles wrap to two lines, a task's note shows under its title, and a lone subtask's 0/1 is hidden. A task waiting on you shows Waiting once, not twice (desktop too). ([#300](https://github.com/ticoteam/tico/pull/300))
+- A task's header has Done (for its owner) and Close buttons: one tap, no reason asked, and the task window closes back to where you were. Closing a request a bot made no longer asks why. The header's icons match (no stray lock, a drawn ✕), and the Private setting always reads Private, with a line saying who can see the task. ([#299](https://github.com/ticoteam/tico/pull/299))
+
+### Fixed
+- **Granola imports run again.** A long wait saved by the old code is capped at 24 hours, Sync now retries instead of being silently blocked, and the status shows its attempts. ([#310](https://github.com/ticoteam/tico/pull/310))
+- Computers still on 0.3.34 can add and attach task worktrees against a 0.3.35 or newer server again. ([#306](https://github.com/ticoteam/tico/pull/306))
+- Turning on a helper bot no longer places it on a computer that an inbox bot keeps to itself or that belongs to another member. ([#308](https://github.com/ticoteam/tico/pull/308), [#312](https://github.com/ticoteam/tico/pull/312))
+- On a phone, the Tasks toolbar fits on one line whatever the font. ([#303](https://github.com/ticoteam/tico/pull/303))
+- Phone screenshots of Docs work with the current reader. ([#302](https://github.com/ticoteam/tico/pull/302))
+
+### Fixed
+- **Runner hostname on a Cloudflare tunnel:** when `TICO_RUNNER_URL` names a host other than `TICO_DOMAIN`, the tunnel config the server writes routes that host too, for `/api/v2/...` and `/download/...` only, so it can be served without Access as docs/connect-an-agent.md says. No hand-written tunnel config or compose override is needed. See docs/install.md, "Cloudflare Tunnel".
 
 ### Fixed
 - Runners of several company environments on one checkout each move to the server's release. The first to update moved the shared checkout and restarted only itself; the others reported the new release while still running the old code until restarted by hand. A runner now reports the release it started on and restarts onto a checkout that is already there.
