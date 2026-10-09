@@ -689,12 +689,24 @@ class Onboarding:
         elif not row:
             self._define(c, who, slug, choice, card)
         if not c.execute("SELECT 1 FROM assignments WHERE bot=?", (slug,)).fetchone():
-            machine = (c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
-                       or c.execute("SELECT id AS runner_id FROM runners WHERE revoked_at IS NULL "
-                                    "ORDER BY created LIMIT 1").fetchone())
-            if machine:
-                self.execution.assign(c, who, slug, SimpleNamespace(runner_id=machine["runner_id"],
-                                                                    expected_generation=0))
+            # BotOps' computer first, then the oldest; one an inbox bot keeps to itself is skipped.
+            botops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
+            machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created")]
+            if botops and botops["runner_id"] in machines:
+                machines.remove(botops["runner_id"])
+                machines.insert(0, botops["runner_id"])
+            refusal = None
+            for runner_id in machines:
+                try:
+                    self.execution.assign(c, who, slug, SimpleNamespace(runner_id=runner_id, expected_generation=0))
+                    break
+                except Problem as problem:
+                    if problem.code not in ("inbox_isolation", "shared_runner"):
+                        raise
+                    refusal = refusal or problem
+            else:
+                if refusal:
+                    raise refusal
         placed = bool(c.execute("SELECT 1 FROM assignments WHERE bot=?", (slug,)).fetchone())
         if placed and H.bot(c, slug)["state"] != "active":
             self.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(
