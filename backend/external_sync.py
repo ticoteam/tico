@@ -163,24 +163,36 @@ def find(c, provider, person, ext_id):
 # A synced message may carry images. Each one is fetched once, stored like a chat attachment and shown inline; one
 # that cannot be fetched stays a link. Tico fetches only public https addresses, so a sync can
 # never make it read something on its own network.
-def public_host(host):
+def public_address(host):
+    """The address to connect to for `host`, when every address it resolves to is public; else None. The fetch
+    connects to this address and not to the name, so a second lookup (DNS rebinding) cannot send it elsewhere."""
     try:
         infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
-    except (OSError, UnicodeError):
-        return False
-    addresses = {ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos}
-    return bool(addresses) and all(a.is_global for a in addresses)
+        addresses = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return str(addresses[0]) if addresses and all(a.is_global for a in addresses) else None
+
+
+def public_host(host):
+    return public_address(host) is not None
 
 
 def fetch_image(url, transport=None):
-    """(bytes, content type) for an image at a public https address, or None."""
+    """(bytes, content type) for an image at a public https address, or None. `transport` stands in for the
+    network in tests; the address is checked and pinned either way."""
     for _ in range(IMAGE_REDIRECTS + 1):
         parts = urlsplit(url)
-        if parts.scheme != "https" or not parts.hostname or (transport is None and not public_host(parts.hostname)):
+        address = public_address(parts.hostname) if parts.scheme == "https" and parts.hostname else None
+        if not address:
             return None
         try:
+            # Connect to the checked address; TLS (SNI and the certificate check) and Host still use the name.
+            pinned = httpx.URL(url).copy_with(host=address)
+            host = parts.hostname + (f":{parts.port}" if parts.port else "")
             with httpx.Client(timeout=IMAGE_TIMEOUT, follow_redirects=False, transport=transport) as client:
-                with client.stream("GET", url) as response:
+                with client.stream("GET", pinned, headers={"Host": host},
+                                   extensions={"sni_hostname": parts.hostname}) as response:
                     if response.is_redirect:
                         url = urljoin(url, response.headers.get("location", ""))
                         continue
@@ -193,7 +205,7 @@ def fetch_image(url, transport=None):
                         if len(data) > IMAGE_BYTES:
                             return None
                     return (data, kind) if data else None
-        except httpx.HTTPError:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
             return None
     return None
 
