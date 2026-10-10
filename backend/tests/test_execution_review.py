@@ -1,6 +1,6 @@
 """Operator review preserves evidence and fences stale or unauthorized decisions."""
 import pytest
-from backend.tests.test_api import api, setup_attempt, post, get, expire, ready, claim, headers
+from backend.tests.test_api import api, assign, setup_attempt, post, get, expire, ready, claim, headers
 
 
 def interrupted(api):
@@ -309,3 +309,27 @@ def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(a
     # The stopped job is not retried, and the notice starts no run: the person's next message is what runs.
     follow_up = post(api, 'chat/ops', {'text': 'Do this instead.'})
     assert claim(api, machine)['job_id'] == follow_up['id']
+
+
+def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api)
+    limited_turn(api, machine, attempt)
+    assert claim(api, machine) is None
+    # A person's new message gets one try now; a bot's or the keeper's would not.
+    post(api, "chat/ops", {"text": "Renewed the plan, try again."})
+    retry = claim(api, machine)
+    assert retry, "a person's message after the limit lets the bot try once"
+    limited_turn(api, machine, retry)
+    assert claim(api, machine) is None, "the new limit is later than the message: the cooldown holds"
+    # Try now: only a person who manages the bot; it clears every bot limited on the same runtime and computer.
+    post(api, "bots/ops/limit/retry", {}, token="cara-test", expected=403)
+    assign(api, machine, "coo")
+    with api.app.state.store.transaction() as c:
+        H.status_set(c, H.KEEPER, "coo", state="limited", focus="fake usage limit")
+    assert post(api, "bots/ops/limit/retry", {})["cleared"] == 2
+    with api.app.state.store.read() as c:
+        assert H.status(c, "ops")["state"] == H.status(c, "coo")["state"] == "idle"
+        assert c.execute("SELECT count(*) FROM events WHERE action='limit.cleared'").fetchone()[0] == 2
+    assert claim(api, machine)
+    post(api, "bots/ops/limit/retry", {}, expected=409)
