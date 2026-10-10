@@ -295,6 +295,13 @@ class BotSetup(unittest.TestCase):
         self.client.github = APIError("github_not_connected", "GitHub is not connected.", 409, False)
         self.assertIn("skipped", self.remotecli.github_repository(self.client, "seo", self.workspace))
 
+    def test_creating_a_bot_the_server_has_not_registered_keeps_it_local(self):
+        from clients.tico import APIError
+        self.client.github = APIError("forbidden", "seo is not a bot being set up or running", 403, False)
+        made = self.run_command("bot", "create", "seo", "--template", "specialist")
+        self.assertIn("skipped", made["github"])
+        self.assertIn("hub bot repo-create seo --empty", made["github"]["note"])
+
 
 
 

@@ -741,6 +741,17 @@ def install_github_app(app, settings, store):
         scopes = [scope for scope, _ in found]
         return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
+    def fixer(c):
+        """Who can change the app's permissions on GitHub: the owner, else an Admin; "" when neither is on the
+        roster (Health still shows the alert)."""
+        auth = app.state.auth
+        if auth.owner_id(c):
+            return auth.owner_id(c)
+        for row in c.execute("SELECT id,email FROM humans ORDER BY rowid"):
+            if str(row["email"] or "").lower() in auth.bot_admins:
+                return row["id"]
+        return ""
+
     def status_view(refresh=False):
         from .repo_waits import fixes, waits
         row = service.row()
@@ -1012,8 +1023,7 @@ def install_github_app(app, settings, store):
             with store.transaction() as c:
                 bot = H.bot(c, slug)
                 if bot and bot.get("state") != "archived" and service.row(c):
-                    found = raise_item(c, slug, service.row(c), app.state.auth.owner_id(c),
-                                       "" if body.empty else template)
+                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
                     problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
                     problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
                                        "build and finishes on its own once either is done.")

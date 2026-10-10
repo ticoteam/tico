@@ -202,7 +202,7 @@ def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
     assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
 
 
-def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_granted(api, gh):
+def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_granted(api, gh, monkeypatch):
     """BotOps' create without Administration: a refusal naming a person, one owner task however often it is
     retried, a Health alert, and the repository made (and the task closed) once GitHub reports the permission."""
     from backend import repo_waits
@@ -211,6 +211,10 @@ def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_gra
     gh.missing = {"bot-newbie"}
     botops_turn(api)
     create = lambda: api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    # Nobody on the roster can change the app's permissions yet: no task, only the refusal and Health.
+    assert create().json()["error"]["needs_you_task"] is None
+    with api.app_state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),))
     first, again = create(), create()
     for refused in (first, again):
         error = refused.json()["error"]
@@ -233,10 +237,20 @@ def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_gra
 
     assert repo_waits.resume(api.app_state.github_app) == {}          # nothing changed on GitHub yet
     assert not gh.created_repositories
+    # Another waiting bot whose check fails unexpectedly does not hold this one up.
+    with api.app_state.store.transaction() as c:
+        every = repo_waits.waits(c)
+        repo_waits._save(c, repo_waits.KEY, {**every, "cpo": {"repository": "Acme/bot-cpo", "task_id": None}})
+    service, mint = api.app_state.github_app, api.app_state.github_app.mint
+    def flaky(repos, *a, **k):
+        if repos == ["Acme/bot-cpo"]:
+            raise httpx.ConnectError("synthetic")
+        return mint(repos, *a, **k)
+    monkeypatch.setattr(service, "mint", flaky)
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
     checked = api.post("/api/v2/github/app/check-permissions", json={}, headers=auth())
     assert checked.status_code == 200 and checked.json()["administration"] is True, checked.text
-    assert list(checked.json()["resumed"]) == ["newbie"] and checked.json()["waiting"] == []
+    assert list(checked.json()["resumed"]) == ["newbie"] and [w["bot"] for w in checked.json()["waiting"]] == ["cpo"]
     assert gh.created_repositories == {"Acme/bot-newbie"}
     with api.app_state.store.read() as c:
         assert c.execute("SELECT status FROM tasks WHERE id=?", (tasks[0]["id"],)).fetchone()[0] == "closed"

@@ -681,6 +681,9 @@ def github_repository(client, slug, path):
     except APIError as exc:
         if exc.code in ("github_not_connected", "rehearsal"):
             return {"skipped": exc.detail}
+        if exc.code in ("forbidden", "not_found"):
+            # A bot the server has not registered stays on this computer, as before.
+            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
             return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":

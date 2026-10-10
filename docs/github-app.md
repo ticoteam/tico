@@ -13,7 +13,7 @@ changes; bots keep using whatever git access their computer already has.
 | Pull requests | write | a bot opens pull requests for its work |
 | Issues | write | a bot files and comments on issues |
 | Metadata | read | required by GitHub for every app |
-| Administration | write, on by default | BotOps creates each new bot's repository, and deletes repositories the Owner requests; untick **Let BotOps create bot repositories** to leave it out, and a person then creates every new bot's repository |
+| Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
 The app is private, receives installation change webhooks to refresh the repository list when its webhook is active, and requests no
 workflow permission, so a bot cannot change `.github/workflows` files. Add Workflows: write on the

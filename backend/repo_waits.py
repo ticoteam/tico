@@ -97,14 +97,15 @@ def _body(found):
 
 
 def raise_item(c, bot, row, owner_id, template=""):
-    """One Needs-you task for the owner per waiting bot. A repeated attempt finds the open one and returns it."""
+    """One Needs-you task per waiting bot, for `owner_id` (the owner, else an Admin). A repeated attempt finds the
+    open one and returns it. With nobody who can change the app, no task is filed and Health's alert stands."""
     found = fixes(c, row, bot)
     every = waits(c)
     current = every.get(bot) or {}
     task = H.task(c, current.get("task_id") or "") if current.get("task_id") else None
     if task and task["status"] in H.ACTIVE_STATUSES:
         return {**found, "task_id": task["id"], "created": False}
-    owner = owner_id or H.default_human(c)
+    owner = owner_id
     task_id = None
     if owner:
         try:
@@ -150,38 +151,48 @@ def resume(service):
     with _lock:
         allowed = service.can_create_repos(refresh=True)
         for bot, wait in pending.items():
-            with service.store.read() as c:
-                state = (H.bot(c, bot) or {}).get("state")
-            if state in (None, "archived"):
-                _finish(service.store, bot, wait, "The bot was archived; nothing was created.")
-                done[bot] = "archived"
-                continue
-            repository = wait.get("repository") or f"{row['org']}/bot-{bot}"
-            how = None
             try:
-                service.mint([repository], {"metadata": "read"}, diagnose=False)
-                how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."
-            except (Problem, ValueError, KeyError):
-                pass
-            if how is None and allowed:
-                try:
-                    # Empty for a bot built on a computer (its runner publishes the history); from the template
-                    # when that is what was asked for.
-                    template = wait.get("template") or ""
-                    service.create_repo(bot, template, empty=not template)
-                    how = f"BotOps created {repository}; the bot's computer publishes its history on its next run."
-                    with service.store.transaction() as c:
-                        H.event(c, H.KEEPER, "github.repo_created", repository,
-                                {"template": template, "resumed": True} if template else {"empty": True, "resumed": True})
-                except Problem as problem:
-                    if problem.code == "github_repo_exists":
-                        how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."
-                    else:
-                        log.warning("Creating %s for a waiting bot failed: %s", repository, problem.code)
+                how = _resume_one(service, row, allowed, bot, wait)
+            except Exception as exc:
+                # One bot's failure (GitHub unreachable, a bad record) never holds up the others.
+                log.warning("Checking %s's waiting repository failed: %s", bot, type(exc).__name__)
+                continue
             if how:
-                _finish(service.store, bot, wait, how)
                 done[bot] = how
     return done
+
+
+def _resume_one(service, row, allowed, bot, wait):
+    with service.store.read() as c:
+        state = (H.bot(c, bot) or {}).get("state")
+    if state in (None, "archived"):
+        _finish(service.store, bot, wait, "The bot was archived; nothing was created.")
+        return "archived"
+    repository = wait.get("repository") or f"{row['org']}/bot-{bot}"
+    how = None
+    try:
+        service.mint([repository], {"metadata": "read"}, diagnose=False)
+        how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."
+    except (Problem, ValueError, KeyError):
+        pass
+    if how is None and allowed:
+        try:
+            # Empty for a bot built on a computer (its runner publishes the history); from the template
+            # when that is what was asked for.
+            template = wait.get("template") or ""
+            service.create_repo(bot, template, empty=not template)
+            how = f"BotOps created {repository}; the bot's computer publishes its history on its next run."
+            with service.store.transaction() as c:
+                H.event(c, H.KEEPER, "github.repo_created", repository,
+                        {"template": template, "resumed": True} if template else {"empty": True, "resumed": True})
+        except Problem as problem:
+            if problem.code == "github_repo_exists":
+                how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."
+            else:
+                log.warning("Creating %s for a waiting bot failed: %s", repository, problem.code)
+    if how:
+        _finish(service.store, bot, wait, how)
+    return how
 
 
 def tick(service, force=False):
