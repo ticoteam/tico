@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Muse (Meta) links like Dots: `hub_external_sync` with `provider` `muse` puts your one Muse under you on the team chart, with its history, and hands it what you write to it in Tico. See docs/external-agent-sync.md#muse.
+
 ### Changed
 - **Mail sending is switched on in Tico by a person, not by bot.yaml.** Whether a bot sends mail without a per-message approval, and its forward addresses, is now held on the server and set only by the owner or a human who manages the bot: Settings > Bots > the bot > Edit > Mail sending, `hub bot mail <slug>`, or `POST /api/v2/bots/<slug>/mail-settings`. A bot, BotOps (in its own runs or acting for a person) and the Assistant are refused. `outbound_send` and `forward_to` in bot.yaml are only a request: anything that can push to a bot's repository writes them, so on their own they turn nothing on, and an address only bot.yaml lists needs an approval for each message. Each computer reports what its bots' bot.yaml asks, and Health shows "<bot> asks to send mail without approval; a person must turn this on" until a person decides. BotOps' template no longer edits either key. See docs/mail.md, "Turning sending on".
 - **Upgrade step: after upgrading, an owner or manager confirms mail sending per bot.** Until then a bot that sent with `outbound_send: true` writes drafts and its refusal names the setting. Health lists each bot that asks; `hub bot mail <slug> --from-bot-yaml` (or the Mail sending row) turns on exactly what its bot.yaml asks.

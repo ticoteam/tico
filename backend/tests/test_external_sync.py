@@ -232,3 +232,15 @@ def test_a_synced_bot_joins_its_humans_group_until_moved(api):
     api.patch(f"/api/v2/groups/{gid}", json={"remove": {"bots": ["grok-designer"]}}, headers=headers())
     sync(api, designer(messages=[]))
     assert team() != gid                      # moved out by a person: a later sync leaves it there
+
+
+def test_muse_links_as_one_bot_beside_dots(api):
+    post(api, "external/sync", {"provider": "dots", "bots": [{"name": "Dots"}]}, token="cara-test")
+    out = post(api, "external/sync", {"provider": "muse", "bots": [{"name": "Muse", "messages": [
+        {"role": "bot", "text": "Drafted three Instagram captions.", "at": "2026-10-10T08:00:00Z"}]}]}, token="cara-test")
+    assert out["bots"][0]["bot"] == "muse" and out["bots"][0]["messages_added"] == 1
+    again = post(api, "external/sync", {"provider": "muse", "bots": [{"name": "Muse"}]}, token="cara-test")
+    assert again["bots"][0]["bot"] == "muse" and not again["bots"][0]["created"]      # one Muse per person
+    rows = {b["slug"]: b for b in get(api, "bots") if b["slug"] in ("dots", "muse")}
+    assert rows["muse"]["harness"] == "muse" and rows["muse"]["agent"]["label"] == "Muse"
+    assert rows["muse"]["reports_to"] == rows["dots"]["reports_to"] == "human:cara"

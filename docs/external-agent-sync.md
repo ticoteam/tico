@@ -1,4 +1,4 @@
-# External agent sync: Grok Bot and Dots
+# External agent sync: Grok Bot, Dots and Muse
 
 Bots a human runs on another platform, shown on the team chart under that human, with their history and
 instructions kept in Tico in case the account goes away:
@@ -7,14 +7,15 @@ instructions kept in Tico in case the account goes away:
 |---|---|---|
 | **Grok Bot** (grok.com/bot) | xAI's cloud agents, any number on one account | A **Grok Bot** cluster under the human, with Grok's own sections (Pinned, and any section made there) nested inside |
 | **Dots** | OpenAI's always-on agent, one per account | A single **Dots** row under the human |
+| **Muse** | Meta's always-on agent, one per account | A single **Muse** row under the human |
 
-Neither platform has an API, export or webhook for these bots. The agent itself can call Tico's MCP tools as its
+None of these platforms has an API, export or webhook for these bots. The agent itself can call Tico's MCP tools as its
 human on a routine, so the sync runs on the platform, with the human's own sign-in, and Tico only receives
 (`backend/external_sync.py`).
 
 ## What Tico does with a sync
 
-- A bot it has not seen becomes a bot with the `grokbot` or `dots` harness, **under the human who synced it**
+- A bot it has not seen becomes a bot with the `grokbot`, `dots` or `muse` harness, **under the human who synced it**
   (`reports_to: human:<them>`), active, with them as owner. Move it anywhere on the team chart afterwards and it
   becomes an ordinary row there; a later sync never moves it back. It also joins its human's group (a bot reporting to a
   human does not inherit their group on its own), until someone puts it in another group or none.
@@ -84,9 +85,16 @@ routine to run daily:
 
 Dots needs no `id`: a human has one Dots, and a later sync updates the same bot.
 
+## Muse
+
+Muse makes connectors when you ask it in a chat. Ask it to add a custom connector for Tico's MCP server URL and sign in
+to Tico when it asks ([OAuth sign-in](connect-an-agent.md#oauth-sign-in)); if it wants a header instead, use a token
+from [Connect an external agent](connect-an-agent.md). Then give it the Dots routine above with `provider` `muse`. Like
+Dots, a human has one Muse, and it needs no `id`.
+
 ## Recovering a bot
 
-The bot's Tico chat holds its history and `config_json.grok.instructions` (or `config_json.dots.instructions`)
+The bot's Tico chat holds its history and `config_json.grok.instructions` (or `config_json.dots` / `config_json.muse`)
 holds its instructions. To bring a Grok Bot back, paste those instructions into a new Grok Bot (or share the old
 one to another account, which copies its instructions but not its history), or move the Tico bot to the `grok`
 runtime on a registered computer with the same instructions.

@@ -21,9 +21,10 @@ HARNESS_CATALOG = (
     {"id": "openclaw", "label": "openclaw", "runtime": "openclaw", "external": True},
     # Bots on their maker's platform, synced in by the agent itself with its person's sign-in;
     # they never hold a credential of their own (backend/external_sync.py, docs/external-agent-sync.md).
-    # A Grok Bot is one of many on a Grok account; Dots is the one always-on agent on a ChatGPT account.
+    # A Grok Bot is one of many on a Grok account; Dots (ChatGPT) and Muse (Meta) are one always-on agent each.
     {"id": "grokbot", "label": "grok bot", "runtime": "grokbot", "external": True},
     {"id": "dots", "label": "dots", "runtime": "dots", "external": True},
+    {"id": "muse", "label": "muse", "runtime": "muse", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
 EXTERNAL_HARNESSES = tuple(row["id"] for row in HARNESS_CATALOG if row.get("external"))

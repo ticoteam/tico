@@ -139,6 +139,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "dots-own", "label": "dots' own model", "runtime": "dots", "provider": "",
      "efforts": ("as-configured",),
      "default_effort": "as-configured"},
+    {"id": "muse-own", "label": "muse's own model", "runtime": "muse", "provider": "",
+     "efforts": ("as-configured",),
+     "default_effort": "as-configured"},
 ))
 MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 

@@ -2472,7 +2472,7 @@ _SYNCED_MESSAGE = {"type": "object", "additionalProperties": False, "required": 
                    "url": _s("The image's https address"), "name": _s("A file name, e.g. poster.png"),
                    "content_base64": _s("The image itself, base64")}}}}}
 _SYNCED_BOT = {"type": "object", "additionalProperties": False, "required": ["name"], "properties": {
-    "id": _s("The bot's id on its platform: for a Grok Bot the uuid in grok.com/bot/<id>. Dots may leave it out"),
+    "id": _s("The bot's id on its platform: for a Grok Bot the uuid in grok.com/bot/<id>. Dots and Muse may leave it out"),
     "grok_id": _s("Older name for id, for a Grok Bot"),
     "name": _s("Its name there"),
     "description": _s("Its short description"),
@@ -2506,8 +2506,8 @@ def _sync_with_inbox(api, body, key):
 
 
 @tool("hub_external_sync", "Sync your (a person's) bots on another platform into Tico: your Grok Bots "
-      "(provider grokbot, every Bot on the account) or your Dots (provider dots, one bot). " + _SYNC_DOC + _INBOX_DOC,
-      {"provider": _s("grokbot or dots", enum=["grokbot", "dots"]),
+      "(provider grokbot, every Bot on the account), your Dots (provider dots) or your Muse (provider muse), one bot each. " + _SYNC_DOC + _INBOX_DOC,
+      {"provider": _s("grokbot, dots or muse", enum=["grokbot", "dots", "muse"]),
        "bots": {"type": "array", "minItems": 1, "maxItems": 50, "items": _SYNCED_BOT},
        "source": _s("Which of your bots ran this sync")},
       required=("provider", "bots"), writes=True)
