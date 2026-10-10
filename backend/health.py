@@ -994,7 +994,7 @@ def note_github_token(store, error=None, action=""):
         if error:
             if current and current["last_error"] == error and current["detail_json"] == detail:
                 return
-        elif not current or not current["last_error"] and current["detail_json"] in ("{}", ""):
+        elif not current or not current["last_error"] and (current["detail_json"] or "{}") in ("{}", ""):
             return
     with store.transaction() as c:
         if error:
