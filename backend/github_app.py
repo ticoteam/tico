@@ -123,6 +123,9 @@ def validate_product_repo_name(name):
 KEY_FILE = "github-app.key"
 MISSING_KEY = ("The GitHub App key file (github-app.key) is missing from the data volume: restore it from the backup "
                "made with this database (docs/install.md, Backups and restore)")
+LOST_KEY = ("The key for the saved GitHub App and directory sync secrets (github-app.key) is missing from the data volume, "
+            "so they cannot be opened. Restore it from the backup (credential-key/github-app.key) and restart; or, if no "
+            "backup has it, send again with replace_lost_key set to drop those secrets and enter them again.")
 
 
 class GitHubApp:
@@ -178,11 +181,34 @@ class GitHubApp:
             if not create:
                 return None
             if self._sealed_elsewhere(c, replacing):
-                raise Problem("github_key_missing", MISSING_KEY, 409)
+                raise Problem("github_key_missing", LOST_KEY, 409)
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
         return path.read_bytes()
+
+    def key_lost(self, c):
+        """No local key file, and secrets sealed with the one that was there: nothing here can open them again."""
+        if self.settings.credential_kms_key and self.vault is not None:
+            return False
+        return not self.key_file().exists() and self._sealed_elsewhere(c, "")
+
+    def replace_lost_key(self, c, actor):
+        """The owner's confirmed way out when no copy of github-app.key exists anywhere: drop what only that key opens
+        (the GitHub App row and every directory source's credentials), so the next save makes a new key. Does nothing
+        while the key is there. A copy the backup held is kept there as credential-key/github-app.key.replaced-<time>."""
+        if not self.key_lost(c):
+            return False
+        app = self.row(c)
+        sources = [r["source"] for r in c.execute("SELECT source FROM directory_credentials")] if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone() else []
+        if app:
+            self.forget(c)
+        if sources:
+            c.execute("DELETE FROM directory_credentials")
+        H.event(c, actor, "github.lost_key_replaced", app["slug"] if app else "",
+                {"github_app": bool(app), "directory_sources": sources})
+        return True
 
     def secret_key(self, c, create=True, replacing=""):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
@@ -834,12 +860,20 @@ def install_github_app(app, settings, store):
         return view
 
     @app.get("/api/v2/github/app/manifest")
-    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
+    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False,
+                      replace_lost_key: bool = False):
         who = owner(request)
         if not ORG.match(org):
             raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
         if service.row():
             raise Problem("github_connected", "GitHub is already connected; disconnect it first to start over", 409)
+        # Before GitHub makes an app: one it could never be saved for (the key that seals other secrets is lost) is refused
+        # here, unless the owner confirms dropping what that key sealed.
+        with store.transaction() as c:
+            if service.key_lost(c):
+                if not replace_lost_key:
+                    raise Problem("github_key_missing", LOST_KEY, 409)
+                service.replace_lost_key(c, who.actor)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))

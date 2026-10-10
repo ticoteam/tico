@@ -725,7 +725,10 @@ by itself on first start, or from a backup made before a file was copied, run `r
 `credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
 user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
 file to put back. A backup made before a key was copied cannot bring it back: copy it from the old server's volume if it
-still exists, else reconnect GitHub, save the directory sync credentials and paste the Slack tokens again. With
+still exists. Else paste the Slack tokens again, and disconnect and reconnect GitHub or save the directory sync
+credentials again: Tico asks you to confirm replacing the lost key, then drops the GitHub App and every directory source's
+credentials sealed with it (recorded as `github.lost_key_replaced`), and you enter them again (`replace_lost_key` in the
+API). With
 `TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
 `github-app.key` or `slack.key` from before KMS was set needs keeping.
 

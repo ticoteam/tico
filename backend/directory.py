@@ -242,6 +242,8 @@ class DirectoryUpdate(Contract):
     mass_leave_limit: int = Field(default=DEFAULT_LIMIT, ge=0, le=10000)
     expected_revision: int = 0
     credentials: DirectoryCredentials | None = None
+    # Confirmed by the owner when github-app.key is lost with no copy: drop what it sealed, then save (backend/github_app.py).
+    replace_lost_key: bool = False
 
 
 class SyncRequest(Contract):
@@ -323,6 +325,8 @@ class Directory:
             raise Problem("source", "Choose Google Workspace, Microsoft Entra ID, SCIM, or none", 422)
         if body.credentials is not None and body.source in ("google", "entra"):
             blob, hint = _credential_blob(body.source, body.credentials)
+            if body.replace_lost_key:
+                self.github_app.replace_lost_key(c, actor)
             self.put_credentials(c, actor, body.source, blob, hint)
         elif body.source in ("google", "entra") and not self.hint(c, body.source):
             raise Problem("credentials", "Add this source's credentials first", 422)

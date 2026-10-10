@@ -605,8 +605,12 @@ def _sealed_secrets(c, settings, github):
                     "github-app.key is missing." if key is None else
                     "they were sealed with another key (github-app.key, from before TICO_CREDENTIAL_KMS_KEY was set?)." if kms else
                     "github-app.key does not open them."))
-                fixes.append(SEALED_FIX.format(file="github-app.key", redo="connect GitHub again and save the directory "
-                                               "sync credentials again (Settings)"))
+                fixes.append(SEALED_FIX.format(file="github-app.key", redo="disconnect GitHub and connect it again, or save "
+                                               "the directory sync credentials again, and confirm replacing the lost key: "
+                                               "Tico drops the GitHub App and every directory source's credentials sealed "
+                                               "with it, and you enter them again" if key is None else
+                                               "disconnect GitHub and connect it again, and save the directory sync "
+                                               "credentials again"))
         slack = c.execute("SELECT * FROM slack_credentials WHERE id='app'").fetchone() if table("slack_credentials") else None
         if slack:
             # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
