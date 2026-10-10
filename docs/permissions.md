@@ -116,12 +116,14 @@ is the same humans who always have full access to it. A bot owner can:
 - set its See, Read and Write access;
 - pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Goal Manager);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
-- give it a stored credential they hold themselves, and no one else's.
+- give it a stored credential they hold themselves or stored themselves, and no one else's.
 
 A member cannot change a bot that is not theirs, through Settings, the API or BotOps.
 
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
-Credential administrators store, delete and grant credentials. A human who holds a credential may also delegate it to a bot
+Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
+bots they own or manage (`Auth.bot_manager`), directly or through BotOps, and sees its metadata (never its value unless it is
+also granted to them); another person's bot stays an administrator's call. A human who holds a credential may also delegate it to a bot
 they own or run, directly or through BotOps. Revoking the human's grant removes the delegated bot access; changing the bot owner
 invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
@@ -217,7 +219,7 @@ The commands (with MCP tools of the same names):
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
 | `hub computer list`, `hub health check` | the computers a bot may go on and what runs on each; what is wrong with the bots, most urgent first, each with its fix |
 | `hub credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
-| `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator or a holder delegating to a bot they own or run; revoke the delegation to take it away |
+| `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
 | `hub credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
 | `hub support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
 | `hub api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |

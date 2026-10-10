@@ -2281,11 +2281,12 @@ def _bot_of_credentials(listing, ref):
     return str(ref or "").strip()
 
 
-@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator): from then "
+@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator, or the "
+      "person who stored it, for a bot they own or manage): from then "
       "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
       "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
-      "hub_credential_import it first. Then run the bot's own read-only check of the connection. A member who is not a "
-      "credential administrator is refused, with who to ask.",
+      "hub_credential_import it first. Then run the bot's own read-only check of the connection. Anyone else is "
+      "refused, with who to ask.",
       {"credential": _s("The credential's name (or its variable's name)"), "to_bot": _s("The bot's slug or name")},
       required=("credential", "to_bot"), writes=True)
 def credential_grant(api, args):
@@ -2297,7 +2298,8 @@ def credential_grant(api, args):
     return {"credential": row.get("name"), "env": row.get("env"), "bot": bot, **{k: v for k, v in given.items() if k != "subject"}}
 
 
-@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator). "
+@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator, "
+      "or the person who stored it, for a bot they own or manage). "
       "Its next run no longer has it. Safe to repeat.",
       {"credential": _s("The credential's name (or its variable's name)"), "from_bot": _s("The bot's slug or name")},
       required=("credential", "from_bot"), writes=True)

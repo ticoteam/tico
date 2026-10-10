@@ -9,6 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel".
+- **Share a credential you added with your own bots.** The person who stored a credential can give it to, and take it from, bots they own or manage, in Tools > Credentials or through BotOps, without waiting on a credential administrator. They see its name, variable and grants, never its value unless it is also granted to them. Another person's bot, a person, or every computer stays an administrator's call, refused with who to ask. See docs/credential-vault.md.
 - **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server, the Slack gateway and `restore` ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity".
 
 ### Fixed
