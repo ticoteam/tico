@@ -300,6 +300,7 @@ def sync_credential_key(path, mirror, state, copy=CREDENTIAL_KEY_COPY):
         try:
             with os.fdopen(fd, "wb") as out:
                 out.write(data)
+            _keep_replaced_copy(mirror, copy, digest)
             mirror.put(copy, temporary)
         finally:
             os.unlink(temporary)
@@ -307,6 +308,22 @@ def sync_credential_key(path, mirror, state, copy=CREDENTIAL_KEY_COPY):
         state["copied_at"] = _now()
     # The stamp read before the file: if it changed while it was read, it no longer matches and is copied again.
     return {"copied_at": state["copied_at"], "stamp": stamp}
+
+
+def _keep_replaced_copy(mirror, copy, digest):
+    """A different key already in the backup may be the only one that opens what the database holds (a key file that did
+    not come back with a restore, and a new one made since). It is kept as <copy>.replaced-<UTC time>, never overwritten.
+    A key is never rotated in place, so this happens only after such a loss."""
+    if not mirror.exists(copy):
+        return
+    fd, previous = tempfile.mkstemp(prefix=".key-")    # mode 0600
+    os.close(fd)
+    try:
+        mirror.get(copy, previous)
+        if hashlib.sha256(Path(previous).read_bytes()).digest() != digest:
+            mirror.put(copy + ".replaced-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"), previous)
+    finally:
+        os.unlink(previous)
 
 
 def restore_credential_key(mirror, path, replace=False, copy=CREDENTIAL_KEY_COPY):

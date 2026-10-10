@@ -155,25 +155,38 @@ class GitHubApp:
         without it cannot open the app's secrets or the directory sync credentials."""
         return Path(self.settings.db_path).parent / KEY_FILE
 
-    def _key(self, c, create=True):
+    def _sealed_elsewhere(self, c, replacing):
+        """Whether anything but what this save replaces is sealed with the local key: a GitHub App row, or directory sync
+        credentials of another source. `replacing` is "app" or "directory:<source>"."""
+        if replacing != "app" and c.execute("SELECT 1 FROM github_app WHERE id='app'").fetchone():
+            return True
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone():
+            return False
+        source = replacing.split(":", 1)[1] if replacing.startswith("directory:") else None
+        return bool(c.execute("SELECT 1 FROM directory_credentials WHERE source IS NOT ?", (source,)).fetchone())
+
+    def _key(self, c, create=True, replacing="app"):
         """The vault's KMS-wrapped key when the deployment has one; otherwise a local key file kept
         beside the database, so a copy of the database alone does not carry the app's private key.
         Only a save makes the file: a read with it missing returns None, so a restore that lost it is not
-        papered over by a new key that opens nothing."""
+        papered over by a new key that opens nothing. A save makes one only when nothing else is sealed with the
+        missing key: a new key would leave that unreadable, and the backup copy of the old key is what opens it."""
         if self.settings.credential_kms_key and self.vault is not None:
             return self.vault.cipher.key(c)
         path = self.key_file()
         if not path.exists():
             if not create:
                 return None
+            if self._sealed_elsewhere(c, replacing):
+                raise Problem("github_key_missing", MISSING_KEY, 409)
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
         return path.read_bytes()
 
-    def secret_key(self, c, create=True):
+    def secret_key(self, c, create=True, replacing=""):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
-        return self._key(c, create)
+        return self._key(c, create, replacing)
 
     def save(self, c, actor, org, administration, conversion):
         secrets_blob = json.dumps({"pem": conversion["pem"], "webhook_secret": conversion.get("webhook_secret") or "",

@@ -41,7 +41,8 @@ def key_file(settings):
 def _key(settings, vault=None, c=None, create=True):
     """The vault's KMS-wrapped key when the deployment has one; otherwise a key file beside the
     database, so a copy of the database alone does not carry the tokens. Only a save makes the file:
-    a read with it missing returns None rather than a new key that opens nothing."""
+    a read with it missing returns None rather than a new key that opens nothing. A save may make one: it replaces
+    the only row sealed with slack.key, and the backup keeps the old key's copy aside (backend/replication.py)."""
     if settings.credential_kms_key and vault is not None and c is not None:
         return vault.cipher.key(c)
     path = key_file(settings)

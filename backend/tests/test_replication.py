@@ -386,3 +386,39 @@ def test_the_other_key_files_go_to_the_bucket_beside_the_credential_key(tmp_path
     (tmp_path / "fresh" / "slack.key").unlink()
     assert replication.restore_key_files(env, mirror=mirror) == 1         # said, and the other files still restored
     assert not (tmp_path / "fresh" / "slack.key").exists()
+
+
+def test_a_new_key_never_overwrites_the_backups_only_good_copy(tmp_path):
+    """github-app.key did not come back with a restore and a save made a new one: the copy in the backup that opens the
+    stored GitHub App is kept aside, by a fresh backup process too. Saves that would orphan sealed rows are refused."""
+    from backend.store import Problem
+    live = tmp_path / "data"
+    live.mkdir()
+    seal_secrets(live)
+    mirror = replication.LocalMirror(tmp_path / "backups")
+    for name in replication.KEY_FILES:
+        replication.sync_credential_key(live / name, mirror, {}, replication.key_copy(name))
+    good = {name: (live / name).read_bytes() for name in replication.KEY_FILES}
+    (live / "github-app.key").unlink()
+    # Saving directory credentials now would seal them with a new key while the GitHub App row needs the old one.
+    from backend.config import Settings
+    from backend.directory import Directory
+    from backend.github_app import GitHubApp
+    from backend.store import Store
+    settings = Settings(db_path=live / "hub.sqlite")
+    store = Store(settings)
+    app = GitHubApp(settings, store)
+    directory = Directory(settings, store, app)
+    with pytest.raises(Problem, match="github-app.key"), store.transaction() as c:
+        directory.put_credentials(c, "human:ana", "google", {"admin_email": "a@acme.example"}, "hint")
+    assert not (live / "github-app.key").exists()
+    # The new key is made anyway (by hand, or once the person reconnects): the backup keeps the good copy aside.
+    for name in replication.KEY_FILES:
+        (live / name).write_bytes(b"\x07" * 32)
+        replication.sync_credential_key(live / name, mirror, {}, replication.key_copy(name))   # a fresh process
+        (aside,) = (tmp_path / "backups" / "credential-key").glob(name + ".replaced-*")
+        assert aside.read_bytes() == good[name]
+        assert (tmp_path / "backups" / "credential-key" / name).read_bytes() == b"\x07" * 32
+    # The same key again (another fresh process) keeps nothing more aside.
+    replication.sync_credential_key(live / "slack.key", mirror, {}, replication.key_copy("slack.key"))
+    assert len(list((tmp_path / "backups" / "credential-key").glob("slack.key.replaced-*"))) == 1

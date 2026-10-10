@@ -282,7 +282,7 @@ class Directory:
     # -- credentials, encrypted like the GitHub App key (same key, its own context string)
     def put_credentials(self, c, actor, source, blob, hint):
         nonce = os.urandom(12)
-        sealed = AESGCM(self.github_app.secret_key(c)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
+        sealed = AESGCM(self.github_app.secret_key(c, replacing="directory:" + source)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
         c.execute("INSERT INTO directory_credentials VALUES(?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET "
                   "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created=excluded.created, "
                   "created_by=excluded.created_by", (source, sealed, nonce, hint, H.now(), actor))

@@ -690,7 +690,9 @@ database stores. A database restored without them cannot open those secrets:
 | `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` |
 
 The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
-`tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. They are stored as the
+`tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
+opens a restored database, when a new key was made after the file was lost) is kept as `credential-key/<file>.replaced-<time>`,
+never overwritten. They are stored as the
 bucket stores everything: encrypted at rest by the bucket (S3 and R2 encrypt every object by default), which also means
 anyone who can read the bucket can read the keys and the database together, so keep the bucket private and its access
 key to that bucket alone. The keys are never logged or sent anywhere else, and Health warns while one exists and has not
