@@ -178,7 +178,11 @@ rights, and those make it a manager of every bot that is not built in: it change
 (`bot_contact`) and Instructions, and its GitHub token writes every bot's repository. It never changes people or owners, never
 sees a Credential value, never turns on sending to outsiders and never archives a bot with its own rights. A run a person or a
 bot asked for keeps that requester's rights, so BotOps never lends this to another bot. The team rule **BotOps manages every
-bot** turns it off.
+bot** turns it off. In a run carrying a person's rights, the token writes the repositories of the bots that person manages
+(owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no BotOps
+run in progress, only BotOps' own. A token is reused only for the exact same repositories, so a wider one never reaches a
+narrower run.
+
 If a friendly tool refuses for permissions, BotOps retries the same action with `hub_api` before handing work back. Both use the same rights.
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update

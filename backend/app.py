@@ -3168,6 +3168,21 @@ def create_app(settings=None):
             # The ordinary route checks the requester's rights, including its own outbound send switch.
             return None, acting
 
+    def botops_run_identity(c, attempt_id):
+        """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
+        it acts for, BotOps' own, or None when its start lends nobody's (someone else's comment)."""
+        import contextvars
+        row = c.execute("SELECT runner_id FROM attempts WHERE id=? AND bot=?", (attempt_id, BOTOPS)).fetchone()
+        if not row:
+            return None
+        own = Identity("bot:" + BOTOPS, "bot", runner_id=row["runner_id"], attempt_id=attempt_id)
+        try:
+            # Its own context: resolving the run here records nothing as delegated.
+            return contextvars.copy_context().run(delegated_identity, c, own, "turn")
+        except Problem:
+            return None
+    app.state.botops_run_identity = botops_run_identity
+
     def propose_card(c, acting, method, path, body, summary):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
         and the answer BotOps reports back instead of asking them to go to Settings."""

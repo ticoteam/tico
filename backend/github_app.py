@@ -698,17 +698,37 @@ def install_github_app(app, settings, store):
                     raise Problem("forbidden", "Only the owner, or someone who manages this bot, sets its repositories", 403)
         return who
 
-    def botops_manages_repos(c, who):
-        """Whether BotOps' token also writes every other bot's repository (`Auth.botops_manages`): in its own run, and,
-        for its computer's git helper, only while every BotOps run in progress is its own."""
+    def run_scope(c, attempt_id):
+        """The other bots whose repositories one BotOps run writes: every bot but the built-in ones in its own run
+        (team rule `botops_manages_bots`), the bots the person manages in a run carrying their rights, none in a run a
+        bot asked for or one that lends nobody's rights."""
         from . import botops_act, team_rules
-        if not team_rules.load(c)["botops_manages_bots"]:
-            return False
+        auth = app.state.auth
+        acting = app.state.botops_run_identity(c, attempt_id)
+        if acting is None:
+            return set()
+        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                                        "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
+        if acting.actor == "bot:" + BOTOPS:
+            if team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, attempt_id):
+                return {bot for bot in bots if not auth.system_bot(bot)}
+            return set()
+        if H.is_human(acting.actor):
+            return {bot for bot in bots if auth.bot_manager(c, acting, bot)}
+        return set()
+
+    def botops_extra_repos(c, who):
+        """The bots whose repositories BotOps' token also writes. A turn asks for its own run; the computer's git helper
+        gets only what every BotOps run in progress on it may have, and nothing extra when none is."""
         if who.role == "bot":
-            return who.actor == "bot:" + BOTOPS and not who.via and botops_act.own_run(c, who.attempt_id)
-        live = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
-                                           (BOTOPS,))]
-        return who.role == "runner" and all(botops_act.own_run(c, attempt) for attempt in live)
+            attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
+        elif who.role == "runner":
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+                                                   "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
+        else:
+            attempts = []
+        scopes = [run_scope(c, attempt) for attempt in attempts]
+        return set.intersection(*scopes) if scopes else set()
 
     @app.get("/api/v2/github/app")
     def status(request: Request):
@@ -815,13 +835,14 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
-            if body.bot == BOTOPS and botops_manages_repos(c, who):
+            extra = botops_extra_repos(c, who) if body.bot == BOTOPS else set()
+            if extra:
+                # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
                 have = {g['full_name'].lower() for g in grants}
-                for other in c.execute("SELECT bc.bot,bc.repo FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                                       "WHERE b.state<>'archived' ORDER BY bc.bot"):
+                for other in c.execute("SELECT bot,repo FROM bot_config ORDER BY bot"):
                     name = repo_of(other["repo"] or "", row["org"])
-                    if (name and name.lower() not in have and name.split("/")[0].lower() == row["org"].lower()
-                            and name.lower() not in missing and not app.state.auth.system_bot(other["bot"])):
+                    if (other["bot"] in extra and name and name.lower() not in have
+                            and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
         repos = [r['full_name'] for r in grants]
