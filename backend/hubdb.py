@@ -46,13 +46,12 @@ withdrawn text in the audit trail.
 6. **Rule names.** §4 names `reach`, `cap`, `depth`, `unsolicited`, `one-question`,
    `duplicate`, `consumed`, `lint`. The rest are `identity` (acting as someone else, deciding
    an approval as a bot), `kind` (a bad approval kind or status), `close` (closing a task you
-   did not request), `escape` (rule 8's escape class), `quarantined` (a quarantined bot's
-   writes) and `not-found`.
+   did not request), `quarantined` (a quarantined bot's writes) and `not-found`.
 7. **Severity is classified here, not passed in.** `classify()` reads the body or payload and
-   returns `escape` (a `secrets/` path, another bot's repo path, an external URL in a
-   hub-change or access request), `sensitive` (money, an outbound send, access, a human's
-   inbox) or `normal`. Refusals remain in the audit; repeated failures open an internal
-   review. Generic refusal diagnostics do not create human decision tasks.
+   returns `sensitive` (money, an outbound send, access, a human's inbox) or `normal`. Words
+   that name a `secrets/` path or another bot's folder are written as they are and recorded
+   (`path_mentioned`); they are never refused or counted. Refusals remain in the audit; repeated
+   failures open an internal review. Generic refusal diagnostics do not create human decision tasks.
 8. **`sync_registry` never lowers a state.** A bot the registry calls `active` that hubdb has
    `quarantined` stays quarantined; only a human clears it. Tokens, thread ids and
    `last_turn_at` are never overwritten by a sync.
@@ -115,6 +114,10 @@ MOVER_TEAMS = ("leadership", "product", "engineering")
 MOVER_FIELDS = ("lane", "labels")   # what only a mover changes (a parent or blocker: task_relations)
 LINK_KINDS = ("pr", "issue", "url", "doc", "worktree")
 TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
+# Rule 7's writing checks on an item for a person and the shape of an update: warned about with
+# the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
+# for them. A missing title or approval field is structural and always refused.
+STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
 APPROVAL_KINDS = ("send", "spend", "publish", "merge")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "spend": ("amount", "account", "what"),
@@ -127,7 +130,6 @@ UNSOLICITED_PER_DAY = int(os.environ.get("TICO_UNSOLICITED_PER_DAY", "10"))   # 
 REVIEW_AT = 3                   # rule 8: refusals in a day that open a review task
 QUARANTINE_AT = 10              # rule 8: repeated refusals in a day that quarantine the bot
 QUARANTINE_TOTAL_AT = 3 * QUARANTINE_AT   # rule 8: any refusals in a day, repeated or not (a loop over new targets)
-ESCAPE_QUARANTINE_AT = int(os.environ.get("TICO_ESCAPE_QUARANTINE_AT", "3"))   # rule 8: `escape` refusals in a day that quarantine it until a person clears it
 NOTICE_DAYS = 14                # how long a notice stays in the inbox
 
 # ----------------------------------------------------------------------------- schema
@@ -1005,7 +1007,7 @@ def writing_refusal(rule, detail):
 
 def refuse(conn, actor, rule, detail="", severity="normal", context=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
-    reviewing the refusal reads (`escape_context`); a private task write keeps only what was refused."""
+    reviewing the refusal reads; a private task write keeps only what was refused."""
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
@@ -1187,7 +1189,31 @@ def lint_approval(kind, payload):
             if f == "cc" and "cc" in payload:
                 continue                    # an empty Cc is a real answer
             problems.append(f"{kind} needs {f}")
+    if kind == "merge" and "merge needs pr" in problems:
+        # A merge approval is for one pull request; a change with none is a decision for a person.
+        problems[problems.index("merge needs pr")] = ("merge needs pr (the pull request number); for a change "
+                                                      "with no pull request, file a decision task for the person instead")
     return problems
+
+
+def style_problems(conn, actor, problems, severity="normal"):
+    """Rule 7's writing problems as warnings: returned for the write to carry, so the bot does
+    better next time, and refused only when TICO_STYLE_LINT=refuse."""
+    if not problems or STYLE_LINT == "off":
+        return []
+    if STYLE_LINT == "refuse":
+        refuse(conn, actor, "lint", "; ".join(problems), severity)
+    return list(problems)
+
+
+def open_children(conn, task_id):
+    """The titles of a task's unfinished subtasks, oldest first. A private subtask under a task
+    that is not private is not named: the parent's readers may not read it."""
+    parent_private = task_private(conn, task(conn, task_id))
+    return [r["title"] if parent_private or not task_private(conn, r) else "a private subtask"
+            for r in _rows(conn.execute(
+                "SELECT * FROM tasks WHERE id IN (" + TR.CHILD_IDS + ") "
+                "AND status NOT IN ('done','closed','declined') ORDER BY created,id", (task_id,)))]
 
 
 def _clip(text, limit=180):
@@ -1255,18 +1281,14 @@ SENSITIVE_WORDS = re.compile(
 def classify(text, kind=None, to_actor=None, where="item", actor=None, conn=None):
     """The severity rule 8 counts by, read off the thing that was refused.
 
-    `escape`   a `secrets/` path or another bot's repo path. Rule 8 quarantines on this, once
-               the bot has done it ESCAPE_QUARANTINE_AT times in a day.
     `sensitive` money, an outbound send, an access change, or a human's inbox.
     `normal`   everything else.
 
-    `where` is "item" (a task or an approval payload) or "message" (a say or an answer). A
-    link is never an escape; a secrets path or another bot's repo path is one anywhere. `conn` lets a
-    `bot-<slug>/` be recognised as a real bot's folder (see `names_other_repo`).
+    `escape` is no longer read off words: text that names a `secrets/` path or another bot's
+    folder reaches nothing, so it is written as it is (`path_mentioned` records it). `actor` and
+    `conn` are kept so callers need not change; `where` is "item" or "message".
     """
     body = str(text or "")
-    if SECRETS_PATH.search(body) or names_other_repo(body, actor, conn):
-        return "escape"
     if kind in ("send", "spend"):
         return "sensitive"
     if is_human(to_actor) and SENSITIVE_WORDS.search(body):
@@ -1274,6 +1296,19 @@ def classify(text, kind=None, to_actor=None, where="item", actor=None, conn=None
     if SENSITIVE_WORDS.search(body) and kind in ("publish", "merge"):
         return "sensitive"
     return "normal"
+
+
+def path_mentioned(conn, actor, what, text, task_id=None):
+    """A bot's words that name a `secrets/` path or another bot's folder are kept as written:
+    naming a path opens nothing, and refusing it cost bots their turns and quarantined them.
+    The mention is recorded (`path.mentioned`) for whoever reviews the bot. What was found, or ""."""
+    if not is_bot(actor):
+        return ""
+    found = escape_found(text, actor, conn)
+    if found:
+        event(conn, actor, "path.mentioned", task_id or "",
+              {"what": what} if PRIVATE_WRITE.get() else {"what": what, "found": found})
+    return found
 
 
 def escape_found(text, actor=None, conn=None):
@@ -1298,11 +1333,6 @@ def escape_preview(text):
     return out if len(out) <= ESCAPE_PREVIEW_MAX else out[:ESCAPE_PREVIEW_MAX - 1] + "…"
 
 
-def escape_context(conn, actor, what, text, task_id=None):
-    """The `context` an escape refusal keeps for the person who reviews the pause it may cause."""
-    return {"what": what, "found": escape_found(text, actor, conn), "preview": escape_preview(text), "task": task_id}
-
-
 def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     """Rule 8: count the day's refusals, open review tasks, quarantine when it is bad enough."""
     if not is_bot(actor):
@@ -1310,7 +1340,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # A writing correction ("start the title with a verb") is fixed by retrying, not a sign the bot
     # is reaching where it should not: it neither counts nor quarantines. A bot was quarantined by
     # ten refusals, three of them lint on one task title.
-    if rule == "lint" and severity != "escape":
+    if rule == "lint":
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -1335,11 +1365,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                      f"Read its refusals and decide whether its playbook or its reach needs a change.", origin=actor)
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
-    escapes = conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND ts>=? AND severity='escape'",
-                           (actor, since)).fetchone()[0]
-    if severity == "escape" and escapes >= ESCAPE_QUARANTINE_AT:
-        quarantine(conn, slug, f"{rule}: {said}", context)
-    elif repeats >= QUARANTINE_AT:
+    if repeats >= QUARANTINE_AT:
         quarantine(conn, slug, f"{repeats} repeated refusals today")
     elif count >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
@@ -1670,10 +1696,6 @@ def _opener(conn, conversation_id):
 
 
 # ----------------------------------------------------------------------------- messages
-MESSAGE_ESCAPE = ("The message includes a secrets path or another bot’s workspace path. Remove the restricted "
-                  "reference and retry; this did not send anything outside the Hub.")
-
-
 def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None,
         in_reply_to=None, wait_s=None):
     """The one write every message goes through: rules 1, 2, 3, 4, 7 and 8 all live here."""
@@ -1681,14 +1703,13 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     if kind not in MESSAGE_KINDS:
         refuse(conn, actor, "kind", f"a message is {'|'.join(MESSAGE_KINDS)}, not {kind}")
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
-    if severity == "escape" and not (actor == KEEPER and kind == "notice"):
-        on_task = (refs or {}).get("task")
-        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape",
-               escape_context(conn, actor, "task note" if on_task else "message", body, on_task))
+    on_task = (refs or {}).get("task")
+    path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
     # A person's message to a paused or quarantined bot is kept: runners claim only active bots' work
     # (execution.claim), so it runs when the bot is back. A bot still cannot write to one (rule 2).
     target = _reach(conn, actor, to_actor, allow_held=is_human(actor))
     refs = dict(refs or {})
+    warnings = []
 
     if is_bot(actor) and actor == target:
         refuse(conn, actor, "self", "a bot cannot send work to itself")
@@ -1739,9 +1760,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
                 refuse(conn, actor, "unsolicited",
                        f"{n} unsolicited messages to {actor_id(target)} today; the cap is "
                        f"{UNSOLICITED_PER_DAY}. File a task or an approval instead.", severity)
-            problems = lint_human_item(body)
-            if problems:
-                refuse(conn, actor, "lint", "; ".join(problems), severity)
+            warnings = style_problems(conn, actor, lint_human_item(body), severity)
             refs["unsolicited"] = True
 
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s)
@@ -1750,6 +1769,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         about = message_task_id({"refs": refs}, conv)
         if about and supersede_asks(conn, about, from_actor=actor, to_actor=target, keep=msg["id"]):
             _recount(conn, actor)
+    if warnings:
+        event(conn, actor, "message.lint", msg["id"], {"problems": warnings})
+        return {**msg, "warnings": warnings}
     return msg
 
 
@@ -1910,10 +1932,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
         refuse(conn, actor, "identity", "The asker cannot answer their own question")
     if asked["to_actor"] != actor and not task_reply:
         refuse(conn, actor, "identity", f"{message_id} was not addressed to {actor}")
-    if classify(body if classify_text is None else classify_text, where="message", actor=actor, conn=conn) == "escape":
-        refuse(conn, actor, "escape", "The reply includes a secrets path or another bot’s workspace path. Remove the restricted reference and retry; this did not send anything outside the Hub.",
-               "escape", escape_context(conn, actor, "reply", body if classify_text is None else classify_text,
-                                        (comment_refs or {}).get("task")))
+    path_mentioned(conn, actor, "reply", body if classify_text is None else classify_text, (comment_refs or {}).get("task"))
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
@@ -2976,8 +2995,7 @@ def task_comment_edit(conn, actor, task_id, message_id, text):
     text = str(text or "").strip()
     if not text:
         refuse(conn, actor, "lint", "write the comment")
-    if classify(text, to_actor=msg["to_actor"], where="message", actor=actor, conn=conn) == "escape":
-        refuse(conn, actor, "escape", MESSAGE_ESCAPE, "escape", escape_context(conn, actor, "task note edit", text, task_id))
+    path_mentioned(conn, actor, "task note edit", text, task_id)
     if actor == "bot:librarian":
         text = librarian_text(text)
     if text == msg["body"]:
@@ -3057,26 +3075,22 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     title = str(title or "").strip()
     body = str(body or "")
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
-    # rule 8 is about bots reaching outside the hub; a person's notes are not an escape
-    if severity == "escape" and is_bot(actor):
-        refuse(conn, actor, "escape", f"the task reaches outside the hub: {_clip(body, 80)}", severity,
-               escape_context(conn, actor, "new task", f"{title}\n{body}".strip()))
+    path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     if next_run and not is_bot(target):
         refuse(conn, actor, "next-run", "only a bot has a next run; file an ordinary task for a person")
     lane = _lane_for(conn, lane, target, actor)
     general = _task_state(conn, actor, {}, type=type, step=step)[0] == GENERAL_TYPE
     # Rule 7 shapes an ask to a person (a verb, the ask first). A task on a custom type is a
     # ticket on that type's board, written the way the board writes them, not an ask.
-    if is_human(target) and lint and general:
-        problems = lint_human_item(body, title=title)
-        if problems:
-            refuse(conn, actor, "lint", "; ".join(problems), severity)
-    elif not title:
+    if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
+    warnings = (style_problems(conn, actor, lint_human_item(body, title=title), severity)
+                if is_human(target) and lint and general else [])
     # A ticket keeps the board's own references ("#18945", "(B/F)") in its title.
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []
     if plain and TITLE_LINT == "refuse":
         refuse(conn, actor, "lint", "; ".join(plain), severity)
+    plain = warnings + plain
     labels = _labels(labels)
     dup = _one(conn, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
                      f"AND coalesce({TR.parent_sql()},'')=? "
@@ -3156,7 +3170,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
           {"reconcile": reconcile} if reconcile else None, quiet_bots=next_run, quiet=next_run)
     _recount(conn, target)
     _recount(conn, actor)
-    return task(conn, row["id"])
+    made = task(conn, row["id"])
+    return {**made, "warnings": plain} if plain else made
 
 
 def _retitle(conn, actor, row, title, owner, type_id):
@@ -3170,10 +3185,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
     general = type_id == GENERAL_TYPE
     if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
-    if is_human(target) and general:
-        problems = lint_human_title(title)
-        if problems:
-            refuse(conn, actor, "lint", "; ".join(problems))
+    warnings = style_problems(conn, actor, lint_human_title(title)) if is_human(target) and general else []
     dup = _one(conn, "SELECT id FROM tasks WHERE id<>? AND requester=? AND owner=? AND title=? "
                      f"AND coalesce({TR.parent_sql()},'')=? "
                      f"AND status IN ({','.join('?' * len(LIVE_STATUSES))})",
@@ -3185,7 +3197,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []
     if plain and TITLE_LINT == "refuse":
         refuse(conn, actor, "lint", "; ".join(plain))
-    return plain
+    return warnings + plain
 
 
 @private_task_write
@@ -3238,6 +3250,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if step is not None and effective == row["status"]:
             status = None
     closing_step = status == "closed" and step is not None
+    self_wait = []
     if closing_step:
         _task_close_allowed(conn, actor, row, note)
     if waiting_on is not None:
@@ -3245,8 +3258,6 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
-        if status == "done" and not is_human(actor) and children_summary(conn, task_id)["open"]:
-            refuse(conn, actor, "children", "Finish the open subtasks before marking this task done")
         if status == "closed":
             refuse(conn, actor, "close", "close a task with task_close; the requester closes it")
         if actor == row["owner"] and not is_human(actor) and status not in OWNER_STATUSES:
@@ -3266,9 +3277,15 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         waiting_row["waiting_on"] = (waiting_on or None) if waiting_on is not None else None
         if (status == "waiting" and row["status"] != "waiting" and is_bot(row["owner"])
                 and row["owner"] == row["requester"] and not waiting_for(conn, waiting_row)):
-            refuse(conn, actor, "lint",
-                   "You asked for this task yourself, so nobody will answer it: file the child task, "
-                   "blocker or approval you are waiting on first, name the person with --on, or keep working")
+            if not str(note or "").strip():
+                refuse(conn, actor, "lint",
+                       "You asked for this task yourself, so nobody will answer it: say what you are waiting on "
+                       "in a note, file the child task, blocker or approval first, name the person with --on, "
+                       "or keep working")
+            # A note naming what it waits on is enough to park it; the hint goes back with the write.
+            self_wait = ["you asked for this task yourself and nothing it waits on is recorded, so it goes back to "
+                         "open after a day: file the child task, blocker or approval you wait on, or name the "
+                         "person with --on"]
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
     wanted = {k: v for k, v in (("lane", lane), ("labels", labels), ("number", number)) if v is not None}
@@ -3309,10 +3326,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
         if value is None:
             continue
-        severity = classify(str(value), actor=actor, conn=conn) if field in checked and is_bot(actor) else "normal"
-        if severity == "escape":
-            refuse(conn, actor, "escape", f"the task {field} reaches outside the hub: {_clip(value, 80)}", severity,
-                   escape_context(conn, actor, f"task {field}", str(value), task_id))
+        if field in checked:
+            path_mentioned(conn, actor, f"task {field}", str(value), task_id)
         sets.append(f"{field}=:{field}")
         args[field] = value
         _task_event(conn, task_id, actor, field, row.get(field), value, note or "")
@@ -3374,10 +3389,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # The task's own thread was named after it; a room many tasks share keeps its subject.
         conn.execute("UPDATE conversations SET subject=? WHERE id=? AND task_id=? AND subject=?",
                      (title, row["conversation_id"], task_id, row["title"]))
+    plain = plain + self_wait
     if plain:
         _task_event(conn, task_id, KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", task_id, {"problems": plain})
-    event(conn, actor, "task.update", task_id, {"status": status, "note": note})
+    still_open = open_children(conn, task_id) if status == "done" and row["status"] != "done" else []
+    if still_open:
+        # Done with subtasks still open: they stay open, and the record says which.
+        _task_event(conn, task_id, KEEPER, "children", None, "Still open: " + "; ".join(still_open), "")
+    event(conn, actor, "task.update", task_id, {"status": status, "note": note,
+                                                **({"still_open": still_open} if still_open else {})})
     after = isolate_private_task(conn, task(conn, task_id))
     if after.get("waiting_on") and not task_private_readable(conn, after["waiting_on"], after):
         # Made private, or moved under a private parent: it no longer goes in front of that person.
@@ -3422,7 +3443,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                                    and linked and person.get("notify_slack_task_done") is not False)}}
         _wake(conn, after, after["requester"],
               f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}"
-              + (f"\n{note}" if note and not quiet else ""), refs=refs, quiet_bots=True)
+              + (f"\n{note}" if note and not quiet else "")
+              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), refs=refs, quiet_bots=True)
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
@@ -3433,7 +3455,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor)
-    return after
+    return {**after, "warnings": plain} if plain else after
 
 
 def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
@@ -3465,8 +3487,6 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
 def _task_close_allowed(conn, actor, row, note):
     _task_private_writer(conn, actor, row)
-    if actor != KEEPER and not is_human(actor) and row["status"] != "closed" and children_summary(conn, row["id"])["open"]:
-        refuse(conn, actor, "children", "Finish the open subtasks before closing this task")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     if actor != row["requester"] and not is_human(actor) and actor != KEEPER and not shipped:
@@ -3490,10 +3510,15 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
     conn.execute("UPDATE tasks SET closed_at=?, closed_by=?, updated=?, "
                  "note=COALESCE(NULLIF(?, ''), note) WHERE id=?", (ts, actor, ts, note or "", task_id))
-    event(conn, actor, "task.close", task_id, {"note": note})
+    still_open = open_children(conn, task_id)
+    if still_open:
+        # Closed with subtasks still open: they stay open, and the record says which.
+        _task_event(conn, task_id, KEEPER, "children", None, "Still open: " + "; ".join(still_open), "")
+    event(conn, actor, "task.close", task_id, {"note": note, **({"still_open": still_open} if still_open else {})})
     after = task(conn, task_id)
     _unblock(conn, after)
-    said = f"Closed: {after['title']}" + (f"\n{note}" if note else "")
+    said = (f"Closed: {after['title']}" + (f"\n{note}" if note else "")
+            + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""))
     # Closing work that was already done, with nothing said, is acceptance: news, not work. It
     # goes to the bot's inbox without a run. Hundreds of runs were a bot
     # waking to read "Closed:" and saying "acknowledged", hours of agent time. The keeper's
@@ -3948,9 +3973,7 @@ def note_create(conn, actor, to, body):
         refuse(conn, actor, "note", "the note is empty")
     if len(body) > NOTE_MAX:
         refuse(conn, actor, "note", f"a note is at most {NOTE_MAX} characters; put the detail in a file or a task")
-    if classify(body, to_actor=target, actor=actor, where="message", conn=conn) == "escape" and is_bot(actor):
-        refuse(conn, actor, "escape", f"the note reaches outside the hub: {_clip(body, 80)}", "escape",
-               escape_context(conn, actor, "note", body))
+    path_mentioned(conn, actor, "note", body)
     row = {"id": new_id(), "from_actor": actor, "to_actor": target, "body": body, "created": now()}
     conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES "
                  "(:id,:from_actor,:to_actor,:body,:created)", row)
@@ -4042,13 +4065,11 @@ def approval_request(conn, actor, kind, payload, task_id=None):
     if kind not in APPROVAL_KINDS:
         refuse(conn, actor, "kind", f"an approval is {'|'.join(APPROVAL_KINDS)}, not {kind}")
     text = json.dumps(payload, sort_keys=True, default=str)
-    severity = classify(text, kind=kind, conn=conn)
-    if severity == "escape":
-        refuse(conn, actor, "escape", f"the {kind} payload reaches outside the hub: {_clip(text, 100)}", severity,
-               escape_context(conn, actor, f"{kind} approval", text, task_id))
+    severity = classify(text, kind=kind, actor=actor, conn=conn)
+    path_mentioned(conn, actor, f"{kind} approval", text, task_id)
     problems = lint_approval(kind, payload)
     if problems:
-        refuse(conn, actor, "lint", "; ".join(problems), classify(text, kind=kind, conn=conn))
+        refuse(conn, actor, "lint", "; ".join(problems), severity)
     digest = payload_hash(payload)
     dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
     if dup:

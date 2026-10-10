@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Naming a path no longer pauses a bot.** A note, message, task, approval or reply that names another bot's folder or a `secrets/` path is written as it is, never refused and never counted toward a quarantine; the mention is recorded for review. The runner no longer rewrites such paths in a bot's reply (local `file://` links still become plain words), and `TICO_ESCAPE_QUARANTINE_AT` is gone. An approval's payload naming the bot's own repository is accepted.
+- **Writing checks warn instead of refusing.** A task or unsolicited message for a person whose title does not start with a verb, or whose body runs over 120 words, is written, and the response's `warnings` (and the task's history) say what to fix next time. A daily update with a section label, a heading or too many words is posted with a `warning`; an empty update, a week in review without its slides, a missing title or a missing approval field are still refused. `TICO_STYLE_LINT=refuse` brings the refusals back. A merge approval with no pull request says to file a decision task for the person instead.
+- A bot can park a task it asked for itself in Waiting with a note saying what it waits on; the response warns that it goes back to open after a day unless the wait is recorded.
+- **Done with subtasks still open.** A bot can mark its task Done, or close it, while subtasks are open. They stay open, and the task's history and the Finished or Closed notice end with "Still open:" and their titles.
+
 ### Added
 - **Setup gives a Cloudflare tunnel a runner hostname without Access.** With `--auth cloudflare`, `python3 -m setup` adds `runner.<domain>` (or `<name>-runner.<zone>` for a subdomain) to the tunnel it creates, routed for `/api/v2` and `/download` only, with its DNS record and `TICO_RUNNER_URL`, so computers and external agents connect without an Access bypass. `--runner-hostname` picks another host or `none`; `setup doctor` checks the host answers from the server and not a login page. See docs/install.md, "Cloudflare Tunnel".
 - **Check the AWS identity at start:** with `TICO_EXPECTED_AWS_ACCOUNT` (and optionally `TICO_EXPECTED_AWS_ROLE`, a role name or ARN) in `.env`, the Docker server, the Slack gateway and `restore` ask STS who they are and refuse to start, naming the expected and actual account or role, when it differs, no credentials are found or STS cannot be reached. Unset, nothing changes. See docs/install.md, "Check the AWS identity".

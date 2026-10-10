@@ -2501,7 +2501,7 @@ def create_app(settings=None):
                 raise Problem("roles", str(exc), 422)
         note = usage_limits.warning(c, owner)
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
-                **({"warning": note} if note else {})}
+                **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
@@ -2552,11 +2552,13 @@ def create_app(settings=None):
                     H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                     note = ""
                 H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet)
+                warnings = None
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
-                H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None)
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warnings": warnings} if warnings else {})}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/run-now")

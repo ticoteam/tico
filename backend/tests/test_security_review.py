@@ -144,17 +144,11 @@ def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resume
     ready(api, computer, ["ops"])
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, "human:ana", "Set up the tool", "Please.", "bot:ops")["id"]
-
-    def refused_notes():
-        for _ in range(H.ESCAPE_QUARANTINE_AT):
-            with api.app.state.store.transaction() as c:
-                try:
-                    H.task_comment(c, "bot:ops", tid, "Paste this into bot-coo/tools.yaml: token=ghp_abcdefghijklmnop1234")
-                except H.Refused:
-                    pass
-        return next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
-
-    line = refused_notes()
+        words = "Paste this into bot-coo/tools.yaml: token=ghp_abcdefghijklmnop1234"
+        # An escape pause recorded before path mentions stopped refusing keeps its review.
+        H.quarantine(c, "ops", "escape: the task note reaches outside the hub",
+                     {"what": "task note", "found": "bot-coo/", "preview": H.escape_preview(words), "task": tid})
+    line = next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
     review = line["quarantine"]["review"]
     assert line["bot_state"] == "quarantined" and review["what"] == "task note" and review["found"] == "bot-coo/"
     assert review["task"] == {"id": tid, "title": "Set up the tool"}
@@ -164,5 +158,3 @@ def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resume
     post(api, "bots/ops/quarantine/clear", {}, token="cara-test", expected=403)
     post(api, "bots/ops/quarantine/clear", {})
     assert next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")["bot_state"] == "active"
-    again = refused_notes()                                       # the check stays on: a repeat is a new pause
-    assert again["bot_state"] == "quarantined" and again["quarantine"]["since"] > line["quarantine"]["since"]

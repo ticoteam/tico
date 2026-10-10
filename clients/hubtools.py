@@ -2535,8 +2535,8 @@ _SLIDES = {
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
       "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
       "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
-      "kpis, done, focus, blockers. One of each a day; posting again replaces it, and one that breaks the "
-      "rules is refused with how to fix it.",
+      "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
+      "rules is posted with a `warning` saying how to write the next one; an empty one is refused.",
       {"body": _s("A daily: one to five lines, each starting with '- '"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),

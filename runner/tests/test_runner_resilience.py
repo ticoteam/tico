@@ -354,14 +354,11 @@ class RefusedReplies(unittest.TestCase):
              "See emp-legal/reports/a.md, emp-coo/knowledge/needs.md and ../secrets/_shared.env. "
              "PR https://github.com/acme/emp-legal/pull/3.")
 
-    def test_the_scrubbed_reply_passes_the_hubs_own_rule_and_keeps_the_rest(self):
-        from backend import hubdb
-        self.assertEqual(hubdb.classify(self.CODEX, where="message", actor="bot:coo"), "escape")
+    def test_the_scrubbed_reply_drops_local_links_and_keeps_paths_as_written(self):
         clean = service.scrub_reply(self.CODEX, "coo")
-        self.assertNotEqual(hubdb.classify(clean, where="message", actor="bot:coo"), "escape")
         self.assertIn("Task `1b874fee` is open", clean)
-        self.assertIn("emp-coo/knowledge/needs.md", clean, "its own repository is not an escape")
-        self.assertIn("(a file in legal's repository), emp-coo", clean, "the comma survives")
+        self.assertIn("See emp-legal/reports/a.md, emp-coo/knowledge/needs.md and ../secrets/_shared.env.", clean,
+                      "a path written as text is the bot's words, not an escape")
         self.assertNotIn("file://", clean)
         self.assertEqual(service.scrub_reply("All clear.", "coo"), "All clear.")
 
