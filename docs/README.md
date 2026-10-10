@@ -11,7 +11,7 @@ from Tico HQ are on by default and share your answer and team description; [Priv
 Try locally with Docker on a Mac with Docker Desktop running, or on Linux:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
 [Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in, **Set up**, a first draft and a completed task.

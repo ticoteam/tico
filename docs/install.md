@@ -26,10 +26,11 @@ first; on Linux the installer installs Docker for you.
 Run the installer with `--local` (a Mac or Linux; it asks for your email when you leave `--owner-email` out):
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
-That installs the newest release; to pin one, use `releases/download/vX.Y.Z/install.sh` instead of `releases/latest/download/install.sh`.
+The line saves the installer first, so it stops with an error when `curl` is missing or the download fails; on a bare Ubuntu or Debian,
+run `sudo apt-get install -y curl` first. That installs the newest release; to pin one, use `releases/download/vX.Y.Z/install.sh` instead of `releases/latest/download/install.sh`.
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
@@ -164,7 +165,7 @@ Open a shell on the server and run the installer of the release you want (see
 software it installs always match):
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh
 ```
 
 It asks for `sudo` if you are not root, and it prints each step. In order it:
@@ -177,7 +178,7 @@ It asks for `sudo` if you are not root, and it prints each step. In order it:
    `SHA256SUMS`. A bundle that does not match is refused and nothing is installed.
 4. **Runs the `tico setup` wizard** on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
 
-Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh` or `sh -s --` when piping:
+Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh install.sh`:
 
 | Flag | Meaning |
 |---|---|
@@ -360,7 +361,7 @@ Or run the bots' computer on the server itself and skip Access altogether: the r
 network and talks to it directly. With a one-time code from Settings > Computers > Add computer, on the server:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner \
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner \
   --url http://server:8765 --server-network tico_default --code <code> --label "Server computer"
 ```
 
@@ -402,8 +403,8 @@ On any Linux computer, run the line the app shows. It downloads the installer of
 runner and its updater start on that same release:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | \
-  sh -s -- --runner --url https://tico.example.com --code <code> --label "Build computer"
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && \
+  sh install.sh --runner --url https://tico.example.com --code <code> --label "Build computer"
 ```
 
 `vX.Y.Z` is your server's release (Settings and Settings > Health show it); `--runner` exists from v0.2.1.
@@ -425,7 +426,7 @@ existing `/opt/tico-runner/.env` (it says which), and every other setting stays;
 is no `.env` yet. Run with none of them, the installer keeps the `.env` as it is and only repairs and updates.
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner --code <new code>
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner --code <new code>
 ```
 
 **A computer on the same host as a local server (the quick start).** A server that answers on this computer only cannot be
@@ -433,8 +434,8 @@ reached at `127.0.0.1` from inside the runner's container, so the runner joins t
 this line when the server is local:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | \
-  sh -s -- --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && \
+  sh install.sh --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
 ```
 
 **Add a second computer on the same host (for a message bot).** A message bot must have a computer of its
@@ -442,7 +443,7 @@ own, so a second one on the same host is the usual next step ([mail](mail.md)). 
 a new code from Settings > Computers > Add computer; the first computer is not touched:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner --name mail \
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner --name mail \
   --url http://server:8765 --server-network tico_default --code <code> --label "Mail computer"
 ```
 

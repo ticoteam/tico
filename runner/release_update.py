@@ -550,7 +550,7 @@ class Follower:
         if self.env.get("TICO_RUNNER_COMPOSE") == "1":
             return "no updater is set up; run docker compose pull && docker compose up -d on this box"
         return ("no updater is set up; move this runner onto the compose file that has one: on this box run "
-                f"curl -fsSL https://github.com/ticoteam/tico/releases/download/v{want}/install.sh | sh -s -- --runner "
+                f"curl -fsSL https://github.com/ticoteam/tico/releases/download/v{want}/install.sh -o install.sh && sh install.sh --runner "
                 "--url <your Tico address> --code <new code from Settings > Computers > Add computer> --label <name>")
 
     def decide(self):

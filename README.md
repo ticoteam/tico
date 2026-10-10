@@ -22,7 +22,7 @@ A small pilot is what has been measured ([sizing](docs/sizing.md)).
 On your own computer (a Mac with Docker Desktop, or Linux), with no domain and no sign-in setup, run the installer with `--local`:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
@@ -46,7 +46,7 @@ Add a domain and sign-in later ([Install](docs/install.md#add-a-domain-and-sign-
 For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the installer with no flags:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
 It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through `tico setup`:

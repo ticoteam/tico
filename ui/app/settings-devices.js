@@ -184,7 +184,7 @@ function dockerRunnerCommands(code, label, runtime, kind = 'linux') {
     [local ? 'Set up the runner on this computer (installs Docker if it is missing; keeps itself on this server\'s release)'
            : kind === 'mac' ? 'Set up the runner on that Mac (Docker Desktop must be running; keeps itself on this server\'s release)'
            : 'Set up the runner on the server (installs Docker if it is missing; keeps itself on this server\'s release)',
-     `curl -fsSL ${installer} | sh -s -- --runner --name ${name} ${join}${local ? ` --server-network ${network}` : ''} --code '${code}' --label ${quoted}`],
+     `curl -fsSL ${installer} -o install.sh && sh install.sh --runner --name ${name} ${join}${local ? ` --server-network ${network}` : ''} --code '${code}' --label ${quoted}`],
     // Signing in to a model comes only once a provider is chosen; before that there is no model to name.
     // `claude auth login` signs the CLI in; `claude setup-token` would only print a token. As `bot`, the user turns run as.
     runtime ? ['Sign the bots in to a model, once: Sign in on Settings > Computers, or run this (the runner installs the model CLI first; give it a minute)',
