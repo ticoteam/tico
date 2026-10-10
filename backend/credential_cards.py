@@ -25,7 +25,7 @@ from fastapi import Request
 from pydantic import Field, SecretStr
 
 from .auth import validate_identity
-from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail
+from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
 from .store import H, Problem
 
@@ -173,8 +173,8 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     for g in c.execute("SELECT credential_id,subject FROM credential_grants WHERE revoked IS NULL"):
         grants.setdefault(g["credential_id"], set()).add(g["subject"])
     # A member replaces only a credential they stored themselves; anyone else's stays, and theirs is a new one.
-    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created", (env,))
-            if admin or r["created_by"] == who.actor]
+    mine = set() if admin else owned(c, who)
+    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created", (env,)) if admin or r["id"] in mine]
     own = next((r for r in rows if grants.get(r["id"], set()) <= {subject} and r["id"] in grants), None)
     unused = next((r for r in rows if not grants.get(r["id"])), None)
     existing = own or unused

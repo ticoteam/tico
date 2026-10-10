@@ -74,15 +74,16 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
 
 
-def test_the_person_who_added_a_credential_shares_it_only_with_their_own_bots(api):
+def member_stores(api,bot,env,value,token='cara-test',expected=200):
+    return post(api,'credential-set',{'env':env,'for_bot':bot,'value':value,'name':env.title()},token,expected=expected)
+
+
+def test_the_person_who_stored_a_credential_shares_it_only_with_their_own_bots(api):
     setup(api)
-    settings=api.app.state.store.settings
-    settings.credential_admins=('ana@acme.example','cara@acme.example')
-    mine=post(api,'credentials',{'name':'PostHog','secret':'phx-synthetic-private-987654','env':'POSTHOG_API_KEY'},'cara-test')['id']
-    theirs=create(api,name='Other',env='OTHER_KEY')['id']
-    settings.credential_admins=('ana@acme.example',)          # Cara is a member again
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+    mine=member_stores(api,'cpo','POSTHOG_API_KEY','phx-synthetic-private-987654')['id']
+    theirs=create(api,name='Other',env='OTHER_KEY')['id']
     listing=get(api,'credentials','cara-test')
     assert [r['id'] for r in listing['credentials']]==[mine] and not listing['credentials'][0]['can_reveal']
     assert 'finance' in [b['id'] for b in listing['bots']] and 'ops' not in [b['id'] for b in listing['bots']]
@@ -100,6 +101,63 @@ def test_the_person_who_added_a_credential_shares_it_only_with_their_own_bots(ap
     assert [r['id'] for r in get(api,'credential-runtime',attempt['token'])['credentials']]==[mine]
     post(api,f'credentials/{mine}/grants/{given["id"]}/revoke',{},'cara-test')
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
+
+
+def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_rotated_or_the_rule_is_off(api):
+    setup(api)
+    settings,store=api.app.state.store.settings,api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+    # Cara adds company credentials while she is an Admin, by hand and through a card for a bot she runs, then is demoted.
+    settings.credential_admins=('ana@acme.example','ben@acme.example','cara@acme.example')
+    company=post(api,'credentials',{'name':'Company GitHub','secret':'ghp-company-secret-123456','env':'GITHUB_TOKEN'},'cara-test')['id']
+    carded=member_stores(api,'finance','SENTRY_TOKEN','sentry-company-secret-123')['id']
+    settings.credential_admins=('ana@acme.example','ben@acme.example')
+    for cid in (company,carded):
+        post(api,f'credentials/{cid}/grants',{'subject':'bot:cpo'},'cara-test',expected=403)
+    get(api,'credentials','cara-test',expected=403)
+    # Storing under the same variable is a new credential of hers; the company's value is never overwritten.
+    again=member_stores(api,'cpo','GITHUB_TOKEN','member-own-value-123456')
+    assert again['id']!=company and not again['replaced']
+    post(api,f'credentials/{company}',{'name':'Company GitHub','env':'GITHUB_TOKEN','secret':'member-own-value-123456',
+                                       'expected_revision':1},'cara-test',expected=403)
+    assert post(api,f'credentials/{company}/reveal',{})['value']=='ghp-company-secret-123456'
+    # A bot an administrator gave the company's value keeps it; the refusal names it and whom to ask.
+    post(api,f'credentials/{company}/grants',{'subject':'bot:finance'})
+    busy=member_stores(api,'finance','GITHUB_TOKEN','member-other-value-123456',expected=409)
+    assert 'from the credential Company GitHub' in busy['error']['detail'] and 'Ask Ana' in busy['error']['detail']
+    with store.read() as c:                       # the refusal leaves the grant it named in place
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE credential_id=? AND subject='bot:finance' "
+                         'AND revoked IS NULL',(company,)).fetchone()[0]==1
+
+    # A server that ran the old backfill: no row already there stays anyone's, even one a member stored.
+    with store.transaction() as c:
+        c.execute('ALTER TABLE credentials DROP COLUMN member_stored')
+    store.initialize()
+    with store.read() as c:
+        assert c.execute('SELECT count(*) FROM credentials WHERE member_stored=1').fetchone()[0]==0
+    post(api,f'credentials/{again["id"]}/grants',{'subject':'bot:finance'},'cara-test',expected=403)
+
+    # Her own credential stops being hers once someone else saves a new value for it.
+    mine=member_stores(api,'finance','POSTHOG_API_KEY','phx-member-own-value-987')['id']
+    post(api,f'credentials/{mine}/grants',{'subject':'bot:cpo'},'cara-test')
+    row=post(api,f'credentials/{mine}',{'name':'Posthog_Api_Key','env':'POSTHOG_API_KEY','secret':'phx-rotated-by-admin-987',
+                                        'expected_revision':1},'ben-test')
+    post(api,f'credentials/{mine}/grants',{'subject':'bot:finance'},'cara-test',expected=403)
+    # Storing it again cannot replace the rotated value, and says what to take away first (her own grant, so no one to ask).
+    busy=member_stores(api,'finance','POSTHOG_API_KEY','phx-member-again-value-987',expected=409)
+    assert 'Take Posthog_Api_Key away from finance' in busy['error']['detail'] and 'Ask' not in busy['error']['detail']
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE credential_id=? AND subject='bot:finance' "
+                         'AND revoked IS NULL',(mine,)).fetchone()[0]==1
+    assert post(api,f'credentials/{mine}/reveal',{})['value']=='phx-rotated-by-admin-987' and row['revision']==2
+
+    # The owner turning the rule off ends what is hers too.
+    own=member_stores(api,'cpo','SLACK_TOKEN','xoxb-member-own-value-123')['id']
+    r=api.put('/api/v2/access/rules',json={'members_store_credentials':False},headers=headers())
+    assert r.status_code==200,r.text
+    post(api,f'credentials/{own}/grants',{'subject':'bot:finance'},'cara-test',expected=403)
+    get(api,'credentials','cara-test',expected=403)
 
 
 def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
