@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Naming a path no longer pauses a bot.** A note, message, task, approval or reply that names another bot's folder or a `secrets/` path is written as it is, never refused and never counted toward a quarantine; the mention is recorded for review. The runner no longer rewrites such paths in a bot's reply (local `file://` links still become plain words), and `TICO_ESCAPE_QUARANTINE_AT` is gone. An approval's payload naming the bot's own repository is accepted.
+- **Writing checks warn instead of refusing.** A task or unsolicited message for a person whose title does not start with a verb, or whose body runs over 120 words, is written, and the response's `warnings` (and the task's history) say what to fix next time. A daily update with a section label, a heading or too many words is posted with a `warning`; an empty update, a week in review without its slides, a missing title or a missing approval field are still refused. `TICO_STYLE_LINT=refuse` brings the refusals back. A merge approval with no pull request says to file a decision task for the person instead.
+- A bot can park a task it asked for itself in Waiting with a note saying what it waits on; the response warns that it goes back to open after a day unless the wait is recorded.
+- **Done with subtasks still open.** A bot can mark its task Done, or close it, while subtasks are open. They stay open, and the task's history and the Finished or Closed notice end with "Still open:" and their titles.
+
 ### Added
 - **Members store credentials for their own bots.** Anyone on the team fills a credential card, or has BotOps store a pasted value (`hub credential set --for-bot`), for a bot they own or manage; it is granted to that bot at once. They replace only a credential they stored, never read a value, and cannot store for someone else's bot. The owner turns it off with the new team rule **Members store credentials for their bots** (Settings > Humans, `members_store_credentials`). See docs/permissions.md.
 - **Share a credential you added with your own bots.** The person who stored a credential can give it to, and take it from, bots they own or manage, in Tools > Credentials or through BotOps, without waiting on a credential administrator. They see its name, variable and grants, never its value unless it is also granted to them. Another person's bot, a person, or every computer stays an administrator's call, refused with who to ask. See docs/credential-vault.md.

@@ -439,9 +439,6 @@ def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
     tree = get(api, 'tasks/' + parent['id'] + '/tree')
     assert tree[0]['id'] == child['id'] and tree[0]['children'][0]['pr_state'] == 'open'
     relate(api, parent['id'], leaf['id'], 'parent', expected=422)
-    token = bot_token(api)
-    post(api, 'tasks/' + parent['id'], {'version': parent['version'], 'status': 'done'}, token=token, expected=422)
-    post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'}, token=token, expected=422)
     leaf = post(api, 'tasks/' + leaf['id'], {'version': leaf['version'], 'close': True})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE body='All subtasks done'").fetchone()[0] == 1
@@ -473,7 +470,6 @@ def test_parent_owner_bot_can_track_and_reparent_inherited_subtasks(api):
     # Company transparency grants reads; it does not grant unrelated task mutations.
     post(api, 'tasks/' + unrelated['id'], {'version': unrelated['version'], 'title': 'Change it'},
          token=token, expected=403)
-    post(api, 'tasks/' + parent['id'], {'version': parent['version'], 'status': 'done'}, token=token, expected=422)
     moved = relate(api, child['short_id'], parent['id'], 'parent', token=token, remove=True)
     assert related(moved, 'parent') == []
 
@@ -576,7 +572,6 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
                      headers=headers(token))
         assert r.status_code in (403, 422), (refused, r.text)
     shipped = post(api, 'tasks/' + ticket['id'], {'version': moved['version'], 'step': 'Shipped', 'owner': 'ben'})
-    post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token, expected=422)
     child = get(api, 'tasks/' + child['id'])['task']
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True})
     closed = post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token)

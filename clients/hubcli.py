@@ -344,31 +344,30 @@ def owner_from_registry(name):
 
 
 def task_problems(actor, owner, title, body, type=None):
-    """(resolved owner, the problems the server's `task_create` would refuse on), writing none.
+    """(resolved owner, the problems the server's `task_create` would refuse on, the writing
+    warnings it would accept with), writing none.
 
-    The owner's kind comes from the registry files; the lint (`lint_human_item`) and the reach
-    rule (`classify`) are hubdb's own functions run here. Reach against live state, the
+    The owner's kind comes from the registry files; the lint (`lint_human_item`) is hubdb's own
+    function run here. Reach against live state, the
     duplicate check and whether a named type exists are the hub's to decide at the real create.
     A type other than General is a custom type, whose tasks neither lint shapes.
     """
     from backend import hubdb as H
-    problems = []
+    problems, warnings = [], []
     title, body = str(title or "").strip(), str(body or "")
     general = str(type or "").strip().lower() in ("", H.GENERAL_TYPE)
     target = owner_from_registry(owner)
     if not target:
         problems.append(f"{owner} is not in registry/employees.yaml or registry/people.yaml")
-    if H.is_bot(actor) and H.classify(f"{title}\n{body}", to_actor=target) == "escape":
-        problems.append("the task reaches outside the hub (rule 8): a real create is refused "
-                        "and repeating it quarantines you")
-    if H.is_human(target) and general:
-        problems += H.lint_human_item(body, title=title)
-    elif not title:
+    if not title:
         problems.append("give it a title that says what you are asking for")
+    elif H.is_human(target) and general and H.STYLE_LINT != "off":
+        # writing problems: the create is accepted with these as warnings unless TICO_STYLE_LINT=refuse
+        (problems if H.STYLE_LINT == "refuse" else warnings).extend(H.lint_human_item(body, title=title))
     if H.is_bot(actor) and general:
         # plain-English titles: a warning this week, a refusal once TICO_TITLE_LINT=refuse
         problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-    return target, problems
+    return target, problems, warnings
 
 
 def cmd_task_dry_run(args, who):
@@ -388,10 +387,12 @@ def cmd_task_dry_run(args, who):
     slug = (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
     actor = H.bot_actor(slug) if slug else None
     body = body_of(args)
-    owner, problems = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
+    owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
     if problems:
-        print("\n".join(f"- {p}" for p in problems))
+        print("\n".join(f"- {p}" for p in problems + [f"{w} (warning)" for w in warnings]))
         return 1
+    for w in warnings:
+        print(f"- {w} (warning: the create is accepted)")
     print(f'ok: would create "{args.title.strip()}" for {owner} '
           f'({words_outside_quotes(body)} words outside quoted drafts)')
     return 0

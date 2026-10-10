@@ -478,60 +478,19 @@ def push_repo(path, env=None, timeout=60):
     return ahead, (stderr.splitlines() or [f"exit {result.returncode}"])[-1][:120]
 
 
-# The hub refuses a reply that names a secrets path or another bot's repository (rule 8,
-# backend/hubdb.py SECRETS_PATH and OTHER_REPO), and the reply rides on the completion, so one
-# such reference cost the whole turn: the lease lapsed and the job read as stopped partway. This
-# happened with Codex's `[emp-legal/...](file:///Volumes/...)` links.
-# A local file link opens nowhere but this Mac, so its target goes; a reference into another
-# bot's repository or into secrets/ is removed, as the refusal itself asks.
+# A local file link opens nowhere but this Mac, so its target goes and its words stay (Codex writes
+# `[emp-legal/...](file:///Volumes/...)` links). Paths written as text, another bot's folder or
+# secrets/ included, are kept as written: the hub accepts them, and rewriting them mangled replies.
 LOCAL_LINK = re.compile(r"\[([^\]]*)\]\(file://[^)\s]*\)")
 FILE_URL = re.compile(r"file://[^\s)\]`'\"]+")
-REPO_URL = re.compile(r"https?://[^\s)\]`'\"]*?(?<!\w)(emp|bot)-([a-z0-9-]+)/[^\s)\]`'\"]*", re.I)
-REPO_PATH = re.compile(r"(?:(?<![\w:/])/[^\s`'\"()\[\]]*?/)?(?<!\w)(emp|bot)-([a-z0-9-]+)/[^\s`'\"()\[\]]*", re.I)
-SECRETS_REF = re.compile(r"(?:(?<=^)|(?<=[\s\"'(/]))(?:[^\s`'\"()\[\]]*/)?secrets/[^\s`'\"()\[\]]*", re.I | re.M)
 
 
-def known_repo_names(workspace, assignments=()):
-    """The bot repository folders this computer knows: `bot-*` folders in the workspace, and `bot-<slug>` and the recorded
-    repository of each bot assigned here. Lower case, without a trailing slash."""
-    names = set()
-    try:
-        names |= {p.name.lower() for p in Path(workspace).iterdir() if p.is_dir() and p.name.lower().startswith("bot-")}
-    except (OSError, TypeError):
-        pass
-    for row in assignments or ():
-        slug = str((row or {}).get("bot") or "").lower()
-        if slug:
-            names.add("bot-" + slug)
-        repo = str(((row or {}).get("config") or {}).get("repo") or "").rstrip("/").rsplit("/", 1)[-1].lower()
-        if repo:
-            names.add(repo)
-    return names
-
-
-def scrub_reply(text, bot, known=None, own=None):
-    """The reply with the references the hub would refuse taken out; everything else as written. `emp-<name>/` is always
-    another bot's repository; `bot-<name>/` only when it is one of the `known` folders (known_repo_names), so an ordinary
-    word such as "bot-driven/" stays. With no `known`, only the `emp-` form goes."""
+def scrub_reply(text, bot=None):
+    """The reply with local file links made plain words; everything else as written."""
     if not text:
         return text
-
-    def other(what):
-        def swap(match):
-            prefix, slug = match.group(1).lower(), match.group(2)
-            if slug.lower() == str(bot).lower() or f"{prefix}-{slug.lower()}" == str(own or "").lower():
-                return match.group(0)
-            if prefix == "bot" and f"bot-{slug.lower()}" not in (known or ()):
-                return match.group(0)
-            found = match.group(0)
-            tail = found[len(found.rstrip(".,;:!?")):]      # a sentence's full stop is not the path
-            return f"({what} {slug}'s repository){tail}"
-        return swap
     text = LOCAL_LINK.sub(lambda m: m.group(1), text)
-    text = FILE_URL.sub("(a file on the runner's Mac)", text)
-    text = REPO_URL.sub(other("a link into"), text)
-    text = REPO_PATH.sub(other("a file in"), text)
-    return SECRETS_REF.sub(lambda m: "(a secrets file)" + m.group(0)[len(m.group(0).rstrip(".,;:!?")):], text)
+    return FILE_URL.sub("(a file on the runner's Mac)", text)
 
 
 PLAYBOOK_REF = re.compile(r"playbooks/[\w.-]+\.md")
@@ -3197,10 +3156,9 @@ class Runner:
                         reply = (reply + "\n\n" if reply else "") + "not pushed: a commit made this turn contains a secret"
                         log(f"Tico runner: {bot}: a commit made this turn contains a granted secret; it was not pushed")
             if outcome == "completed":
-                scrubbed = scrub_reply(reply, bot, known_repo_names(self.config.get("projects_dir"), self.assignments_seen),
-                                        own=self.local_path(bot).name if is_shared(config) else None)
+                scrubbed = scrub_reply(reply, bot)
                 if scrubbed != reply:
-                    log(f"Tico runner: {bot}: took local file links or other repositories' paths out of the reply")
+                    log(f"Tico runner: {bot}: took local file links out of the reply")
                     reply = scrubbed
             goal = attempt.get("chat_goal")
             if goal and goal["status"] == "active" and outcome != "completed" and not limited and not retryable:
