@@ -692,8 +692,11 @@ def view(c, who, settings, auth, github, config):
 
     # A bot.yaml asking to send without approval, or to forward to new addresses, has no effect until a person turns
     # it on in Tico (backend/mail_settings.py); the request itself is worth a look, since a bot or BotOps may write it.
+    # Whoever may turn it on sees it: the owner and admins for every bot, a person who manages a bot for that bot only.
     from .mail_settings import alert_text, alerts as mail_alerts
-    asking = mail_alerts(c) if full else []
+    asking = mail_alerts(c) if full or who.role == "human" else []
+    if not full:
+        asking = [(bot, extra) for bot, extra in asking if auth.bot_manager(c, who, bot)]
     if asking:
         checks.append(_check("mail_sending", "Mail sending", "warn",
                              "; ".join(alert_text(bot, extra) for bot, extra in asking[:3])

@@ -76,3 +76,48 @@ def test_health_alerts_while_bot_yaml_asks_for_more_than_a_person_approved(api):
     report(api, machine, "ops", {"outbound_send": True, "forward_to": ["me@personal.example", "x@elsewhere.example"]})
     assert setting(api)["forward_to"] == ["me@personal.example"]
     assert "ops asks to forward mail to x@elsewhere.example" in mail_alert(api)
+
+
+def test_a_manager_sees_the_alert_for_the_bots_they_manage_and_no_other(api):
+    from backend.tests.test_api import as_member
+    # Ben operates cpo and not ops; as a plain member (not an admin) he manages cpo only. Cara manages nothing.
+    as_member(api, "ben@acme.example")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    assign(api, machine, "cpo")
+    rows = {}
+    for bot in ("ops", "cpo"):
+        rows[bot] = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
+                     "configuration_valid": True, "problems": [],
+                     "mail_request": declared_access.mail_request({"outbound_send": True})}
+    r = api.post("/api/v2/runners/heartbeat", headers=headers(machine["token"]), json={
+        "version": "test", "platform": "test", "readiness": {"schema_version": 1, "runtimes": RUNTIMES, "bots": rows}})
+    assert r.status_code == 200, r.text
+
+    def seen(token):
+        checks = get(api, "health", token=token)["checks"]
+        return next((c["summary"] for c in checks if c["id"] == "mail_sending"), None)
+
+    owner = seen("ana-test")
+    assert "ops asks to send mail without approval" in owner and "cpo asks to send mail without approval" in owner
+    ben = seen("ben-test")
+    assert ben == "cpo asks to send mail without approval; a person must turn this on."
+    assert seen("cara-test") is None
+
+
+def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api, botops):
+    hint = ("A person who manages ops turns its mail sending on in Settings > Bots > ops > Mail sending, "
+            "or with `hub bot mail ops --send`")
+    own = _wake(api, botops)
+    r = act(api, own, "POST", "bots/ops/mail-settings", {"outbound_send": True}, ref=None)
+    assert r.status_code == 403 and r.json()["error"]["fix"] == hint, r.text
+    assert "go ahead" not in r.text and r.json()["error"]["link"].endswith("#/settings")
+    finish(api, botops, own)
+    lent = turn(api, botops, person="ana-test", text="Let ops send mail")
+    r = act(api, lent, "POST", "bots/ops/mail-settings", {"outbound_send": True})
+    assert r.status_code == 403 and r.json()["error"]["fix"] == hint and "go ahead" not in r.text, r.text
+    # Any other caller that is not a person gets the same pointer in the refusal itself.
+    _, _, attempt = setup_attempt(api, "ops")
+    r = change(api, {"outbound_send": True}, attempt["token"])
+    assert r.status_code == 403 and "Settings > Bots > ops > Mail sending" in r.json()["error"]["detail"]
+    assert "hub bot mail ops --send" in r.json()["error"]["detail"]

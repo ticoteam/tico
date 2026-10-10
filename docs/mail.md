@@ -501,7 +501,9 @@ The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send"
 repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
 approval for each message and the refusal names the setting. The bot's computer reports what bot.yaml asks, and
 Settings > Health shows "<bot> asks to send mail without approval; a person must turn this on" (or names the new
-forward addresses) until a person turns it on or the request goes away.
+forward addresses) until a person turns it on or the request goes away. The owner and admins see it for every bot;
+a person who manages a bot sees it for that bot only. The Support Agent's `software/hq-tickets reply` reads the same
+switch before it posts a reply to an HQ ticket.
 
 To have the rules written down, ask BotOps in chat in plain words: "let my Inbox Manager reply to support senders that
 support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
