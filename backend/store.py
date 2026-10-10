@@ -87,14 +87,16 @@ CREATE TABLE IF NOT EXISTS agents(
  model TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '', revoked_at TEXT, revoked_by TEXT);
 -- A Hermes profile asking to be connected to a bot (backend/agents.py): the code a person
--- reads out, the hash of the secret only the profile knows, and, from approval until the
--- profile collects it once, the minted credential.
+-- reads out, the hash of the secret only the profile knows, the public key that secret derives
+-- (token_key), and, from approval until the profile collects it once, the minted credential
+-- sealed to that key: only the profile's secret opens it.
 CREATE TABLE IF NOT EXISTS agent_pairings(
  id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, secret_hash TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', host TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '',
  harness TEXT NOT NULL DEFAULT 'hermes', client_hash TEXT NOT NULL DEFAULT '',
  state TEXT NOT NULL DEFAULT 'pending', bot TEXT, token TEXT,
- created TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT);
+ created TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT,
+ token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created);
 CREATE TABLE IF NOT EXISTS runners(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, operator TEXT NOT NULL REFERENCES humans(id),
@@ -667,6 +669,11 @@ class Store:
                 H.add_column(c, "tasks", "request_id", "TEXT")
                 # When an archived bot's agent last used its still-valid credential (backend/agents.py).
                 H.add_column(c, "agents", "archived_seen", "TEXT")
+                # The pairing secret's public key: a held agent credential is sealed to it (backend/agents.py). A
+                # credential held in plaintext by the release before that, and no longer collectable, goes now.
+                H.add_column(c, "agent_pairings", "token_key", "TEXT NOT NULL DEFAULT ''")
+                from .agents import wipe_unclaimable
+                wipe_unclaimable(c)
                 # Who added each credential, for the record. Older rows take it from their audit event once, when the
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
                 if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:

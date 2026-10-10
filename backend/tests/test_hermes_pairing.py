@@ -185,3 +185,43 @@ def test_pairing_preview_does_not_rotate_a_working_credential(api):
     assert "token" not in shown
     assert get(api, "me", token=token)["actor"] == "bot:scout"
     assert poll(api, made).json()["state"] == "pending"
+
+
+def test_the_held_credential_is_sealed_with_the_profiles_secret_and_never_in_the_row(api):
+    hermes_bot(api, status="planned")
+    pairing = pair(api).json()
+    assert approve(api, pairing["code"]).status_code == 200
+    with api.app.state.store.read() as c:
+        row = dict(c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone())
+    token = poll(api, pairing).json()["token"]
+    assert token.startswith("tico-agent-") and get(api, "me", token=token)["actor"] == "bot:scout"
+    # The row holds a sealed form only, and nothing in it is the token or the secret.
+    flat = repr(row)
+    assert row["token"] and token not in flat and "tico-agent-" not in flat and pairing["secret"] not in flat
+    # The server cannot open it without the secret: another secret's key does not.
+    from backend import agents
+    with api.app.state.store.read() as c:
+        assert agents.open_held_token(row, pairing["secret"]) == token
+        assert agents.open_held_token(row, "a-different-secret") is None
+    # A poll with a wrong secret is still a 404, and collection still clears it.
+    assert poll(api, pairing, "wrong").status_code == 404
+    beat(api, token)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone()[0] is None
+
+
+def test_a_credential_held_in_plaintext_before_the_upgrade_is_still_collected_then_wiped(api):
+    """A pairing approved by the previous release (plaintext `token`, no sealing key) still hands over within its ten
+    minutes; one past its time, or not approved, is wiped on start."""
+    from backend.store import Store
+    hermes_bot(api, status="planned")
+    live, stale = pair(api).json(), pair(api).json()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-live',token_key='' "
+                  "WHERE id=?", (live["pairing_id"],))
+        c.execute("UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-stale',token_key='',"
+                  "expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), stale["pairing_id"]))
+    Store(api.app.state.store.settings).initialize()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (stale["pairing_id"],)).fetchone()[0] is None
+    assert poll(api, live).json()["token"] == "tico-agent-legacy-live"
