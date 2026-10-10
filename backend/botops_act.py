@@ -332,6 +332,13 @@ def _place(path):
     return "#/settings", "", "Settings"
 
 
+def mail_settings_hint(bot, slug=""):
+    """Where a person turns a bot's mail sending on: the only fix for a refused write to its mail setting. `bot` is
+    the name the app shows, `slug` the one `hub` takes."""
+    return ("A person who manages " + bot + " turns its mail sending on in Settings > Bots > " + bot
+            + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
+
+
 def fix(path, code, status, acting, names, base=""):
     """`{"fix", "link"}` for a refusal of a BotOps call, or None. `acting` is the identity the route checked;
     `names` maps actor ids to display names."""
@@ -344,6 +351,11 @@ def fix(path, code, status, acting, names, base=""):
         link = "#/settings"
     elif status != 403:
         return None
+    elif slug and re.fullmatch(API + rf"bots/{_S}/mail-settings", normalize(path) or ""):
+        # Mail sending is a person's switch (backend/mail_settings.py): no request lends it to BotOps, so "go ahead"
+        # in chat would not help. Say who sets it and where.
+        text = mail_settings_hint(bot, slug)
+        link = "#/settings"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

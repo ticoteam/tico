@@ -55,15 +55,16 @@ If the ticket has a reply-to email, add an email-ready copy to the task. Send re
 
 ## 4. Post the requested reply
 
-While `outbound_send` is false in this bot's manifest, keep the reply as a draft on the task.
-When it is true, post the requested file from this bot's repository:
+Until a person who manages this bot turns its sending on in Tico, keep the reply as a draft on the task:
+`outbound_send` in bot.yaml only asks, and `reply` refuses while the switch in Tico is off or cannot be read.
+When it is on, post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md
 
 Verify the reply with `show` before saying it was posted. If you are genuinely unsure about the
 exact reply, you may use `payload` and `hub approval request --kind publish` and pass the resulting
 id with `--approval <approval-id>`. That optional approval must match this ticket and these exact
-bytes, and it does not turn `outbound_send` on.
+bytes, and it does not turn sending on.
 
 ## 5. Finish
 

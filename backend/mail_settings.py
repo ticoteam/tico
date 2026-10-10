@@ -79,15 +79,16 @@ def view(c, bot):
             "requested": request, "unapproved": unapproved(setting, request)}
 
 
-def require_person(who):
+def require_person(who, bot=""):
     """A person acting as themselves: never a bot or a computer, never BotOps or the Assistant acting for them."""
     if who.role not in ("owner", "human") or who.via or who.task_actor:
-        raise Problem("forbidden", "Only a person who manages this bot turns its mail sending on or off, "
-                                   "in Tico or with their own token", 403)
+        from .botops_act import mail_settings_hint
+        raise Problem("forbidden", "Only a person who manages this bot turns its mail sending on or off, in Tico or "
+                                   "with their own token" + (". " + mail_settings_hint(bot) if bot else ""), 403)
 
 
 def update(c, auth, who, bot, body):
-    require_person(who)
+    require_person(who, bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     if not auth.bot_manager(c, who, bot):
@@ -156,5 +157,5 @@ def install(app, store, auth, mutate):
     def write(request: Request, bot: str, body: M.MailSettingsUpdate):
         """Turn a bot's sending without approval on or off, or change its forward targets: a person only."""
         who = request.state.identity
-        require_person(who)
+        require_person(who, bot)
         return mutate(request, body, lambda c: update(c, auth, who, bot, body))
