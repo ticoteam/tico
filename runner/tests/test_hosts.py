@@ -190,15 +190,17 @@ class GrokAcp(unittest.TestCase):
 
 # ----------------------------------------------------------------------------- Claude (stream-json)
 class ClaudeProcess:
-    """Popen's surface for one `claude -p` run: the prompt arrives on stdin, stream-json leaves
-    on stdout, and the test decides when and how the process exits."""
+    """Popen's surface for one `claude -p` run: stream-json user messages arrive on stdin,
+    stream-json leaves on stdout, and the test decides when and how the process exits. Like
+    Claude, it exits once stdin is closed (the turn being over)."""
 
     instances = []
 
     def __init__(self, argv, **kw):
         self.argv = argv
         self.kwargs = kw
-        self.prompt = ""
+        self.written = ""
+        self.closed = False
         self.stdout = _Stdout()
         self.stdin = self
         self.pid = 4243
@@ -208,13 +210,42 @@ class ClaudeProcess:
 
     # ---- stdin
     def write(self, text):
-        self.prompt += text
+        assert not self.closed, "write after close"
+        self.written += text
 
     def flush(self):
         pass
 
     def close(self):
-        pass
+        if not self.closed:
+            self.closed = True
+            if self._rc is None:
+                self.exit(0)
+
+    def messages(self, count=1):
+        """The user messages written so far, once at least `count` have arrived."""
+        import time
+        for _ in range(400):
+            lines = [json.loads(line) for line in self.written.splitlines()]
+            if len(lines) >= count:
+                return lines
+            time.sleep(0.005)
+        raise AssertionError(f"only {self.written!r} written")
+
+    def texts(self, count=1):
+        return [m["message"]["content"][0]["text"] for m in self.messages(count)]
+
+    def replay(self, index):
+        self.push({"type": "user", "isReplay": True, "uuid": self.messages(index + 1)[index]["uuid"],
+                   "message": {"role": "user", "content": "..."}, "parent_tool_use_id": None})
+
+    def wait_closed(self):
+        import time
+        for _ in range(400):
+            if self.closed:
+                return True
+            time.sleep(0.005)
+        return False
 
     # ---- the test's side
     def push(self, obj):
@@ -224,13 +255,15 @@ class ClaudeProcess:
         self._rc = rc
         self.stdout.q.put(None)
 
-    def result(self, text="pong", is_error=False, rc=0, **extra):
+    def result(self, text="pong", is_error=False, rc=0, exit=True, cost=0.1131, **extra):
+        """A `result` line; `exit=False` leaves the process running, as Claude does while stdin is open."""
         usage = {"input_tokens": 2, "cache_creation_input_tokens": 10521,
                  "cache_read_input_tokens": 15560, "output_tokens": 4}
         self.push({"type": "result", "subtype": "error_during_execution" if is_error else "success",
                    "is_error": is_error, "result": text, "stop_reason": "end_turn",
-                   "session_id": self.session_id(), "total_cost_usd": 0.1131, "usage": usage, **extra})
-        self.exit(rc)
+                   "session_id": self.session_id(), "total_cost_usd": cost, "usage": usage, **extra})
+        if exit:
+            self.exit(rc)
 
     def session_id(self):
         for flag in ("--session-id", "--resume"):
@@ -255,6 +288,7 @@ class ClaudeProcess:
 
 def make_claude(**kw):
     ClaudeProcess.instances = []
+    kw.setdefault("version", lambda: "2.1.296 (Claude Code)")
     host = ClaudeHost(bot="cpo", spawn=lambda argv, **kwargs: ClaudeProcess(argv, **kwargs), **kw)
     host.start()
     return host
@@ -311,7 +345,7 @@ class ClaudeStreamJson(unittest.TestCase):
         fresh = ClaudeProcess.instances[-1]
         self.assertNotIn("--resume", fresh.argv)
         self.assertEqual(fresh.argv[fresh.argv.index("--session-id") + 1], "gone-session")
-        self.assertEqual(fresh.prompt, "ping")
+        self.assertEqual(fresh.texts(), ["ping"])
         events = self.finish(host, fresh)
         self.assertEqual([e["kind"] for e in events if e["kind"] in ("diagnostic", "turn_failed", "turn_completed")],
                          ["diagnostic", "turn_completed"])
@@ -338,6 +372,185 @@ class ClaudeStreamJson(unittest.TestCase):
         self.assertIsNone(host.active_turn(tid))
         host.interrupt(tid, turn)                              # nothing running: a no-op
         self.assertEqual(host.drain(), [])
+        with self.assertRaises(base.SteerRefused):
+            host.steer(tid, turn, "too late")
+        host.stop()
+
+    def test_the_prompt_is_a_stream_json_message_and_stdin_stays_open_until_the_result(self):
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "hello")
+        proc = ClaudeProcess.instances[-1]
+        self.assertEqual(proc.argv[proc.argv.index("--input-format") + 1], "stream-json")
+        self.assertIn("--replay-user-messages", proc.argv)
+        [prompt] = proc.messages()
+        self.assertEqual((prompt["type"], prompt["message"]["role"]), ("user", "user"))
+        self.assertEqual(prompt["message"]["content"], [{"type": "text", "text": "hello"}])
+        self.assertTrue(prompt["uuid"])
+        self.assertFalse(proc.closed)                          # open for steers while the turn runs
+        proc.replay(0)
+        proc.result(text="hi", exit=False)
+        self.assertTrue(proc.wait_closed())                    # every message read: the turn is over
+        events = self.drain(host)
+        self.assertEqual([(e["kind"], e.get("text")) for e in events if e["kind"] in ("message", "turn_completed")],
+                         [("message", "hi"), ("turn_completed", None)])
+        self.assertTrue(all(e["turn_id"] == turn for e in events if e["kind"] == "turn_completed"))
+        host.stop()
+
+    def test_a_steer_read_mid_turn_is_part_of_the_same_turn(self):
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "run the tests")
+        proc = ClaudeProcess.instances[-1]
+        proc.replay(0)
+        host.steer(tid, turn, "and the linter")
+        steer = proc.messages(2)[1]
+        self.assertEqual(steer["type"], "user")
+        self.assertEqual(steer["message"]["content"], [{"type": "text", "text": "and the linter"}])
+        self.assertNotEqual(steer["uuid"], proc.messages()[0]["uuid"])
+        proc.replay(1)                                         # read at a tool boundary
+        proc.result(text="tests and linter pass", exit=False)
+        self.assertTrue(proc.wait_closed())
+        events = self.drain(host)
+        finals = [e["text"] for e in events if e["kind"] == "message" and e.get("final")]
+        self.assertEqual(finals, ["tests and linter pass"])
+        self.assertEqual([e["status"] for e in events if e["kind"] == "turn_completed"], ["completed"])
+        host.stop()
+
+    def test_a_result_before_a_steer_is_read_waits_for_the_steers_own_result_and_keeps_both(self):
+        import time
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "first")
+        proc = ClaudeProcess.instances[-1]
+        proc.replay(0)
+        host.steer(tid, turn, "second")
+        proc.messages(2)
+        proc.result(text="answer one", exit=False, cost=0.1)   # Claude ended its turn before reading it
+        time.sleep(0.05)
+        early = host.drain()
+        self.assertFalse(proc.closed)
+        self.assertFalse([e for e in early if e["kind"] in ("turn_completed", "turn_failed", "tokens")])
+        self.assertEqual(host.active_turn(tid), turn)
+        proc.replay(1)                                         # it starts Claude's next turn in this process
+        proc.result(text="answer two", exit=False, cost=0.25)  # total_cost_usd is cumulative per process
+        self.assertTrue(proc.wait_closed())
+        events = early + self.drain(host)
+        self.assertEqual([e["text"] for e in events if e["kind"] == "message" and e.get("final")],
+                         ["answer one\n\nanswer two"])
+        [tokens] = [e for e in events if e["kind"] == "tokens"]
+        one = usage_tokens({"input_tokens": 2, "cache_creation_input_tokens": 10521,
+                            "cache_read_input_tokens": 15560, "output_tokens": 4})
+        self.assertEqual((tokens["input"], tokens["output"], tokens["total"]), tuple(2 * n for n in one))
+        self.assertEqual(tokens["usage"]["cached"], 2 * 15560)
+        self.assertAlmostEqual(tokens["cost_usd"], 0.25)
+        self.assertEqual([e["status"] for e in events if e["kind"] == "turn_completed"], ["completed"])
+        host.stop()
+
+    def test_an_empty_or_repeated_result_adds_nothing_to_the_reply(self):
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "first")
+        proc = ClaudeProcess.instances[-1]
+        for i, text in enumerate(("same", "same", "", "next")):
+            host.steer(tid, turn, f"steer {i}")
+            proc.messages(i + 2)
+            proc.result(text=text, exit=False)
+            proc.replay(i + 1)
+        proc.result(text="next", exit=False)
+        self.assertTrue(proc.wait_closed())
+        events = self.drain(host)
+        self.assertEqual([e["text"] for e in events if e["kind"] == "message" and e.get("final")],
+                         ["same\n\nnext"])
+        host.stop()
+
+    def test_a_steer_never_read_after_a_result_fails_the_turn_after_the_silence(self):
+        from unittest import mock
+        from runner.hosts import claude
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "first")
+        proc = ClaudeProcess.instances[-1]
+        host.steer(tid, turn, "never read")
+        proc.messages(2)
+        with mock.patch.object(claude, "STEER_READ_TIMEOUT_S", 0.1):
+            proc.result(text="answer one", exit=False)
+            events = self.drain(host)
+        self.assertTrue(proc.closed and proc.terminated)
+        [failed] = [e for e in events if e["kind"] == "turn_failed"]
+        self.assertEqual(failed["error"], "Claude did not read a follow-up message within 0.1 s; it was not applied")
+        self.assertFalse(failed["limit"])
+        self.assertFalse([e for e in events if e["kind"] == "turn_completed"])
+        self.assertIsNone(host.active_turn(tid))
+        host.stop()
+
+    def test_steering_needs_the_claude_code_that_was_verified(self):
+        for version, steers in (("2.1.296 (Claude Code)", True), ("2.2.0 (Claude Code)", True),
+                                ("2.1.295 (Claude Code)", False), ("", False), ("claude: not found", False)):
+            self.assertEqual(make_claude(version=lambda v=version: v).supports_steer, steers, version)
+
+    def test_a_replay_without_the_written_uuid_counts_for_the_oldest_unread_message(self):
+        logs = []
+        host = make_claude(log=logs.append)
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "first")
+        proc = ClaudeProcess.instances[-1]
+        host.steer(tid, turn, "one")
+        host.steer(tid, turn, "two")
+        proc.messages(3)
+        for uuid_field in ({}, {"uuid": "made-up"}):          # the prompt, then the first steer
+            proc.push({"type": "user", "isReplay": True, "message": {"role": "user", "content": "..."},
+                       "parent_tool_use_id": None, **uuid_field})
+        proc.push({"type": "user", "isReplay": True, "uuid": proc.messages()[1]["uuid"],
+                   "message": {"role": "user", "content": "..."}, "parent_tool_use_id": None})  # read already
+        proc.result(text="partial", exit=False)
+        import time
+        time.sleep(0.05)
+        self.assertFalse(proc.closed)                          # "two" is still unread
+        proc.push({"type": "user", "isReplay": True, "message": {"role": "user", "content": "..."},
+                   "parent_tool_use_id": None})
+        proc.result(text="all three", exit=False)
+        self.assertTrue(proc.wait_closed())
+        events = self.drain(host)
+        self.assertEqual([e["status"] for e in events if e["kind"] == "turn_completed"], ["completed"])
+        self.assertEqual(sum("did not carry the uuid" in line for line in logs), 1)
+        host.stop()
+
+    def test_a_steer_after_stdin_closed_is_refused_with_nothing_written(self):
+        host = make_claude()
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "ping")
+        proc = ClaudeProcess.instances[-1]
+        proc.messages()
+        proc._rc = 0                                           # keep the process "running" past the close
+        proc.result(text="pong", exit=False)
+        self.assertTrue(proc.wait_closed())
+        self.assertEqual(host.active_turn(tid), turn)          # ending, not yet over
+        with self.assertRaises(base.SteerRefused):
+            host.steer(tid, turn, "late")
+        with self.assertRaises(base.SteerRefused):
+            host.steer(tid, "another-turn", "wrong turn")
+        self.assertEqual(len(proc.messages()), 1)
+        proc.exit(0)
+        self.assertEqual([e["status"] for e in self.drain(host) if e["kind"] == "turn_completed"], ["completed"])
+        with self.assertRaises(base.SteerRefused):
+            host.steer(tid, turn, "after the turn")
+        host.stop()
+
+    def test_a_missing_session_is_not_relaunched_once_a_steer_went_in(self):
+        import time
+        host = make_claude()
+        tid = host.resume_thread("cpo", "gone-session", self.SETTINGS)
+        turn = host.start_turn(tid, "ping")
+        dead = ClaudeProcess.instances[-1]
+        host.steer(tid, turn, "and another thing")
+        dead.messages(2)
+        dead.result(text="", is_error=True, rc=1, errors=["No conversation found with session ID: gone-session"])
+        events = self.drain(host)
+        time.sleep(0.02)
+        self.assertEqual(len(ClaudeProcess.instances), 1)
+        self.assertEqual([e["kind"] for e in events if e["kind"] in ("diagnostic", "turn_failed", "turn_completed")],
+                         ["turn_failed"])
         host.stop()
 
 # ----------------------------------------------------------------------------- Gemini (stream-json)

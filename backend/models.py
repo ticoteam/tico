@@ -1435,6 +1435,9 @@ class Completion(Contract):
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
+    # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
+    # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
+    undelivered: list[ID] = Field(default_factory=list, max_length=100)
 
 
 class Retry(Contract):

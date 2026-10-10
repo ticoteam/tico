@@ -72,6 +72,14 @@ class HostError(RuntimeError):
     """The runtime refused a call, or died while answering one."""
 
 
+class SteerRefused(HostError):
+    """`steer` wrote nothing because the turn is over or already ending.
+
+    Unlike a bare HostError, the input certainly did not reach the runtime, so the runner may
+    hand it to a new turn instead of treating its delivery as uncertain.
+    """
+
+
 class Host:
     """One runtime. Subclasses implement everything below `start`."""
 
