@@ -58,7 +58,7 @@ LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": True}
+                     "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
 
 # What a computer with no registry runs on: sending is on globally (each bot still needs `outbound_send: true` and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
@@ -704,12 +704,19 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                    if is_reply else "the hub does not write to them."),
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
-    if attachments and not pol["defaults"]["allow_attachments"]:
-        raise Refused("attachments are not allowed on mail the hub writes "
-                      "(defaults.allow_attachments: false in registry/mail-policy.yaml).",
-                      "Draft it without --attach and put the file on the task, or ask for the "
-                      "policy to allow attachments.")
+    if attachments:
+        check_attachments_allowed(pol)
     return everyone
+
+
+def check_attachments_allowed(pol):
+    """Refuses (exit 2) any attachment unless the policy opts in. Checked before a file is read."""
+    if not pol["defaults"]["allow_attachments"]:
+        raise Refused("attachments are not allowed on mail the hub writes "
+                      "(defaults.allow_attachments is false in registry/mail-policy.yaml; "
+                      "it is off unless the team turns it on).",
+                      "Draft it without --attach and put the file on the task, or ask the owner "
+                      "to set defaults.allow_attachments: true.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -839,6 +846,23 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
                         "sender of the thread being replied to go without one")
 
     caps = caps_for(pol, allowance)
+    if attachments:
+        # A file can carry anything the bot's computer holds, and a reviewer only sees its name and
+        # size, so no standing path (an internal address, a forward target, the thread's sender or an
+        # allowance) covers it: every attached send needs the owner's per-message yes.
+        if not caps["allow_attachments"]:
+            return no("attachments", "attachments are not allowed (defaults.allow_attachments is "
+                                     "false in registry/mail-policy.yaml)")
+        seen = appr
+        if seen is not None and not seen["ok"] and not ext and not ext_cc:
+            seen = approval_check(approval, to, cc, thread_id, repo, slug=slug)  # all internal
+        if not (seen and seen["ok"]):
+            return no("attachments", "a message with attachments needs a per-message approval, "
+                      "even to a recipient who needs none without them; pass --approval-issue "
+                      "(a GitHub Issue, a Tico send approval, or the owner's message telling this "
+                      "employee to send)"
+                      + (f". {seen['detail']}" if seen and seen.get("detail") else ""))
+        ok("attachments", f"{attachments} file(s) approved by {seen['detail']}")
     if full:
         ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
                    f"Issue {appr['issue']}, which names every address on it")
@@ -853,8 +877,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
                               f"({', '.join(ext_cc)})"
                               + ("; an --approval-issue that names every address lifts it"
                                  if not approval else ""))
-    if attachments and not caps["allow_attachments"]:
-        return no("caps", "attachments are not allowed")
     if conn is not None:
         from . import db                                # noqa: PLC0415
         day = now.astimezone(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")

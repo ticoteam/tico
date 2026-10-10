@@ -95,6 +95,30 @@ class Chain(Stage2):
         d = self.decide([ME], conn=conn)
         self.assertEqual((d["gate"], "cooldown" in d["reason"]), ("caps", True))
 
+    def test_an_attachment_needs_an_approval_on_every_path_that_otherwise_needs_none(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        reply = {"thread_id": THREAD, "thread_senders": [AVA]}
+        self.assertTrue(self.decide([AVA], **reply).allowed)             # no file: the sender needs no yes
+        for to, extra in (([AVA], reply), ([ME], {}), (["colleague@acme.example"], {})):
+            d = self.decide(to, attachments=1, **extra)
+            self.assertEqual(d["gate"], "attachments", (to, d))
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
+        self.assertTrue(self.decide([AVA], attachments=1, approval="77", **reply).allowed)
+        pl.RUN = harness.gh_answer(state="OPEN", body=f"Send to: {AVA}")        # an open Issue is no yes
+        self.assertEqual(self.decide([AVA], attachments=1, approval="77", **reply)["gate"], "attachments")
+
+    def test_the_default_policy_refuses_attachments_and_an_explicit_true_allows_them(self):
+        self.write_policy(harness.POLICY.replace("  allow_attachments: false\n", ""))
+        self.assertFalse(self.policy()["defaults"]["allow_attachments"])
+        self.assertFalse(pl.FALLBACK_DEFAULTS["allow_attachments"])
+        with self.assertRaises(Refused):
+            pl.check_draft(self.policy(), "inbox", "ana@acme.example", [AVA], attachments=1)
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
+        self.assertEqual(self.decide([AVA], attachments=1, approval="77")["gate"], "attachments")
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        pl.check_draft(self.policy(), "inbox", "ana@acme.example", [AVA], attachments=1)
+        self.assertTrue(self.decide([AVA], attachments=1, approval="77").allowed)
+
     def test_forward_to_reads_a_list_or_a_comma_string_and_nothing_else(self):
         self.assertEqual(access.forward_to({"forward_to": "A@x.example, b@y.example;a@x.example, nope"}),
                          ["a@x.example", "b@y.example"])
@@ -120,6 +144,20 @@ class Cli(Stage2):
                                    "--body-file", self.body_file(FORWARD), "--issue", "2", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "2")
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_an_attached_reply_to_the_sender_waits_for_an_approval(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", "1", "--json")
+        self.assertEqual((rc, p.get("send_needs_approval")), (0, True), err)
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
+        self.assertEqual((out["sent"], out["gate"]), (False, "attachments"), out)
+        self.assertEqual(self.service.sent, [])
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", "77")
         self.assertEqual((rc, out["sent"]), (0, True), out)
 
     def test_a_stranger_is_still_a_draft(self):
@@ -152,7 +190,7 @@ class NoRegistry(Stage2):
         self.assertEqual(pol["blocklist"], {"addresses": [], "domains": []})
         self.assertEqual(pol["allowances"], [])
         self.assertEqual((pol["defaults"]["max_sends_per_day"], pol["defaults"]["max_external_recipients"],
-                          pol["defaults"]["allow_attachments"]), (20, 1, True))
+                          pol["defaults"]["allow_attachments"]), (20, 1, False))
         self.assertEqual(pol["internal_domains"], ["acme.example"])            # the bot's own mailbox domain
 
     def test_internal_domains_come_from_the_roster_without_public_providers(self):
