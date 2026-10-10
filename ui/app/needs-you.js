@@ -19,9 +19,9 @@ function needsV2Item(it, folded, showName = true) {
     acts.push(`<button class="ghost danger" type="button" data-v2-task="${esc(it.id)}" data-v2-close="1">Close</button>`);
   }
   if (it.conversation_id) acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
-  const payload = it.payload && typeof it.payload === 'object'
-    ? `<div class="req-next"><span>Exactly this</span><div class="md"><pre>${esc(JSON.stringify(it.payload, null, 2))}</pre></div></div>` : '';
-  return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${folded ? ' hidden data-folded' : ''}>
+  const payload = it.payload && typeof it.payload === 'object' ? approvalPayloadNode(it).outerHTML : '';
+  const keep = kind === 'approval' ? ` data-patch-key="approval:${esc(it.id)}"` : '';
+  return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${keep}${folded ? ' hidden data-folded' : ''}>
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
@@ -38,6 +38,73 @@ function needsV2Item(it, folded, showName = true) {
       <div class="issue-compose" hidden></div>
     </div>
   </details>`;
+}
+// What an approval asks for, built as elements with every payload value set as text; the markup the list
+// redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
+// recipients, subject, draft and files readably; every kind keeps the exact payload under Details.
+const APPROVAL_FILE_ID = /^[A-Za-z0-9-]{8,80}$/;   // the ids the file viewer opens (fileLinkId)
+function approvalFileIcon() {
+  const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
+  for (const [k, v] of Object.entries({viewBox: '0 0 14 14', width: '13', height: '13', class: 'approval-file-icon', 'aria-hidden': 'true', focusable: 'false'})) svg.setAttribute(k, v);
+  for (const [k, v] of Object.entries({d: 'M3.5 1.5h4.5l2.5 2.5v8.5h-7z M8 1.5V4h2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linejoin': 'round'})) path.setAttribute(k, v);
+  svg.append(path);
+  return svg;
+}
+function approvalPayloadNode(it) {
+  const p = it.payload, el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = String(text);
+    return node;
+  };
+  const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
+  box.append(el('span', '', 'Exactly this'), main);
+  const raw = el('pre', '', JSON.stringify(p, null, 2));
+  if (it.what !== 'send') { main.append(raw); return box; }
+  const list = v => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(String).join(', ');
+  const facts = el('dl', 'approval-facts');
+  for (const [label, value] of [['From', p.mailbox], ['To', list(p.to)], ['Cc', list(p.cc)],
+                                ['Subject', p.subject], ['Draft', p.draft]]) {
+    if (value == null || value === '') continue;
+    facts.append(el('dt', '', label), el('dd', label === 'Draft' ? 'mono' : '', value));
+  }
+  main.append(facts);
+  const files = Array.isArray(p.attachments) ? p.attachments.filter(f => f && typeof f === 'object') : [];
+  if (files.length) {
+    const ul = el('ul', 'approval-files');
+    ul.setAttribute('aria-label', 'Attached files');
+    for (const f of files) {
+      const li = el('li'), name = String(f.name ?? 'file'), size = Number(f.size), hash = String(f.sha256 ?? '');
+      li.append(approvalFileIcon());
+      const id = String(f.file_id ?? '');
+      if (APPROVAL_FILE_ID.test(id)) {
+        const a = el('a', 'approval-file-name', name);
+        a.href = '/api/v2/files/' + encodeURIComponent(id);
+        a.dataset.name = name;
+        li.append(a);
+      } else li.append(el('span', 'approval-file-name', name));
+      if (Number.isFinite(size) && size >= 0) li.append(el('span', 'approval-file-size', bytes(size)));
+      if (hash) {
+        const code = el('code', 'approval-file-hash', hash.slice(0, 12));
+        code.title = 'sha256 ' + hash;
+        li.append(code);
+      }
+      ul.append(li);
+    }
+    main.append(ul);
+  }
+  const details = el('details', 'approval-raw');
+  details.append(el('summary', '', 'Details'), raw);
+  main.append(details);
+  return box;
+}
+// Approvals waiting on the person lead Needs you, decided in place with Approve or Decline.
+const pendingApprovals = () => (S.v2?.needs || []).filter(it => it.kind === 'approval');
+function approvalsHTML() {
+  const items = pendingApprovals();
+  if (!items.length) return '';
+  return `<section class="tl-group" data-group="approvals"><header class="tl-ghead"><span class="tl-gname">Approvals</span><span class="tl-gcount tnum">${items.length}</span></header>
+    <div class="tl-rows" role="list" aria-label="Approvals">${items.map(it => needsV2Item(it, false)).join('')}</div></section>`;
 }
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.

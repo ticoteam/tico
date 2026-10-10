@@ -1371,20 +1371,83 @@ def draft_files(ctx, draft):
     return found
 
 
-def approval_request(ctx, draft_id, to, cc, subject, body, files):
+def draft_task(ctx):
+    """The Tico task this draft belongs to: --issue (or HUB_ISSUE) when it is a Tico task id, else
+    the task the runner started this turn for (HUB_TASK_ID). '' when there is none."""
+    for value in (ctx.issue, os.environ.get("HUB_TASK_ID", "")):
+        if pl.HUB_ID.match(str(value or "").strip()):
+            return str(value).strip()
+    return ""
+
+
+def _default_task_attach(task_id, name, data, key):
+    """Attach one file to a Tico task through the API behind `hub task attach`; returns its file id.
+    Tests replace `TASK_ATTACH`. '' when this process holds no Tico credential."""
+    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    if not url or not token:
+        return ""
+    import base64, tempfile
+    from clients.tico import Client
+    api = Client(url, token)
+    path = f"tasks/{task_id}/files"
+    if api.features().get("task_files_multipart"):
+        with tempfile.TemporaryDirectory() as tmp:
+            upload = Path(tmp) / "upload"
+            upload.write_bytes(data)
+            result = api.post_multipart(path, {"file": upload}, {"name": name}, key=key)
+    elif len(data) <= 10_000_000:                       # an older server takes JSON bodies up to 10 MB
+        result = api.post(path, {"name": name, "content_base64": base64.b64encode(data).decode()},
+                          key=key)
+    else:
+        return ""
+    return str((result or {}).get("file_id") or "")
+
+
+TASK_ATTACH = _default_task_attach
+
+
+def attach_to_task(ctx, task_id, draft_id, attachments):
+    """Put each `--attach` file on the draft's task so the approver can open it. Returns
+    {sha256: file id} for the files that went up; a missing task or a failed upload leaves the
+    draft as it is and the approval request without links."""
+    if not task_id or not draft_id or ctx.dry:
+        return {}
+    ids = {}
+    for a in attachments or ():
+        key = f"mail-draft-attach:{task_id}:{draft_id}:{a['sha256']}"
+        try:
+            fid = str(TASK_ATTACH(task_id, a["name"], a["data"], key) or "")
+        except Exception as exc:                        # the approval check never depends on this
+            ctx.audit("task-attach", task_id, {"name": a["name"], "ok": False,
+                                              "error": str(exc)[:200]})
+            continue
+        if fid:
+            ids[a["sha256"]] = fid
+            ctx.audit("task-attach", task_id, {"name": a["name"], "ok": True, "file": fid})
+    return ids
+
+
+def approval_request(ctx, draft_id, to, cc, subject, body, files, file_ids=None, task_id=""):
     """The Tico send approval a human decides for a draft with files: the existing `send` payload
-    plus this draft's id and each file's name, size and sha256, which the send checks again."""
+    plus this draft's id and each file's name, size and sha256, which the send checks again.
+    `file_ids` ({sha256: Tico file id}) adds a `file_id` to the files that are on the task, so the
+    approval card can open them; the send never compares it."""
+    file_ids = file_ids or {}
     payload = {"to": list(to), "cc": list(cc), "subject": subject,
                "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
                "mailbox": ctx.mailbox, "draft": draft_id,
-               "attachments": [{"name": a["name"], "size": a["size"], "sha256": a["sha256"]}
+               "attachments": [{"name": a["name"], "size": a["size"], "sha256": a["sha256"],
+                                **({"file_id": file_ids[a["sha256"]]} if a["sha256"] in file_ids
+                                   else {})}
                                for a in files]}
-    task = f" --task {ctx.issue}" if pl.HUB_ID.match(ctx.issue or "") else ""
+    task = f" --task {task_id}" if task_id else ""
     command = ("hub approval request --kind send --payload "
                + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
     lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
              f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
-    lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})" for a in files]
+    lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})"
+              + (f", on task {task_id} as file {file_ids[a['sha256']]}" if a["sha256"] in file_ids else "")
+              for a in files]
     return {"kind": "send", "payload": payload, "command": command, "text": "\n".join(lines)}
 
 
@@ -1555,13 +1618,16 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "created": created, "reply": bool(reply_to), "chars": len(body),
                "attachments": files, "review": verdict.get("backend"),
                "review_ok": None if not verdict.get("available") else verdict.get("ok")})
+    # The files go on the draft's task before the request is printed, so the approver can open them.
+    task_id = draft_task(ctx) if files else ""
+    file_ids = attach_to_task(ctx, task_id, draft_id, attachments) if files else {}
     payload = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
                "draft": draft_id, "key": key, "thread": thread_id, "message": message_id,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
                "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
                "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
-               "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files)
-                                    if files else None),
+               "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files,
+                                                     file_ids, task_id) if files else None),
                "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
                "needs_owner": review_no,
                "why_needs_owner": review_why if review_no else "",

@@ -13,6 +13,7 @@ import fake, harness                                                 # noqa: E40
 from harness import MANIFESTS, POLICY, Stage2                        # noqa: E402
 
 from connectors.mail import Refused, policy as pl, access            # noqa: E402
+from connectors.mail import __main__ as cli                          # noqa: E402
 
 AVA, STRANGER, ME = "ava@creator.example", "stranger@elsewhere.example", "owner@personal-domain.example"
 INBOX_ON = """
@@ -310,6 +311,36 @@ class Cli(Stage2):
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)               # the approved draft is intact
         self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_attached_files_go_on_the_task_and_the_file_id_is_not_part_of_the_approval(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        data = b"%PDF-1.4 the answer"
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(data)
+        task, uploads = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", []
+        saved = cli.TASK_ATTACH
+        self.addCleanup(setattr, cli, "TASK_ATTACH", saved)
+        cli.TASK_ATTACH = lambda *call: uploads.append(call) or "f-answer-0001"
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", task, "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([(t, n, d) for t, n, d, _ in uploads], [(task, "answer.pdf", data)])
+        request = p["approval_request"]
+        self.assertEqual(request["payload"]["attachments"],
+                         [dict(file_meta("answer.pdf", data), file_id="f-answer-0001")])
+        self.assertTrue(request["command"].endswith(f" --task {task}"))
+        # The approval matches on name, size and sha256: another file_id, or none, approves the same files.
+        approved = dict(request["payload"], attachments=[dict(file_meta("answer.pdf", data), file_id="f-other")])
+        hub(dict(send_approval([AVA], []), payload=approved))
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", task,
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+        # No credential or a failed upload: the draft and the request still stand, without file ids.
+        cli.TASK_ATTACH = lambda *call: (_ for _ in ()).throw(RuntimeError("offline"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(data + b" v2")
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", task, "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(p["approval_request"]["payload"]["attachments"], [file_meta("answer.pdf", data + b" v2")])
 
     def test_the_draft_text_shows_the_approval_request_with_the_files(self):
         self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
