@@ -81,6 +81,8 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
+      TICO_GITHUB_REVIEW_ROLE:
+      TICO_TITLE_LINT:
       # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
       # must run as. Unset keeps the defaults.
       TICO_APP_NAME:
@@ -157,6 +159,8 @@ services:
       TICO_SLACK_DIGEST_MINUTES:
       TICO_SLACK_DIGEST_CAP:
       TICO_SLACK_SECRET_ARN:
+      TICO_TELEMETRY:
+      DO_NOT_TRACK:
       TICO_APP_NAME:
       TICO_ASSISTANT_NAME:
       TICO_INTEGRATIONS_DIR:
