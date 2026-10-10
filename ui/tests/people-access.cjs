@@ -34,7 +34,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
                 add_people: p.add_people === undefined ? true : !!p.add_people, add_people_default: p.add_people === undefined,
                 sign_in: p.sign_in !== false, can_sign_in: !p.left && !!p.email && p.sign_in !== false};
       }),
-      allowed: allowedPeople, allowed_domains: allowedDomains, admins: [], bot_admins: [], member_bot_limit: limit, rules: {assistant_direct: true, botops_direct: true, admin_credentials: true, admin_sql: true, member_tokens: true, ...rules},
+      allowed: allowedPeople, allowed_domains: allowedDomains, admins: [], bot_admins: [], member_bot_limit: limit, rules: {assistant_direct: true, botops_direct: true, botops_manages_bots: true, admin_credentials: true, members_store_credentials: true, admin_sql: true, member_tokens: true, ...rules},
       company_domains: ['acme.example'], company_domain_source: 'owner', revision, proxy: 'cloudflare',
       home_domain: 'acme.example', domain_sign_in: allowedDomains.includes('acme.example'), directory: directory.source});
     let me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', credential_access: false, config: CONFIG};
@@ -178,8 +178,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.deepEqual(await next(), ['limits', {member_bot_limit: 30}]);
 
     // The owner's rules are all on, and turning one off saves it (backend/team_rules.py).
-    assert.equal(await page.locator('[data-rule]').count(), 5);
-    assert.equal(await page.locator('[data-rule]:checked').count(), 5);
+    assert.equal(await page.locator('[data-rule]').count(), 7);
+    assert.equal(await page.locator('[data-rule]:checked').count(), 7);
     await page.locator('[data-rule=admin_sql]').uncheck();
     assert.deepEqual(await next(), ['rules', {admin_sql: false}]);
     await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);

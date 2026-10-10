@@ -69,6 +69,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/api/employees') return json(data.bots || bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
+    if (p === '/api/v2/bots/cmo/limit/retry') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({cleared: 1}); }
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()).ids); return json({}); }
@@ -248,6 +249,22 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.deepEqual(errors, [], 'quarantine banner errors');
       await context.close();
     }
+    for (const scheme of ['dark', 'light']) {
+      // A usage limit offers Try now beside the warning and in the chat banner; one click clears it.
+      const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme},
+        {status: {bot: 'cmo', state: 'limited', bot_state: 'active', since: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      const banner = page.locator('#conv-paused:not([hidden])');
+      await banner.waitFor();
+      assert.match(await banner.innerText(), /usage limit; your messages will run when it's back\s*Try now$/);
+      assert.match(await page.locator('#bot-alert').innerText(), /Try now/);
+      if (shots) await page.screenshot({path: path.join(shots, `bot-limit-try-now-${scheme}.png`)});
+      await banner.locator('[data-limit-retry]').click();
+      await page.locator('#conv-paused').waitFor({state: 'hidden'});
+      assert.deepEqual(cleared, ['/api/v2/bots/cmo/limit/retry']);
+      assert.deepEqual(errors, [], 'limit banner errors');
+      await context.close();
+    }
     {
       // An escape waits for a person, on a bot placed on a computer too: it says what the check matched, shows the
       // refused words and task under More, and Resume bot sits beside the warning.
@@ -271,6 +288,6 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.deepEqual(errors, [], 'escape banner errors');
       await context.close();
     }
-    console.log('bot page: Active, Updates, Files and Recurring; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More');
+    console.log('bot page: Active, Updates, Files and Recurring; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

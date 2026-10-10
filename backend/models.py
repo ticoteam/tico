@@ -1282,7 +1282,9 @@ class AccessRules(Contract):
     """Team rules the owner tightens (backend/team_rules.py); only what is sent changes."""
     assistant_direct: bool | None = None
     botops_direct: bool | None = None
+    botops_manages_bots: bool | None = None
     admin_credentials: bool | None = None
+    members_store_credentials: bool | None = None
     admin_sql: bool | None = None
     member_tokens: bool | None = None
 
@@ -1478,6 +1480,10 @@ class BotGoLive(Contract):
 
 
 class Empty(Contract):
+    pass
+
+
+class LimitRetry(Contract):
     pass
 
 

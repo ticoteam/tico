@@ -454,11 +454,12 @@ function orgTreeWithHelpers(byParent) {
   return out;
 }
 // A human's synced bots from a platform that holds many of them (Grok Bot: backend/external_sync.py) sit in one
-// cluster under that human, the platform's own sections nested inside. A single agent (Dots) is an ordinary row.
+// cluster under that human: pinned bots at the top, the platform's other sections nested inside. A single agent
+// (Dots) is an ordinary row.
 // One moved elsewhere on the chart, or with bots under it, stays an ordinary row.
 const CLUSTER_PROVIDERS = {grokbot: {label: 'Grok Bot', logo: 'xai'}};
 const clusterProvider = e => CLUSTER_PROVIDERS[e.harness] ? e.harness : CLUSTER_PROVIDERS[e.agent?.harness] ? e.agent.harness : '';
-const PINNED = /^pinned$/i;
+const isPinned = n => n.kind === 'bot' && /^pinned$/i.test((n.agent?.section || '').trim());
 function orgAgentClusters(byParent) {
   const tree = {}, clusters = {};
   for (const [parent, kids] of Object.entries(byParent)) {
@@ -471,7 +472,7 @@ function orgAgentClusters(byParent) {
         (tree[parent] ||= []).push(clusters[id]);
       }
       clusters[id].count++;
-      if (!section) { (tree['c:' + id] ||= []).push(n); return false; }
+      if (!section || isPinned(n)) { (tree['c:' + id] ||= []).push(n); return false; }
       const sid = id + '|' + section;
       if (!clusters[sid]) {
         clusters[sid] = {kind: 'cluster', id: sid, provider, name: section, section: true, count: 0};
@@ -524,10 +525,10 @@ function renderTree() {
       // A group's own humans and bots come first, then the groups nested in it.
       if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
       if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
-      // A cluster follows its human's own bots. Inside one, as on the platform, its sections (Pinned first) come
-      // before the bots in none.
+      // A cluster follows its human's own bots. Inside one, as on the platform, pinned bots lead, then its sections,
+      // then the bots in none.
+      if (isPinned(a) !== isPinned(b)) return isPinned(a) ? -1 : 1;
       if ((a.kind === 'cluster') !== (b.kind === 'cluster')) return (a.kind === 'cluster') === !parent.startsWith('c:') ? 1 : -1;
-      if (a.kind === 'cluster' && b.kind === 'cluster' && PINNED.test(a.name) !== PINNED.test(b.name)) return PINNED.test(a.name) ? -1 : 1;
       if ((a.kind === 'person') !== (b.kind === 'person')) return a.kind === 'person' ? -1 : 1;
       if (isTemp(a) !== isTemp(b)) return isTemp(a) - isTemp(b);
       if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);

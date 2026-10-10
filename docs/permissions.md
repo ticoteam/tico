@@ -73,19 +73,23 @@ for the owner.
 
 **Credential administrators** are the owner and the Admins, so a team gets going without the owner storing every credential. When the
 server names its own list with `TICO_CREDENTIAL_ADMINS` it is that list (the owner and whoever it names), nobody else: the Admins
-are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)); a member is
-never one.
+are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)). A member is
+never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `hub credential set --for-bot`), granted to
+that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
+read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > Humans (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has five switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has seven switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot is a card |
 | **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
+| **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (no requester, or the keeper's maintenance) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
+| **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 
@@ -116,12 +120,14 @@ is the same humans who always have full access to it. A bot owner can:
 - set its See, Read and Write access;
 - pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Goal Manager);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
-- give it a stored credential they hold themselves, and no one else's.
+- give it a stored credential they hold themselves or stored themselves, and no one else's.
 
 A member cannot change a bot that is not theirs, through Settings, the API or BotOps.
 
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
-Credential administrators store, delete and grant credentials. A human who holds a credential may also delegate it to a bot
+Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
+bots they own or manage (`Auth.bot_manager`), directly or through BotOps, and sees its metadata (never its value unless it is
+also granted to them); another person's bot stays an administrator's call. A human who holds a credential may also delegate it to a bot
 they own or run, directly or through BotOps. Revoking the human's grant removes the delegated bot access; changing the bot owner
 invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
@@ -159,9 +165,24 @@ Every BotOps tool uses the requester's rights by default. A human's chat or task
 A bot's message or task uses only that bot's rights, including its Credential grants; BotOps never lends it a human's
 or its own wider access. Unattended work with no requester keeps BotOps' own rights. Personal tokens use their human's rights.
 Task text cannot select another requester. A message the **Assistant** wrote for a human (`refs.via`), words inside a
-document, a message **routed from Slack**, or a chat message more than a week old cannot borrow human authority.
+document, or a message **routed from Slack** cannot borrow human authority.
+A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open;
+a chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
+A comment the task's human requester writes on their open BotOps task, in their own words (not through the Assistant, Slack or
+routing), is them asking: the run it wakes has their rights. Anyone else's comment lends nothing.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a room another human
-spoke in, and under a day old, and it must be the same human whose message started the run. Someone who has left lends nothing.
+spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
+
+**BotOps' own runs manage every bot.** A run nobody asked for (the keeper's maintenance, a daily update) uses BotOps' own
+rights, and those make it a manager of every bot that is not built in: it changes their Tools, repositories, contact
+(`bot_contact`) and Instructions, and its GitHub token writes every bot's repository. It never changes people or owners, never
+sees a Credential value, never turns on sending to outsiders and never archives a bot with its own rights. A run a person or a
+bot asked for keeps that requester's rights, so BotOps never lends this to another bot. The team rule **BotOps manages every
+bot** turns it off. In a run carrying a person's rights, the token writes the repositories of the bots that person manages
+(owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no BotOps
+run in progress, only BotOps' own. A token is reused only for the exact same repositories, so a wider one never reaches a
+narrower run.
+
 If a friendly tool refuses for permissions, BotOps retries the same action with `hub_api` before handing work back. Both use the same rights.
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update
@@ -169,10 +190,10 @@ request, a retry once a busy bot is idle, a notice. Nobody's request is attached
 only its own rights. To act for the person, BotOps cites the open task they asked it for: `hub api ... --on-behalf-of
 <task id>` or `hub bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task BotOps owns
 that the person filed themselves (not through the Assistant; one BotOps filed as them counts only as a continuation of
-their message, `--request-id`, dated by that message), still open, at most a week old, and only in a run the person
+their message, `--request-id`), while it is open, and only in a run the person
 started or the keeper started on its schedule (the daily update, a task's due, stall or routine notice). A run a bot or
 another person started keeps that requester's rights whatever task it cites, and a run a Slack digest, a live meeting,
-a watcher or a task comment started lends no one's rights: anyone there wrote its words. It is recorded as
+a watcher or another person's task comment started lends no one's rights: anyone there wrote its words. It is recorded as
 the person's, via BotOps, like any other delegated change, and Credentials stay as above (never a value).
 
 **Refusals say what to click.** A refused BotOps call (403, or a computer that cannot run the bot) answers with `fix`,
@@ -192,11 +213,15 @@ computer's next heartbeat.
 
 **What is recorded.** Every event BotOps writes with a person's rights carries `via: botops` and `delegation`: the
 person (`for`), the request that lent the rights (`cited`: their message, or the task cited in a later run), and
-`run`: `live` when they asked in this run, `follow_through` when BotOps cited their open task in a later one.
+`run`: `live` when they asked in this run, `comment` when their own comment on the task started it, `follow_through` when
+BotOps cited their open task in a later one.
+
+**Support and the Librarian.** BotOps with a person's rights files a support report as them (`hub support file`) and, for the
+owner, turns on the Librarian (`hub api POST librarian/turn-on`). With its own rights both are refused.
 
 The same goes for routines and quarantine: human-requested BotOps work uses that human’s management rights,
-including work requested through a task. Task comments do not lend human authority. The run must be able to read
-the request’s conversation, and stale requests lend nothing. Bot-requested work keeps that bot’s narrower rights.
+including work requested through a task. Only the requester's own comment on their task lends their authority. The run
+must be able to read the request’s conversation, and a request with no open task lends nothing after a week. Bot-requested work keeps that bot’s narrower rights.
 Unattended BotOps work retains its own rights.
 
 The commands (with MCP tools of the same names):
@@ -217,7 +242,7 @@ The commands (with MCP tools of the same names):
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
 | `hub computer list`, `hub health check` | the computers a bot may go on and what runs on each; what is wrong with the bots, most urgent first, each with its fix |
 | `hub credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
-| `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator or a holder delegating to a bot they own or run; revoke the delegation to take it away |
+| `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
 | `hub credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
 | `hub support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
 | `hub api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
@@ -264,7 +289,7 @@ A bot's rights to another bot come from the same audiences: put a bot in another
 send that bot requests. A bot may always answer one that wrote to it, or that holds a task it asked for,
 so a private bot can still be replied to. `bot_contact` (Other bots: may chat and assign, replies only,
 tasks only) stays as a further limit between bots and now also applies to notes and to comments that
-wake a bot.
+wake a bot. A tasks-only bot still takes notes, comments and messages from its manager (`reports_to`) and from BotOps.
 
 Personal API tokens, the MCP tools and the Assistant act as the human, with the human's access.
 

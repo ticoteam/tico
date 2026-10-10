@@ -26,7 +26,7 @@ tokens and revoke any of them.
 |---|---|
 | URL | `https://<your team hostname>/api/v2/mcp`: `TICO_RUNNER_URL`, or `TICO_PUBLIC_URL` when that is unset. The dialog shows the right one |
 | Transport | Streamable HTTP, JSON replies, stateless (no session id; `GET` answers 405) |
-| Auth | `Authorization: Bearer <token>`. No OAuth |
+| Auth | `Authorization: Bearer <token>`, or [OAuth sign-in](#oauth-sign-in) for agents that cannot send a header |
 | Tools | The `hub` command set (`clients/hubtools.py`): tasks, goals and KPIs, docs, bots, messages, approvals, updates, SQL. Each call runs as the token's human through the same routes the web app uses |
 | Instructions | The server's `initialize` reply carries the "who needs me" skill (`skills/who-needs-me/SKILL.md`), so nothing else needs pasting |
 
@@ -84,11 +84,11 @@ Your regular CLI configuration stays in its own directory.
 - Grok Build: `grok mcp add --transport http tico <URL> --header "Authorization: Bearer <token>"`, or
   `[mcp_servers.tico]` with `url` and `headers` in `~/.grok/config.toml`.
 
-**Dots.** OpenAI's always-on agents reach apps through ChatGPT plugins, which sign in with OAuth or
-not at all and cannot send a token. The dialog gives Dots the generic steps; until Tico's MCP server
-offers OAuth, Dots is not expected to connect. Once connected, [External agent sync](external-agent-sync.md#dots) puts
-it on the team chart under you. ChatGPT itself (developer mode, **Settings > Security
-and login > Developer mode**, then **Plugins > +**) is in the same position, so it has no tile.
+**Dots.** OpenAI's always-on agents reach apps through ChatGPT plugins, which sign in with OAuth and cannot send a
+token. Add a connector with the MCP server URL; Dots opens Tico's sign-in, you press **Allow**, and it works as you
+([OAuth sign-in](#oauth-sign-in)). [External agent sync](external-agent-sync.md#dots) then puts it on the team chart
+under you. ChatGPT itself (developer mode, **Settings > Security and login > Developer mode**, then **Plugins > +**)
+connects the same way.
 
 **Muse** (Meta)
 - The Muse app: ask Muse, in a chat, to make a custom connector for the MCP server at the URL with the
@@ -98,11 +98,9 @@ and login > Developer mode**, then **Plugins > +**) is in the same position, so 
 
 **Claude** (Anthropic)
 - Claude Code: `claude mcp add --transport http tico <URL> --header "Authorization: Bearer <token>"`.
-- The Claude app: **Customize > Connectors > Add custom connector**, paste the URL, choose **No
-  sign-in**, and under **Request headers** add `authorization` = `Bearer <token>`. Request headers are
-  a beta that not every plan has. On Team and Enterprise an owner adds the connector first under
-  **Organization settings > Connectors**. Without request headers, use the **Other** JSON in
-  **Settings > Developer > Edit Config** (Claude Desktop).
+- The Claude app: **Customize > Connectors > Add custom connector**, paste the URL, and sign in to Tico when it
+  asks ([OAuth sign-in](#oauth-sign-in)). On Team and Enterprise an owner adds the connector first under
+  **Organization settings > Connectors**.
 
 **Cursor.** In `~/.cursor/mcp.json` (or a project's `.cursor/mcp.json`), merged with any servers
 already there: `{"mcpServers": {"tico": {"url": "<URL>", "headers": {"Authorization": "Bearer <token>"}}}}`.
@@ -118,6 +116,21 @@ token written into the file.
 [`mcp-remote`](https://github.com/geelen/mcp-remote), which the dialog's JSON block sets up:
 `npx -y mcp-remote <URL> --header "Authorization:${TICO_AUTH}"` with `TICO_AUTH` set to `Bearer <token>`.
 Leave no space around that `:`.
+
+## OAuth sign-in
+
+For an agent that cannot send a header (Dots, ChatGPT, the Claude app), the server speaks the MCP authorization flow
+(`backend/mcp_oauth.py`): OAuth 2.1 with PKCE, dynamic client registration and no client secret.
+
+1. The agent's first call gets 401 with `WWW-Authenticate: Bearer resource_metadata="<runner URL>/api/v2/oauth/protected-resource"`.
+2. It reads the server's metadata (`<runner URL>/api/v2/oauth/.well-known/openid-configuration`) and registers itself.
+3. Your browser opens `<team URL>/oauth/authorize` behind your usual sign-in: **Allow** or **Deny**.
+4. The agent gets an access token (an hour) and a refresh token (90 days from its last use).
+
+The result is a personal token: the agent is you, with your rights, and nothing more. It is one line in **Settings >
+Computers > API tokens** named after the agent and the day; **Revoke** there stops it and its refresh at once. The
+owner's rule that limits personal tokens to admins limits this too. Every machine-facing path is under `/api/v2/`, so a
+runner hostname that passes only `/api/v2` needs nothing more; `/oauth/authorize` is on the team's own address.
 
 ## An agent that is a bot, not you
 

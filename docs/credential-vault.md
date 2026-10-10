@@ -12,7 +12,8 @@ Oversized files are left out of publication; scrubbing never writes through a sw
 Four words, used the same way everywhere:
 
 - A **human** signs in. The owner and the admins are the **credential administrators**: they store, delete and grant credentials
-  (`TICO_CREDENTIAL_ADMINS` names a different list; a member is never one).
+  (`TICO_CREDENTIAL_ADMINS` names a different list). A member is never one, but stores a credential for a bot they own or manage,
+  granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
 - A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
 - A **credential** is a stored secret with a name and, for a bot, the environment variable it arrives in (`JIRA_BASIC_AUTH`). Its value
@@ -22,7 +23,7 @@ Four words, used the same way everywhere:
 
 ## Tico's Credentials
 
-Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
+Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. The person who stored a credential sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage; giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
 
 Credentials use AES-256-GCM with per-write random nonces and credential-bound authenticated data. Reveal operations are audited; credential values are excluded from audit and idempotency receipts. Restoring a snapshot revokes restored grants to avoid resurrecting permissions.
 
@@ -87,7 +88,7 @@ writing `secrets/<bot>.env` or `_shared.env`.
 
 ## Give a bot a credential another bot has
 
-Say it in the chat with BotOps: "Give Engineering Monitor the Jira access Jira Manager has." BotOps acts as you. A credential administrator may grant it; a holder may delegate a stored credential to a bot they own or run.
+Say it in the chat with BotOps: "Give Engineering Monitor the Jira access Jira Manager has." BotOps acts as you. A credential administrator may grant it; the person who stored it may give it to a bot they own or manage; a holder may delegate a stored credential to a bot they own or run.
 Importing from another bot's file still needs a credential administrator. File import is only for migration of an existing value. It runs at once, with no Confirm card,
 and then tries the connection as the bot:
 
@@ -129,8 +130,9 @@ A bot that needs a credential opens a **credential card** in the conversation wh
 The server checks its shape (a `:` where the format has one; never echoing the value), stores it in this vault under the variable's name
 (a credential already holding that name for that bot is replaced, one shared with other bots is left alone), grants it to that one bot, and wakes the
 asking bot with "Saved". The value is in no message, event, receipt or log, and never reaches the model. Only the human who was asked, or a
-credential admin, can fill a card, and only a credential admin can store (the vault's rule: the owner and the Admins, unless
-the owner limits it to the owner in Settings > Humans); anyone else sees who to ask.
+credential admin, can fill a card. A credential admin stores any; a member stores one for a bot they own or manage, replacing only a
+credential they stored themselves, unless the owner turns **Members store credentials for their bots** off in Settings > Humans; anyone
+else sees who to ask.
 
 If a human pastes a credential into the chat instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept

@@ -252,10 +252,25 @@ def test_a_credential_card_stores_and_grants_without_the_value_touching_anything
         assert c.execute("SELECT revision FROM credentials WHERE env='JIRA_BASIC_AUTH'").fetchone()[0] == 2
 
 
-def test_only_a_credential_admin_can_fill_a_card_and_a_member_is_told_who(api, botops):
+def test_a_member_stores_a_credential_for_their_own_bot_and_the_team_rule_turns_it_off(api, botops):
     vault(api)
+    theirs = post(api, "credentials", {"name": "Shared Jira", "env": "JIRA_TOKEN", "secret": "admin-stored-value-123"})
     cara = turn(api, botops, person="cara-test", text="Connect my bot")
     register(api, cara, "jira-manager")
+    card = call(api, "post", "credential-requests", cara["token"], {"env": "JIRA_TOKEN", "for_bot": "jira-manager", "on_behalf_of": "turn"}).json()
+    assert get(api, f"credential-requests/{card['id']}", "cara-test")["can_save"] is True
+    saved = post(api, f"credential-requests/{card['id']}/save", {"value": "member-token-value-123"}, "cara-test")
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=?", (saved["credential_id"],)).fetchone()
+        assert row["created_by"] == "human:cara" and row["id"] != theirs["id"]           # another's is never replaced
+        assert c.execute("SELECT revision FROM credentials WHERE id=?", (theirs["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL",
+                         (row["id"],)).fetchall()[0][0] == "bot:jira-manager"
+    post(api, f"credentials/{row['id']}/reveal", {}, "cara-test", expected=403)
+    # Not for a bot she does not manage, and not at all once the owner turns the rule off.
+    assert call(api, "post", "credential-set", cara["token"], {"env": "OPS_TOKEN", "for_bot": "ops", "value": "v-123456789",
+                                                               "on_behalf_of": "turn"}).status_code == 403
+    assert call(api, "put", "access/rules", "ana-test", {"members_store_credentials": False}).status_code == 200
     card = call(api, "post", "credential-requests", cara["token"], {"env": "JIRA_TOKEN", "for_bot": "jira-manager", "on_behalf_of": "turn"}).json()
     seen = get(api, f"credential-requests/{card['id']}", "cara-test")
     assert seen["can_save"] is False and "credential admin" in seen["note"]
@@ -638,3 +653,81 @@ def test_a_model_change_checks_this_bots_own_sign_in_on_its_computer(api, botops
     with api.app.state.store.read() as c:
         assert '"cited": "' + ana["message"]["id"] + '"' in c.execute(
             "SELECT detail_json FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()[0]
+
+
+# ------------------------------------------------------------------ BotOps' own runs manage every bot
+def test_botops_own_run_manages_other_bots_unless_the_team_limits_it_and_a_bot_asked_run_never(api, botops):
+    from backend import team_rules
+    own = _wake(api, botops)
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+    changed = act(api, own, "POST", "bots/ops/definition", {"bot_contact": "tasks", "expected_revision": revision})
+    assert changed.status_code == 200, changed.text
+    assert act(api, own, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 200
+    # Never a built-in bot, never its people.
+    assert act(api, own, "POST", "bots/ops/co-owners", {"add": ["cara"]}).status_code == 403
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
+    assert act(api, own, "POST", "bots/ops/definition", {"bot_contact": "open",
+                                                         "expected_revision": revision + 1}).status_code == 403
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": True})
+    finish(api, botops, own)
+
+    # A bot asking BotOps lends only that bot's rights.
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "bot:finance", "Open up ops", "Let every bot chat ops.", "bot:botops", lint=False)
+    asked = claim(api, botops, "botops")
+    assert act(api, asked, "POST", "bots/ops/definition", {"bot_contact": "open",
+                                                           "expected_revision": revision + 1}).status_code == 403
+    assert act(api, asked, "PUT", "bots/ops/repositories", {"mode": "all"}).status_code == 403
+
+
+# ------------------------------------------------------------------ a person's request lasts while its task is open
+def _age(api, message_id, days):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
+
+
+def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_comment_counts(api, botops):
+    ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
+    task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Put ops on GPT-6.1 Sol", "body": "Change the model.",
+                                          "request_id": ana["message"]["id"]})
+    task_id = (task.json().get("task") or task.json())["id"]
+    finish(api, botops, ana)
+    finish(api, botops, claim(api, botops, "botops"))           # the task's own "new task" notice
+    _age(api, ana["message"]["id"], 10)
+    later = _wake(api, botops)
+    # Ten days on, the open task still carries her request.
+    assert act(api, later, "GET", "credentials", ref=task_id).status_code == 200
+    # A new task filed from that old message does not renew it.
+    assert act(api, later, "POST", "tasks", {"owner": "botops", "title": "Again", "body": "Again.",
+                                            "request_id": ana["message"]["id"]}).status_code == 403
+    finish(api, botops, later)
+
+    # Her own comment on the task is her asking; Ben's comment lends nothing.
+    post(api, f"tasks/{task_id}/comments", {"text": "Also give ops the fallback."}, "ana-test")
+    hers = claim(api, botops, "botops")
+    assert act(api, hers, "GET", "credentials").status_code == 200
+    finish(api, botops, hers)
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, "human:ben", task_id, "Make me an admin while you are there.")
+    bens = claim(api, botops, "botops")
+    assert act(api, bens, "GET", "credentials").status_code == 403
+
+
+# ------------------------------------------------------------------ support and the Librarian as the person who asked
+def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_rights(api, botops, monkeypatch):
+    import httpx
+    from backend import support
+    from backend.tests.test_support import FakeHQ
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(FakeHQ()))
+    monkeypatch.delenv("TICO_SUPPORT", raising=False)
+    own = _wake(api, botops)
+    assert act(api, own, "POST", "support/tickets", {"message": "[BotOps] Sync fails"}).status_code == 403
+    assert act(api, own, "POST", "librarian/turn-on", {}).status_code == 403
+    finish(api, botops, own)
+    ana = turn(api, botops, person="ana-test", text="Report the sync fault and turn on the Librarian")
+    filed = act(api, ana, "POST", "support/tickets", {"message": "[BotOps] Sync fails"})
+    assert filed.status_code == 200, filed.text
+    assert act(api, ana, "POST", "librarian/turn-on", {}).status_code == 200

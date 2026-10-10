@@ -49,7 +49,7 @@ function vaultPaint() {
     <td><strong>${esc(row.name)}</strong><div class="muted">${esc(row.env || row.kind.replace('_',' '))}</div><div class="muted">${row.stored ? 'Stored encrypted' : 'Not stored'}${row.source ? ` · ${esc(row.source)}` : ''}</div></td>
     <td>${esc(row.username || '')}${row.preview ? `<div class="mono">${esc(row.preview)}</div>` : ''}</td>
     <td>${row.grants.length ? row.grants.map(grant => esc(vaultSubject(grant.subject))).join(', ') : '<span class="muted">Owners only</span>'}</td>
-    <td><div class="row">${row.stored ? `<button class="ghost" data-vault-reveal="${esc(row.id)}" type="button">Reveal / copy</button>` : ''}
+    <td><div class="row">${row.stored && row.can_reveal ? `<button class="ghost" data-vault-reveal="${esc(row.id)}" type="button">Reveal / copy</button>` : ''}
       ${VAULT.can_manage ? `<button class="ghost" data-vault-edit="${esc(row.id)}" type="button">Edit</button>` : ''}
       ${VAULT.can_manage ? `<button class="ghost" data-vault-delete="${esc(row.id)}" type="button">Delete</button>` : ''}
       <button class="ghost" data-vault-share="${esc(row.id)}" type="button">${VAULT.can_manage ? 'Manage access' : 'Use with my bots'}</button></div></td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">No credentials match.</p>';
@@ -116,7 +116,7 @@ function vaultShare(id) {
     ...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
     ...VAULT.bots.map(bot=>({subject:'bot:'+bot.id,label:bot.name+' (bot)'}))];
   const dialog=vaultDialog('Access to '+row.name,`<p class="muted">Revoking access also revokes the access they gave their bots.</p>
-    <div>${row.grants.map(grant=>`<div class="row"><span>${esc(vaultSubject(grant.subject))}${grant.parent_id?' · delegated':''}</span>${VAULT.can_manage?`<button class="ghost" type="button" data-revoke="${esc(grant.id)}">Revoke</button>`:''}</div>`).join('') || '<p>Owners only.</p>'}</div>
+    <div>${row.grants.map(grant=>`<div class="row"><span>${esc(vaultSubject(grant.subject))}${grant.parent_id?' · delegated':''}</span>${grant.can_revoke?`<button class="ghost" type="button" data-revoke="${esc(grant.id)}">Revoke</button>`:''}</div>`).join('') || '<p>Owners only.</p>'}</div>
     <form id="vault-grant-form"><label>Grant access to<select name="subject" required>${choices.map(choice=>`<option value="${esc(choice.subject)}">${esc(choice.label)}</option>`).join('')}</select></label>
     <button class="primary" type="submit" ${choices.length?'':'disabled'}>Grant access</button><p class="err" id="vault-error"></p></form>`);
   dialog.querySelector('form').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;

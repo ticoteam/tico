@@ -2297,11 +2297,12 @@ def _bot_of_credentials(listing, ref):
     return str(ref or "").strip()
 
 
-@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator): from then "
+@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator, or the "
+      "person who stored it, for a bot they own or manage): from then "
       "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
       "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
-      "hub_credential_import it first. Then run the bot's own read-only check of the connection. A member who is not a "
-      "credential administrator is refused, with who to ask.",
+      "hub_credential_import it first. Then run the bot's own read-only check of the connection. Anyone else is "
+      "refused, with who to ask.",
       {"credential": _s("The credential's name (or its variable's name)"), "to_bot": _s("The bot's slug or name")},
       required=("credential", "to_bot"), writes=True)
 def credential_grant(api, args):
@@ -2313,7 +2314,8 @@ def credential_grant(api, args):
     return {"credential": row.get("name"), "env": row.get("env"), "bot": bot, **{k: v for k, v in given.items() if k != "subject"}}
 
 
-@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator). "
+@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator, "
+      "or the person who stored it, for a bot they own or manage). "
       "Its next run no longer has it. Safe to repeat.",
       {"credential": _s("The credential's name (or its variable's name)"), "from_bot": _s("The bot's slug or name")},
       required=("credential", "from_bot"), writes=True)
@@ -2376,8 +2378,8 @@ def message_redact(api, args):
     return api.post(f"messages/{args['message_id']}/redact", body)
 
 
-@tool("hub_support_file", "Tell the Tico team about something the product cannot do, or a fault you cannot fix. A card in the person's "
-      "chat shows the exact message and sends nothing until they confirm. Say what they asked for, what you tried, what the "
+@tool("hub_support_file", "Tell the Tico team about something the product cannot do, or a fault you cannot fix. BotOps files it as the "
+      "person who asked, with their rights; with its own rights it is refused. Say what they asked for, what you tried, what the "
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
@@ -2551,8 +2553,8 @@ _SLIDES = {
 @tool("hub_update_create", "Post your daily update (or, on Friday, your week in review) when Tico asks "
       "for it. A daily is `body`: one to five markdown bullets in plain English and nothing else, no title, "
       "headings or task ids, at most 25 words a bullet and 90 in all. A week in review is `slides`: goal, "
-      "kpis, done, focus, blockers. One of each a day; posting again replaces it, and one that breaks the "
-      "rules is refused with how to fix it.",
+      "kpis, done, focus, blockers. One of each a day; posting again replaces it. One that breaks the "
+      "rules is posted with a `warning` saying how to write the next one; an empty one is refused.",
       {"body": _s("A daily: one to five lines, each starting with '- '"),
        "slides": _SLIDES,
        "kind": _s("daily or weekly; Tico picks from the day when omitted", enum=["daily", "weekly"]),

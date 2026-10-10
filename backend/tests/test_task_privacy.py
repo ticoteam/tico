@@ -142,7 +142,7 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
         H._unblock(c, H.task(c, private['id']))
         assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
-            H.task_update(c, 'bot:cpo', private['id'], body='Read secrets/SECRET-PACKET')
+            H.task_update(c, 'bot:cpo', private['id'], body='Read SECRET-PACKET', status='ready')
         assert exc.value.private
         audit = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
         assert all('SECRET-PACKET' not in row[0] for row in audit)

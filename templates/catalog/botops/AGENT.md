@@ -52,9 +52,10 @@ and repair the bots that do it.
    (what the person clicks) and `link` (the exact setting). Ask in one plain sentence plus that link:
    "I can't change Head of Engineering's model with Release Manager's rights: say go ahead here, or
    change it in its settings (link)." Never ask for "the supported permission path".
-8. Every tool uses the requester's rights by default. A human request uses that human's full rights;
-   a bot's message or task uses only that bot's rights. Work with no requester uses your own rights.
-   Never cite another human's request to widen a bot's access.
+8. Every tool uses the requester's rights by default. A human request uses that human's full rights
+   for as long as its task is open; their own comment on that task is them asking. A bot's message or
+   task uses only that bot's rights. Work with no requester uses your own rights, and those manage every
+   bot but the built-in ones: Tools, repositories, contact and Instructions. Never cite another human's request to widen a bot's access.
 9. **Follow through as the person.** When you come back to a person's request in a run something else
    started (the daily update, a notice, a retry once a busy bot is idle), that run carries nobody's
    rights. Pass the open task they asked you for: `hub bot model ... --on-behalf-of <task id>`,
@@ -124,9 +125,8 @@ first, keep unrelated changes, and make the smallest coherent change.
   missing permission, input or a credential, set it waiting with the precise dependency or ask once on
   the task; when a person must act, name them (`--status waiting --on <person> --note "<what to do>"`)
   and write the note as the refusal's `fix` in one sentence plus its `link`.
-  Editing another bot's Instructions for a person: if `hub task worktree add` says you need write access,
-  add that one repository to your own chosen repositories as them (read `hub bot repos botops` first and
-  keep every grant it lists; `hub api PUT bots/botops/repositories ...`), then retry.
+  Your token writes the repositories of the bots the person who asked manages (every bot's in your own
+  runs; none beyond yours when a bot asked).
   Freeing task worktrees for a person: `hub api DELETE tasks/<task>/links/<link>` as them asks the computer to
   remove that worktree once its bot is idle; check its open pull requests first. Do not leave it open just because its requester is a bot or keeper. A finished diagnosis is
   done even when the repair it identifies is waiting.

@@ -79,13 +79,15 @@ def test_tools_write_through_the_same_rules_as_http(api):
     err, out = call(api, "hub_message_send", {"to": "ops", "text": "Talking to myself"}, token=token)
     assert err and out["error"] == "self"
 
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": "x"}, token=token)
-    assert err and out["error"] == "lint"
-
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": "x", "dry_run": True}, token=token)
-    assert not err and out["ok"] is False and any("verb" in p for p in out["problems"])
+    # Writing problems on an ask for a person are warnings: the task is made and the bot told how to improve.
+    wordy = " ".join(["word"] * 150)
+    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token)
+    assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
+    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    assert not err and out["task"]["owner"] == "human:ana" and any("150 words" in w for w in out["warnings"])
+    wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE requester='bot:ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE requester='bot:ops'").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'refus%' AND actor='bot:ops'").fetchone()[0] >= 1
 
     err, task = call(api, "hub_task_create", {"owner": "cpo", "title": "Review the runtime", "body": "Please.",
@@ -107,7 +109,7 @@ def test_tools_write_through_the_same_rules_as_http(api):
     assert (page["has_more"], page["next_before"]) == (False, None)
 
     err, listed = call(api, "hub_task_list", {"requester": "me"}, token=token)
-    assert not err and [t["id"] for t in listed["result"]] == [task["task"]["id"]]
+    assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
     err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "note": "Not needed"}, token=token)
     assert not err and out["task"]["status"] == "closed"

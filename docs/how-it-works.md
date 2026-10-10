@@ -59,15 +59,19 @@ itself; it may message only active bots and humans; at most 20 bot-to-bot messag
 conversation per hour and 10 unsolicited messages per human per bot per day
 (`TICO_UNSOLICITED_PER_DAY`); one open clarifying question per task; the requester closes; an approval
 is optional, decided by a human and consumed once. Bot requests to a human are linted:
-a nonempty first line and under 120 words outside quoted drafts. Put the ask first; the first-line
-check does not judge whether it is an ask. Replies to the human's own message are exempt from this
+a verb at the front of the title, a nonempty first line and under 120 words outside quoted drafts. A
+problem is a warning: the task or message is written, and the response's `warnings` (also the task's
+history) says what to fix next time; `TICO_STYLE_LINT=refuse` turns them back into refusals, `off` drops
+them. A daily update's shape is checked the same way (`warning` on the posted update). Put the ask
+first; the first-line check does not judge whether it is an ask. Replies to the human's own message are exempt from this
 request-format lint, and so is a task on a custom type, which is a ticket on that type's board
 rather than a request ([Tasks](tasks.md)); title and Credential checks apply separately. Refusals open a
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
 rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
-for an hour (a loop over new targets). A third attempt in a day to reach another bot's files or a
-`secrets/` path (`TICO_ESCAPE_QUARANTINE_AT`) quarantines it until a human clears it. A person's message to a
+for an hour (a loop over new targets). Words that name another bot's folder or a `secrets/` path are written
+as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
+A person's message to a
 paused or quarantined bot is kept and runs when it is back; another bot still cannot write to it.
 
 ## The three places
@@ -230,14 +234,20 @@ status` says when the running bot job predates the checkout's current commit. On
 page, one line above the composer says when the bot is paused and why (a usage limit, a
 quarantine, or a Mac offline for more than ten minutes) and that messages are saved, or that a
 review is owed while chat still answers. For a quarantine it says when the bot resumes by itself, or, for a safety
-pause, what the check matched (a secrets path or another bot's folder, in the bot's own words). Anyone who manages the
+pause recorded before path mentions stopped pausing bots, what the check matched (a secrets path or another
+bot's folder, in the bot's own words). Anyone who manages the
 bot, wherever it runs, sees Resume bot beside the warning by its name and a Paused for review card under More with the
 refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*), the bot shows
 *limited* and the cloud claims it again after 30 minutes. A third limit in a row waits two hours
-and says so in **Settings → Health**, with the retry time. If the bot has a fallback
+and says so in **Settings → Health**, with the retry time. A person's message to the bot written
+after the limit lets it try once at once; a run that hits the limit again goes back to the
+cooldown. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
+manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
+cooldown for that bot and every bot limited on the same runtime on the same computer, which share
+the subscription (`limit.cleared` in the event log). If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session) and reports `fallback` as that harness, which **Runs** shows in the Session column.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses

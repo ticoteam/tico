@@ -188,7 +188,7 @@ def record_call(app, request, message, reply, seconds):
 def task_dry_run(c, auth, who, body):
     """The checks `task_create` would refuse on, without writing or counting a refusal."""
     from . import hubdb as H
-    problems = []
+    problems, warnings = [], []
     title, text = str(body.title or "").strip(), str(body.body or "")
     typ = H.type_get(c, body.type or H.GENERAL_TYPE)
     general = bool(typ) and typ["id"] == H.GENERAL_TYPE      # the lints shape asks, not a custom type's tickets
@@ -208,13 +208,11 @@ def task_dry_run(c, auth, who, body):
             if not auth.bot_contact(c, who, H.actor_id(target)):
                 problems.append(f"{H.actor_id(target)} does not take tasks from other bots; ask its "
                                 "manager or a person to pass this on")
-        severity = H.classify(f"{title}\n{text}", to_actor=target, actor=who.actor, conn=c) if H.is_bot(who.actor) else "normal"
-        if severity == "escape":
-            problems.append("the task reaches outside the hub (rule 8): a real create is refused and repeating it quarantines you")
-        if H.is_human(target) and general:
-            problems += H.lint_human_item(text, title=title)
-        elif not title:
+        if not title:
             problems.append("give it a title that says what you are asking for")
+        elif H.is_human(target) and general and H.STYLE_LINT != "off":
+            # writing problems: the create is accepted with these as warnings unless TICO_STYLE_LINT=refuse
+            (problems if H.STYLE_LINT == "refuse" else warnings).extend(H.lint_human_item(text, title=title))
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
@@ -241,4 +239,4 @@ def task_dry_run(c, auth, who, body):
             problems.append("Ready to ship is set when the pull request merges, not by the bot")
         elif step["status"] == "waiting" and who.actor == target and H.is_bot(target):
             problems.append("A self-requested task needs something to wait on first")
-    return {"ok": not problems, "owner": target, "problems": problems}
+    return {"ok": not problems, "owner": target, "problems": problems, **({"warnings": warnings} if warnings else {})}

@@ -122,6 +122,15 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used TEXT, expires_at TEXT, revoked_at TEXT);
+-- OAuth sign-in for the MCP server (backend/mcp_oauth.py): registered agents, and each person's approval of one,
+-- which ends in a human_tokens row whose secret a refresh rotates in place.
+CREATE TABLE IF NOT EXISTS oauth_clients(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris_json TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_grants(
+ id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES oauth_clients(id), human TEXT NOT NULL,
+ redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+ code_hash TEXT UNIQUE, code_expires TEXT, token_id TEXT REFERENCES human_tokens(id),
+ refresh_hash TEXT UNIQUE, refresh_expires TEXT, denied_at TEXT);
 -- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
@@ -256,7 +265,7 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL,
- updated_by TEXT NOT NULL);
+ updated_by TEXT NOT NULL, created_by TEXT);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -656,6 +665,13 @@ class Store:
                 H.add_column(c, "tasks", "request_id", "TEXT")
                 # When an archived bot's agent last used its still-valid credential (backend/agents.py).
                 H.add_column(c, "agents", "archived_seen", "TEXT")
+                # Who added each credential: they may share it with bots they manage (backend/credentials.py
+                # `grant_authority`). Older rows take it from their audit event once, when the column arrives.
+                if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
+                    H.add_column(c, "credentials", "created_by", "TEXT")
+                    c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
+                                  [(r[0], r[1]) for r in c.execute(
+                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY ts")])
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")

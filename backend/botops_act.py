@@ -22,6 +22,36 @@ def request_task(c, auth, who, title, body):
         H.event(c, who.actor, "botops.task_requested", task["id"], {})
     return task
 
+
+# Message refs that mean words someone else wrote started the run: a comment, the Assistant, Slack, a live meeting.
+OTHERS_WORDS = ("comment", "via", "assistant", "slack", "routing", "live_meeting")
+
+
+def own_run(c, attempt_id):
+    """Whether this BotOps run is its own work: no message started it, or the keeper did about nothing or about a
+    task BotOps itself asked for. A run a person or a bot asked for, or one started by words others wrote, is not."""
+    from .store import H
+    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                     (attempt_id,)).fetchone() if attempt_id else None
+    if not turn:
+        return False
+    msg = H.message(c, turn["message_id"]) if turn["message_id"] else None
+    if not msg:
+        return True
+    if any((msg.get("refs") or {}).get(key) for key in OTHERS_WORDS):
+        return False
+    own = (H.KEEPER, "bot:" + H.FLEET_MAINTAINER)
+    if msg["from_actor"] not in own:
+        return False
+    task_id = H.message_task_id(msg)
+    task = H.task(c, task_id) if task_id else None
+    if not task:
+        return True
+    creator = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+                        (task_id,)).fetchone()
+    return task["requester"] in own and (not creator or creator["actor"] in own)
+
+
 HEADER = "x-tico-on-behalf-of"
 API = "/api/v2/"
 _S = r"[^/]+"
@@ -33,12 +63,12 @@ def _routes(*rows):
 
 # Runs at once, as the person. Some of these keep their own "always a click" rule inside the route (adding someone
 # a role, a Computer that does not take members' bots): the route answers with the card.
-# A credential grant to a bot runs at once when the person is a credential administrator and is refused, with who to
-# ask, when they are not; only a grant to a person or to every computer is a card (backend/credentials.py).
+# A credential grant to a bot runs at once when the person is a credential administrator (or stored it, for a bot they
+# manage) and is refused, with who to ask, when they are not; only a grant to a person or to every computer is a card (backend/credentials.py).
 DO = _routes(
     ("POST", r"bots"), ("POST", r"bots/register"),
     ("POST", rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
-             rf"onboarded|goals|updates|routines|tools|quarantine/clear)"),
+             rf"onboarded|goals|updates|routines|tools|quarantine/clear|limit/retry)"),
     ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"), ("DELETE", rf"bots/{_S}/tools/{_S}"),
     # Copying a bot or a skill, bringing a copy up to date and suggesting its changes back: each is checked with the requester's own
     # rights on the bots it names (backend/bot_copy.py).
