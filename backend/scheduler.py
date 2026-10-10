@@ -29,6 +29,7 @@ class Scheduler:
         self.stranded = None
         self.stall_checked = None
         self.goals_checked = None
+        self.go_lives_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -167,6 +168,15 @@ class Scheduler:
                     G.refresh(c)
             except Exception as exc:
                 failures.append({"goals": type(exc).__name__})
+        if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
+            # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
+            self.go_lives_checked = at
+            try:
+                from . import go_live
+                with self.store.transaction() as c:
+                    go_live.expire(c, at)
+            except Exception as exc:
+                failures.append({"go_live": type(exc).__name__})
         if self.stall_checked is None or at - self.stall_checked >= timedelta(minutes=1):
             # Every minute: bot tasks nothing is going to move (H.wake_stalled).
             self.stall_checked = at

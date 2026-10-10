@@ -165,3 +165,70 @@ def test_a_bad_routines_list_shows_the_expected_shape(api, tmp_path, capsys):
     assert hubcli.main(["bot", "go-live", "--help"]) == 0
     shown = capsys.readouterr().out
     assert hubcli.ROUTINES_EXAMPLE.replace(" ", "") in shown.replace(" ", "").replace("\n", "")
+
+
+def _waiting(api, monkeypatch, github=("present", None)):
+    """cpo placed on a computer that has not reported its repository, with its go-live waiting."""
+    _new_bot(api, monkeypatch, github)
+    machine = runner(api, label="Studio Mac")
+    ready(api, machine, [])
+    waiting = post(api, "bots/cpo/go-live", {"computer": "Studio Mac"}, expected=202)
+    return machine, waiting
+
+
+def _record(api):
+    import json
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='go-live-pending:cpo'").fetchone()
+        return json.loads(row[0]) if row else None
+
+
+def _notices(api):
+    with api.app.state.store.read() as c:
+        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE to_actor='human:ana' AND body LIKE '%Going live for cpo%'")]
+
+
+def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, monkeypatch):
+    machine, _ = _waiting(api, monkeypatch)
+    record = _record(api)
+    with api.app.state.store.transaction() as c:      # a stored routine that no longer validates
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='go-live-pending:cpo'",
+                  (encode({**record, "routines": [{"id": "cpo:review", "bogus": 1}]}),))
+    ready(api, machine, ["cpo"])                       # 200, not a failed heartbeat
+    ready(api, machine, ["cpo"])
+    assert _record(api)["failed"]["code"] == "finish_error"
+    told = _notices(api)
+    assert len(told) == 1 and "error in Tico" in told[0] and "hub bot go-live cpo" in told[0]
+    assert "bogus" not in told[0] and "validation" not in told[0].lower()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"
+
+
+def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monkeypatch):
+    from datetime import datetime, timezone
+    from backend.scheduler import Scheduler
+    from backend.tests.test_api import as_member
+    as_member(api, "ben@acme.example")               # a plain member who manages cpo
+    machine, waiting = _waiting(api, monkeypatch, github=("unknown", None))
+    assert "GitHub could not be asked; if the repository doesn't exist, this won't finish" in waiting["message"]
+
+    def seen(token):
+        return next((c["summary"] for c in get(api, "health", token=token)["checks"] if c["id"] == "go_live_waiting"), None)
+    assert "cpo is waiting for Studio Mac to get its repository" in seen("ana-test")
+    assert "cpo is waiting for Studio Mac" in seen("ben-test")
+    assert seen("cara-test") is None
+    # The computer never reports the repository; eight days later the scheduler ends it.
+    record = _record(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='go-live-pending:cpo'",
+                  (encode({**record, "requested_at": "2026-01-01T00:00:00.000000Z"}),))
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.tick(datetime(2026, 1, 9, tzinfo=timezone.utc))
+    scheduler.tick(datetime(2026, 1, 10, tzinfo=timezone.utc))
+    ready(api, machine, ["cpo"])                       # a late report finishes nothing and tells nobody again
+    assert _record(api)["failed"]["code"] == "expired"
+    told = _notices(api)
+    assert len(told) == 1 and "within 7 days" in told[0] and "hub bot go-live cpo" in told[0]
+    assert seen("ana-test") is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"

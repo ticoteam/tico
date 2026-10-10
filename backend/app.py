@@ -1,6 +1,7 @@
 """Authenticated, deterministic API. No runtime launch or local-machine dependency."""
 
 import asyncio
+import logging
 import time
 import json
 from dataclasses import replace
@@ -19,6 +20,7 @@ from fastapi.exceptions import RequestValidationError
 
 from clients.agent_skill import WHO_NEEDS_ME
 
+from . import go_live as pending_go_lives
 from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
@@ -3657,7 +3659,7 @@ def create_app(settings=None):
         who = request.state.identity
         return mutate(request, body, lambda c: place_now(c, who, bot, body.computer))
 
-    GO_LIVE_PENDING = "go-live-pending:"
+    GO_LIVE_PENDING = pending_go_lives.PREFIX
 
     def check_routines(c, who, bot, expected):
         """The live Routines match the schedule the caller asked to go live with (`--routines-file`)."""
@@ -3697,10 +3699,10 @@ def create_app(settings=None):
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
         return {"activated": activated, "setup_started": started, "routine_armed": armed}
 
-    def wait_for_repository(c, who, bot, placed, body):
+    def wait_for_repository(c, who, bot, placed, body, github_asked=True):
         """Keep the placement and remember the go-live: the computer is told about the bot on its next heartbeat,
         clones the repository, and the readiness report that says it has it finishes the go-live
-        (`finish_pending_go_live`)."""
+        (`finish_pending_go_live`). It expires after backend/go_live.py EXPIRY_DAYS."""
         computer = placed.get("computer") or "its computer"
         runner = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
         c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
@@ -3710,56 +3712,74 @@ def create_app(settings=None):
                       "setup": body.setup,
                       "routines": None if body.routines is None else [r.model_dump() for r in body.routines],
                       "requested_at": H.now()})))
-        H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer})
+        H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
+        message = (f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
+                   f"when {computer} has it; nothing needs to run again")
+        if not github_asked:
+            message += ". GitHub could not be asked; if the repository doesn't exist, this won't finish"
         return {"bot": bot, "state": "waiting_for_repository", "bot_state": H.bot(c, bot)["state"],
                 "computer": computer, "placed": placed.get("placed", False), "activated": False, "setup_started": False,
-                "message": f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
-                           f"when {computer} has it; nothing needs to run again"}
+                "github_checked": github_asked,
+                "message": message}
 
     def finish_pending_go_live(c, runner_id, readiness):
         """A computer's readiness report completes the go-lives waiting for it to get a bot's repository. Each one
-        finishes once: the record is removed when it completes, so later reports do nothing. A go-live that can no
-        longer finish (the person's rights, a routine changed) is recorded as failed and the person is told."""
+        finishes once: the record is removed when it completes, so later reports do nothing. One past its deadline
+        is expired; one that can no longer finish is marked failed. Either way the person is told once, and nothing
+        here fails the heartbeat."""
+        from datetime import datetime, timezone
+        from .auth import validate_identity
         reports = readiness.get("bots") or {}
-        waiting = c.execute("SELECT key,value_json FROM registry_metadata WHERE key>=? AND key<?",
-                            (GO_LIVE_PENDING, GO_LIVE_PENDING[:-1] + ";")).fetchall()
-        for key, value in waiting:
-            pending = H._json(value, {}) or {}
-            bot = key[len(GO_LIVE_PENDING):]
-            report = reports.get(bot)
-            if pending.get("failed") or not isinstance(report, dict) or report.get("repository_present") is not True:
+        now = datetime.now(timezone.utc)
+        for key, bot, pending in pending_go_lives.rows(c):
+            if pending.get("failed"):
                 continue
-            here = c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, runner_id)).fetchone()
-            if not here:
-                continue
-            row = H.bot(c, bot)
-            if not row or row["state"] == "archived":
-                c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
-                continue
-            role = pending.get("role") or "human"
-            if role == "owner" and H.actor_id(pending.get("actor") or "") != auth.owner_id(c):
-                role = "human"
-            who = Identity(pending.get("actor") or "", role, pending.get("email") or "", via=pending.get("via") or "")
-            expected = (None if pending.get("routines") is None
-                        else [M.RoutineExpectation(**r) for r in pending["routines"]])
             c.execute("SAVEPOINT go_live_finish")
             try:
-                from .auth import validate_identity
+                if pending_go_lives.expired(pending, now):
+                    pending_go_lives.fail(c, key, bot, pending, "expired", pending_go_lives.expire_notice(bot, pending))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                report = reports.get(bot)
+                if (not isinstance(report, dict) or report.get("repository_present") is not True
+                        or not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?",
+                                         (bot, runner_id)).fetchone()):
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                row = H.bot(c, bot)
+                if not row or row["state"] == "archived":
+                    c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                role = pending.get("role") or "human"
+                if role == "owner" and H.actor_id(pending.get("actor") or "") != auth.owner_id(c):
+                    role = "human"
+                who = Identity(pending.get("actor") or "", role, pending.get("email") or "", via=pending.get("via") or "")
+                expected = (None if pending.get("routines") is None
+                            else [M.RoutineExpectation(**r) for r in pending["routines"]])
                 validate_identity(c, who)
                 done = finish_go_live(c, who, bot, bool(pending.get("setup", True)), expected)
-            except Problem as exc:
+                H.event(c, who.actor, "bot.go_live_finished", bot, {"computer": pending.get("computer") or "", **done})
+                c.execute("RELEASE go_live_finish")
+            except Exception as exc:
                 c.execute("ROLLBACK TO go_live_finish")
                 c.execute("RELEASE go_live_finish")
-                c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
-                          (encode({**pending, "failed": {"code": exc.code, "detail": exc.detail, "at": H.now()}}), key))
-                H.event(c, H.KEEPER, "bot.go_live_failed", bot, {"code": exc.code, "detail": exc.detail})
-                if H.is_human(who.actor):
-                    H.say(c, H.KEEPER, who.actor, f"{bot} has its repository on {pending.get('computer') or 'its computer'}, "
-                          f"but going live could not finish: {exc.detail}. Run `hub bot go-live {bot}` again "
-                          "once that is fixed.", kind="notice")
-                continue
-            c.execute("RELEASE go_live_finish")
-            H.event(c, who.actor, "bot.go_live_finished", bot, {"computer": pending.get("computer") or "", **done})
+                where = pending.get("computer") or "its computer"
+                if isinstance(exc, Problem):
+                    code, notice = exc.code, f"{bot} has its repository on {where}, but going live could not finish: {str(exc.detail).rstrip('.')}."
+                else:
+                    # A fault in Tico, not something the person did: its text stays in the log.
+                    logging.getLogger("tico.go_live").exception("Finishing the go-live of %s failed", bot)
+                    telemetry.capture("go_live_finish", exc, 500)
+                    code, notice = "finish_error", f"Going live for {bot} could not finish because of an error in Tico."
+                c.execute("SAVEPOINT go_live_fail")
+                try:
+                    pending_go_lives.fail(c, key, bot, pending, code, notice)
+                    c.execute("RELEASE go_live_fail")
+                except Exception:
+                    c.execute("ROLLBACK TO go_live_fail")
+                    c.execute("RELEASE go_live_fail")
+                    logging.getLogger("tico.go_live").exception("Recording the failed go-live of %s failed", bot)
 
     execution.readiness_reported = finish_pending_go_live
 
@@ -3813,7 +3833,7 @@ def create_app(settings=None):
                                       + f". Then run `hub bot go-live {bot}` again", 409)
                     elif bot_repository(c, settings, bot):
                         # GitHub could not be asked: the computer tries the clone and says why if it cannot.
-                        return wait_for_repository(c, who, bot, placed, body)
+                        return wait_for_repository(c, who, bot, placed, body, github_asked=False)
                     else:
                         raise Problem("repository_missing", "It has no repository yet. Ask BotOps to build it "
                                       f"(`hub bot repo-create {bot}`), then run `hub bot go-live {bot}` again", 409)
