@@ -1,5 +1,7 @@
 """s3:// URIs in what a bot writes become view URLs before sending (clients/s3links.py), for the CLI and the MCP tools."""
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -7,6 +9,8 @@ from clients import hubcli, hubtools, remotecli, s3links
 
 VIEW = "https://d1234example.cloudfront.net"
 MAPPING = {"acme-files": VIEW}
+# The cases the UI's own linking is held to as well (ui/tests/inline-links.cjs).
+VECTORS = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/support/s3-link-vectors.json").read_text())
 
 
 def test_the_setting_maps_buckets_to_https_bases_and_ignores_bad_entries_with_a_log_line(caplog):
@@ -36,6 +40,30 @@ def test_mapped_uris_are_rewritten_outside_code_and_unmapped_ones_are_reported()
     assert [r["from"] for r in rewritten] == ["s3://acme-files/email/deliverables/u-1/2026-09-09-launch.md",
                                               "s3://acme-files/img/hero.png"]
     assert unmapped == ["s3://other-bucket/x/y.md"]
+
+
+@pytest.mark.parametrize("case", VECTORS["cases"], ids=[c["text"] for c in VECTORS["cases"]])
+def test_the_rewrite_makes_the_links_the_ui_makes(case):
+    out, rewritten, unmapped = s3links.rewrite(case["text"], s3links.parse(VECTORS["mapping"]))
+    assert [r["to"] for r in rewritten] == case["view"]
+    assert unmapped == case["unmapped"]
+    for url in case["view"]:
+        assert url in out
+    # Only the URI changes: the words around it, a sentence's period or a closing bracket, stay where they were.
+    assert s3links.rewrite(out, {})[0] == out
+
+
+def test_a_rewrite_keeps_the_text_around_each_uri():
+    out = s3links.rewrite("(see s3://acme-files/k.pdf). <s3://acme-files/a b.pdf> [x](s3://acme-files/k)", MAPPING)[0]
+    assert out == f"(see {VIEW}/k.pdf). <{VIEW}/a%20b.pdf> [x]({VIEW}/k)"
+
+
+def test_tico_s_own_file_bucket_is_never_mapped(caplog):
+    with caplog.at_level(logging.WARNING, logger="tico.config"):
+        parsed = s3links.parse("acme-files=https://d1.example, tico-blobs=https://d2.example", private_bucket="tico-blobs")
+    assert parsed == {"acme-files": "https://d1.example"}
+    assert [r.getMessage() for r in caplog.records] == [
+        "TICO_S3_VIEW_URLS: ignored the entry for tico-blobs: it is TICO_BLOB_BUCKET, Tico's private file store"]
 
 
 class Api:

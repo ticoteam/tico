@@ -14,15 +14,16 @@ function hubUrl(url) {
 }
 // A route of the app (#/...) or a task (/tasks/<id>, which the task link handler opens), not a file or the API.
 const hubPageUrl = url => hubUrl(url) && (url.hash.startsWith('#/') || /^\/tasks?\/[A-Za-z0-9-]{8,80}\/?$/.test(url.pathname));
-// s3://bucket/key at the bucket's view URL, each segment encoded as Python's quote(safe="") does; '' when unmapped.
+// s3://bucket/key at the bucket's view URL, each segment decoded once and encoded as Python's quote(safe="") does
+// (clients/s3links.py makes the same URL; ui/tests/support/s3-link-vectors.json holds the shared cases); '' when unmapped.
 const S3_URI_RE = /^s3:\/\/([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\/(.+)$/i;
 const urlSeg = s => encodeURIComponent(s).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 function s3ViewUrl(uri) {
   const m = S3_URI_RE.exec(uri), map = (typeof S !== 'undefined' && S.config?.s3_view_urls) || {};
   const base = m && Object.hasOwn(map, m[1].toLowerCase()) ? String(map[m[1].toLowerCase()]) : '';
-  return /^https:\/\/[^\s?#]+$/i.test(base) ? base.replace(/\/+$/, '') + '/' + m[2].split('/').map(urlSeg).join('/') : '';
+  return /^https:\/\/[^\s?#]+$/i.test(base) ? base.replace(/\/+$/, '') + '/' + m[2].split('/').map(s => urlSeg(decoded(s))).join('/') : '';
 }
-const decoded = s => { try { return decodeURIComponent(s); } catch { return s; } };
+function decoded(s) { try { return decodeURIComponent(s); } catch { return s; } }
 const lastSeg = path => decoded(String(path).split(/[?#]/)[0].replace(/\/+$/, '').split('/').pop() || '');
 // Documents a link may point at, by extension: a card with this mark (the viewer's own marks where it shows the kind).
 const MD_FILE_MARK = {pdf: 'PDF', md: 'DOC', markdown: 'DOC', txt: 'TEXT', csv: 'CSV', doc: 'DOC', docx: 'DOC',
@@ -57,8 +58,10 @@ function shortUrl(url) {
   if (path.length > 36) path = path.slice(0, 16) + '…' + path.slice(-16);
   return url.hostname.replace(/^www\./, '') + (path ? '/' + path : '') + (url.search || url.hash ? '…' : '');
 }
-// Bare https:// and s3:// addresses in text become links; code and existing links are left as written.
-const BARE_URL_RE = /\b(?:https?|s3):\/\/[^\s<>"'`]+/gi;
+// Bare https:// and s3:// addresses in text become links; code and existing links are left as written. `<...>` around
+// an address is one unit, spaces and all; a bare one gives back trailing punctuation and a bracket it did not open.
+const BARE_URL_RE = /<((?:https?|s3):\/\/[^<>\n]+)>|\b(?:https?|s3):\/\/[^\s<>"'`]+/gi;
+const unopened = (url, o, c) => url.endsWith(c) && url.split(o).length < url.split(c).length;
 function autolink(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), hits = [];
   for (let n; (n = walker.nextNode());) if (/(?:https?|s3):\/\//i.test(n.data) && !n.parentElement?.closest('a, code, pre')) hits.push(n);
@@ -66,12 +69,12 @@ function autolink(root) {
     const frag = document.createDocumentFragment();
     let at = 0;
     for (const m of n.data.matchAll(BARE_URL_RE)) {
-      let url = m[0];
-      while (/[.,;:!?*_~]$/.test(url) || (url.endsWith(')') && url.split('(').length < url.split(')').length)) url = url.slice(0, -1);
+      let url = m[1] || m[0];
+      if (!m[1]) while (/[.,;:!?*_~]$/.test(url) || unopened(url, '(', ')') || unopened(url, '[', ']')) url = url.slice(0, -1);
       if (url.length < 9) continue;
       frag.append(n.data.slice(at, m.index));
       const a = document.createElement('a'); a.setAttribute('href', url); a.textContent = url;
-      frag.append(a); at = m.index + url.length;
+      frag.append(a); at = m.index + (m[1] ? m[0].length : url.length);
     }
     frag.append(n.data.slice(at));
     n.replaceWith(frag);
@@ -81,7 +84,7 @@ function safeLink(el, options) {
   let href = el.getAttribute('href') || '';
   const text = el.textContent.trim();
   if (/^s3:\/\//i.test(href)) {
-    const uri = decoded(href), view = s3ViewUrl(uri), own = text && text !== href && text !== uri ? text : '';
+    const uri = decoded(href), view = s3ViewUrl(href), own = text && text !== href && text !== uri ? text : '';
     if (!view) { el.replaceWith(s3Chip(uri, own)); return; }
     el.textContent = own || lastSeg(uri);
     href = view;
@@ -125,7 +128,7 @@ function safeMd(s, options = {}) {
     if (el.tagName === 'IMG') {
       let src = el.getAttribute('src') || '';
       if (/^s3:\/\//i.test(src)) {
-        src = s3ViewUrl(decoded(src));
+        src = s3ViewUrl(src);
         if (!src) { el.replaceWith(s3Chip(decoded(el.getAttribute('src')), el.getAttribute('alt') || '')); continue; }
       }
       try {

@@ -52,8 +52,8 @@ open, comma-separated as `bucket=https://base[/prefix]`, for example
 its origin, with origin access control) and name the distribution's address here. `s3://acme-files/reports/q3.pdf`
 then becomes `https://d1234example.cloudfront.net/reports/q3.pdf`, each path segment URL-encoded. Tico shows such
 links in task bodies, comments and chat (images as thumbnails, PDFs and documents as cards), and `hub` and the MCP
-tools rewrite them in a bot's text before sending. An entry that is not https or names a malformed bucket is ignored
-and logged. Whether the distribution is public or behind signed URLs or cookies is the operator's choice; Tico only
+tools rewrite them in a bot's text before sending. An entry that is not https, names a malformed bucket, or names
+`TICO_BLOB_BUCKET` (Tico's own private store, served only through its access checks) is ignored and logged. Whether the distribution is public or behind signed URLs or cookies is the operator's choice; Tico only
 rewrites the link and never signs or fetches it. An unmapped `s3://` URI shows as a file chip with a Copy button;
 `hub file import` makes it a Tico file that shows inline.
 

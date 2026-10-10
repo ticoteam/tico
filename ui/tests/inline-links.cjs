@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex');
+// The cases clients/s3links.py is held to as well: the UI links each URI to the same view URL.
+const VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, 'support', 's3-link-vectors.json'), 'utf8'));
 const TASK = '5b0c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3';
 const VIEW = 'https://d1234example.cloudfront.net';
 const UNMAPPED = 's3://other-bucket/email-marketing/deliverables/0f8e5c1e-1111-2222-3333-444455556666/2026-09-09-follow-up-draft-final.md';
@@ -37,7 +39,7 @@ const BODY = ['Two drafts for review.', '',
       if(ui&&fs.existsSync(uiFile(ui[1])))return route.fulfill({contentType:ui[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
       if(/\.png$/.test(p)&&url.hostname!=='tico-ui.test'){referers.push(route.request().headers().referer||'');return route.fulfill({contentType:'image/png',body:PNG});}
       if(/\.pdf$/.test(p))return route.fulfill({contentType:'application/pdf',body:'%PDF-1.4 fixture'});
-      if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true,config:{app_name:'Tico',s3_view_urls:{'acme-files':VIEW}}});
+      if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true,config:{app_name:'Tico',s3_view_urls:VECTORS.mapping}});
       if(p==='/api/employees')return json([bot]);
       if(p==='/api/issues')return json([]);
       if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
@@ -92,6 +94,11 @@ const BODY = ['Two drafts for review.', '',
     const fit=await desc.evaluate(el=>{const r=el.getBoundingClientRect();
       return {scroll:el.scrollWidth-el.clientWidth,over:[...el.querySelectorAll('a, .s3-chip')].filter(x=>x.getBoundingClientRect().right>r.right+1).map(x=>x.outerHTML.slice(0,80))};});
     assert.deepEqual(fit,{scroll:0,over:[]});
+    // The shared cases: the same view URLs as the hub rewrite, chips for the unmapped, and code left as written.
+    const seen=await page.evaluate(cases=>cases.map(c=>{const d=document.createElement('div');d.innerHTML=safeMd(c.text);
+      return {view:[...d.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')),unmapped:[...d.querySelectorAll('.s3-chip')].map(x=>x.title),
+              raw:(()=>{d.querySelectorAll('code, .s3-chip').forEach(x=>x.remove());return d.textContent.includes('s3://');})()};}),VECTORS.cases);
+    assert.deepEqual(seen,VECTORS.cases.map(c=>({view:c.view,unmapped:c.unmapped,raw:false})));
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.TICO_SCREENSHOT_DIR,'inline-links-phone.png')});
     assert.deepEqual(errors,[]);
     console.log('inline-links: ok (mapped s3 link, unmapped chip with Copy, thumbnails in the viewer, PDF card, short link, phone width)');

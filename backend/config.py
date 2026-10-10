@@ -221,7 +221,7 @@ class Settings:
         self.blob_bucket, _, self.blob_prefix = bucket.partition("/")
         self.blob_prefix = self.blob_prefix.rstrip("/")
         from clients import s3links
-        self.s3_view_urls = s3links.parse(self.s3_view_urls)
+        self.s3_view_urls = s3links.parse(self.s3_view_urls, private_bucket=self.blob_bucket)
         self.public_url = self.public_url.rstrip("/")
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors

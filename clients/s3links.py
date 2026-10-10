@@ -7,13 +7,15 @@ person gets a link rather than a URI nothing opens. Pure stdlib: the server, the
 """
 import logging
 import re
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 # S3's own rule for bucket names: 3-63 lower-case letters, digits, dots and hyphens, starting and ending alphanumeric.
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
-# An s3:// URI in free text: a bucket, then a key that runs to whitespace or a character that closes Markdown.
-URI = re.compile(r"s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/([^\s<>()\[\]`'\"]+)", re.I)
-TRAILING = ".,;:!?"
+# An s3:// URI in free text, by the rules ui/app/markdown.js (autolink) links with; ui/tests/support/s3-link-vectors.json
+# holds the cases both are tested on. `<s3://...>` is one unit, spaces and all. A bare URI runs to whitespace or
+# <>"'` and then gives back trailing punctuation and a closing bracket it did not open.
+URI = re.compile(r"<(s3://[^<>\n]+)>|\bs3://[^\s<>\"'`]+", re.I)
+TRAILING = ".,;:!?*_~"
 # Fenced blocks and inline code spans are quoted text: a URI there is shown as written.
 CODE = re.compile(r"(^|\n)(```|~~~)[^\n]*\n.*?(\n\2[^\n]*(?=\n|$)|$)|(`+)(?!`).+?(?<!`)\4(?!`)", re.S)
 HINT = "`hub file import s3://...` makes it a Tico file that shows inline"
@@ -21,9 +23,17 @@ HINT = "`hub file import s3://...` makes it a Tico file that shows inline"
 log = logging.getLogger("tico.config")
 
 
-def parse(value):
+def trim(uri):
+    """A bare URI less the punctuation after it: `.`, `,` and the like, and a `)` or `]` it did not open."""
+    while uri and (uri[-1] in TRAILING or any(uri[-1] == c and uri.count(o) < uri.count(c) for o, c in ("()", "[]"))):
+        uri = uri[:-1]
+    return uri
+
+
+def parse(value, private_bucket=""):
     """{bucket: https base} from TICO_S3_VIEW_URLS, or an existing mapping. A bad entry is left out and logged,
-    never fatal: the server starts and those buckets simply stay unmapped."""
+    never fatal: the server starts and those buckets simply stay unmapped. `private_bucket` is Tico's own file
+    store (TICO_BLOB_BUCKET): its objects are served only through Tico's access checks, so it is never mapped."""
     if isinstance(value, dict):
         parts = [f"{k}={v}" for k, v in value.items()]
     else:
@@ -42,6 +52,9 @@ def parse(value):
         elif url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment \
                 or any(c.isspace() for c in base):
             log.warning("TICO_S3_VIEW_URLS: ignored the entry for %s: the base must be https://host[/prefix]", bucket)
+        elif private_bucket and bucket == private_bucket.lower():
+            log.warning("TICO_S3_VIEW_URLS: ignored the entry for %s: it is TICO_BLOB_BUCKET, Tico's private file store",
+                        bucket)
         elif bucket in out:
             log.warning("TICO_S3_VIEW_URLS: ignored the second entry for %s", bucket)
         else:
@@ -50,9 +63,10 @@ def parse(value):
 
 
 def view_url(bucket, key, mapping):
-    """The view URL of one object, each path segment URL-encoded; "" when the bucket is not mapped."""
+    """The view URL of one object, each path segment decoded once and URL-encoded (so `a%20b` stays `a%20b`);
+    "" when the bucket is not mapped."""
     base = (mapping or {}).get(bucket.lower())
-    return base + "/" + "/".join(quote(seg, safe="") for seg in key.split("/")) if base and key else ""
+    return base + "/" + "/".join(quote(unquote(seg), safe="") for seg in key.split("/")) if base and key else ""
 
 
 def rewrite(text, mapping):
@@ -60,16 +74,16 @@ def rewrite(text, mapping):
     rewritten, unmapped = [], []
 
     def one(m):
-        uri, tail = m.group(0), ""
-        while uri and uri[-1] in TRAILING:
-            uri, tail = uri[:-1], uri[-1] + tail
+        angled = m.group(1)
+        uri = angled or trim(m.group(0))
         bucket, _, key = uri[5:].partition("/")
-        url = view_url(bucket, key, mapping)
+        url = view_url(bucket, key, mapping) if BUCKET.fullmatch(bucket.lower()) else ""
         if not url:
-            unmapped.append(uri)
+            if key:
+                unmapped.append(uri)
             return m.group(0)
         rewritten.append({"from": uri, "to": url})
-        return url + tail
+        return ("<" + url + ">") if angled else url + m.group(0)[len(uri):]
 
     out, at = [], 0
     for code in CODE.finditer(text or ""):
