@@ -33,10 +33,13 @@ function accessSummary(policy) {
 }
 // One word for the table row; the editor shows the full sentence (accessSummary).
 const ACCESS_WORD = {open: 'Open', requests: 'Requests only', private: 'Private', custom: 'Custom'};
-function settingsAccessCell(e) {
+function settingsAccessWord(e) {
   const mine = e.my_access || {see: true, read: true, write: true};
-  const word = e.access_policy ? ACCESS_WORD[accessPresetOf(e.access_policy)] || 'Custom'
+  return e.access_policy ? ACCESS_WORD[accessPresetOf(e.access_policy)] || 'Custom'
     : `You: ${ACCESS_LEVELS.filter(([key]) => mine[key]).map(([, label]) => label).join(' · ') || 'See'}`;
+}
+function settingsAccessCell(e) {
+  const word = settingsAccessWord(e);
   return `<span class="sb-access" data-access-summary title="${esc(e.access_policy ? accessSummary(e.access_policy) : word)}">${esc(word)}</span>`;
 }
 // Who owns a bot: its creator and co-owners (and its operator). Whoever it reports up to and the admins own it too,
