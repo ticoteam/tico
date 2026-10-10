@@ -93,3 +93,12 @@ def test_deny_and_unknown_redirects_never_hand_out_a_code(api):
                                             "code_challenge_method": "S256"}, headers=headers(), follow_redirects=False)
     assert r.status_code == 400
     assert api.post("/api/v2/oauth/register", json={"redirect_uris": ["http://agent.example/cb"]}).status_code == 400
+
+
+def test_bodies_are_capped_and_bad_requests_are_shown_not_redirected(api):
+    assert api.post("/api/v2/oauth/token", content=b"a=" + b"x" * 30_000,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}).status_code == 413
+    client_id = register(api)
+    r = api.get("/oauth/authorize", params={"response_type": "token", "client_id": client_id, "redirect_uri": REDIRECT},
+                headers=headers(), follow_redirects=False)
+    assert r.status_code == 400 and "location" not in r.headers

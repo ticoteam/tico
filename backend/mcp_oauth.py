@@ -36,6 +36,8 @@ REQUEST_SECONDS = 900
 ACCESS_SECONDS = 3600
 REFRESH_DAYS = 90
 MAX_CLIENTS = 2000
+UNUSED_CLIENT_HOURS = 24
+MAX_BODY = 20_000
 VERIFIER = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
 CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
@@ -102,6 +104,11 @@ def register_client(c, body):
     method = body.get("token_endpoint_auth_method") or "none"
     if method != "none":
         raise OAuthError("invalid_client_metadata", "Only public clients (token_endpoint_auth_method none) are supported")
+    # Anyone may register, so a client that never got a token is let go after a day: the cap cannot be filled for good.
+    stale, used = H.shift(H.now(), hours=-UNUSED_CLIENT_HOURS), "SELECT client_id FROM oauth_grants WHERE token_id IS NOT NULL"
+    c.execute(f"DELETE FROM oauth_grants WHERE client_id IN (SELECT id FROM oauth_clients WHERE created<? AND id NOT IN ({used}))",
+              (stale,))
+    c.execute(f"DELETE FROM oauth_clients WHERE created<? AND id NOT IN ({used})", (stale,))
     if c.execute("SELECT count(*) FROM oauth_clients").fetchone()[0] >= MAX_CLIENTS:
         raise OAuthError("temporarily_unavailable", "Too many registered clients", 503)
     name = " ".join(str(body.get("client_name") or "").split())[:80] or urlsplit(uris[0]).hostname or "An agent"
@@ -168,6 +175,12 @@ def decide(c, auth, settings, who, grant_id, allow):
     return back(row["redirect_uri"], settings, code=code, state=row["state"])
 
 
+def _may_hold(c, auth, human):
+    """Whether this person may still hold a personal token (the owner's rule may have changed since they said yes)."""
+    who = auth.identity_for_actor(c, "human:" + human)
+    return bool(who) and personal_tokens.can_create(c, auth, who)
+
+
 def _tokens(c, grant, client, rotate):
     """Mint the access and refresh secrets for a grant: a new token row the first time, the same row after."""
     access, refresh, now = personal_tokens.PREFIX + secrets.token_urlsafe(30), "tico_rt_" + secrets.token_urlsafe(32), H.now()
@@ -181,13 +194,14 @@ def _tokens(c, grant, client, rotate):
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
                   (token_id, grant["human"], label, digest(access), now, "human:" + grant["human"], expires))
         H.event(c, "human:" + grant["human"], "token.create", token_id, {"label": label, "oauth_client": client["id"]})
-    c.execute("UPDATE oauth_grants SET token_id=?,refresh_hash=?,refresh_expires=?,code_expires=NULL WHERE id=?",
-              (token_id, digest(refresh), H.shift(now, days=REFRESH_DAYS), grant["id"]))
+    # One approval lasts REFRESH_DAYS from the Allow, like a personal token's 90 days; then the person is asked again.
+    c.execute("UPDATE oauth_grants SET token_id=?,refresh_hash=?,refresh_expires=coalesce(refresh_expires,?),"
+              "code_expires=NULL WHERE id=?", (token_id, digest(refresh), H.shift(now, days=REFRESH_DAYS), grant["id"]))
     return {"access_token": access, "token_type": "Bearer", "expires_in": ACCESS_SECONDS,
             "refresh_token": refresh, "scope": SCOPE}
 
 
-def exchange(c, form):
+def exchange(c, auth, form):
     """The token endpoint: a code with its PKCE verifier, or a refresh token, for a fresh access token."""
     kind = form.get("grant_type")
     client = _client(c, form.get("client_id"))
@@ -213,6 +227,8 @@ def exchange(c, form):
         if not grant or grant["client_id"] != client["id"] or grant["token_revoked"] \
                 or grant["refresh_expires"] <= H.now():
             raise OAuthError("invalid_grant", "The refresh token is unknown, revoked or expired")
+        if not _may_hold(c, auth, grant["human"]):
+            raise OAuthError("invalid_grant", "Your team now lets only the owner and admins connect agents")
         return _tokens(c, grant, client, rotate=True)
     raise OAuthError("unsupported_grant_type", "Use authorization_code or refresh_token")
 
@@ -240,9 +256,22 @@ def consent_page(settings, who, client_name, grant_id, host):
     return _page(settings, 200, "Connect " + client_name + "?", form)
 
 
+async def _body(request):
+    """The request body, at most MAX_BODY bytes: these routes are open to anyone, before the API's own size check."""
+    chunks, total = [], 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_BODY:
+            raise OAuthError("invalid_request", "Request too large", 413)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _form(request):
-    body = await request.body()
-    return {k: v[0] for k, v in parse_qs(body[:20_000].decode("utf-8", "replace"), max_num_fields=20).items()}
+    try:
+        return {k: v[0] for k, v in parse_qs((await _body(request)).decode("utf-8", "replace"), max_num_fields=20).items()}
+    except ValueError:
+        raise OAuthError("invalid_request", "Too many fields") from None
 
 
 def register(app, auth, store):
@@ -267,9 +296,11 @@ def register(app, auth, store):
     @app.post(PREFIX + "/register", include_in_schema=False)
     async def oauth_register(request: Request):
         try:
-            body = json.loads((await request.body())[:20_000] or b"{}")
+            body = json.loads(await _body(request) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError
+        except OAuthError as exc:
+            return _error(exc)
         except ValueError:
             return _error(OAuthError("invalid_client_metadata", "Send a JSON object"))
         try:
@@ -279,16 +310,19 @@ def register(app, auth, store):
 
     @app.post(PREFIX + "/token", include_in_schema=False)
     async def oauth_token(request: Request):
-        form = await _form(request)
         try:
-            issued = mutate_free(lambda c: exchange(c, form))
+            form = await _form(request)
+            issued = mutate_free(lambda c: exchange(c, auth, form))
         except OAuthError as exc:
             return _error(exc)
         return _error(issued) if isinstance(issued, OAuthError) else _answer(issued)
 
     @app.post(PREFIX + "/revoke", include_in_schema=False)
     async def oauth_revoke(request: Request):
-        form = await _form(request)
+        try:
+            form = await _form(request)
+        except OAuthError as exc:
+            return _error(exc)
         mutate_free(lambda c: revoke(c, form))
         return _answer({})
 
@@ -298,14 +332,18 @@ def register(app, auth, store):
         try:
             grant, name, host = mutate_free(lambda c: begin(c, settings, who, query))
         except OAuthError as exc:
-            # The client and redirect checked out (begin raises Problem before that), so the agent hears why.
-            return RedirectResponse(back(query["redirect_uri"], settings, error=exc.code,
-                                         error_description=exc.description, state=query.get("state", "")), 303)
+            # Shown here, not sent back: anyone can register a client, and an error redirect sent before the person
+            # saw anything would make this address a way to bounce them to any site (RFC 9700 §4.11.2).
+            from .oidc import _page
+            return _page(settings, 400, "This sign-in link is not valid", html.escape(exc.description))
         return consent_page(settings, who, name, grant, host)
 
     @app.post(AUTHORIZE_PATH, include_in_schema=False)
     async def oauth_decide(request: Request):
-        form = await _form(request)
+        try:
+            form = await _form(request)
+        except OAuthError as exc:
+            raise Problem("oauth_request", exc.description, exc.status) from None
         target = mutate_free(lambda c: decide(c, auth, settings, request.state.identity, form.get("grant", ""),
                                               form.get("decision") == "allow"))
         return RedirectResponse(target, 303)
