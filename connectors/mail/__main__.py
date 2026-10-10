@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, sys, weakref
+import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1350,6 +1350,44 @@ def attachments_of(paths, root):
     return found
 
 
+def draft_files(ctx, draft):
+    """[{name, type, size, sha256}] of the files in a Gmail draft as it stands, hashed from the bytes
+    Gmail holds, so a send is checked against what would actually go out."""
+    message = (draft or {}).get("message") or {}
+    found, total = [], 0
+    for item in gm.attachment_refs(message.get("payload") or {}):
+        if item["inline"]:
+            encoded, declared = item["_data"], item["size"]
+        elif item["attachment_id"]:
+            fetched = ctx.gmail.get_attachment(message.get("id", ""), item["attachment_id"]) or {}
+            encoded, declared = fetched.get("data"), item["size"]
+        else:
+            raise Failure(f"draft attachment {item['name']} has neither data nor a Gmail attachment id.",
+                          "Open the draft in Gmail and attach the file again.")
+        data = gm.attachment_bytes(encoded, declared, limit=MAX_ATTACH_BYTES - total)
+        total += len(data)
+        found.append({"name": item["name"], "type": item["type"], "size": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest()})
+    return found
+
+
+def approval_request(ctx, draft_id, to, cc, subject, body, files):
+    """The Tico send approval a human decides for a draft with files: the existing `send` payload
+    plus this draft's id and each file's name, size and sha256, which the send checks again."""
+    payload = {"to": list(to), "cc": list(cc), "subject": subject,
+               "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
+               "mailbox": ctx.mailbox, "draft": draft_id,
+               "attachments": [{"name": a["name"], "size": a["size"], "sha256": a["sha256"]}
+                               for a in files]}
+    task = f" --task {ctx.issue}" if pl.HUB_ID.match(ctx.issue or "") else ""
+    command = ("hub approval request --kind send --payload "
+               + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
+    lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
+             f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
+    lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})" for a in files]
+    return {"kind": "send", "payload": payload, "command": command, "text": "\n".join(lines)}
+
+
 def attachment_meta(atts):
     """What the audit, the payload and the reviewer see of each file: never its bytes."""
     return [{k: a.get(k) for k in ("name", "type", "size", "sha256") if a.get(k) is not None}
@@ -1522,6 +1560,8 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
                "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
                "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
+               "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files)
+                                    if files else None),
                "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
                "needs_owner": review_no,
                "why_needs_owner": review_why if review_no else "",
@@ -1545,7 +1585,7 @@ def draft_text(p):
              f"  thread:  {p['thread'] or '(new)'}",
              *(["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)"
                                           for a in p["attachments"])
-                + "; sending it needs --approval-issue"] if p.get("attachments") else []),
+                + "; sending it needs the approval below"] if p.get("attachments") else []),
              f"  draft:   {p['draft'] or '(not created: dry run)'}",
              f"  key:     {p['key'][:16]}...",
              f"  lint:    {p['lint']['summary']}",
@@ -1559,6 +1599,12 @@ def draft_text(p):
                      "downgraded to a draft.")
     if not p["dry_run"]:
         lines.append(f"  labelled {p['label']}; the owner can see it in Gmail.")
+    if p.get("approval_request"):
+        req = p["approval_request"]
+        lines += ["", "  sending it needs this approval (a person decides it; then "
+                      "`mail send --draft ... --approval-issue <approval id>`):",
+                  *("    " + line for line in req["text"].splitlines()),
+                  "  request it with:", "    " + req["command"]]
     return "\n".join(lines) + "\n"
 
 
@@ -1604,6 +1650,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     Attachments ride the same chain: they need allow_attachments and a per-message approval
     whoever the recipient is, are named in the audit, and lift nothing."""
     names = [a["name"] for a in attachments or ()]
+    files = list(attachments or ())
     base = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
             "draft": draft_id, "to": to, "cc": cc, "subject": subject, "thread": thread_id,
             "attachments": names, "dry_run": ctx.dry}
@@ -1622,7 +1669,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # is recorded, but it advises rather than blocks: it does not get to overrule the owner.
     appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
                               pl.externals(ctx.policy, cc), thread_id,
-                              slug=ctx.slug) if approval else None)
+                              slug=ctx.slug, attachments=files or None, draft=draft_id)
+            if approval else None)
     full = bool(appr and appr["full"])
     review_note = ""
     if not verdict.get("available"):
@@ -1644,7 +1692,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         base["review_advisory"] = review_note
 
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
-                             attachments=len(names), thread_id=thread_id,
+                             attachments=files, draft=draft_id, thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn,
                              thread_senders=pl.inbound_senders(msgs, ctx.mailbox))
     if not decision.allowed:
@@ -1685,7 +1733,7 @@ def cmd_send(args):
     msg = ctx.normalize(draft.get("message") or {})
     to, cc, subject, body = msg["to"], msg["cc"], msg["subject"], msg["body"]
     thread_id = msg["thread_id"]
-    files = msg.get("attachments") or []
+    files = draft_files(ctx, draft)                     # hashed as they stand in Gmail now
     if not to:
         raise Refused(f"draft {args.draft} has no recipient.",
                       "Draft it again with --to; a draft with no To: cannot be sent.")

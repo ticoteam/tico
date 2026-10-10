@@ -125,6 +125,15 @@ contents. Attaching lifts nothing, and sending an attached draft always needs `-
 even to a recipient who needs none without files (the sender of the thread, a forward target,
 an internal address or an allowance).
 
+That approval must name the files. `mail draft --attach` prints a ready request (and returns it
+as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
+and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
+carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
+files as they are in the Gmail draft and sends only if they are exactly the approved set for
+that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
+counts only when its `Send to:` line matches and it names each file and its sha256 (and no
+other hash). The owner's message telling the bot to send does not cover attachments.
+
 `discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
 draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
 the `draft` verb and is audited.

@@ -122,7 +122,10 @@ with the reason attached; it never silently drops the work.
   blocklist, or `allow_attachments`.
 - Attachments come only from the bot's own folder, never from a secret-looking file (`.env*`, keys, `credentials*`,
   `*secret*`, `*token*`, `secrets/`, `.ssh/` and the like), and a message carrying one always needs a per-message
-  approval, even to the sender of the thread, a forward target or an internal address. See docs/mail.md, "Draft".
+  approval, even to the sender of the thread, a forward target or an internal address. That approval names the
+  files: a Tico send approval whose payload lists the draft and each file's name, size and sha256 (`mail draft`
+  prints the request), or a GitHub Issue naming each file and its sha256. The files are hashed again from the
+  draft at send time; an owner's "send it" message does not cover attachments. See docs/mail.md, "Draft".
 - Blocklist of addresses and domains bots never email (press, counterparties, anyone Ana
   lists), and a "Ana handles personally" list that forces `hub/needs-owner`. Both beat a forward address and a
   reply to a sender.
