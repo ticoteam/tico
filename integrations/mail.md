@@ -108,7 +108,7 @@ policy refused you. Add `--json` for structured output.
   `bot.yaml`), lint, a second model (a different vendor), execution, audit. A gate that
   says no leaves a draft in Gmail with the reason. Read the reason; do not retry the same text
   or look for another route.
-- A send to anyone outside `@example.com` needs `outbound_send: true` and one of: a standing
+- A send to anyone outside `@example.com` needs the bot's mail switch turned on in Tico by a person (bot.yaml's `outbound_send` only asks) and one of: a standing
   allowance in `registry/mail-policy.yaml` that lists the recipient, or a per-message approval
   (`--approval-issue`: a matching GitHub Issue, a decided Tico send approval, or the owner's
   Tico message telling you to send). With the flag false every send is a draft unless that
