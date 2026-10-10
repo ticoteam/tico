@@ -117,7 +117,9 @@ async function desktop(browser) {
   assert.deepEqual(api.sends, [], 'goal mode does not queue a normal chat turn');
   await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
   assert.equal(await page.locator('#chat-goal .cg-chip').innerText(), 'Working');
-  assert.match(await target.getAttribute('class'), /\bon\b/, 'the goal mode remains highlighted');
+  assert.equal(await target.isHidden(), true, 'a pinned goal takes the target out of the composer');
+  assert.equal(await send.getAttribute('aria-label'), 'Send', 'the composer is back to chatting');
+  assert.equal(await composer.getAttribute('placeholder'), 'Type a message…');
   await page.locator('#side .tree-goal').waitFor();               // the bot's row has the mark
 
   // Three lines, then tap to read it all with Edit, Pause and Clear.
@@ -135,6 +137,10 @@ async function desktop(browser) {
   await page.getByRole('button', {name: 'Clear'}).click();
   await page.locator('#chat-goal').waitFor({state: 'hidden'});
   assert.equal(api.goalPosts.at(-1).action, 'clear');
+  assert.equal(await target.isHidden(), false, 'a cleared goal brings the target back');
+  assert.equal(await target.getAttribute('aria-pressed'), 'false', 'and goal mode is off');
+  await target.click();
+  assert.equal(await send.innerText(), 'Set goal');
   // Files are never dropped: with one attached, Send is Send again and it all goes as a message.
   const goalPosts = api.goalPosts.length;
   await composer.fill('With a file');

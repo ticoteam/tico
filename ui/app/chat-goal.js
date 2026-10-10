@@ -1,4 +1,4 @@
-/* ui/app/chat-goal.js — A chat's pinned goal: the target button in the composer, the bar above the thread, and
+/* ui/app/chat-goal.js — A chat's pinned goal: the target button in the composer (until a goal is pinned), the bar above the thread, and
    the one line a met or stopped goal leaves in the chat. The harness (Codex, Claude Code) keeps working toward it.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -167,7 +167,10 @@ function chatGoalRender(state, force = false) {
   const P = BOT_PILL?.slug === state.slug ? BOT_PILL : null, btn = P && pq(P, '.p-goal');
   if (btn) {
     if (P.goalMode == null) P.goalMode = chatGoalModeSaved(state.slug);
-    btn.hidden = !state.goalSupported && !P.goalMode;
+    // A pinned goal is edited and cleared from its bar, so the composer is for chatting: no target, and Send sends.
+    const pinned = goalPinned(state.goal);
+    if (pinned && P.goalMode) { P.goalMode = false; chatGoalModeStore(state.slug, false); }
+    btn.hidden = pinned || (!state.goalSupported && !P.goalMode);
     btn.classList.toggle('on', !!P.goalMode);
     btn.setAttribute('aria-pressed', String(!!P.goalMode));
     btn.setAttribute('aria-label', P.goalMode ? 'Goal mode on' : 'Goal mode');
