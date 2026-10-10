@@ -200,6 +200,8 @@ class Execution(unittest.TestCase):
             return post(path, body, key)
 
         def refuse(thread_id, turn_id, text):
+            self.host.emit("tokens", thread_id, turn_id, input=40, output=2, total=42,
+                           usage={"input": 40, "cached": 0, "output": 2})
             self.host.complete(thread_id, "the first answer")
             raise service.SteerRefused("turn is ending")
 
@@ -214,6 +216,72 @@ class Execution(unittest.TestCase):
         self.assertEqual(runner.state.input_phase("att-1", "msg-2"), "applied")
         self.assertEqual(client.completion()["outcome"], "completed")
         self.assertEqual(client.completion()["text"], "the first answer\n\nthe follow-up's answer")
+        reply = "the follow-up's answer"
+        self.assertEqual((client.completion()["tokens_in"], client.completion()["tokens_out"]),
+                         (40 + 100, 2 + len(reply)))           # both turns, not just the last
+        self.assertNotIn("undelivered", client.completion())
+
+    def refused_follow_up(self, client, refuse, run):
+        """Run one attempt whose single inputs poll returns a follow-up the host refuses with `refuse`."""
+        runner = self.runner(client)
+        self.host.hold_next_turn()
+        post, polls = client.post, []
+
+        def inputs_once(path, body=None, key=None):
+            if path.endswith("/inputs") and self.host.turn_of and not polls:
+                polls.append(path)
+                return {"messages": [{"id": "msg-2", "kind": "chat", "body": "one more thing",
+                                      "from_actor": "human:ana"}]}
+            return post(path, body, key)
+
+        with mock.patch.object(client, "post", side_effect=inputs_once), \
+                mock.patch.object(self.host, "steer", side_effect=refuse):
+            runner.execute(run)
+        return runner
+
+    def test_a_follow_up_refused_by_a_failing_turn_is_handed_back_undelivered(self):
+        def refuse(thread_id, turn_id, text):
+            self.host.turn_of.pop(thread_id, None)
+            self.host.emit("turn_failed", thread_id, turn_id, error="the turn failed", limit=False, auth_retry=False)
+            raise service.SteerRefused("turn is ending")
+
+        client = FakeClient()
+        self.refused_follow_up(client, refuse, attempt())
+        self.assertEqual(len(self.host.prompts), 1)            # no turn for it on a failed run
+        self.assertEqual(client.completion()["outcome"], "failed")
+        self.assertEqual(client.completion()["undelivered"], ["msg-2"])
+        self.assertNotIn(("attempts/att-1/inputs/msg-2/ack", {}), client.posts)
+
+    def test_a_follow_up_refused_before_a_goal_control_is_handed_back_undelivered(self):
+        goal = {"id": "goal-1", "status": "active", "updated_at": "r1", "objective": "ship it"}
+        client = FakeClient()
+        refused = threading.Event()
+        # The goal is unchanged until the steer was refused; then a person pauses it.
+        client.get = lambda path, **query: ({"goal": goal} if not refused.is_set() else {"goal": None})
+
+        def refuse(thread_id, turn_id, text):
+            refused.set()
+            raise service.SteerRefused("turn is ending")
+
+        self.refused_follow_up(client, refuse, {**attempt(), "chat_goal": goal})
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertEqual(client.completion()["undelivered"], ["msg-2"])
+        self.assertEqual(len(self.host.prompts), 1)
+
+    def test_a_server_from_before_undelivered_still_gets_the_result(self):
+        client = FakeClient()
+        sent = []
+
+        def older_server(path, body=None, key=None):
+            sent.append(dict(body))
+            if "undelivered" in body:
+                raise APIError("validation", "body.undelivered: Extra inputs are not permitted", 422)
+            return {}
+
+        client.post = older_server
+        self.runner(client).complete("att-1", {"outcome": "failed", "text": "", "last_seq": 0,
+                                               "undelivered": ["msg-2"]})
+        self.assertEqual([("undelivered" in body) for body in sent], [True, False])
 
     def test_a_definite_refusal_to_renew_interrupts_the_turn(self):
         client = FakeClient(renew_error=GONE)

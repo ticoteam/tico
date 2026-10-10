@@ -2872,6 +2872,10 @@ class Runner:
         selected_profile = None
         goal_controlled = [False]
         goal_failure = [None]
+        # Inputs a turn refused as it ended (message id -> message). A completed turn gets a turn of its
+        # own for them; on any other ending the completion names them `undelivered`, so the server queues
+        # them again instead of settling them with a run that never showed them to the bot.
+        carried = {}
         redactor, started_at, tree, memory_before = None, "", {}, ""
         meter, metered = [usage.Meter()], []
         bot_lock, acquired = self.worktrees.bot_lock(bot), False
@@ -2929,10 +2933,17 @@ class Runner:
                     """Drain the host until the turn ends: (outcome, reply, tokens, limited, retryable)."""
                     reply, tokens, outcome, limited, retryable = "", {}, "interrupted", False, False
                     acted, last_flush, complete = False, 0, False
-                    carried = {}                 # inputs a turn refused as it ended: they get the next turn
                     earlier = ""                 # the replies of turns before a carried one, kept in the answer
+                    earlier_tokens = {}          # and their token counts, summed into the run's
+
                     def answer():
                         return "\n\n".join(text for text in (earlier, reply) if text)
+
+                    def spent():
+                        if not earlier_tokens:
+                            return tokens
+                        return {key: (earlier_tokens.get(key) or 0) + (tokens.get(key) or 0)
+                                for key in ("input", "output", "total")}
                     goal = attempt.get("chat_goal")
                     goal_running = bool(goal and goal["status"] == "active")
                     revision = goal["updated_at"] if goal else None
@@ -2940,7 +2951,7 @@ class Runner:
                         if stopped.is_set():
                             goal_failure[0] = "Stopped by a person"
                             host.interrupt(thread, turn)
-                            return "interrupted", answer(), tokens, False, False
+                            return "interrupted", answer(), spent(), False, False
                         if self.stop.is_set() or lost.is_set() or time.monotonic() >= limit:
                             goal_failure[0] = ("Run time limit reached" if time.monotonic() >= limit else
                                                "The computer stopped" if self.stop.is_set() else "The execution lease expired")
@@ -2996,6 +3007,7 @@ class Runner:
                             # Not on a failed or stopped turn: those settle the attempt, inputs included.
                             turn = self.carry_inputs(aid, host, thread, carried, config.get("reasoning_effort"))
                             outcome, complete, earlier, reply = "interrupted", False, answer(), ""
+                            earlier_tokens, tokens = spent(), {}
                         if time.monotonic() - last_flush >= 1:
                             try:
                                 host.poll_goal(thread)
@@ -3018,7 +3030,7 @@ class Runner:
                         if not host.alive() and not complete:
                             raise RuntimeError("Local runtime exited unexpectedly")
                         done.wait(0.1)
-                    return outcome, answer(), tokens, limited, retryable
+                    return outcome, answer(), spent(), limited, retryable
                 if persistent:
                     host, env = self.warm.acquire(attempt, env, self.host_factory)
                 else:
@@ -3222,6 +3234,7 @@ class Runner:
             completion = self.state.finish(aid, {"outcome": outcome, "text": reply,
                                                 **({"profile_used": profile_used} if profile_used else {}),
                                                 "tokens_in": tokens.get("input"), "tokens_out": tokens.get("output"),
+                                                **({"undelivered": sorted(carried)} if carried else {}),
                                                 **({"usage": spent} if spent else {}),
                                                 **({"limited": True} if limited else {}),
                                                 **({"retryable": True} if retryable and not limited else {}),
@@ -3292,7 +3305,10 @@ class Runner:
             except APIError as exc:
                 if exc.status != 422:
                     raise
-                if "subscription_unavailable" in pending:
+                if "undelivered" in pending:
+                    # A server from before it settles these with the run, as it always did.
+                    pending.pop("undelivered", None)
+                elif "subscription_unavailable" in pending:
                     pending.pop("subscription_unavailable", None)
                 elif "profile_used" in pending and ("profile_used" in str(exc.detail) or "extra" in str(exc.detail).lower() and "body." not in str(exc.detail)):
                     pending.pop("profile_used", None)

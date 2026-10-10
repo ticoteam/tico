@@ -288,6 +288,7 @@ class ClaudeProcess:
 
 def make_claude(**kw):
     ClaudeProcess.instances = []
+    kw.setdefault("version", lambda: "2.1.296 (Claude Code)")
     host = ClaudeHost(bot="cpo", spawn=lambda argv, **kwargs: ClaudeProcess(argv, **kwargs), **kw)
     host.start()
     return host
@@ -481,6 +482,38 @@ class ClaudeStreamJson(unittest.TestCase):
         self.assertFalse(failed["limit"])
         self.assertFalse([e for e in events if e["kind"] == "turn_completed"])
         self.assertIsNone(host.active_turn(tid))
+        host.stop()
+
+    def test_steering_needs_the_claude_code_that_was_verified(self):
+        for version, steers in (("2.1.296 (Claude Code)", True), ("2.2.0 (Claude Code)", True),
+                                ("2.1.295 (Claude Code)", False), ("", False), ("claude: not found", False)):
+            self.assertEqual(make_claude(version=lambda v=version: v).supports_steer, steers, version)
+
+    def test_a_replay_without_the_written_uuid_counts_for_the_oldest_unread_message(self):
+        logs = []
+        host = make_claude(log=logs.append)
+        tid = host.start_thread("cpo", self.SETTINGS)
+        turn = host.start_turn(tid, "first")
+        proc = ClaudeProcess.instances[-1]
+        host.steer(tid, turn, "one")
+        host.steer(tid, turn, "two")
+        proc.messages(3)
+        for uuid_field in ({}, {"uuid": "made-up"}):          # the prompt, then the first steer
+            proc.push({"type": "user", "isReplay": True, "message": {"role": "user", "content": "..."},
+                       "parent_tool_use_id": None, **uuid_field})
+        proc.push({"type": "user", "isReplay": True, "uuid": proc.messages()[1]["uuid"],
+                   "message": {"role": "user", "content": "..."}, "parent_tool_use_id": None})  # read already
+        proc.result(text="partial", exit=False)
+        import time
+        time.sleep(0.05)
+        self.assertFalse(proc.closed)                          # "two" is still unread
+        proc.push({"type": "user", "isReplay": True, "message": {"role": "user", "content": "..."},
+                   "parent_tool_use_id": None})
+        proc.result(text="all three", exit=False)
+        self.assertTrue(proc.wait_closed())
+        events = self.drain(host)
+        self.assertEqual([e["status"] for e in events if e["kind"] == "turn_completed"], ["completed"])
+        self.assertEqual(sum("did not carry the uuid" in line for line in logs), 1)
         host.stop()
 
     def test_a_steer_after_stdin_closed_is_refused_with_nothing_written(self):

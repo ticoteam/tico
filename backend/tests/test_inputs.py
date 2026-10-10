@@ -1,3 +1,5 @@
+import pytest
+
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt, expire
 from backend.tests.test_member_bots import botops, turn, finish
 
@@ -162,3 +164,39 @@ def test_private_task_input_is_not_folded_into_another_tasks_run_and_runs_on_its
     second = claim(api, r, "ops")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT message_id FROM jobs WHERE id=?", (second["job_id"],)).fetchone()[0] == ask["id"]
+
+
+@pytest.mark.parametrize("outcome", ["completed", "failed"])
+def test_an_input_the_runtime_never_got_goes_back_to_the_queue_whatever_the_outcome(api, outcome):
+    # The runner polled it, but the turn ended before the steer (then a goal control settled the run
+    # "completed", or the turn failed): settled with the run it would read as answered, or uncertain.
+    r, _, first = setup_attempt(api)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
+    lost = post(api, "chat/ops", {"text": "Also include the weekly numbers"})
+    applied = post(api, "chat/ops", {"text": "And the monthly ones"})
+    assert {m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]} == \
+        {lost["id"], applied["id"]}
+    post(api, f"attempts/{first['id']}/inputs/{applied['id']}/ack", {}, r["token"])
+    # The bot spoke, so a failure is a person's review ("uncertain"), not a turn that never ran.
+    post(api, f"attempts/{first['id']}/events", {"events": [{"seq": 1, "kind": "message",
+                                                              "payload": {"text": "Working on it"}}]}, r["token"])
+    # Only this run's own unacknowledged inputs come back: the acknowledged one reached the runtime.
+    post(api, f"attempts/{first['id']}/complete", {"outcome": outcome, "text": "Here is the summary.", "last_seq": 1,
+         "undelivered": [lost["id"], applied["id"], "msg-of-someone-else"]}, r["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (lost["id"],)).fetchone()[:] == \
+            ("queued", None)
+        # The acknowledged one is settled with the run as before and stays this run's input.
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (applied["id"],)).fetchone()[0] == \
+            ("completed" if outcome == "completed" else "uncertain")
+        assert c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (applied["id"],)).fetchone()[0] == \
+            first["id"]
+        assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id=?", (lost["id"],)).fetchone()
+        if outcome == "completed":
+            answers = c.execute("SELECT json_extract(refs_json,'$.answers') FROM messages WHERE from_actor='bot:ops' "
+                                "AND body='Here is the summary.'").fetchone()[0]
+            assert lost["id"] not in answers and applied["id"] in answers
+    if outcome == "completed":
+        second = claim(api, r)
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT message_id FROM jobs WHERE id=?", (second["job_id"],)).fetchone()[0] == lost["id"]

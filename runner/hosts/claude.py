@@ -23,12 +23,14 @@ the runner's turn only when none is, and then the host closes stdin and the proc
 turn's reply is every result's text in order, so an answer given before a steer was read is
 kept; a steer left unread through STEER_READ_TIMEOUT_S of silence fails the turn. A
 steer after that point is refused with `SteerRefused` (nothing written; the runner gives it a
-turn of its own). `interrupt` terminates the process.
+turn of its own). Steering is on only from STEER_MIN_VERSION, read with `claude --version` when
+the host starts. `interrupt` terminates the process.
 """
 
 import json
 import os
 import queue
+import re
 import subprocess
 import tempfile
 import threading
@@ -52,6 +54,23 @@ STDERR_TAIL = 2000
 # How long a turn waits, after a `result`, with a steer still unread and nothing at all on stdout.
 # Claude replays a message the moment it reads it, so this much silence means it never will.
 STEER_READ_TIMEOUT_S = 120
+# The first Claude Code verified to replay stream-json input and fold a mid-turn message into the turn.
+STEER_MIN_VERSION = (2, 1, 296)
+_steer_versions = {}                       # command -> whether its `--version` is new enough
+
+
+def version_tuple(text):
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", str(text or ""))
+    return tuple(int(n) for n in m.groups()) if m else None
+
+
+def installed_version(cmd):
+    """`claude --version`, as the bot user like the turns; "" when it cannot be read."""
+    try:
+        result = isolation.run(list(cmd) + ["--version"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (result.stdout or result.stderr or "").strip() if result.returncode == 0 else ""
 
 
 def effort_for(effort):
@@ -115,6 +134,7 @@ class _Pipe:
         self.open = True
         self.first = None                  # the turn's prompt
         self.unread = set()                # uuids written and not yet replayed
+        self.order = []                    # every uuid written, oldest first
         self.steered = False               # a steer was written to this process
         self.cost = 0.0                    # Claude's total_cost_usd so far (it is per process, cumulative)
         self.awaiting = None               # the timer armed while a result left a steer unread
@@ -123,14 +143,16 @@ class _Pipe:
 
 class ClaudeHost(Host):
     name = "claude"
-    supports_steer = True
+    supports_steer = False                 # until `start` finds a Claude Code that can steer
 
-    def __init__(self, bot=None, cmd=("claude",), log=None, stderr_path=None, spawn=None):
+    def __init__(self, bot=None, cmd=("claude",), log=None, stderr_path=None, spawn=None, version=None):
         super().__init__(log=log)
         self.bot = bot
         self.cmd = list(cmd)
         self.stderr_path = stderr_path
         self._spawn = spawn or isolation.popen
+        self._version = version                # `--version` reader; the real command when None
+        self._replay_fallback_logged = False
         self._up = False
         self.proc = None                   # the running turn's process
         self._reader = None
@@ -147,7 +169,16 @@ class ClaudeHost(Host):
 
     # ------------------------------------------------------------------ process
     def start(self):
-        """Nothing runs between turns; `alive` means the host accepts turns."""
+        """Nothing runs between turns; `alive` means the host accepts turns. Steering needs a Claude
+        Code that replays its input, checked once per command for the runner's life (an update only
+        ever moves it forward); an older or unreadable one queues follow-ups for the next run."""
+        key = tuple(self.cmd)
+        if self._version is not None:
+            self.supports_steer = (version_tuple(self._version()) or (0,)) >= STEER_MIN_VERSION
+        else:
+            if key not in _steer_versions:
+                _steer_versions[key] = (version_tuple(installed_version(self.cmd)) or (0,)) >= STEER_MIN_VERSION
+            self.supports_steer = _steer_versions[key]
         self._up = True
 
     def stop(self):
@@ -321,6 +352,7 @@ class ClaudeHost(Host):
         with self._lock:
             pipe.first = str(uuid.uuid4())
             pipe.unread.add(pipe.first)
+            pipe.order.append(pipe.first)
             pipe.lines.put(user_line(pipe.first, text))
             self._pipe = pipe
         threading.Thread(target=self._feed, args=(pipe,), daemon=True).start()
@@ -373,6 +405,18 @@ class ClaudeHost(Host):
             else:
                 self._await_read(pipe)
 
+    def _replayed(self, pipe, mid):
+        """Claude read message `mid`. A replay whose uuid is missing or not one written here (a Claude
+        that stops echoing ours) stands for the oldest unread message, as Claude reads them in order;
+        a repeat of one already read changes nothing. Under `_lock`."""
+        if mid not in pipe.order:
+            mid = next((m for m in pipe.order if m in pipe.unread), None)
+            if not self._replay_fallback_logged:
+                self._replay_fallback_logged = True
+                self._log(f"claude[{self.bot}]: a replayed message did not carry the uuid written; "
+                          "counting replays in order instead")
+        pipe.unread.discard(mid)
+
     def _await_read(self, pipe):
         """(Re)start the wait for an unread steer; any stdout line restarts it. Under `_lock`."""
         if pipe.awaiting:
@@ -409,7 +453,7 @@ class ClaudeHost(Host):
                     if isinstance(msg, dict) and msg.get("type") == "user" and msg.get("isReplay") \
                             and not msg.get("parent_tool_use_id"):
                         with self._lock:         # Claude has read this one; not a provider event
-                            pipe.unread.discard(msg.get("uuid"))
+                            self._replayed(pipe, msg.get("uuid"))
                             if pipe.awaiting and not pipe.unread - {pipe.first}:
                                 pipe.awaiting.cancel()   # read: its own result follows
                                 pipe.awaiting = None
@@ -583,6 +627,7 @@ class ClaudeHost(Host):
                 raise SteerRefused(f"claude turn {turn_id} is over or ending")
             mid = str(uuid.uuid4())
             pipe.unread.add(mid)
+            pipe.order.append(mid)
             pipe.steered = True
             pipe.lines.put(user_line(mid, text))
 

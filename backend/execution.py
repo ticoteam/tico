@@ -1135,6 +1135,20 @@ class Execution:
         return {"attempt_id": aid, "messages": [m for row in ids if (m := H.message(c, row[0]))
                              and privacy.message_readable(c, "bot:" + attempt["bot"], m)]}
 
+    def release_undelivered(self, c, aid, ids):
+        """Put inputs the runner says it never gave the runtime back in the queue, before anything below
+        settles this run's inputs with its outcome (a goal control's "completed" would mark them answered,
+        a failure "uncertain"). Only this run's own unacknowledged inputs: an acknowledged one did reach
+        the runtime. Its input row goes too, so the reply does not list it as answered and the next poll
+        or claim treats it as new."""
+        for mid in dict.fromkeys(ids or ()):
+            if not c.execute("SELECT 1 FROM attempt_inputs WHERE attempt_id=? AND message_id=? AND acked_at IS NULL",
+                             (aid, mid)).fetchone():
+                continue
+            c.execute("DELETE FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid))
+            c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
+            H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})
+
     def acknowledge_input(self, c, who, aid, mid):
         self.attempt(c, who, aid)
         row = c.execute("SELECT * FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid)).fetchone()
@@ -1182,6 +1196,7 @@ class Execution:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
         if late and not self.settleable(c, who, row):
             return self.file_result(c, row, body)
+        self.release_undelivered(c, aid, body.undelivered)
         msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
