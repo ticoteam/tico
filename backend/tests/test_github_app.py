@@ -18,7 +18,7 @@ from backend import hubdb as H
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
-from backend.store import encode
+from backend.store import Problem, encode
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
@@ -764,12 +764,15 @@ def test_a_lost_github_app_key_is_replaced_only_when_the_owner_confirms(api, gh)
     connect(api)
     lose_key(api, "entra")
     assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
-    refused = api.get("/api/v2/github/app/manifest", params={"org": "Acme"}, headers=auth())
-    assert refused.status_code == 409 and "replace_lost_key" in refused.text
     state = api.app_state
-    with state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 1   # nothing dropped unasked
-    connect(api, replace_lost_key="true")
+    for params in ({}, {"replace_lost_key": "true"}):       # a GET, even a link carrying the flag, never drops anything
+        refused = api.get("/api/v2/github/app/manifest", params={"org": "Acme", **params}, headers=auth())
+        assert refused.status_code == 409 and "replace-lost-key" in refused.text
+        with state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 1
+    assert api.post("/api/v2/github/app/replace-lost-key", headers=auth("person-test")).status_code == 403
+    assert api.post("/api/v2/github/app/replace-lost-key", headers=auth()).json() == {"replaced": True}
+    connect(api)
     with state.store.read() as c:
         assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 0   # to be entered again
         assert state.github_app.private_key(c, state.github_app.row(c))
@@ -790,3 +793,14 @@ def test_two_directory_sources_sealed_with_a_lost_key_do_not_deadlock(api, gh):
     assert directory_put(api, replace_lost_key=True).status_code == 200
     with state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='github.lost_key_replaced'").fetchone()[0] == 1
+
+
+def test_a_proposal_cannot_carry_the_lost_key_replacement():
+    """PUT /api/v2/directory is a route BotOps may propose; replacing the lost key is a person's own confirm, not a card's."""
+    from types import SimpleNamespace
+
+    from backend import assistant
+    settings = SimpleNamespace(assistant_bot="assistant")
+    body = {"source": "entra", "replace_lost_key": True}
+    with pytest.raises(Problem, match="person directly"):
+        assistant.create_proposal(None, settings, None, None, "botops", "Save Entra", "PUT", "/api/v2/directory", body)

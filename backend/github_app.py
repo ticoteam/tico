@@ -125,7 +125,8 @@ MISSING_KEY = ("The GitHub App key file (github-app.key) is missing from the dat
                "made with this database (docs/install.md, Backups and restore)")
 LOST_KEY = ("The key for the saved GitHub App and directory sync secrets (github-app.key) is missing from the data volume, "
             "so they cannot be opened. Restore it from the backup (credential-key/github-app.key) and restart; or, if no "
-            "backup has it, send again with replace_lost_key set to drop those secrets and enter them again.")
+            "backup has it, confirm replacing it (POST /api/v2/github/app/replace-lost-key, or replace_lost_key on the "
+            "directory save) to drop those secrets and enter them again.")
 
 
 class GitHubApp:
@@ -860,20 +861,17 @@ def install_github_app(app, settings, store):
         return view
 
     @app.get("/api/v2/github/app/manifest")
-    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False,
-                      replace_lost_key: bool = False):
+    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
         who = owner(request)
         if not ORG.match(org):
             raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
         if service.row():
             raise Problem("github_connected", "GitHub is already connected; disconnect it first to start over", 409)
         # Before GitHub makes an app: one it could never be saved for (the key that seals other secrets is lost) is refused
-        # here, unless the owner confirms dropping what that key sealed.
-        with store.transaction() as c:
+        # here. This GET never drops anything; the owner's confirmed POST replace-lost-key does.
+        with store.read() as c:
             if service.key_lost(c):
-                if not replace_lost_key:
-                    raise Problem("github_key_missing", LOST_KEY, 409)
-                service.replace_lost_key(c, who.actor)
+                raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
@@ -887,6 +885,14 @@ def install_github_app(app, settings, store):
                     "<script>document.getElementById('f').submit()</script>")
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
         return {"action": action, "manifest": body, "state": nonce}
+
+    @app.post("/api/v2/github/app/replace-lost-key")
+    def replace_lost_key(request: Request):
+        """The owner confirmed it: github-app.key is lost with no copy, so drop the GitHub App and directory sync
+        secrets only it opened. Not proposable: a person clicks it themselves."""
+        who = owner(request)
+        with store.transaction() as c:
+            return {"replaced": service.replace_lost_key(c, who.actor)}
 
     @app.get("/api/v2/github/app/callback")
     def callback(request: Request, code: str = "", state: str = ""):

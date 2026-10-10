@@ -67,7 +67,7 @@ window.mountGithubConnect = async function (host) {
       catch (error) {
         // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
         if (error.body?.error?.code !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
-        query.set('replace_lost_key', 'true');
+        await post('/v2/github/app/replace-lost-key', {});
         setup = await get('/v2/github/app/manifest?' + query);
       }
       const post_form = document.createElement('form');
