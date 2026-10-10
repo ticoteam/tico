@@ -292,7 +292,7 @@ if you edited elsewhere. Do not edit while the bot is running there.
 **You change a routine.** Routines are rows in Tico (`docs/routines.md`): edit one on the
 site under Settings → Routines, or a bot changes its own with `hub routine set`. The change is in
 the table at once; a sleeping Mac does not block it. **You change a bot's switches.** Tools
-read `outbound_send` and `tools:` from the Mac checkout each time a bot sends or posts. Model, effort, computer, humans, name,
+read `tools:` from the Mac checkout each time a bot sends or posts; whether it may send without approval comes from the mail switch a person sets in Tico (`outbound_send` in bot.yaml only asks). Model, effort, computer, humans, name,
 status and reporting line are changed in **Settings → Bots**, not in the file.
 
 ## Calling the API from a script

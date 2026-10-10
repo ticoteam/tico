@@ -29,7 +29,7 @@ logged in one place.
 - **Who may act as which mailbox comes from `bot.yaml`.** The dispatcher already sets the
   bot's env; it will add `HUB_BOT=<slug>`. The CLI reads that (or `--as <slug>`), loads
   the bot's `tools:` block, and refuses anything not declared there: mailbox identity, verbs
-  (`read`, `draft`, `send`), and `outbound_send`.
+  (`read`, `draft`, `send`), and the mail switch a person sets in Tico (bot.yaml's `outbound_send` is only a request).
 
 ## Commands (the interface every bot learns)
 
@@ -99,16 +99,16 @@ with the reason attached; it never silently drops the work.
 
 **1. Policy (hardcoded, `registry/mail-policy.yaml` plus `bot.yaml`).**
 - Global kill switch and per-mailbox pause. Flip one line and everything becomes drafts.
-- Bot may use this mailbox with this verb (from `tools:`). `outbound_send: false` means
-  `send` produces a draft and a note, always.
-- Internal (@acme.example) versus external recipients. With `outbound_send: true`, which is the owner saying yes
-  to this bot sending, three kinds of recipient need no per-message approval: an internal address, an address the
-  owner lists under `forward_to:` in the bot's `bot.yaml` (their other email, say), and the sender of the thread
+- Bot may use this mailbox with this verb (from `tools:`). With the Tico mail switch off
+  (`hub bot mail <slug>`; bot.yaml's `outbound_send` only asks), `send` produces a draft and a note, always.
+- Internal (@acme.example) versus external recipients. With the Tico mail switch on, which a person who manages
+  the bot sets, three kinds of recipient need no per-message approval: an internal address, an address the
+  person approved as a forward target in that switch (their other email, say), and the sender of the thread
   the bot is replying to (a reply, to that one person, nobody added; an outside Cc makes it something else).
   Any other external recipient needs one of: a standing allowance in the policy file (Influencer: recipient must be
   in its creator table, 10 per day, never the same address twice) or `--approval-issue`, which is a closed
   `owner:ana` `type:decision` GitHub Issue, a decided Tico `send` approval, or Ana's Tico message telling this bot
-  to send. With `outbound_send: false`, none of this applies and a send is a draft.
+  to send. With the switch off, none of this applies and a send is a draft.
 - With no registry (a Docker computer has no `registry/mail-policy.yaml`) the policy is built in: sending is on
   globally, internal domains are the ones the bot's mailbox and the team roster use (public providers such as
   gmail.com never count), the caps are 20 sends a day, one external recipient, no external Cc, no attachments, and
@@ -145,7 +145,7 @@ matching block, a decided Tico `send` approval whose payload names every externa
 or a Tico message in which Ana told this bot to send — that message may carry more
 than one external recipient and external Cc, the cooldown does not apply to it, lint L056
 does not apply to it, the second reviewer runs but advises instead of blocking (its verdict
-is still recorded and shown), and the bot's `outbound_send: false` is lifted for that
+is still recorded and shown), and the switch being off is lifted for that
 message only. The bot still has to declare `send` on the mailbox, the daily cap and
 the blocklist still apply, and `mail draft` accepts the same `--approval-issue` so the
 draft can be written with the external Cc in the first place. Everything else about the
@@ -277,10 +277,10 @@ access to `mail_*` is owner-only.
   them for any bot that declares gmail access.
 - `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, send to itself,
   create and delete a throwaway event. Run by preflight before any message bot goes active.
-- Week one: all three bots read and draft only (`outbound_send: false`). Ana reviews
-  drafts in Gmail and on the tasks. Week two, if the drafts are good: `outbound_send: true` for
+- Week one: all three bots read and draft only (mail switch off). Ana reviews
+  drafts in Gmail and on the tasks. Week two, if the drafts are good: the mail switch on for
   Influencer with the 10-per-day creator allowance. A message bot sends only once its owner turns sending on
-  (`outbound_send: true`, asked of BotOps in chat; docs/mail.md, "Turning sending on"), and then only to the
+  (a person who manages it sets the mail switch in Settings → Bots → Mail sending or with `hub bot mail <slug> --send`; docs/mail.md), and then only to the
   three kinds of recipient above without a per-message approval; Ana can also just send the draft herself.
 
 ## Build order (about three working days of bot time)

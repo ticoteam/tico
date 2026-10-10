@@ -288,7 +288,7 @@ These are invented examples, in the shape that repeats in real repositories.
 | Bad | Good |
 |---|---|
 | "Be thorough and helpful when reviewing invoices." | "Match every invoice to the purchase order for the same supplier and total. A gap over 2 percent goes on the task; you never pay." |
-| "Use your judgement about what to send." | "Draft on the task while `outbound_send` is off. Once sending is on, send the requested reply with the granted mail Tool; ask if the recipient or terms are unclear." |
+| "Use your judgement about what to send." | "Draft on the task until a person turns mail sending on in Tico. Once it is on, send the requested reply with the granted mail Tool; ask if the recipient or terms are unclear." |
 | "On the 2nd we moved to the new sheet, then on the 11th the folder moved, so read the new one now." | "Counts come from `knowledge/counting.md`. The old spreadsheet is not a source." (The dates go in `memory/decisions.md`.) |
 | "Check the chat tool, the mailbox, the CRM, the dashboard and the forum each run." | "Each pass reads the two sources named in the playbook. Anything else is a separate task." |
 | "Escalate anything important." | "Escalate a deadline, a regulator, a termination, or money. Everything else you handle or archive." |
@@ -375,7 +375,7 @@ that fires daily, is either perfect or unread.
 
 **Say what the bot may do.** A playbook carries out the authorized request with its granted Tools;
 spending, publishing, merging, record changes and deletion have no blanket approval step.
-`outbound_send: false` keeps messages to outsiders as drafts until the owner turns sending on.
+Messages to outsiders stay drafts until a person who manages the bot turns mail sending on in Tico (Settings → Bots → Mail sending, or `hub bot mail <slug> --send`). `outbound_send` in bot.yaml only asks for it.
 An approval can still be requested for an uncertain action, with the exact action attached;
 it is optional, decided by a human and used once. See [Permissions](permissions.md).
 
@@ -434,11 +434,11 @@ is shown on the bot's page, it is what the shared tools check, and it is what pr
 resolves against the computer before a bot goes active.
 
 ```yaml
-outbound_send: false           # no email, DM, post or invite leaves the team
+outbound_send: false           # a request only: a person turns sending on in Tico
 tools:
   - service: gmail
     identity: "desk@example.com"
-    can: [read, draft]         # send only with outbound_send: true
+    can: [read, draft]         # sends need the Tico mail switch on
     env: GOOGLE_SA_KEY
     note: "reads and drafts on its own mailbox; never files or sends"
   - service: warehouse-api
