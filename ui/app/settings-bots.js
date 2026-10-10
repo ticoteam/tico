@@ -467,7 +467,7 @@ function renderSettingsBots() {
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.name)}"><td class="settings-pick">${pick(e)}</td>
       <td class="sb-cell-name"><div class="sb-bot">${avatar(e.name, 27, stateOf(e.name))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${esc(e.name)}">${shownName(e)}</a>${botDisplayName(e.name) !== (e.display_name || e.name) ? `<span class="mono muted">${esc(e.name)}</span>` : ''}${badges}</div>${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
-      <td class="sb-cell-access">${settingsAccessCell(e)}</td><td class="sb-cell-model">${model}</td>
+      <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model">${model}</td>
       <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>
       <td class="sb-cell-limit">${useLimitButton(e.name, e.display_name, SETTINGS_DATA.limits?.bots?.[e.name])}</td>
@@ -495,25 +495,32 @@ function renderSettingsBots() {
   } else el.innerHTML = html;
   settingsBotsSyncSelection(el, rows);
   void settingsArchivedBots(el);
+  // A control that redraws the list takes the keyboard back to itself, or to the search box when it is gone
+  // (hidden on a computer, or no longer drawn): a redraw must not drop focus to the page.
+  const redraw = selector => {
+    renderSettingsBots();
+    const target = [...el.querySelectorAll(selector)].find(node => node.getClientRects().length);
+    (target || el.querySelector('[data-bots-search]'))?.focus();
+  };
   el.onclick = event => {
     const restore = event.target.closest('[data-bot-restore]');
     if (restore) { void settingsRestoreBot(restore.dataset.botRestore, restore); return; }
     const choice = event.target.closest('[data-choice-open]');
     if (choice) { settingsChoicePopover(choice); return; }
     if (event.target.closest('[data-bulk-model]')) { settingsBulkModelDialog(); return; }
-    if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); renderSettingsBots(); return; }
+    if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); redraw('[data-bots-picking]'); return; }
     if (event.target.closest('[data-bots-search-clear]')) {
       SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots(); el.querySelector('[data-bots-search]')?.focus(); return;
     }
     // On a phone the checkbox cell is the tap target, not just the 16px box.
     const pickCell = event.target.closest('td.settings-pick');
     if (pickCell && event.target === pickCell) { pickCell.querySelector('input:not(:disabled)')?.click(); return; }
-    if (event.target.closest('[data-bots-filters-toggle]')) { SETTINGS_BOTS_VIEW.filtersOpen = !SETTINGS_BOTS_VIEW.filtersOpen; renderSettingsBots(); return; }
+    if (event.target.closest('[data-bots-filters-toggle]')) { SETTINGS_BOTS_VIEW.filtersOpen = !SETTINGS_BOTS_VIEW.filtersOpen; redraw('[data-bots-filters-toggle]'); return; }
     // Done also drops the selection: nothing stays picked behind checkboxes that are no longer shown.
     if (event.target.closest('[data-bots-picking]')) {
       SETTINGS_BOTS_VIEW.picking = !(SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size);
       if (!SETTINGS_BOTS_VIEW.picking) SETTINGS_BOTS_VIEW.selected.clear();
-      renderSettingsBots(); return;
+      redraw('[data-bots-picking]'); return;
     }
     if (event.target.closest('[data-bots-pick-all]')) {
       const pickable = rows.filter(settingsBotSelectable), on = !pickable.every(e => SETTINGS_BOTS_VIEW.selected.has(e.name));
@@ -543,10 +550,17 @@ function renderSettingsBots() {
     const search = event.target.closest('[data-bots-search]');
     if (search) { SETTINGS_BOTS_VIEW.q = search.value; renderSettingsBots(); }
   };
+  // Escape empties the search box (as a search field does in Chrome and Safari); an empty box lets it through.
+  el.onkeydown = event => {
+    const search = event.key === 'Escape' && event.target.closest('[data-bots-search]');
+    if (!search || !search.value) return;
+    event.preventDefault(); event.stopPropagation();
+    search.value = ''; SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots();
+  };
   el.onchange = event => {
     if (event.target.closest('[data-bots-search]')) return;
     const filter = event.target.closest('[data-bots-filter]');
-    if (filter) { SETTINGS_BOTS_VIEW[filter.dataset.botsFilter] = filter.value; settingsBotsRemember(); renderSettingsBots(); return; }
+    if (filter) { SETTINGS_BOTS_VIEW[filter.dataset.botsFilter] = filter.value; settingsBotsRemember(); redraw(`[data-bots-filter="${filter.dataset.botsFilter}"]`); return; }
     const one = event.target.closest('[data-bot-pick]');
     if (one) { one.checked ? SETTINGS_BOTS_VIEW.selected.add(one.dataset.botPick) : SETTINGS_BOTS_VIEW.selected.delete(one.dataset.botPick); settingsBotsSyncSelection(el, rows); return; }
     if (event.target.closest('[data-bots-select-all]')) {

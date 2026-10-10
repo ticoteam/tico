@@ -143,6 +143,7 @@ p:empty{display:none}
 .sb-line{overflow:hidden}
 .sb-line .pill{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-text small{display:block;color:var(--muted);font-size:var(--t-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-access-label{display:none}   /* the phone's bot line names it; a computer has the column head */
 .sb-access{display:block;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb-stack{display:inline-flex;align-items:center}
 .sb-stack .av{border:2px solid var(--surface);box-sizing:content-box;margin-left:-6px}
@@ -157,8 +158,8 @@ p:empty{display:none}
 .bot-editor-grid .sb-row .settings-combo input[type=search]{font-size:var(--t-base);padding:7px 9px}
 .sb-row .settings-owner-list{gap:4px}
 .sb-row .settings-agent-cell{grid-column:2/-1}
-/* A phone: each bot is two lines. The name, its pills and Edit; then one muted line of access, limit and model,
-   lined up under the name. The checkboxes show only while selecting (Select, or once a bot is picked). The
+/* A phone: each bot is two lines. The name, its pills and Edit; then one muted line of access, limit and model
+   ("Access: Open · Set limit · Claude Opus 5.5 · low"). The checkboxes show only while selecting (Select, or once a bot is picked). The
    controls stay 40px tall to tap; the negative margins let the second line sit closer than that. */
 @media (max-width:760px){
   .settings-bots-table,.settings-bots-table tbody{display:block;width:100%}
@@ -173,11 +174,12 @@ p:empty{display:none}
   .settings-bots-table td.settings-row-actions{grid-column:5;grid-row:1;padding-left:8px}
   .settings-bots-table td.settings-row-actions button{min-height:40px;padding:0 14px}
   .settings-bots-table :is(td.sb-cell-access,td.sb-cell-limit,td.sb-cell-model){grid-row:2;display:flex;align-items:center;min-height:32px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
-  .settings-bots-table td.sb-cell-access{grid-column:2;padding-left:35px}   /* the avatar (27px) and its gap */
+  .settings-bots-table td.sb-cell-access{grid-column:2}   /* from the row's left edge, under the avatar: the model name needs the width */
   .settings-bots-table td.sb-cell-limit{grid-column:3}
   .settings-bots-table td.sb-cell-limit:not(:has(button)){display:none}
   .settings-bots-table td.sb-cell-model{grid-column:4/-1}
-  .settings-bots-table :is(td.sb-cell-limit,td.sb-cell-model)::before{content:"·";flex:none;padding:0 6px;color:var(--muted)}
+  .settings-bots-table :is(td.sb-cell-limit,td.sb-cell-model)::before{content:"·";flex:none;padding:0 4px;color:var(--muted)}
+  .settings-bots-table .sb-access-label{display:inline;flex:none;margin-right:4px}
   .settings-bots-table .sb-cell-access .sb-access{font-size:inherit;color:inherit}
   .settings-bots-table td.sb-cell-fallback,.settings-bots-table td.sb-cell-owners,.settings-bots-table td.sb-cell-computer{display:none}
   .settings-bots-table td.sb-cell-limit button.use-limit{min-height:40px;margin:-4px 0;padding:0 2px;font-size:var(--t-sm);color:var(--muted);border:0}
