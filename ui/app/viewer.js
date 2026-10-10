@@ -14,6 +14,12 @@ function fileLinkId(a) {
   const m = url.pathname.match(/^\/api\/v2\/files\/([A-Za-z0-9-]{8,80})$/);
   return m ? m[1] : '';
 }
+// The version a file link pins with ?v=<n> (an approval links the version it approved), or null for the current one.
+function fileLinkVersion(a) {
+  let url; try { url = new URL(a.getAttribute('href') || '', location.href); } catch { return null; }
+  const v = url.searchParams.get('v');
+  return /^[1-9][0-9]{0,8}$/.test(v || '') ? Number(v) : null;
+}
 const fileNameOf = response => {
   const cd = response.headers.get('content-disposition') || '';
   const star = cd.match(/filename\*=UTF-8''([^;]+)/i);
@@ -59,7 +65,7 @@ function viewItemOf(el) {
   if (!el.matches('a[href]') || el.hasAttribute('download') || el.closest('#side, #mobile-nav, .nav-link, .upd-meta')) return null;
   const text = (el.dataset.name || el.textContent || '').trim();      // a file card names its file in data-name
   const fileId = fileLinkId(el);
-  if (fileId) return {fileId, name: text || 'file', kind: viewKindOf(text)};
+  if (fileId) return {fileId, version: fileLinkVersion(el), name: text || 'file', kind: viewKindOf(text)};
   let url; try { url = new URL(el.getAttribute('href') || '', location.href); } catch { return null; }
   if (!/^https?:$/.test(url.protocol)) return null;
   const embed = viewEmbedOf(url);
@@ -106,9 +112,10 @@ function rowsView(rows, max = CSV_ROWS) {
   return wrap;
 }
 const VIEW_FILES = new Map();                 // Tico file id -> Promise<{blob, url, name, kind}>
-function viewFile(id, fallbackName) {
-  if (!VIEW_FILES.has(id)) VIEW_FILES.set(id, (async () => {
-    const response = await fetch(`${API}/v2/files/${encodeURIComponent(id)}`, {credentials: 'same-origin'});
+function viewFile(id, fallbackName, version = null) {
+  const key = version ? `${id}?v=${version}` : id;
+  if (!VIEW_FILES.has(key)) VIEW_FILES.set(key, (async () => {
+    const response = await fetch(`${API}/v2/files/${encodeURIComponent(id)}${version ? '?v=' + version : ''}`, {credentials: 'same-origin'});
     if (!response.ok) throw new Error(response.status === 403 ? 'You cannot open this file.' : 'Could not open the file.');
     const name = fileNameOf(response) || fallbackName;
     const raw = await response.blob();
@@ -117,8 +124,8 @@ function viewFile(id, fallbackName) {
       : /\.svg$/i.test(name) ? 'image/svg+xml' : 'image/jpeg') : (VIEW_TYPES[kind] || raw.type || 'application/octet-stream');
     const blob = new Blob([raw], {type});
     return {blob, url: URL.createObjectURL(blob), name, kind};
-  })().catch(error => { VIEW_FILES.delete(id); throw error; }));
-  return VIEW_FILES.get(id);
+  })().catch(error => { VIEW_FILES.delete(key); throw error; }));
+  return VIEW_FILES.get(key);
 }
 let VIEW = null;
 function viewerDialog() {
@@ -200,7 +207,7 @@ async function viewerShow() {
   }
   paint(item.name, item.kind || 'loading', '<p class="muted">Loading…</p>');
   let file;
-  try { file = await viewFile(item.fileId, item.name); }
+  try { file = await viewFile(item.fileId, item.name, item.version); }
   catch (e) { if (VIEW === state) { d.close(); toast(e.message || 'Could not open the file.', true); } return; }
   const extra = '<button class="ghost" type="button" data-doc-download>Download</button>';
   if (!file.kind || ((file.kind === 'markdown' || file.kind === 'text') && file.blob.size > DOC_VIEW_LIMIT) || (file.kind === 'csv' && file.blob.size > CSV_LIMIT)) {
@@ -290,7 +297,7 @@ function mediaThumb(a, item) {
     if (!item.fileId && !item.src.startsWith(location.origin + '/')) img.referrerPolicy = 'no-referrer';
     b.append(img); a.after(b);
     const set = src => { img.src = src; img.onload = () => b.classList.add('ready'); img.onerror = () => b.remove(); };
-    if (item.fileId) viewFile(item.fileId, item.name).then(f => f.kind === 'image' ? set(f.url) : b.remove()).catch(() => b.remove());
+    if (item.fileId) viewFile(item.fileId, item.name, item.version).then(f => f.kind === 'image' ? set(f.url) : b.remove()).catch(() => b.remove());
     else if (item.src.startsWith('https:') || item.src.startsWith(location.origin)) set(item.src);
     else b.remove();
   }

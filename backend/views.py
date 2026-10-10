@@ -664,6 +664,30 @@ def recent_bots(c, auth, who, since, limit, needs):
     return out
 
 
+def approval_files(c, auth, who, payload):
+    """For each file a send approval names, in order: {file_id, version} of a version of its Tico file that
+    `who` may open and whose stored sha256 and size are the approved ones, else None. The requester writes
+    the payload, so its `file_id` is only a hint; a later version of the same file never stands in."""
+    from .files import file_visible
+    files = (payload or {}).get("attachments") if isinstance(payload, dict) else None
+    out, cache = [], {}
+    for f in files if isinstance(files, list) else []:
+        link = None
+        fid = str(f.get("file_id") or "") if isinstance(f, dict) else ""
+        try:
+            size, digest = int(f["size"]), str(f["sha256"]).strip().lower()
+        except (KeyError, TypeError, ValueError):
+            fid = ""
+        row = c.execute("SELECT * FROM bot_files WHERE id=? AND locator='tico_blob'", (fid,)).fetchone() if fid else None
+        if row and file_visible(c, auth, who, row, cache):
+            match = c.execute("SELECT version FROM bot_file_versions WHERE file_id=? AND digest=? AND size=? "
+                              "ORDER BY version DESC LIMIT 1", (fid, digest, size)).fetchone()
+            if match:
+                link = {"file_id": fid, "version": match["version"]}
+        out.append(link)
+    return out
+
+
 def needs_items(c, auth, who, task_view, older=None):
     """The person's queue. A task there only for a question older than H.ASK_OLDER_DAYS goes to `older` instead
     (a list the caller passes), out of the queue and its count."""
@@ -707,9 +731,12 @@ def needs_items(c, auth, who, task_view, older=None):
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
         if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
-            items.append({**row, "kind": "approval", "what": row["kind"],
-                          "title": "Approve this " + row["kind"],
-                          "requester": row["requested_by"], "conversation_id": msg["conversation_id"]})
+            item = {**row, "kind": "approval", "what": row["kind"],
+                    "title": "Approve this " + row["kind"],
+                    "requester": row["requested_by"], "conversation_id": msg["conversation_id"]}
+            if row["kind"] == "send":
+                item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
+            items.append(item)
     return sorted(items, key=lambda x: needs_order(
         x["requester"] if x["kind"] == "approval" else (x.get("ask") or {}).get("from_actor") or x.get("origin_actor") or x.get("requester"),
         x["kind"], x["created"], x.get("rank") if x["kind"] == "task" else None))

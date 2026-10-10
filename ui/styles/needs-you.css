@@ -46,8 +46,9 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
 .approval-facts dt{color:var(--muted)}
 .approval-facts dd{margin:0;overflow-wrap:anywhere}
 .approval-files{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
-.approval-files li{display:flex;align-items:baseline;gap:8px;min-width:0}
+.approval-files li{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;min-width:0}
 .approval-file-name{overflow-wrap:anywhere}
+.approval-file-warn{color:var(--wait);font-size:var(--t-sm)}
 .approval-file-size,.approval-file-hash{color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
 .approval-raw{margin-top:8px}
 .approval-raw>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}

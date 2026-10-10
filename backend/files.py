@@ -98,6 +98,37 @@ def refused(exc):
     return Problem("file_refused", str(exc), 422)
 
 
+def file_visible(c, auth, who, row, cache):
+    """Whether `who` may know this file exists: its scope's visibility, and never a runner's."""
+    if who.role not in ("owner", "human", "bot"):
+        return False
+    if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
+        return False
+    # `cache` lives for one read: a run's tasks are read once, however many files it made.
+    for version in c.execute("SELECT blob_id,attempt_id FROM bot_file_versions WHERE file_id=?", (row["id"],)):
+        if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
+            return False
+        if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
+                                                                  memo=cache):
+            return False
+    if who.role == "bot" and H.actor_id(who.actor) != row["bot"] and not row["scope"].startswith("task:"):
+        return False
+    key = row["scope"]
+    if key not in cache:
+        kind, _, ident = key.partition(":")
+        try:
+            if kind == "task":
+                auth.task(c, who, ident)
+            elif kind == "conversation":
+                auth.conversation(c, who, ident)
+            elif not auth.bot_access(c, who, row["bot"])["read"]:
+                raise Problem("forbidden", "private", 403)
+            cache[key] = True
+        except Problem:
+            cache[key] = False
+    return cache[key]
+
+
 class Files:
     def __init__(self, app, store, auth, blobs, mutate):
         self.app, self.store, self.auth, self.blobs, self.mutate = app, store, auth, blobs, mutate
@@ -533,34 +564,7 @@ class Files:
 
     # ------------------------------------------------------------------ reads
     def visible(self, c, who, row, cache):
-        """Whether `who` may know this file exists: its scope's visibility, and never a runner's."""
-        if who.role not in ("owner", "human", "bot"):
-            return False
-        if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
-            return False
-        # `cache` lives for one read: a run's tasks are read once, however many files it made.
-        for version in c.execute("SELECT blob_id,attempt_id FROM bot_file_versions WHERE file_id=?", (row["id"],)):
-            if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
-                return False
-            if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
-                                                                      memo=cache):
-                return False
-        if who.role == "bot" and H.actor_id(who.actor) != row["bot"] and not row["scope"].startswith("task:"):
-            return False
-        key = row["scope"]
-        if key not in cache:
-            kind, _, ident = key.partition(":")
-            try:
-                if kind == "task":
-                    self.auth.task(c, who, ident)
-                elif kind == "conversation":
-                    self.auth.conversation(c, who, ident)
-                elif not self.auth.bot_access(c, who, row["bot"])["read"]:
-                    raise Problem("forbidden", "private", 403)
-                cache[key] = True
-            except Problem:
-                cache[key] = False
-        return cache[key]
+        return file_visible(c, self.auth, who, row, cache)
 
     def bot_row(self, c, who, bot):
         """The bot's files page: a bot the caller may see. What is listed is only what they may read:

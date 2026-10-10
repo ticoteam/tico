@@ -73,13 +73,16 @@ function approvalPayloadNode(it) {
   if (files.length) {
     const ul = el('ul', 'approval-files');
     ul.setAttribute('aria-label', 'Attached files');
-    for (const f of files) {
+    const verified = Array.isArray(it.attachment_files) ? it.attachment_files : [];
+    files.forEach((f, i) => {
       const li = el('li'), name = String(f.name ?? 'file'), size = Number(f.size), hash = String(f.sha256 ?? '');
       li.append(approvalFileIcon());
-      const id = String(f.file_id ?? '');
-      if (APPROVAL_FILE_ID.test(id)) {
+      // A link only to the version the server found with the approved sha256 and size; the payload's own
+      // file_id is the requester's word and never becomes a link.
+      const ok = verified[i], id = String(ok?.file_id ?? ''), version = Number(ok?.version);
+      if (APPROVAL_FILE_ID.test(id) && Number.isInteger(version) && version > 0) {
         const a = el('a', 'approval-file-name', name);
-        a.href = '/api/v2/files/' + encodeURIComponent(id);
+        a.href = `/api/v2/files/${encodeURIComponent(id)}?v=${version}`;
         a.dataset.name = name;
         li.append(a);
       } else li.append(el('span', 'approval-file-name', name));
@@ -89,8 +92,10 @@ function approvalPayloadNode(it) {
         code.title = 'sha256 ' + hash;
         li.append(code);
       }
+      if (f.file_id != null && f.file_id !== '' && !li.querySelector('a'))
+        li.append(el('span', 'approval-file-warn', "Not openable: the file on the task doesn't match the approved file"));
       ul.append(li);
-    }
+    });
     main.append(ul);
   }
   const details = el('details', 'approval-raw');
