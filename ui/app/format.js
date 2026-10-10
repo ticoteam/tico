@@ -113,7 +113,7 @@ function cronWords(expr) {
 // One way to write a model everywhere: "Claude Opus 5", "GPT-5.5", "Gemini 3 Pro"; a provider prefix
 // ("anthropic/") and a date stamp are dropped. A name it does not know stays as it came.
 const HARNESS_WORDS = {claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', antigravity: 'Antigravity', grok: 'Grok Build',
-  cursor: 'Cursor', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', dots: 'Dots', pi: 'pi'};
+  cursor: 'Cursor', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', dots: 'Dots', muse: 'Muse', pi: 'pi'};
 const harnessWords = id => HARNESS_WORDS[String(id || '').toLowerCase()] || id || '';
 function modelWords(id) {
   const raw = String(id || '').trim().replace(/^[a-z][\w.-]*\//i, '');

@@ -91,8 +91,9 @@ under you. ChatGPT itself (developer mode, **Settings > Security and login > Dev
 connects the same way.
 
 **Muse** (Meta)
-- The Muse app: ask Muse, in a chat, to make a custom connector for the MCP server at the URL with the
-  `Authorization` header. The app has no MCP settings page; it builds connectors in chat.
+- The Muse app: ask Muse, in a chat, to make a custom connector for the MCP server at the URL. It signs in to Tico
+  ([OAuth sign-in](#oauth-sign-in)), or takes the `Authorization` header. The app has no MCP settings page; it builds
+  connectors in chat. [External agent sync](external-agent-sync.md#muse) then puts it on the team chart under you.
 - Muse Code: add to `~/.config/muse/settings.json` (it must keep `"schema_version": 1`):
   `{"schema_version": 1, "mcp_servers": {"tico": {"transport": "streamable_http", "url": "<URL>", "headers": {"Authorization": "Bearer <token>"}}}}`
 

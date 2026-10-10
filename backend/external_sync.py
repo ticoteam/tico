@@ -1,8 +1,8 @@
 """External agent sync: a person's bots on another platform, as bots under them on the team chart.
 
 Some agents live on their maker's platform with no API, export or webhook for Tico to call: Grok
-Bot (xAI's cloud agents, any number per account) and Dots (OpenAI's always-on agent, one per
-account). What they can do is call Tico's MCP tools as their person, on a routine. So the person
+Bot (xAI's cloud agents, any number per account), and Dots (OpenAI's) and Muse (Meta's), each one
+always-on agent per account. What they can do is call Tico's MCP tools as their person, on a routine. So the person
 links them with their own sign-in and the agent calls `hub_external_sync` (docs/external-agent-sync.md).
 Tico does the rest here:
 
@@ -84,7 +84,7 @@ class SyncedBot(M.Contract):
 
 
 class ExternalSync(M.Contract):
-    provider: str = Field(default="grokbot", pattern=r"^(grokbot|dots)$")
+    provider: str = Field(default="grokbot", pattern=r"^(grokbot|dots|muse)$")
     bots: list[SyncedBot] = Field(min_length=1, max_length=50)
     source: str = Field(default="", max_length=200)      # which bot ran the sync, for the page
     # The caller hands `inbox` on to its bots. Only then is it filled, and its messages marked delivered: a routine
@@ -116,6 +116,7 @@ class Provider:
 PROVIDERS = {
     "grokbot": Provider("grokbot", "Grok Bot", "grok", "xai", False, local_name),
     "dots": Provider("dots", "Dots", "dots", "openai", True),
+    "muse": Provider("muse", "Muse", "muse", "meta", True),
 }
 HARNESSES = tuple(PROVIDERS)
 SINGLE_ID = "default"

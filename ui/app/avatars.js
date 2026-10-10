@@ -219,7 +219,7 @@ const shownName = e => isTempBot(e)
 // The harness a bot runs on, as a small muted mark beside its name (ui/tool-icons.js). One rule: the
 // harness (runtime), never the provider or model; the model rides in the tooltip. No runtime, nothing shown.
 const RUNTIME_LABELS = {codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', antigravity: 'Antigravity', grok: 'Grok',
-  cursor: 'Cursor', pi: 'OpenRouter', openrouter: 'OpenRouter', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', 'grok-bot': 'Grok Bot', dots: 'Dots'};
+  cursor: 'Cursor', pi: 'OpenRouter', openrouter: 'OpenRouter', hermes: 'Hermes', openclaw: 'OpenClaw', grokbot: 'Grok Bot', 'grok-bot': 'Grok Bot', dots: 'Dots', muse: 'Muse'};
 const RUNTIME_MARKS = {codex: 'openai', claude: 'anthropic', gemini: 'google', antigravity: 'google', grok: 'xai',
   grokbot: 'xai', 'grok-bot': 'xai', cursor: 'cursor', pi: 'openrouter', openrouter: 'openrouter'};
 function runtimeTag(e) {

@@ -1235,7 +1235,7 @@ def parser():
     s.set_defaults(fn="grokbot sync")
     ext = sub.add_parser("external", help="your bots on another platform in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
     s = ext.add_parser("sync", help="sync Grok Bots or Dots from a JSON file: {\"bots\": [...], \"source\": ...}")
-    s.add_argument("--provider", required=True, choices=("grokbot", "dots"))
+    s.add_argument("--provider", required=True, choices=("grokbot", "dots", "muse"))
     s.add_argument("--file", required=True, help="the JSON body hub_external_sync takes")
     s.set_defaults(fn="external sync")
 

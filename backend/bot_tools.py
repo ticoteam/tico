@@ -40,7 +40,7 @@ CREDENTIALS_NOTE = ("Store a needed Credential through Credentials or its chat c
 ONLINE_WITHIN_S = 60
 
 HARNESS_NAMES = {"codex": "Codex", "claude": "Claude Code", "gemini": "Gemini CLI", "antigravity": "Antigravity",
-                 "grok": "Grok Build", "pi": "pi", "cursor": "Cursor", "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot", "dots": "Dots"}
+                 "grok": "Grok Build", "pi": "pi", "cursor": "Cursor", "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot", "dots": "Dots", "muse": "Muse"}
 PROVIDER_LOGOS = {"openai": "openai", "anthropic": "anthropic", "google": "google"}
 
 SERVICE_NAMES = {
