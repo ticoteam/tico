@@ -1,4 +1,4 @@
-/* ui/app/core.js — State-free basics: route constants, $, esc, md, s3url
+/* ui/app/core.js — State-free basics: route constants, $, esc, md
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -42,8 +42,6 @@ const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([typ
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
 const md = s => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs
-const s3url = key => `${API}/s3?key=${encodeURIComponent(String(key || '').replace(/^s3:\/\/[^/]+\//, ''))}`;
-const mdS3 = md;   // safeMd links s3:// URIs to their view URL (TICO_S3_VIEW_URLS) or shows a file chip
 async function copyText(value) {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
   const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0';
