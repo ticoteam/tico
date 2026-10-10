@@ -2698,13 +2698,15 @@ def children_summaries(conn, task_ids, visible_sql="1"):
     if not task_ids:
         return {}
     marks = ",".join("?" * len(task_ids))
-    rows = conn.execute("WITH RECURSIVE visible AS (SELECT * FROM tasks WHERE " + visible_sql + "), "
-        "edges AS (SELECT from_task AS id, to_task AS parent_id FROM task_relations WHERE kind='parent'), "
-        "tree(root,id,live,direct) AS ("
-        f"SELECT e.parent_id,e.id,1,1 FROM edges e JOIN visible v ON v.id=e.id WHERE e.parent_id IN ({marks}) UNION "
-        "SELECT tree.root,t.id,tree.live AND parent.status NOT IN ('done','closed','declined'),0 "
-        "FROM edges e JOIN tree ON e.parent_id=tree.id JOIN visible t ON t.id=e.id "
-        "JOIN visible parent ON parent.id=tree.id), "
+    # Visibility is checked per child by primary key. A `visible` CTE over the whole tasks table was
+    # materialized on every call by older SQLite (the server image's), a full scan for one task page.
+    seen = "EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.from_task AND (" + visible_sql + "))"
+    rows = conn.execute("WITH RECURSIVE tree(root,id,live,direct) AS ("
+        f"SELECT r.to_task,r.from_task,1,1 FROM task_relations r WHERE r.to_task IN ({marks}) "
+        f"AND r.kind='parent' AND {seen} UNION "
+        "SELECT tree.root,r.from_task,tree.live AND parent.status NOT IN ('done','closed','declined'),0 "
+        "FROM tree JOIN tasks parent ON parent.id=tree.id "
+        f"JOIN task_relations r ON r.to_task=tree.id AND r.kind='parent' WHERE {seen}), "
         "prs AS (SELECT task_id,count(*) total,sum(state IN ('merged','shipped')) merged "
         "FROM task_links WHERE kind='pr' AND coalesce(state,'open')!='closed' "
         "AND task_id IN (SELECT id FROM tree) GROUP BY task_id) "
@@ -2712,7 +2714,7 @@ def children_summaries(conn, task_ids, visible_sql="1"):
         "sum(tree.live AND t.status NOT IN ('done','closed','declined')) open,"
         "sum(tree.direct) direct_total,sum(tree.direct AND t.status IN ('done','closed','declined')) direct_done,"
         "sum(coalesce(prs.total,0)) prs_total,sum(coalesce(prs.merged,0)) prs_merged "
-        "FROM tree JOIN visible t ON t.id=tree.id LEFT JOIN prs ON prs.task_id=t.id GROUP BY tree.root", task_ids)
+        "FROM tree JOIN tasks t ON t.id=tree.id LEFT JOIN prs ON prs.task_id=t.id GROUP BY tree.root", task_ids)
     keys = ("total", "open", "done", "prs_total", "prs_merged", "direct_total", "direct_done")
     result = {tid: dict.fromkeys(keys, 0) for tid in task_ids}
     for row in rows:

@@ -15,15 +15,16 @@ class ReadIndex:
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
-        # Ids from the primary key and the private rows by their partial index (tasks_private): reading every task's
-        # whole row for this was a busy server's slowest query.
-        self.known_tasks = {r[0] for r in c.execute("SELECT id FROM tasks")}
+        # The private rows by their partial index (tasks_private); any other task is looked up by id when a
+        # provenance check names it. Reading every task's whole row, and later every id, was a busy server's slowest query.
         self.private = {r["id"]: dict(r) for r in c.execute(
             "SELECT id,requester,owner,private FROM tasks WHERE private IS NOT 0")}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
+        self.known_task = lru_cache(maxsize=4096)(
+            lambda tid: tid in self.private or c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None)
         self.conversation = lru_cache(maxsize=4096)(lambda cid: H.conversation(c, cid))
         self.target_message = lru_cache(maxsize=4096)(lambda mid: H.message(c, mid, include_deleted=True))
         self.attempt_sources = lru_cache(maxsize=4096)(self._attempt_sources)
@@ -118,7 +119,7 @@ class ReadIndex:
         ids = self.references(refs)
         conv = self.conversation(msg["conversation_id"]) if msg.get("conversation_id") else None
         tid = H.message_task_id(msg, conv)
-        if tid and tid not in self.known_tasks:
+        if tid and not self.known_task(tid):
             raise ValueError("Unknown task provenance")
         if tid in self.private:
             ids.add(tid)
@@ -148,11 +149,10 @@ class ReadIndex:
             rows = defaultdict(set)
             for tag, tid in self.c.execute("SELECT tag_id,task_id FROM task_tags"):
                 rows[tag].add(tid)
-            task_ids = self.known_tasks
             for target, detail in self.c.execute("SELECT target,detail_json FROM events WHERE action='tag.attach'"):
                 data = H._json(detail, {}) or {}
                 # Tag history contains explicit task references, not arbitrary prose.
-                rows[target].update(v for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "") if v in task_ids)
+                rows[target].update(v for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "") if self.known_task(v))
             self._tags = rows
         return self._tags
 
