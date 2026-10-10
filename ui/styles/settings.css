@@ -5,6 +5,22 @@
 
 .tree a.node:hover .ub,.tree a.node.cur .ub{opacity:.9;filter:none}
 .settings-tabs{margin-bottom:16px}
+/* A phone: the tabs are one row that scrolls sideways (as the task list's and meetings' filter rows do), More's
+   tabs open inline at its end, and settingsTabIntoView() keeps the current tab in view. The rule under the row is
+   an inset shadow, so the scrolling box does not clip the current tab's underline. */
+@media (max-width:760px){
+  .tabs.settings-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain;gap:0;border-bottom:0;box-shadow:inset 0 -1px 0 var(--line);margin-left:-4px;margin-right:-4px;padding:0 4px}
+  .tabs.settings-tabs::-webkit-scrollbar{display:none}
+  .tabs.settings-tabs button{flex:none;display:inline-flex;align-items:center;white-space:nowrap;margin-bottom:0;min-height:40px;padding:0 11px}
+  .tabs.settings-tabs .settings-more{flex:none;display:flex;white-space:nowrap}
+  .tabs.settings-tabs .settings-more::details-content{display:contents}
+  .tabs.settings-tabs .settings-more[open]{flex-basis:auto}
+  .tabs.settings-tabs .settings-more summary{display:inline-flex;align-items:center;min-height:40px;padding:0 11px;list-style:none;vertical-align:top}
+  .tabs.settings-tabs .settings-more summary::-webkit-details-marker{display:none}
+  .tabs.settings-tabs .settings-more summary::after{content:"›";margin-left:5px}
+  .tabs.settings-tabs .settings-more[open] summary::after{content:"‹"}
+  .tabs.settings-tabs .settings-more>div{display:inline-flex;flex-wrap:nowrap;gap:0;vertical-align:top}
+}
 .settings-pane[hidden]{display:none}
 .settings-table{width:100%;border-collapse:collapse;font-size:var(--t-base)}
 .settings-table th{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600;text-align:left;padding:9px 6px;border-bottom:1px solid var(--line)}
@@ -127,7 +143,7 @@ p:empty{display:none}
 .sb-line{overflow:hidden}
 .sb-line .pill{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sb-text small{display:block;color:var(--muted);font-size:var(--t-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-access{font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-access{display:block;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb-stack{display:inline-flex;align-items:center}
 .sb-stack .av{border:2px solid var(--surface);box-sizing:content-box;margin-left:-6px}
 .sb-stack .av:first-child{margin-left:0}
@@ -141,19 +157,32 @@ p:empty{display:none}
 .bot-editor-grid .sb-row .settings-combo input[type=search]{font-size:var(--t-base);padding:7px 9px}
 .sb-row .settings-owner-list{gap:4px}
 .sb-row .settings-agent-cell{grid-column:2/-1}
+/* A phone: each bot is two lines. The name, its pills and Edit; then one muted line of access, limit and model,
+   lined up under the name. The checkboxes show only while selecting (Select, or once a bot is picked). The
+   controls stay 40px tall to tap; the negative margins let the second line sit closer than that. */
 @media (max-width:760px){
   .settings-bots-table,.settings-bots-table tbody{display:block;width:100%}
   .settings-bots-table thead{display:none}
-  .settings-bots-table tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 10px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+  .settings-bots-table tr{display:grid;grid-template-columns:auto auto auto minmax(0,1fr) auto;gap:0;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+  .settings-bots-table tr:last-child{border-bottom:0}
   .settings-bots-table td{display:block;padding:0;border:0;min-width:0}
-  .settings-bots-table td.settings-pick{grid-column:1;grid-row:1}
-  .settings-bots-table td.sb-cell-name{grid-column:2;grid-row:1}
-  .settings-bots-table td.settings-row-actions{grid-column:3;grid-row:1}
-  .settings-bots-table td.sb-cell-access{grid-column:2;grid-row:2}
-  .settings-bots-table td.sb-cell-limit{grid-column:3;grid-row:2;text-align:right}
-  .settings-bots-table td.sb-cell-model{grid-column:2/-1;grid-row:3}
+  .settings-bots-table td.settings-pick{display:none}
+  .settings-bots-table.picking td.settings-pick{display:flex;align-items:center;align-self:stretch;grid-column:1;grid-row:1/span 2;min-width:36px;padding:0;cursor:pointer}
+  .settings-bots-table.picking td.settings-pick input{width:18px;height:18px}
+  .settings-bots-table td.sb-cell-name{grid-column:2/5;grid-row:1}
+  .settings-bots-table td.settings-row-actions{grid-column:5;grid-row:1;padding-left:8px}
+  .settings-bots-table td.settings-row-actions button{min-height:40px;padding:0 14px}
+  .settings-bots-table :is(td.sb-cell-access,td.sb-cell-limit,td.sb-cell-model){grid-row:2;display:flex;align-items:center;min-height:32px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+  .settings-bots-table td.sb-cell-access{grid-column:2;padding-left:35px}   /* the avatar (27px) and its gap */
+  .settings-bots-table td.sb-cell-limit{grid-column:3}
+  .settings-bots-table td.sb-cell-limit:not(:has(button)){display:none}
+  .settings-bots-table td.sb-cell-model{grid-column:4/-1}
+  .settings-bots-table :is(td.sb-cell-limit,td.sb-cell-model)::before{content:"·";flex:none;padding:0 6px;color:var(--muted)}
+  .settings-bots-table .sb-cell-access .sb-access{font-size:inherit;color:inherit}
   .settings-bots-table td.sb-cell-fallback,.settings-bots-table td.sb-cell-owners,.settings-bots-table td.sb-cell-computer{display:none}
-  .settings-bots-table .sb-cell-access::before{content:"Access · ";color:var(--muted)}
+  .settings-bots-table td.sb-cell-limit button.use-limit{min-height:40px;margin:-4px 0;padding:0 2px;font-size:var(--t-sm);color:var(--muted);border:0}
+  .settings-bots-table td.sb-cell-model .sb-pick{min-height:40px;margin:-4px 0;padding:0 2px;gap:6px;border:0;color:var(--muted);font-size:var(--t-sm);background:none}
+  .settings-bots-table td.sb-cell-model .sb-pick-caret{margin-left:4px}
   .sb-row{grid-template-columns:minmax(0,1fr) auto}.sb-row>span:first-child{grid-column:1/-1}
 }
 .prov-list{display:grid;gap:2px;margin:0 0 var(--s4)}
@@ -167,6 +196,37 @@ p:empty{display:none}
 .settings-filter-search{flex:1 1 160px;min-width:120px;max-width:280px;padding:7px 10px 7px 32px;font-size:var(--t-sm);border-radius:6px;background-position:10px center}
 .settings-bots-count{font-size:var(--t-sm);color:var(--muted);margin-left:auto;white-space:nowrap}
 @media (max-width:760px){.settings-bots-filters{flex-wrap:wrap}.settings-filter-search{flex-basis:100%;max-width:none}.settings-bots-filters .settings-inline-select{flex:1 1 calc(50% - 4px);max-width:none}}
+/* Settings > Bots: the search box with its own clear button (the browser's own is missing on a phone), then the
+   filters. On a computer the selects sit in the row; on a phone they fold behind Filters, which counts the active ones. */
+.sb-search{position:relative;display:flex;flex:1 1 200px;min-width:140px;max-width:280px}
+.sb-search .settings-filter-search{flex:1 1 auto;min-width:0;max-width:none;padding-right:32px}
+.sb-search .settings-filter-search::-webkit-search-cancel-button{display:none}
+.sb-search-clear{position:absolute;top:50%;right:3px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;transform:translateY(-50%);border:0;border-radius:50%;background:none;color:var(--muted);font-size:var(--t-lg);line-height:1;cursor:pointer}
+.sb-search-clear:hover{background:var(--surface2);color:var(--ink)}
+.sb-search-clear[hidden]{display:none}
+.sb-selects{display:contents}
+.sb-filters-toggle,.sb-pick-tools{display:none}
+.settings-bots-card .sb-narrow{display:none}
+@media (max-width:760px){
+  .settings-bots-card>header{align-items:center;gap:var(--s2)}
+  .settings-bots-card>header .row{margin-left:auto;gap:6px;flex-wrap:nowrap}
+  .settings-bots-card>header button{min-height:40px;padding-left:12px;padding-right:12px}
+  .settings-bots-card .sb-wide{display:none}.settings-bots-card .sb-narrow{display:inline}
+  .settings-bots-filters{gap:8px}
+  .sb-search{flex:1 1 calc(100% - 120px);max-width:none}
+  .sb-search-clear{width:36px;height:36px;right:2px}
+  .sb-filters-toggle{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px}
+  .sb-filters-toggle[aria-expanded=true]{background:var(--surface2)}
+  .sb-filters-toggle .cnt{min-width:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:var(--t-xs);font-weight:600;line-height:18px;text-align:center}
+  .sb-selects{display:none}
+  .settings-bots-filters.open .sb-selects{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex-basis:100%}
+  .settings-bots-filters.open .sb-selects .settings-inline-select{width:100%;min-width:0;max-width:none}
+  .settings-bots-filters.open .sb-selects [data-bots-filter=computer]{grid-column:1/-1}
+  .settings-bots-count{flex:1 0 60%;margin-left:0}   /* too wide to join the search line: count and Select are the second line */
+  .sb-pick-tools{display:flex;align-items:center;gap:16px}
+  .sb-pick-tools .linkish{min-height:40px;margin:-8px 0;font-size:var(--t-base);text-decoration:none}
+  .sb-pick-tools .linkish[hidden]{display:none}
+}
 .settings-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:var(--t-base)}
 .settings-bulk[hidden]{display:none}
 .settings-bulk-list{list-style:none;margin:10px 0 0;padding:0;max-height:min(46vh,420px);overflow:auto;border:1px solid var(--line);border-radius:7px}
