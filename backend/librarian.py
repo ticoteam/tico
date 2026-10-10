@@ -54,7 +54,11 @@ async def _search(request, question):
 
 def install(app, store, auth, mutate, onboarding):
     def person(request):
+        """A person, or BotOps acting with one's delegated rights (it then has their role)."""
         who = request.state.identity
+        if who.actor == "bot:botops":
+            raise Problem("forbidden", "BotOps does this only for the person who asked it to; the " + NAME
+                          + " turns on for the owner", 403)
         if who.role not in ("owner", "human"):
             raise Problem("identity", "Bots ask the " + NAME + " with `hub doc ask` (a message of kind ask); "
                           "this route is for people", 403)

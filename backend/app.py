@@ -2427,7 +2427,7 @@ def create_app(settings=None):
             body = body.model_copy(update={"private": True})
         request_id = body.request_id
         if request_id:
-            who = delegated_identity(c, who, request_id)
+            who = delegated_identity(c, who, request_id, new_task=True)
         parents = [r.task for r in body.relations if r.kind == "parent"]
         if len(parents) > 1:
             raise Problem("relations", "A task has one parent", 422)
@@ -2947,15 +2947,24 @@ def create_app(settings=None):
             return result
         return mutate(request, body, work)
 
-    DELEGATION_DAYS = 7               # the message that started the turn (a queued turn may wait)
-    DELEGATION_CITED_HOURS = 24       # a message cited by id
+    # A person's request lends their rights for as long as the task it created (or that cites it) is open. A chat
+    # message with no open task lends them for a week; a new task filed from a message also needs it within the week,
+    # or one open task could renew another for ever.
+    DELEGATION_DAYS = 7
     # Keeper wakes a follow-through run may start from: the daily update, and a task's due, stall or routine notice.
     FOLLOW_THROUGH_WAKES = ("update", "due", "stalled", "occurrence")
 
-    def delegated_identity(c, who, ref):
+    def open_task(task):
+        return bool(task) and task["status"] not in ("done", "closed", "declined")
+
+    def week_old(created):
+        return created < H.shift(H.now(), days=-DELEGATION_DAYS)
+
+    def delegated_identity(c, who, ref, new_task=False):
         """Resolve the run's requester, never a human named in its text. Human messages and tasks
         carry that human's rights; bot messages and tasks carry only that bot's rights. Fleet work
         with no requester keeps BotOps' own. Explicit message references must belong to this requester.
+        `new_task`: the reference is the request a task is being filed from.
         """
         if who.via == "botops" and who.role == "bot" and not who.attempt_id:
             if ref in ("turn", "default"):
@@ -2998,11 +3007,19 @@ def create_app(settings=None):
                     requester = creator["actor"]
             if task and initial:
                 refs = initial.get("refs") or {}
-                if any(refs.get(key) for key in ("comment", "via", "assistant", "slack", "routing")):
-                    raise Problem("on_behalf_of", "Task comments and routed messages cannot lend requester rights", 403)
+                relayed = any(refs.get(key) for key in ("via", "assistant", "slack", "routing"))
+                if (refs.get("comment") and not relayed and H.is_human(requester) and initial["from_actor"] == requester
+                        and task["owner"] == who.actor and open_task(task)):
+                    # The task's requester commenting on it, in their own words: that is them asking.
+                    auth.conversation(c, who, initial["conversation_id"])
+                    H.VIA.set("botops")
+                    return acting_as(auth.identity_for_actor(c, requester), task_id, "comment")
+                if refs.get("comment") or relayed:
+                    raise Problem("on_behalf_of", "Only the task's requester's own comment lends their rights; "
+                                  "other comments and routed messages lend nothing", 403)
             if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
                 auth.conversation(c, who, initial["conversation_id"])
-                if initial["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
+                if not open_task(task) and week_old(initial["created"]):
                     raise Problem("on_behalf_of", "That request is more than a week old; ask the requester again", 403)
             if str(requester).startswith("bot:") and requester != who.actor:
                 if (H.bot(c, H.actor_id(requester)) or {}).get("state") != "active":
@@ -3057,15 +3074,14 @@ def create_app(settings=None):
             raise Problem("on_behalf_of", "This request arrived through a Slack channel, so BotOps can't act on it for "
                           "the person. They can DM it to the Tico app in Slack or send it in their Tico chat with BotOps",
                           403)
-        if explicit:
-            # A message cited by id: the person's own, in their own room with BotOps (not a room another person
-            # spoke in), and recent.
-            if set(conversation.get("participants") or []) != {msg["from_actor"], "bot:" + BOTOPS}:
-                raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
-            if msg["created"] < H.shift(H.now(), hours=-DELEGATION_CITED_HOURS):
-                raise Problem("on_behalf_of", "That request is more than a day old; ask the person again", 403)
-        elif msg["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
-            raise Problem("on_behalf_of", "That request is more than a week old; ask the person again", 403)
+        if explicit and set(conversation.get("participants") or []) != {msg["from_actor"], "bot:" + BOTOPS}:
+            # A message cited by id: the person's own, in their own room with BotOps (not a room another person spoke in).
+            raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
+        if week_old(msg["created"]) and (new_task or not c.execute(
+                "SELECT 1 FROM tasks WHERE request_id=? AND requester=? AND status NOT IN ('done','closed','declined') "
+                "LIMIT 1", (message_id, msg["from_actor"])).fetchone()):
+            raise Problem("on_behalf_of", "That request is more than a week old and no open task carries it; "
+                          "ask the person again", 403)
         # Only a request in a conversation this run may read: otherwise any message a bot sends
         # BotOps could borrow the rights of whoever last asked it for something.
         try:
@@ -3088,8 +3104,9 @@ def create_app(settings=None):
     def follow_through(c, who, task):
         """The person whose open request BotOps is following through on, in a later run: a daily-update wake, a retry
         once a busy bot finished, a notice. The run that started it is gone, so BotOps cites the task the person asked
-        for. Only a task BotOps owns, that the person filed themselves (not through the Assistant), still open and at
-        most a week old; and never from a run a bot or another person started, which keeps its own requester's rights."""
+        for. Only a task BotOps owns, that the person filed themselves (not through the Assistant), for as long as it is
+        open; and never from a run a bot or another person started, which keeps its own requester's
+        rights."""
         requester = task["requester"]
         if task["owner"] != who.actor or not H.is_human(requester):
             raise Problem("on_behalf_of", "Cite a task a person asked BotOps for", 403)
@@ -3101,14 +3118,12 @@ def create_app(settings=None):
         if not made or made["actor"] != requester or via == "assistant":
             raise Problem("on_behalf_of", "That task was not filed by the person who asked for it", 403)
         if via and not task.get("request_id"):
-            # Filed by BotOps as the person: only a continuation of their message (--request-id) counts, dated by that
-            # message, or a follow-through run could file a fresh task as them and so never run out of week.
+            # Filed by BotOps as the person: only a continuation of their message (--request-id) counts, or a
+            # follow-through run could file a fresh task as them and so lend their rights for ever.
             raise Problem("on_behalf_of", "BotOps filed that task without the person's message; ask the person again", 403)
         origin = H.message(c, task["request_id"]) if task.get("request_id") else None
         if task.get("request_id") and (not origin or origin["from_actor"] != requester):
             raise Problem("on_behalf_of", "That task's request is not the person's own", 403)
-        if (origin or task)["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
-            raise Problem("on_behalf_of", "That request is more than a week old; ask the person again", 403)
         current = delegated_identity(c, who, "turn")
         if current.actor not in (who.actor, requester):
             raise Problem("on_behalf_of", "This run is for " + current.actor + "; it keeps that requester's rights", 403)
@@ -3162,6 +3177,21 @@ def create_app(settings=None):
                 raise Problem("secret_in_request", botops_act.DETAIL_SECRET, 422)
             # The ordinary route checks the requester's rights, including its own outbound send switch.
             return None, acting
+
+    def botops_run_identity(c, attempt_id):
+        """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
+        it acts for, BotOps' own, or None when its start lends nobody's (someone else's comment)."""
+        import contextvars
+        row = c.execute("SELECT runner_id FROM attempts WHERE id=? AND bot=?", (attempt_id, BOTOPS)).fetchone()
+        if not row:
+            return None
+        own = Identity("bot:" + BOTOPS, "bot", runner_id=row["runner_id"], attempt_id=attempt_id)
+        try:
+            # Its own context: resolving the run here records nothing as delegated.
+            return contextvars.copy_context().run(delegated_identity, c, own, "turn")
+        except Problem:
+            return None
+    app.state.botops_run_identity = botops_run_identity
 
     def propose_card(c, acting, method, path, body, summary):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,

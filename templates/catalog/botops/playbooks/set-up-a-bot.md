@@ -101,8 +101,7 @@ repository you just committed exists only locally, so create an empty private on
 
     hub bot repo-create <slug> --empty
 
-Do not push it yourself. Your run's token is for your own repository only, so a push of another
-bot's history fails. Instead the bot's repository link (Settings, Bots) has to be `<org>/bot-<slug>`
+Do not push it yourself: the bot publishes its own history. The bot's repository link (Settings, Bots) has to be `<org>/bot-<slug>`
 (a bare `bot-<slug>` also resolves to the connected organization). Its owner sets it there, or you set it
 for the human who asked in chat with `hub bot update <slug>` (it takes their rights); say so in the task note. On the bot's next turn Tico sets `origin` to that
 repository and publishes the history with the bot's own token, and never forces: if the repository

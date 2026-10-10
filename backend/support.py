@@ -96,8 +96,9 @@ def require_on(settings):
 
 
 def require_person(who):
-    """A person at their own browser: not a token, not the Assistant acting for them, not a bot or a computer. What BotOps
-    drafted counts once the person confirmed the card that shows the exact message (their own click)."""
+    """A person at their own browser: not a token, not the Assistant acting for them, not a bot or a computer. BotOps
+    acting with a person's delegated rights (backend/app.py delegated_identity) files as that person; BotOps with its
+    own rights is a bot and is refused."""
     if who.role not in ("owner", "human") or who.via_token or (who.via and not (who.via == "botops" and who.confirmed)):
         raise Problem("forbidden", "Only a signed-in person can contact support.", 403)
 

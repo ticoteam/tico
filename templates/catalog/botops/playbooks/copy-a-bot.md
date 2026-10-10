@@ -79,6 +79,6 @@ original first. Never push to the original's repository yourself.
 
 ## When it goes sideways
 
-- **`on_behalf_of` refused.** The run was not started by a human's own chat message. Tell whoever is on the task; do not retry.
+- **`on_behalf_of` refused.** The run was not started by a human's own chat message or their own comment on their open task. Tell whoever is on the task; do not retry.
 - **"not a copy".** That bot was not made with `hub bot copy`, so there is nothing to update from or suggest to.
 - **A product problem** (the command fails in a way that is not the person's rights): `hub support file`, with what you saw.

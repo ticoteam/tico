@@ -2378,8 +2378,8 @@ def message_redact(api, args):
     return api.post(f"messages/{args['message_id']}/redact", body)
 
 
-@tool("hub_support_file", "Tell the Tico team about something the product cannot do, or a fault you cannot fix. A card in the person's "
-      "chat shows the exact message and sends nothing until they confirm. Say what they asked for, what you tried, what the "
+@tool("hub_support_file", "Tell the Tico team about something the product cannot do, or a fault you cannot fix. BotOps files it as the "
+      "person who asked, with their rights; with its own rights it is refused. Say what they asked for, what you tried, what the "
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
