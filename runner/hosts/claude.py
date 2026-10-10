@@ -1,24 +1,34 @@
 """The Claude Code host: one `claude -p` process per turn, one Claude session per bot thread.
 
-Verified against Claude Code 2.1.212. Claude Code has no server the runner could hold open, so
-a turn is one `claude -p` run: the prompt goes in on stdin, newline-delimited stream-json comes
-out on stdout, and the process exits when the turn is over. A thread is a Claude session id
+Verified against Claude Code 2.1.296. Claude Code has no server the runner could hold open, so
+a turn is one `claude -p` run: the prompt goes in on stdin as a stream-json user message,
+newline-delimited stream-json comes out on stdout, and the process exits once the host closes
+stdin and the last turn is over. A thread is a Claude session id
 chosen here (uuid4). The first turn passes `--session-id`, later turns `--resume`, and a fork
 is `--resume <old> --fork-session --session-id <new>`; Claude reloads the conversation from its
 own session files under ~/.claude/projects, so the process must keep the HOME that holds the
 login and those files.
 
-    claude -p --output-format stream-json --verbose --include-partial-messages
-           --permission-mode bypassPermissions [--model m] [--effort e] --session-id <uuid>
+    claude -p --input-format stream-json --replay-user-messages --output-format stream-json
+           --verbose --include-partial-messages --permission-mode bypassPermissions
+           [--model m] [--effort e] --session-id <uuid>
 
 Turn ids are the runner's own uuid4. One turn runs at a time per host, so the runner keeps one
-host per Claude bot. A `-p` process reads nothing after its prompt: `steer` is refused
-(`supports_steer` is False, so the runner does not poll for mid-turn inputs) and `interrupt`
-terminates the process.
+host per Claude bot. stdin stays open for the whole turn so `steer` can write another user
+message to it. Claude reads a message written while it works at its next tool boundary and folds
+it into the same turn; one written just as a turn ends starts another turn in the same process,
+with its own `result`. `--replay-user-messages` echoes each message (same uuid, `isReplay`) at
+the moment Claude reads it, so the host knows which steers are still unread: a `result` ends
+the runner's turn only when none is, and then the host closes stdin and the process exits. The
+turn's reply is every result's text in order, so an answer given before a steer was read is
+kept; a steer left unread through STEER_READ_TIMEOUT_S of silence fails the turn. A
+steer after that point is refused with `SteerRefused` (nothing written; the runner gives it a
+turn of its own). `interrupt` terminates the process.
 """
 
 import json
 import os
+import queue
 import subprocess
 import tempfile
 import threading
@@ -27,10 +37,11 @@ from pathlib import Path
 
 from .. import isolation
 from clients import mcp_servers
-from .base import Host, HostError, hub_mcp_server, is_auth_retryable, is_limit
+from .base import Host, HostError, SteerRefused, hub_mcp_server, is_auth_retryable, is_limit
 from .codex import iso
 
-STREAM_ARGS = ["--output-format", "stream-json", "--verbose", "--include-partial-messages",
+STREAM_ARGS = ["--input-format", "stream-json", "--replay-user-messages",
+               "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--permission-mode", "bypassPermissions"]
 # `claude --effort` accepts exactly these. Anything else means Claude's own default, so a
 # Codex-only value in a manifest cannot fail every turn.
@@ -38,6 +49,9 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 WINDOW_MINUTES = {"five_hour": 300, "seven_day": 7 * 24 * 60}
 STOP_TIMEOUT_S = 10
 STDERR_TAIL = 2000
+# How long a turn waits, after a `result`, with a steer still unread and nothing at all on stdout.
+# Claude replays a message the moment it reads it, so this much silence means it never will.
+STEER_READ_TIMEOUT_S = 120
 
 
 def effort_for(effort):
@@ -84,9 +98,32 @@ def cached_tokens(usage):
         return 0
 
 
+def user_line(mid, text):
+    """One stream-json user message for stdin; `mid` comes back as the replay's uuid."""
+    return json.dumps({"type": "user", "uuid": mid,
+                       "message": {"role": "user", "content": [{"type": "text", "text": text}]}}) + "\n"
+
+
+class _Pipe:
+    """One process's stdin: the lines still to write, whether it takes more, and which of the
+    messages written to it Claude has not read yet. Guarded by the host's `_lock`; only the
+    writer thread touches the pipe itself, so a steer never interleaves with a long prompt."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.lines = queue.Queue()         # str to write, None to close stdin
+        self.open = True
+        self.first = None                  # the turn's prompt
+        self.unread = set()                # uuids written and not yet replayed
+        self.steered = False               # a steer was written to this process
+        self.cost = 0.0                    # Claude's total_cost_usd so far (it is per process, cumulative)
+        self.awaiting = None               # the timer armed while a result left a steer unread
+        self.timed_out = False
+
+
 class ClaudeHost(Host):
     name = "claude"
-    supports_steer = False
+    supports_steer = True
 
     def __init__(self, bot=None, cmd=("claude",), log=None, stderr_path=None, spawn=None):
         super().__init__(log=log)
@@ -102,6 +139,8 @@ class ClaudeHost(Host):
         self._reply = {}                   # turn id -> the last complete assistant text
         self._last_message = {}            # turn id -> (message id, text) already emitted
         self._limited = set()              # turn ids Claude reported as rate limited
+        self._pipe = None                  # the running turn's stdin
+        self._usage = {}                   # turn id -> summed usage over every result of the turn
         self._interrupted = set()
         self._done_turns = set()
         self._goal_offsets = {}
@@ -116,6 +155,8 @@ class ClaudeHost(Host):
             self._up = False
             proc, self.proc = self.proc, None
             running = self._turn
+            if self._pipe:
+                self._close(self._pipe)
         if proc:
             if running:
                 self._interrupted.add(running[1])
@@ -276,24 +317,87 @@ class ClaudeHost(Host):
         return proc, stderr
 
     def _run(self, proc, thread_id, turn, stderr, text, effort, recovered=False):
-        threading.Thread(target=self._feed, args=(proc, text), daemon=True).start()
+        pipe = _Pipe(proc)
+        with self._lock:
+            pipe.first = str(uuid.uuid4())
+            pipe.unread.add(pipe.first)
+            pipe.lines.put(user_line(pipe.first, text))
+            self._pipe = pipe
+        threading.Thread(target=self._feed, args=(pipe,), daemon=True).start()
         self._reader = threading.Thread(target=self._read_loop, daemon=True,
-                                        args=(proc, thread_id, turn, stderr, text, effort, recovered))
+                                        args=(proc, thread_id, turn, stderr, text, effort, recovered, pipe))
         self._reader.start()
 
     @staticmethod
-    def _feed(proc, text):
+    def _feed(pipe):
+        """Write the pipe's lines in order, then close stdin. A prompt can be larger than the
+        pipe's buffer, so this is its own thread and neither the runner nor the reader waits on it."""
+        stdin = pipe.proc.stdin
         try:
-            proc.stdin.write(text)
-            proc.stdin.close()
+            while (line := pipe.lines.get()) is not None:
+                stdin.write(line)
+                stdin.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            pass                                 # the process is gone; the reader reports how it ended
+        try:
+            stdin.close()
         except (BrokenPipeError, ValueError, OSError):
             pass
 
-    def _read_loop(self, proc, tid, turn, stderr, text="", effort=None, recovered=False):
+    def _close(self, pipe):
+        """No more input: Claude exits once its current turn ends. Under `_lock`."""
+        if pipe.open:
+            pipe.open = False
+            pipe.lines.put(None)
+
+    def _settle(self, pipe, turn, result):
+        """A `result` arrived. The runner's turn is over when Claude has read every message
+        written to it; otherwise one is still unread and Claude answers it with another result.
+        An error result ends it either way."""
+        inp, out, _ = usage_tokens(result.get("usage"))
+        with self._lock:
+            u = self._usage.setdefault(turn, {"input": 0, "output": 0, "cached": 0, "cost": None, "texts": []})
+            u["input"] += inp
+            u["output"] += out
+            u["cached"] += cached_tokens(result.get("usage"))
+            cost = result.get("total_cost_usd")
+            if isinstance(cost, (int, float)):
+                u["cost"] = (u["cost"] or 0) + max(cost - pipe.cost, 0)
+                pipe.cost = cost
+            text = result.get("result") if isinstance(result.get("result"), str) else ""
+            if text and (not u["texts"] or u["texts"][-1] != text):
+                u["texts"].append(text)          # one answer per Claude turn; the person gets them all
+            pipe.unread.discard(pipe.first)      # a result means the prompt was read, replayed or not
+            if result.get("is_error") or not pipe.unread:
+                self._close(pipe)
+            else:
+                self._await_read(pipe)
+
+    def _await_read(self, pipe):
+        """(Re)start the wait for an unread steer; any stdout line restarts it. Under `_lock`."""
+        if pipe.awaiting:
+            pipe.awaiting.cancel()
+        pipe.awaiting = threading.Timer(STEER_READ_TIMEOUT_S, self._read_timeout, args=(pipe,))
+        pipe.awaiting.daemon = True
+        pipe.awaiting.start()
+
+    def _read_timeout(self, pipe):
+        with self._lock:
+            if not pipe.awaiting or not pipe.open or not pipe.unread:
+                return
+            pipe.awaiting, pipe.timed_out = None, True
+            self._close(pipe)
+        self._end(pipe.proc)                     # the reader sees EOF and fails the turn
+
+    def _read_loop(self, proc, tid, turn, stderr, text="", effort=None, recovered=False, pipe=None):
         result = None
         saw_event = False
+        pipe = pipe or _Pipe(proc)
         try:
             for line in proc.stdout:
+                with self._lock:
+                    if pipe.awaiting:            # Claude is still producing: keep waiting
+                        self._await_read(pipe)
                 line = line.strip()
                 if not line:
                     continue
@@ -302,29 +406,52 @@ class ClaudeHost(Host):
                 except ValueError:
                     continue
                 try:
-                    if self._on_message(msg, tid, turn):
+                    if isinstance(msg, dict) and msg.get("type") == "user" and msg.get("isReplay") \
+                            and not msg.get("parent_tool_use_id"):
+                        with self._lock:         # Claude has read this one; not a provider event
+                            pipe.unread.discard(msg.get("uuid"))
+                            if pipe.awaiting and not pipe.unread - {pipe.first}:
+                                pipe.awaiting.cancel()   # read: its own result follows
+                                pipe.awaiting = None
+                    elif self._on_message(msg, tid, turn):
                         result = msg
+                        self._settle(pipe, turn, msg)
                     else:
                         saw_event = True
                 except Exception as e:
                     self._log(f"claude[{self.bot}]: event error {e}")
         except (ValueError, OSError):
             pass
+        with self._lock:
+            self._close(pipe)                    # stops the writer if Claude exited on its own
+            if pipe.awaiting:
+                pipe.awaiting.cancel()
+                pipe.awaiting = None
+            unread = bool(pipe.unread - {pipe.first})
         try:
             rc = proc.wait()
         except Exception:
             rc = -1
+        # The runner acknowledged a steer Claude never read: the follow-up went unanswered, so the
+        # turn is not done. A real error from Claude still takes precedence over the plain exit.
+        clean = isinstance(result, dict) and not result.get("is_error") and rc == 0
+        failure = (f"Claude did not read a follow-up message within {STEER_READ_TIMEOUT_S:g} s; it was not applied"
+                   if pipe.timed_out else
+                   "Claude exited before reading a follow-up message; it was not applied" if unread and clean else None)
         tail = self._stderr_tail(stderr)
         # Claude checks --resume before the model runs and answers only with an error result (and
         # stderr) when the session file is not on this computer: a new HOME or computer, or cleaned
         # sessions. Restart once as a new session under the same id so the next turn resumes it; the
-        # prompt carries the recent messages and the `hub conversation show` pointer. Never after an event.
+        # prompt carries the recent messages and the `hub conversation show` pointer. Never after an event,
+        # and never once a steer went in: the runner counts it delivered, and resending it to the new
+        # process could repeat it. (A steer after the error result is refused, and the runner gives it
+        # a turn of its own.)
         missing = isinstance(result, dict) and \
             self._error_text(result, rc, tail).startswith("No conversation found with session ID")
         with self._lock:
             t = self._threads.get(tid)
-            if (missing and not recovered and not saw_event and rc and t and (t["started"] or t["fork_from"])
-                    and self._up and turn not in self._interrupted):
+            if (missing and not recovered and not saw_event and not pipe.steered and rc and t
+                    and (t["started"] or t["fork_from"]) and self._up and turn not in self._interrupted):
                 t.update(started=False, fork_from=None)
                 t.pop("session_id", None)
                 try:
@@ -337,7 +464,7 @@ class ClaudeHost(Host):
                               text="Saved provider session is unavailable; restoring this conversation's context.")
                     self._run(retry, tid, turn, retry_stderr, text, effort, recovered=True)
                     return
-        self._finish(tid, turn, result, rc, tail)
+        self._finish(tid, turn, result, rc, tail, failure=failure)
 
     def _stderr_tail(self, stderr):
         try:
@@ -397,12 +524,14 @@ class ClaudeHost(Host):
             return True
         return False
 
-    def _finish(self, tid, turn, result, rc, stderr):
+    def _finish(self, tid, turn, result, rc, stderr, failure=None):
         with self._lock:
             if self._turn and self._turn[1] == turn:
                 self._turn = None
                 self.proc = None
+                self._pipe = None
             interrupted = turn in self._interrupted
+            usage = self._usage.pop(turn, None)
         reply = self._reply.pop(turn, "")
         self._last_message.pop(turn, None)
         limited = turn in self._limited
@@ -411,23 +540,21 @@ class ClaudeHost(Host):
             return
         self._done_turns.add(turn)
         result = result if isinstance(result, dict) else None
-        if result:
-            inp, out, total = usage_tokens(result.get("usage"))
-            if total:
-                self.emit("tokens", tid, turn, input=inp, output=out, total=total,
-                          cost_usd=result.get("total_cost_usd"),
-                          usage={"input": inp, "cached": cached_tokens(result.get("usage")), "output": out})
+        if usage and usage["input"] + usage["output"]:
+            inp, out = usage["input"], usage["output"]
+            self.emit("tokens", tid, turn, input=inp, output=out, total=inp + out, cost_usd=usage["cost"],
+                      usage={"input": inp, "cached": usage["cached"], "output": out})
         self.poll_goal(tid)
         if interrupted:
             self.emit("turn_completed", tid, turn, status="interrupted")
-        elif result and not result.get("is_error") and rc == 0:
-            text = result.get("result") or reply
+        elif result and not result.get("is_error") and rc == 0 and not failure:
+            text = "\n\n".join(usage["texts"]) if usage and usage["texts"] else reply
             if text:
                 self.emit("message", tid, turn, text=text, final=True)
             self.emit("turn_completed", tid, turn, status="completed",
                       stop_reason=result.get("stop_reason"))
         else:
-            error = self._error_text(result, rc, stderr)
+            error = failure or self._error_text(result, rc, stderr)
             self.emit("turn_failed", tid, turn, error=error, limit=limited or is_limit(error),
                       auth_retry=is_auth_retryable(error))
         self.emit("status", tid, None, state="idle")
@@ -447,7 +574,17 @@ class ClaudeHost(Host):
         return f"claude exited {rc}"
 
     def steer(self, thread_id, turn_id, text):
-        raise HostError("Claude runtime cannot steer a running turn")
+        """Write `text` into the running turn. This and `_settle`'s decision to close stdin both run
+        under `_lock`, so a steer either lands before that decision (and the turn waits for Claude to
+        read it) or is refused with nothing written."""
+        with self._lock:
+            pipe = self._pipe
+            if self._turn != (thread_id, turn_id) or not pipe or not pipe.open:
+                raise SteerRefused(f"claude turn {turn_id} is over or ending")
+            mid = str(uuid.uuid4())
+            pipe.unread.add(mid)
+            pipe.steered = True
+            pipe.lines.put(user_line(mid, text))
 
     def interrupt(self, thread_id, turn_id):
         with self._lock:
@@ -455,6 +592,8 @@ class ClaudeHost(Host):
             if not proc or not running or running[1] != turn_id:
                 return                           # already over; nothing to stop
             self._interrupted.add(turn_id)
+            if self._pipe:
+                self._close(self._pipe)
         self._end(proc)
 
     # ------------------------------------------------------------------ helpers

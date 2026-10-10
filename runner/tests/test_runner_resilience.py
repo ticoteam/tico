@@ -183,6 +183,38 @@ class Execution(unittest.TestCase):
         self.assertEqual(client.completion()["outcome"], "completed")
         self.assertEqual(client.completion()["text"], "finished anyway")
 
+    def test_a_follow_up_refused_by_an_ending_turn_gets_a_turn_of_its_own_in_the_same_run(self):
+        # The turn ends between the inputs poll and the steer: the host writes nothing and says
+        # so. The poll already assigned the message to this run, so the run answers it itself.
+        client = FakeClient()
+        runner = self.runner(client)
+        self.host.hold_next_turn()
+        self.host.replies = ["the follow-up's answer"]          # the held first turn takes none
+        follow_up = {"id": "msg-2", "kind": "chat", "body": "one more thing", "from_actor": "human:ana"}
+        post, polls = client.post, []
+
+        def inputs_once(path, body=None, key=None):
+            if path.endswith("/inputs") and self.host.turn_of:
+                polls.append(path)
+                return {"messages": [follow_up]}
+            return post(path, body, key)
+
+        def refuse(thread_id, turn_id, text):
+            self.host.complete(thread_id, "the first answer")
+            raise service.SteerRefused("turn is ending")
+
+        with mock.patch.object(client, "post", side_effect=inputs_once), \
+                mock.patch.object(self.host, "steer", side_effect=refuse):
+            runner.execute(attempt())
+        self.assertEqual(len(polls), 1)
+        self.assertEqual(len(self.host.prompts), 2)
+        self.assertIn("human:ana: one more thing", self.host.prompts[1][1])
+        self.assertIn("already given; answer only the follow-up", self.host.prompts[1][1])
+        self.assertIn(("attempts/att-1/inputs/msg-2/ack", {}), client.posts)
+        self.assertEqual(runner.state.input_phase("att-1", "msg-2"), "applied")
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertEqual(client.completion()["text"], "the first answer\n\nthe follow-up's answer")
+
     def test_a_definite_refusal_to_renew_interrupts_the_turn(self):
         client = FakeClient(renew_error=GONE)
         runner = self.runner(client)
