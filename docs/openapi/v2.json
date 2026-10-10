@@ -14654,6 +14654,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "s3_view_urls": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at (base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"
           }
         },
         "required": [
