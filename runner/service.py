@@ -486,6 +486,9 @@ def push_repo(path, env=None, timeout=60):
         if branch:
             target = git("for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", branch).stdout
         remote, _, ref = target.strip().partition("\t")
+        if remote == ".":
+            # Tracking a branch in this same checkout: nothing reaches GitHub, so it is not pushed.
+            return ahead, f"it tracks the local branch {ref.removeprefix('refs/heads/')}, not a remote"
         result = git("push", "-q", *([remote, f"HEAD:{ref}"] if remote and ref else []), timeout=timeout)
     except subprocess.TimeoutExpired:
         return ahead, "timed out"

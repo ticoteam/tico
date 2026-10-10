@@ -628,6 +628,12 @@ Drawn from real bot reviews, stated generically.
 - **A dirty or unpushed checkout on the runner's computer.** The bot's commits and a human's edits
   collide, and what runs is not what you pushed. Keep the tree clean and do not edit it mid-run.
 
+After each turn the runner pushes the bot's commits to the branch its checkout tracks, by name: a bot
+that works on a branch of its own that still tracks `main` lands its commits on `main`. When the remote
+moved ahead, the runner rebases the unpushed commits onto it (merges when they include a merge) and
+pushes again. It never forces and never drops a commit; a conflict is undone and reported with the
+files and what to run. A branch that tracks another local branch is not pushed and is reported.
+
 ## 9. More than one environment
 
 The same slug can exist in two environments, and they are different bots: separate repositories,

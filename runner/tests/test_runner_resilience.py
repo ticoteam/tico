@@ -403,6 +403,15 @@ class Pushing(unittest.TestCase):
         self.assertEqual(self.head(self.origin, "main"), self.head(self.repo))
         self.assertTrue((self.repo / "elsewhere").exists() and (self.repo / "memory").exists())
 
+    def test_a_branch_tracking_a_local_branch_is_not_counted_as_pushed(self):
+        git(self.repo, "checkout", "-q", "-b", "draft", "--track", "main", env=self.env)
+        self.commit("draft-note")
+        before = self.head(self.origin, "main")
+        with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
+            self.assertFalse(self.runner.push(self.repo))
+        self.assertIn("tracks the local branch main, not a remote", log.call_args.args[0])
+        self.assertEqual(self.head(self.origin, "main"), before)
+
     def test_a_conflicting_origin_is_left_for_a_person_and_said_once(self):
         other = Path(self.tmp.name) / "other"
         git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
