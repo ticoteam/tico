@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 
 from clients.agent_skill import WHO_NEEDS_ME
 
-from . import agents, batch, external_sync, inbox_isolation, harness_actions, model_login, oidc, personal_tokens, views
+from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -348,6 +348,11 @@ def create_app(settings=None):
             # The repository webhook (backend/github.py) carries its own HMAC signature.
             if request.url.path == GITHUB_WEBHOOK_PATH and request.method == "POST":
                 return await call_next(request)
+            # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
+            # the registration, token and revocation endpoints, which carry their own codes and secrets.
+            if request.url.path.startswith(("/api/v2/oauth/", "/.well-known/oauth-", "/.well-known/openid-configuration/")) \
+                    and (request.method == "GET" or request.url.path.endswith(("/register", "/token", "/revoke"))):
+                return await call_next(request)
             # SCIM carries its own bearer token, which an identity provider holds (backend/scim.py).
             if request.url.path.startswith("/scim/v2/"):
                 return await call_next(request)
@@ -511,7 +516,11 @@ def create_app(settings=None):
                 back = path + ("?" + request.url.query if request.url.query else "")
                 return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
-            return await problem_handler(request, exc)
+            response = await problem_handler(request, exc)
+            if exc.status == 401 and path == mcp_oauth.MCP_PATH:
+                # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
+                response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
+            return response
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
@@ -1337,6 +1346,7 @@ def create_app(settings=None):
         return response
 
     oidc.register(app, auth)
+    mcp_oauth.register(app, auth, store)
 
     @app.get(LOGOUT_PATH)
     def logout(request: Request):

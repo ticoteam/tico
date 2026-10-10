@@ -104,21 +104,17 @@ function convGroup(r, slug) {
   const working = words || detail.length || inter.length
     ? `<details class="conv-act" data-run="${esc(r.run)}"${CONV?.openWork?.has(r.run) ? ' open' : ''}>
         <summary>Working${words ? ` · ${esc(words)}` : ''}</summary>
-        ${inter.map(x => `<div class="conv-ev"><div class="md">${mdS3(x.text)}</div></div>`).join('')}
+        ${inter.map(x => `<div class="conv-ev"><div class="md">${md(x.text)}</div></div>`).join('')}
         ${detail.map(convEvent).join('')}</details>`
     : '';
-  const answer = reply ? `<div class="bubble bot reply"><span class="who">${empName(slug)}</span><div class="md">${mdS3(reply)}</div>${chatCopyHTML(reply)}</div>`
+  const answer = reply ? `<div class="bubble bot reply"><span class="who">${empName(slug)}</span><div class="md">${md(reply)}</div>${chatCopyHTML(reply)}</div>`
     : live ? `<div class="thinking"><span class="dot running"></span>${empName(slug)} is thinking…</div>` : '';
   const comments = (r.comments || []).map(c =>
     c.author === 'human' ? `<div class="bubble you"><span class="who">${esc(personHandle(c.who) || ownerHandle())}</span>${esc(unsigned(c.body))}${chatCopyHTML(unsigned(c.body))}</div>`
-    : c.author === 'bot' ? `<div class="bubble bot"><span class="who">${empName(slug)}</span><div class="md">${mdS3(c.body)}</div>${chatCopyHTML(c.body)}</div>`
+    : c.author === 'bot' ? `<div class="bubble bot"><span class="who">${empName(slug)}</span><div class="md">${md(c.body)}</div>${chatCopyHTML(c.body)}</div>`
     : `<div class="conv-note muted">${esc(plainActors(c.body))}</div>`).join('');
-  const deliv = r.deliverables || [];
-  const files = deliv.length ? `<div class="conv-deliv">${deliv.map(f => f.image
-    ? `<a href="${esc(s3url(f.key))}" target="_blank" rel="noopener"><img src="${esc(s3url(f.key))}" alt="${esc(f.name)}" loading="lazy"></a>`
-    : `<a class="file" href="${esc(s3url(f.key))}" target="_blank" rel="noopener">${esc(f.name)}</a>`).join('')}</div>` : '';
   const brk = r.session_break ? `<div class="conv-break">New session started ${esc(fmt(r.started) || '')}</div>` : '';
-  return `${brk}<div class="conv-run${chat ? ' chat' : ''}">${head}${ask}${working}${answer}${comments}${files}</div>`;
+  return `${brk}<div class="conv-run${chat ? ' chat' : ''}">${head}${ask}${working}${answer}${comments}</div>`;
 }
 function convChatAsk(r) {
   const m = r.message || {};
@@ -130,7 +126,7 @@ function convChatStarted(slug, j, text, files) {
   const state = CONV; if (!state || state.slug !== slug) return;
   state.runs.push({run: j.run, issue: null, kind: 'chat', message: {from: myHandle(), text, files},
     started: j.started || new Date().toISOString(), finished: null, exit: null,
-    events: [], activity: {}, deliverables: [], comments: [], local: true});
+    events: [], activity: {}, comments: [], local: true});
   state.active = {run: j.run, issue: null, offset: 0};
   convRender(state); convSchedule(state);
 }
@@ -200,7 +196,7 @@ function sessionTurn(t, slug) {
     return `<div class="sess-turn tool">${when}<details><summary><code>${esc(line)}</code>${
       t.exit ? ` <span class="pill fail">exit ${esc(t.exit)}</span>` : ''}</summary>${body}</details></div>`;
   }
-  const body = t.role === 'assistant' ? `<div class="md">${mdS3(t.text || '')}</div>`
+  const body = t.role === 'assistant' ? `<div class="md">${md(t.text || '')}</div>`
     : `<div class="body">${esc(t.text || '')}</div>`;
   return `<div class="sess-turn ${esc(t.role)}">${when}<span class="who">${who}</span>${body}</div>`;
 }
