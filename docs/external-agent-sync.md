@@ -70,8 +70,9 @@ The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/
 
 ## Dots
 
-Dots reaches outside tools through ChatGPT plugins, which sign in with OAuth. Once your Dots can call Tico's MCP
-server ([Connect an external agent](connect-an-agent.md#each-agent)), give it this routine to run daily:
+Dots reaches outside tools through ChatGPT plugins, which sign in with OAuth. Add Tico's MCP server URL to your Dots as
+a connector and press **Allow** when Tico asks ([OAuth sign-in](connect-an-agent.md#oauth-sign-in)); then give it this
+routine to run daily:
 
 > **Tico sync.** Use the Tico MCP tools.
 > 1. Call `hub_external_sync` with `provider` `dots`, one bot with `name` (your name), `description` and your full
