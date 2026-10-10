@@ -97,14 +97,16 @@ The commands are Hermes's (see [Keep it working](hermes-agents.md#keep-it-workin
 |---|---|---|
 | `doctor`: "the OpenClaw Gateway is not running" | No cron job fires, `tico-sync` included. The heartbeat still runs, so the bot shows online. | Start the Gateway (`openclaw --profile <name> gateway start`, or `gateway run`). The job is kept; the next run picks up everything that waited. |
 | A sync run ends in `error`, "No route-compatible authentication source" | The profile has no signed-in model. | Sign the profile in to a provider (`openclaw --profile <name> configure`), then run the job once. |
-| `reinstall` or `pair` says "the sync job is not in place", gateway closed | The Gateway was down when the job was being made. | Start the Gateway, then `reinstall`. |
+| `reinstall` or `pair` says "WARNING: the sync job is not in place: openclaw cron list: Gateway target ..." | The Gateway was down, so the job could not be made or changed (a job made earlier stays as it was). | Start the Gateway, then `reinstall`. |
 | `doctor`: "GET /api/v2/me failed: ... credential revoked" (401) | The credential was revoked or replaced in Tico. | `pair` again and approve it, or `uninstall` if the profile should stop. |
 
 **Remove it.** `uninstall` removes the heartbeat timer, the `tico-sync` job, the skill, `tico.env` and the
-credential file; it leaves OpenClaw's own config and your other cron jobs alone. It does **not** revoke the
+credential file; it leaves OpenClaw's own config, your other cron jobs and the connector copy in
+`~/.config/tico/agents/hermes_agent.py` (other profiles may use it) alone. It does **not** revoke the
 credential in Tico: do that as a separate step in **Settings → Bots** (the bot's Computer column), or ask BotOps.
 After a revoke, a profile that still has the connector gets 401: the heartbeat backs off to once an hour and
-says `credential revoked: run pair again`, and the sync skill stops.
+says `credential revoked: run pair again`, `check` and `doctor` say the same, and the skill stops at its first
+step. The cron job still starts one short agent turn each interval until you `uninstall`.
 
 ## MCP
 
@@ -116,7 +118,9 @@ with the bot's credential lists the bot's `hub_*` tools as `tico__hub_*`.
 The connector does not set this up, and the `tico-sync` skill does not depend on it: the skill calls Tico through
 `hermes_agent.py call` on every release. If you add Tico as an MCP server yourself, keep the token out of
 `openclaw.json`: put `TICO_AGENT_TOKEN=...` in the profile's `.env` (mode 600) and use
-`"headers": {"Authorization": "Bearer ${TICO_AGENT_TOKEN}"}`. `uninstall` does not remove an MCP entry you added.
+`"headers": {"Authorization": "Bearer ${TICO_AGENT_TOKEN}"}`. The Gateway reads `.env` when it starts, so restart
+it after adding the line (`mcp reload` is not enough). In a cron turn the tools are found through OpenClaw's
+`tool_search` and called with `tool_call`. `uninstall` does not remove an MCP entry or `.env` line you added.
 
 ## In Tico
 
