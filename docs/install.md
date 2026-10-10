@@ -29,7 +29,7 @@ Run the installer with `--local` (a Mac or Linux; it asks for your email when yo
 curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
-The line saves the installer first, so it stops with an error when `curl` is missing or the download fails; on a bare Ubuntu or Debian,
+The line saves the installer as `install.sh` in the current folder (replacing one already there), so it stops with an error when `curl` is missing or the download fails; on a bare Ubuntu or Debian,
 run `sudo apt-get install -y curl` first. That installs the newest release; to pin one, use `releases/download/vX.Y.Z/install.sh` instead of `releases/latest/download/install.sh`.
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.

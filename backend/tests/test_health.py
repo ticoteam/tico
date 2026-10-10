@@ -191,38 +191,48 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     assert body["stuck"] == [] and "release" not in json.dumps(body)
 
 
-def test_a_chat_waiting_on_a_model_sign_in_says_so_like_health_models(environment):
-    """A provider is chosen and a computer is online, but none is signed in to the model: the queued chat names
-    that reason (the Set up chat shows a Sign in hint from it), from the same rule as Health > Models."""
+def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_their_reason(environment):
+    """The queued chat names a sign-in reason (the Set up chat shows a Sign in hint from it) only when this bot's own
+    model is not signed in on its own computer. A bot on another runtime that waits on something else keeps its reason,
+    even while the team's default model is signed in nowhere."""
     import json
     api = environment()
     revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
     assert api.put("/api/v2/providers", headers=signed_in(), json={
-        "enabled": ["anthropic"], "runtime": "claude", "expected_revision": revision}).status_code == 200
+        "enabled": ["openai", "anthropic"], "runtime": "claude", "expected_revision": revision}).status_code == 200
     runner = enrolled(api)
     add_bot(api, "writer")
+    add_bot(api, "coder")
 
-    def report(authenticated):
+    def report(claude):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
-                "schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
-                "bots": {"writer": {"ready": authenticated == "ready", "runtime": "claude",
-                                    "problems": [] if authenticated == "ready" else ["Claude login required"]}}}), runner))
+                "schema_version": 1, "runtimes": {
+                    "claude": {"installed": True, "authenticated": claude, "detail": "" if claude == "ready" else "Claude login required"},
+                    "codex": {"installed": True, "authenticated": "ready"}},
+                "bots": {"writer": {"ready": claude == "ready", "runtime": "claude",
+                                    "problems": [] if claude == "ready" else ["Claude login required"]},
+                         "coder": {"ready": False, "runtime": "codex", "problems": ["Missing bot repository or AGENT.md"]}}}),
+                runner))
 
     report("missing")
+    chats = {}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('writer',?,1,?,'t')",
-                  (runner, H.now()))
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
-        conversation = H.open_conversation(c, owner, [owner, "bot:writer"], kind="chat")
-        H._write_message(c, owner, "bot:writer", "start setup", conversation, "say", {}, None, None)
-    path = "/api/v2/conversations/" + conversation["id"] + "/snapshot"
-    snapshot = lambda: api.get(path, headers=signed_in()).json()["execution"]
-    execution = snapshot()
-    assert execution["state"] == "queued" and execution["readiness_reason"] == "model_sign_in"
+        for bot in ("writer", "coder"):
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                      (bot, runner, H.now()))
+            chats[bot] = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
+            H._write_message(c, owner, "bot:" + bot, "start setup", chats[bot], "say", {}, None, None)
+    snapshot = lambda bot: api.get("/api/v2/conversations/" + chats[bot]["id"] + "/snapshot", headers=signed_in()).json()["execution"]
+    writer, coder = snapshot("writer"), snapshot("coder")
+    assert writer["state"] == "queued" and writer["readiness_reason"] == "model_sign_in"
+    assert writer["label"] == "Saved — Claude login required"
+    assert "readiness_reason" not in coder and coder["label"] == "Saved — Missing bot repository or AGENT.md"
     assert health_of(api)[1]["models"]["summary"] == "No online computer is signed in to your model."
     report("ready")
-    assert "readiness_reason" not in snapshot() and health_of(api)[1]["models"]["status"] == "ok"
+    assert "readiness_reason" not in snapshot("writer") and health_of(api)[1]["models"]["status"] == "ok"
 
 
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):

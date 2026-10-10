@@ -76,8 +76,10 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
                         and (not model or str(detail.get("model") or "") == str(model)))}
     state = (readiness.get("runtimes") or {}).get(runtime) or {}
 
-    def verdict(can, problem="", fix="", link="#/settings"):
+    def verdict(can, problem="", fix="", link="#/settings", sign_in=False):
         out.update(can_run=can)
+        if sign_in:
+            out["sign_in"] = True     # the model is not signed in on this computer: Settings > Computers fixes it
         if can is not True:
             out["problem"] = problem
         if can is False:
@@ -110,7 +112,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             return verdict(None, "The " + profile + " subscription has not reported " + str(runtime) + " on " + label)
         return verdict(True) if signed else verdict(
             False, "The " + profile + " subscription is not signed in to " + str(runtime) + " on " + label,
-            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers")
+            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers", sign_in=True)
     shared = (state.get("profiles") or {}).get("") or state
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
@@ -118,7 +120,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     if signed in SIGNED_OUT:
         return verdict(False, shared.get("detail") or (str(runtime) + " is not signed in on " + label),
                        "Sign in " + str(runtime) + " on " + label + " in Settings > Computers, or choose a model it "
-                       "already runs")
+                       "already runs", sign_in=True)
     return verdict(None, label + " has not checked the " + str(runtime) + " sign-in yet")
 
 

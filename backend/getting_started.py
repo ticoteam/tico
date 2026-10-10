@@ -83,14 +83,6 @@ def _signed_in_runtime(runners, wanted):
     return ""
 
 
-def no_model_signed_in(c, settings=None):
-    """A provider is chosen and a computer is online, but no online computer is signed in to the chosen model:
-    what Settings > Health > Models reports as "No online computer is signed in to your model"."""
-    runners = _online_runners(c)
-    wanted = _wanted_runtimes(providers.load(c, settings))
-    return bool(wanted and runners and not _signed_in_runtime(runners, wanted))
-
-
 def _login_target(runners, wanted):
     """A computer that has a wanted runtime installed but not signed in, and that the browser
     can sign in (backend/model_login.py): where the checklist's Sign in button goes."""

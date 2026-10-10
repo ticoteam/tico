@@ -444,10 +444,10 @@ function v2PendingHTML(state) {
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
   const providerMissing = x?.state === 'queued' && x?.readiness_reason === 'missing_provider';
-  // A provider is chosen but no online computer is signed in to it (Settings > Health > Models says the same).
+  // A provider is chosen but this bot's computer is not signed in to its model.
   const signInMissing = x?.state === 'queued' && x?.readiness_reason === 'model_sign_in';
   const hint = providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
-    : signInMissing ? ' <span>No computer is signed in to your model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    : signInMissing ? ' <span>Its computer is not signed in to its model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
     : '';
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
     <span>No reply after 20 minutes · <button type="button" class="dismiss" data-pending-dismiss>dismiss</button></span></div>`;

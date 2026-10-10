@@ -456,6 +456,16 @@ def operation_issues(c, who, auth):
     return issues
 
 
+def own_sign_in(c, bot, settings=None):
+    """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
+    check and the model picker use), or '' when its computer is signed in or it waits on something else."""
+    from .readiness import can_run
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
+    verdict = can_run(c, bot, runtime) if runtime else {}
+    return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
+
+
 def conversation_snapshot(c, cid, who=None, settings=None):
     page = privacy.page(c, who, cid) if who else message_page(c, cid)
     job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
@@ -485,7 +495,6 @@ def conversation_snapshot(c, cid, who=None, settings=None):
             label = "Reply failed — your message is saved"
         readiness_reason = ""
         if state == "queued":
-            from .getting_started import no_model_signed_in
             draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (job["bot"],)).fetchone()
             # A drain is either Tico updating itself (the deploy finishes each
             # bot's current run, then holds new ones until it is back) or a person pausing it.
@@ -505,9 +514,10 @@ def conversation_snapshot(c, cid, who=None, settings=None):
                 if any(str(p).startswith("No AI provider is chosen") for p in problems):
                     readiness_reason = "missing_provider"
                     label = "Saved — no AI provider is chosen"
-                elif no_model_signed_in(c, settings):
+                elif (verdict := own_sign_in(c, job["bot"], settings)):
+                    # Only this bot's own model, on its own computer: a bot that waits on anything else keeps its own reason.
                     readiness_reason = "model_sign_in"
-                    label = "Saved — no computer is signed in to your model"
+                    label = "Saved — " + verdict
                 else:
                     label = "Saved — " + str(problems[0]) if problems else "Saved — waiting for computer setup"
         parts = []
