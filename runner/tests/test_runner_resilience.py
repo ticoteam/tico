@@ -388,11 +388,29 @@ class Pushing(unittest.TestCase):
     def head(self, path, ref="HEAD"):
         return git(path, "rev-parse", ref, env=self.env).stdout.strip()
 
-    def test_a_diverged_origin_is_left_for_a_person_and_said_once(self):
+    def test_a_branch_tracking_main_is_rebased_over_a_moved_origin_and_pushed(self):
+        # bot-engineering-lead worked on `review-243` tracking origin/main: a bare `git push` refused it
+        # ("... see push.default in 'git help config'."), and the remote had moved on meanwhile.
         other = Path(self.tmp.name) / "other"
         git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
         self.commit("elsewhere", other)
         git(other, "push", "-q", "origin", "main", env=self.env)
+        git(self.repo, "checkout", "-q", "-b", "review-243", "--track", "origin/main", env=self.env)
+        git(self.repo, "cherry-pick", "main", env=self.env)
+        with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
+            self.assertTrue(self.runner.push(self.repo))
+        log.assert_not_called()
+        self.assertEqual(self.head(self.origin, "main"), self.head(self.repo))
+        self.assertTrue((self.repo / "elsewhere").exists() and (self.repo / "memory").exists())
+
+    def test_a_conflicting_origin_is_left_for_a_person_and_said_once(self):
+        other = Path(self.tmp.name) / "other"
+        git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
+        (other / "memory").write_text("written elsewhere")
+        git(other, "add", "memory", env=self.env)
+        git(other, "commit", "-q", "-m", "elsewhere", env=self.env)
+        git(other, "push", "-q", "origin", "main", env=self.env)
+        mine = self.head(self.repo)
         before = self.head(self.origin, "main")
         with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
             self.runner.execute(attempt())
@@ -401,7 +419,11 @@ class Pushing(unittest.TestCase):
         self.assertEqual(self.head(self.origin, "main"), before)
         messages = [call.args[0] for call in log.call_args_list]
         self.assertTrue(any("pull before coo turn failed" in m and "using the local tree" in m for m in messages), messages)
-        self.assertEqual(messages[-1], "Tico runner: emp-coo has 1 unpushed commits and push failed (non-fast-forward); leaving it for a person")
+        self.assertEqual(messages[-1], "Tico runner: emp-coo has 1 unpushed commits and push failed (origin/main has 1 "
+                         "commits this checkout doesn't, and they conflict with its unpushed commits in memory; in "
+                         f"{self.repo}, run `git pull --rebase`, resolve the conflict, and push); leaving it for a person")
+        self.assertEqual(self.head(self.repo), mine, "the conflicting rebase is undone; nothing is lost")
+        self.assertFalse((self.repo / ".git" / "rebase-merge").exists())
         # Placement says once that the diverged copy was kept; the pull and push failures follow.
         self.assertTrue(messages[0].startswith("Tico runner: coo: kept this computer's copy as it is"), messages)
         self.assertEqual(len(messages), 3)
@@ -463,26 +485,31 @@ class RefusedReplies(unittest.TestCase):
         self.assertEqual(service.scrub_reply("All clear.", "coo"), "All clear.")
 
     def test_a_refused_reply_settles_the_attempt_instead_of_letting_the_lease_lapse(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        (Path(tmp.name) / "emp-coo").mkdir()
-        client = FakeClient()
-        plain = client.post
+        for code, detail in (("escape", "The message includes a secrets path or another bot’s workspace path."),
+                             ("privacy", "Private task content stays with its requester and current owner")):
+            with self.subTest(code=code):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                (Path(tmp.name) / "emp-coo").mkdir()
+                client = FakeClient()
+                plain = client.post
 
-        def post(path, body=None, key=None):
-            if path.endswith("/complete") and body["outcome"] == "completed":
-                client.posts.append((path, body))
-                raise APIError("escape", "The message includes a secrets path or another bot’s workspace path.", 403, False)
-            return plain(path, body, key)
-        client.post = post
-        runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": tmp.name, "capacity": 1},
-                        Path(tmp.name) / "state", host_factory=lambda a, env: FakeHost(replies=["done"]),
-                        client=client, push=lambda path, env=None: (0, ""))
-        with mock.patch("runner.service.log"):
-            runner.execute(attempt())
-        completes = [body for path, body in client.posts if path.endswith("/complete")]
-        self.assertEqual([c["outcome"] for c in completes], ["completed", "failed"])
-        self.assertIn("refused this turn's reply", completes[1]["text"])
+                def post(path, body=None, key=None, client=client, plain=plain, code=code, detail=detail):
+                    if path.endswith("/complete") and body["outcome"] == "completed":
+                        client.posts.append((path, body))
+                        raise APIError(code, detail, 403, False)
+                    return plain(path, body, key)
+                client.post = post
+                runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": tmp.name,
+                                 "capacity": 1}, Path(tmp.name) / "state",
+                                host_factory=lambda a, env: FakeHost(replies=["done"]),
+                                client=client, push=lambda path, env=None: (0, ""))
+                with mock.patch("runner.service.log"):
+                    runner.execute(attempt())
+                completes = [body for path, body in client.posts if path.endswith("/complete")]
+                self.assertEqual([c["outcome"] for c in completes], ["completed", "failed"])
+                self.assertIn("refused this turn's reply", completes[1]["text"])
+                self.assertIn(detail, completes[1]["text"])
 
 
 def test_busy_bots_follow_live_turn_processes_until_they_exit(tmp_path):
@@ -591,7 +618,7 @@ def test_startup_backlog_uses_the_bots_scoped_helper(tmp_path, configured):
     runner = SimpleNamespace(stop=threading.Event(), client=client, config_path=None,
                              local_path=lambda *args: path,
                              credential_environment=lambda *args: safe_git.process_environment(),
-                             push=lambda path, env, shared: seen.append((path, env)) or True)
+                             push=lambda path, env, catch_up_remote: seen.append((path, env)) or True)
     Runner.push_backlog(runner)
     assert len(seen) == 1
     env = seen[0][1]
@@ -625,7 +652,7 @@ def test_startup_push_refreshes_through_the_socket_and_revokes_its_capability(tm
         client = Hub({"configured": True, "token": "initial-test-token"})
         client.get = lambda route: [{"bot": "ana", "config": {}}]
         seen = []
-        def push(path, env, shared):
+        def push(path, env, catch_up_remote):
             assert "password=fresh-test-token" in fill(safe_git.environment(env), tmp_path)
             seen.append(env["HUB_TOKEN"])
             return True

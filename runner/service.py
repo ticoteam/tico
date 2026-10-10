@@ -313,7 +313,7 @@ def pull_repo(path, env=None, timeout=45):
             return ""
         fetched = git("fetch", "--quiet", "--no-tags", timeout=timeout)
         if fetched.returncode != 0:
-            return (fetched.stderr.strip().splitlines() or ["fetch failed"])[-1][:120]
+            return git_reason(fetched)
         pulled = git("merge", "--ff-only", "--quiet", "@{u}", timeout=timeout)
     except subprocess.TimeoutExpired:
         return "timed out"
@@ -324,7 +324,7 @@ def pull_repo(path, env=None, timeout=45):
     stderr = pulled.stderr.strip()
     if "no upstream" in stderr.lower() or "no merge" in stderr.lower() or "unknown revision" in stderr.lower():
         return ""
-    return (stderr.splitlines() or [f"exit {pulled.returncode}"])[-1][:120]
+    return git_reason(pulled)
 
 
 def is_shared(config):
@@ -404,7 +404,7 @@ def sync_shared(path, env=None, timeout=45):
             return "it has uncommitted changes from an earlier turn"
         fetched = git("fetch", "--quiet", "--no-tags", timeout=timeout)
         if fetched.returncode != 0:
-            return "fetch failed: " + (fetched.stderr.strip().splitlines() or ["no detail"])[-1][:120]
+            return "fetch failed: " + git_reason(fetched)
         rebased = git("rebase", "--quiet", "@{u}", timeout=timeout)
         if rebased.returncode == 0:
             return ""
@@ -446,10 +446,28 @@ def sibling_repo(name, workspace=None):
     return repo_dir(workspace, repo).name if workspace else "bot-" + repo
 
 
+def git_reason(result):
+    """The line of a failed git command's stderr that says what went wrong.
+
+    Git ends many failures with advice (`hint:` lines, "see push.default in 'git help config'"), so
+    the last line read "in 'git help config'." for a push that refused a branch named unlike its
+    upstream. The first `fatal:`/`error:`/rejected line is the reason; otherwise the first line."""
+    lines = [line.strip() for line in (result.stderr or "").splitlines() if line.strip()]
+    for line in lines:
+        if line.startswith(("fatal:", "error:", "! [", "remote: error")):
+            return line[:160]
+    plain = [line for line in lines if not line.startswith("hint:")]
+    return (plain or [f"exit {result.returncode}"])[0][:160]
+
+
 def push_repo(path, env=None, timeout=60):
     """Push a bot checkout's commits to its upstream so GitHub, not one laptop, holds the bot's
     memory. Returns (commits ahead, failure reason or ""). Never forces, pulls, or touches the
-    working tree; a checkout without an upstream is left alone."""
+    working tree; a checkout without an upstream is left alone.
+
+    The push names its upstream (`HEAD:<upstream branch>`): a bot that switched to a branch of its
+    own that still tracks `main` (`review-243` tracking `origin/main`) is ahead of `main`, and a bare
+    `git push` refuses a branch named unlike its upstream."""
     path = Path(path)
     if not (path / ".git").exists():
         return 0, ""
@@ -463,7 +481,12 @@ def push_repo(path, env=None, timeout=60):
         ahead = int(count.stdout.strip() or 0) if count.returncode == 0 else 0
         if not ahead:
             return 0, ""
-        result = git("push", "-q", timeout=timeout)
+        branch = git("symbolic-ref", "-q", "HEAD").stdout.strip()
+        target = ""
+        if branch:
+            target = git("for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", branch).stdout
+        remote, _, ref = target.strip().partition("\t")
+        result = git("push", "-q", *([remote, f"HEAD:{ref}"] if remote and ref else []), timeout=timeout)
     except subprocess.TimeoutExpired:
         return ahead, "timed out"
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -471,11 +494,61 @@ def push_repo(path, env=None, timeout=60):
     if result.returncode == 0:
         return ahead, ""
     stderr = result.stderr.strip()
-    if "non-fast-forward" in stderr or "rejected" in stderr:
+    if "[remote rejected]" not in stderr and ("non-fast-forward" in stderr or "rejected" in stderr):
         return ahead, "non-fast-forward"
     if "uthentication" in stderr or "403" in stderr or "Permission" in stderr:
         return ahead, "authentication"
-    return ahead, (stderr.splitlines() or [f"exit {result.returncode}"])[-1][:120]
+    return ahead, git_reason(result)
+
+
+def catch_up(path, env=None, timeout=45):
+    """After a push was refused because the remote moved on, put this checkout's unpushed commits on
+    top of what the remote gained, or say in plain words why not. Returns "" when the push can go again.
+
+    Rebases (merges instead when the unpushed commits hold a merge, which a rebase would flatten).
+    Never forces and never drops a commit: a conflict is undone, the checkout is left exactly as it
+    was, and the conflicting files are named for a person. Runs only under the bot's own turn lock,
+    since it moves the working tree."""
+    path = Path(path)
+    env = safe_git.environment(env)
+    def git(*args, timeout=15):
+        return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+    step = "rebase"
+    try:
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+        if dirty.returncode != 0:
+            return "git status failed: " + git_reason(dirty)
+        fetched = git("fetch", "--quiet", "--no-tags", timeout=timeout)
+        if fetched.returncode != 0:
+            return "the remote refused the push as behind, and fetching it failed: " + git_reason(fetched)
+        upstream = git("rev-parse", "--abbrev-ref", "@{u}").stdout.strip() or "its upstream"
+        behind = git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or "some"
+        missing = f"{upstream} has {behind} commits this checkout doesn't"
+        if dirty.stdout.strip():
+            return (f"{missing}, and uncommitted changes kept the runner from rebasing; in {path}, commit them, "
+                    "then `git pull --rebase` and push")
+        if git("rev-list", "--merges", "@{u}..HEAD").stdout.strip():
+            step = "merge"
+        done = git(*(("merge", "--no-edit", "--quiet") if step == "merge" else ("rebase", "--quiet")), "@{u}",
+                   timeout=timeout)
+        if done.returncode == 0:
+            return ""
+        files = git("diff", "--name-only", "--diff-filter=U").stdout.split()
+        git(step, "--abort")
+        if files:
+            shown = ", ".join(files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
+            return (f"{missing}, and they conflict with its unpushed commits in {shown}; in {path}, run "
+                    "`git pull --rebase`, resolve the conflict, and push")
+        return f"{missing}, and the {step} onto it failed: {git_reason(done)}"
+    except subprocess.TimeoutExpired:
+        try:
+            git(step, "--abort")
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return "git timed out bringing the checkout up to date"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return type(exc).__name__
 
 
 # A local file link opens nowhere but this Mac, so its target goes and its words stay (Codex writes
@@ -898,15 +971,22 @@ class Runner:
         log(f"Tico runner: {bot} materialized from the {template} catalog template at {path}")
         return f"materialized from catalog: {template}", ""
 
-    def push(self, path, env=None, shared=False):
-        """Best-effort. A checkout whose push keeps failing (diverged, sign-in) is a person's job,
-        said once an hour per repository rather than after every turn."""
+    def push(self, path, env=None, catch_up_remote=True):
+        """Best-effort. A push the remote refused as behind is brought up to date (`catch_up`) and
+        pushed again; one that still fails (a real conflict, sign-in) is a person's job, said once an
+        hour per repository rather than after every turn. `catch_up_remote` is off where a turn may be
+        running in the checkout (`push_backlog`): that push only reads the tree."""
         path = Path(path)
         try:
             with self.push_lock:            # several bots can share one checkout; one push at a time
                 ahead, error = self.push_repo(path, env)
-                if shared and error == "non-fast-forward" and not sync_shared(path, env):
-                    ahead, error = self.push_repo(path, env)
+                if error == "non-fast-forward":
+                    if catch_up_remote:
+                        error = catch_up(path, env)
+                        if not error:
+                            ahead, error = self.push_repo(path, env)
+                    else:
+                        error = "the remote has commits this checkout doesn't; it is rebased after the bot's next turn"
         except Exception as exc:
             ahead, error = 0, type(exc).__name__
         if not error:
@@ -1642,7 +1722,7 @@ class Runner:
                                       credentials.path if credentials else None)
                 if env.get("GIT_CONFIG_VALUE_1") == git_credentials.FAILED_HELPER:
                     continue                # never fall back to another login when scoped access failed
-                if self.push(path, env, shared=is_shared(row.get("config") or {})):
+                if self.push(path, env, catch_up_remote=False):
                     pushed.add(path)
             finally:
                 if credentials:
@@ -3259,7 +3339,7 @@ class Runner:
                     held = bool(tree and tree["committed"])
                     if not held and not is_assignment(config):
                         self.publish(bot, self.local_path(bot), env)
-                    pushed = False if held or is_assignment(config) else self.push(self.local_path(bot), env, shared=is_shared(config))
+                    pushed = False if held or is_assignment(config) else self.push(self.local_path(bot), env)
                     files_publish.after_turn(self, attempt, self.local_path(bot), pushed,
                                              skip=[str(Path(p).relative_to(execution_path))
                                                    for p in (tree or {}).get("left_out", []) + (tree or {}).get("too_large", [])])
@@ -3270,10 +3350,12 @@ class Runner:
                     # refusal is a lost turn and says so out loud rather than going quiet.
                     log(f"Tico runner: {bot}: {outcome} result for {aid} refused ({describe(exc)}); kept on this Mac only")
                     self.state.phase(aid, "historical")
-                    if outcome == "completed" and exc.code == "escape":
+                    if outcome == "completed" and exc.code in ("escape", "privacy"):
                         # The reply was what the hub refused, not the turn. Settle the attempt
                         # now with the reason, rather than leave it running until its lease lapses
-                        # and the same reply is refused again on the retry.
+                        # and the same reply is refused again on the retry. A privacy refusal (the
+                        # reply's reader may not see a private task the run took in) left Librarian
+                        # routines as empty `expired` runs a minute or two after they finished.
                         try:
                             self.client.post(f"attempts/{aid}/complete",
                                              {**completion, "outcome": "failed",
