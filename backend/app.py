@@ -2947,7 +2947,8 @@ def create_app(settings=None):
             return result
         return mutate(request, body, work)
 
-    # A person's request lends their rights for as long as the task it created (or that cites it) is open. A chat
+    # A person's request lends their rights for as long as the task it created (or that cites it) is open, up to
+    # botops_act.LEND_MAX_DAYS after they last spoke on it, and never again once someone else reopens it. A chat
     # message with no open task lends them for a week; a new task filed from a message also needs it within the week,
     # or one open task could renew another for ever.
     DELEGATION_DAYS = 7
@@ -2956,6 +2957,10 @@ def create_app(settings=None):
 
     def open_task(task):
         return bool(task) and task["status"] not in ("done", "closed", "declined")
+
+    def lending_task(c, task):
+        """An open task that still lends its requester's rights (`botops_act.lend_lapsed`)."""
+        return open_task(task) and not botops_act.lend_lapsed(c, task)
 
     def week_old(created):
         return created < H.shift(H.now(), days=-DELEGATION_DAYS)
@@ -3019,6 +3024,9 @@ def create_app(settings=None):
                                   "other comments and routed messages lend nothing", 403)
             if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
                 auth.conversation(c, who, initial["conversation_id"])
+                lapsed = botops_act.lend_lapsed(c, task) if task and H.is_human(requester) else ""
+                if lapsed:
+                    raise Problem("on_behalf_of", lapsed, 403)
                 if not open_task(task) and week_old(initial["created"]):
                     raise Problem("on_behalf_of", "That request is more than a week old; ask the requester again", 403)
             if str(requester).startswith("bot:") and requester != who.actor:
@@ -3077,9 +3085,8 @@ def create_app(settings=None):
         if explicit and set(conversation.get("participants") or []) != {msg["from_actor"], "bot:" + BOTOPS}:
             # A message cited by id: the person's own, in their own room with BotOps (not a room another person spoke in).
             raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
-        if week_old(msg["created"]) and (new_task or not c.execute(
-                "SELECT 1 FROM tasks WHERE request_id=? AND requester=? AND status NOT IN ('done','closed','declined') "
-                "LIMIT 1", (message_id, msg["from_actor"])).fetchone()):
+        if week_old(msg["created"]) and (new_task or not any(lending_task(c, H.task(c, row["id"])) for row in c.execute(
+                "SELECT id FROM tasks WHERE request_id=? AND requester=?", (message_id, msg["from_actor"])).fetchall())):
             raise Problem("on_behalf_of", "That request is more than a week old and no open task carries it; "
                           "ask the person again", 403)
         # Only a request in a conversation this run may read: otherwise any message a bot sends
@@ -3112,6 +3119,9 @@ def create_app(settings=None):
             raise Problem("on_behalf_of", "Cite a task a person asked BotOps for", 403)
         if task["status"] in ("done", "closed", "declined"):
             raise Problem("on_behalf_of", "That task is closed; ask the person again", 403)
+        lapsed = botops_act.lend_lapsed(c, task)
+        if lapsed:
+            raise Problem("on_behalf_of", lapsed, 403)
         made = c.execute("SELECT actor,detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
                          (task["id"],)).fetchone()
         via = H._json(made["detail_json"], {}).get("via") if made else None

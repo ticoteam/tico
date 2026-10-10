@@ -651,8 +651,15 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     botops_turn(api)
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot='botops'")
+        # The daily update: BotOps' own schedule.
+        c.execute("UPDATE messages SET kind='notice',refs_json='{\"wake\": \"update\"}' WHERE id='m-botops'")
     wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
     assert sorted(turn_token(api, "botops").json()["repositories"]) == wide
+    with api.app_state.store.read() as c:
+        # The computer's git helper asked: the run in progress on it decided the scope.
+        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='github.token' AND target='botops' "
+                                     "ORDER BY ts DESC,rowid DESC LIMIT 1").fetchone()[0])
+    assert audit["runs"] == [{"attempt": "a2", "rights": "bot:botops", "own_run": True}]
     assert sorted(api.post("/api/v2/github/token", json={"bot": "botops"},
                            headers=auth("botops-test")).json()["repositories"]) == wide
     with api.app_state.store.transaction() as c:
