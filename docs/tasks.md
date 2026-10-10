@@ -215,9 +215,9 @@ Only the task's owner or requester, or a human mover, can re-parent it; bots mus
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner or requester, or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-Bots finish open subtasks before marking a parent Done. Humans can always choose Ready or Done,
-or close a parent to cancel work. The keeper can cancel obsolete routine requests even when
-they have open subtasks. Finishing or moving away the last open subtask wakes the
+A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
+subtasks stay open, and the parent's history and its Finished or Closed notice end with
+"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
 parent's owner with “All subtasks done”, unless that owner made the change.
 Closing a parent cancels it; later subtask completion does not wake its owner.
 Done, Closed and Declined count as finished. Open descendants under a finished subtask do not

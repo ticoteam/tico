@@ -47,6 +47,13 @@ def test_a_bot_posts_once_a_day_and_each_person_has_their_own_read_state(api, mo
     again = api.post("/api/v2/updates", json={"body": "- Drafted and sent the checklist"},
                      headers={**bot, "Idempotency-Key": "u2"}).json()["update"]
     assert again["id"] == first.json()["update"]["id"], "posting again replaces the day's update"
+    labelled = api.post("/api/v2/updates", json={"body": "- Drafted and sent the checklist\n- Next: send it"},
+                        headers={**bot, "Idempotency-Key": "u3"})
+    assert labelled.status_code == 200 and "section label" in labelled.json()["update"]["warning"], "a writing slip is a warning"
+    empty = api.post("/api/v2/updates", json={"body": ""}, headers={**bot, "Idempotency-Key": "u4"})
+    assert empty.status_code == 422, "an empty update is still refused"
+    again = api.post("/api/v2/updates", json={"body": "- Drafted and sent the checklist"},
+                     headers={**bot, "Idempotency-Key": "u5"}).json()["update"]
     post(api, "updates", {"body": "- Me too"}, expected=403)           # people read, bots post
     feed = get(api, "updates")
     assert [u["headline"] for u in feed["updates"]] == ["Drafted and sent the checklist"]

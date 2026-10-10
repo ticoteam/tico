@@ -268,6 +268,17 @@ def draft_by_gmail_id(conn, mailbox, draft_id):
     return dict(r) if r else None
 
 
+def drop_draft(conn, mailbox, draft_id):
+    """Forget a discarded draft, so a retried `draft` makes a new one instead of updating it."""
+    conn.execute("DELETE FROM drafts WHERE mailbox=? AND draft_id=?", (mailbox, draft_id))
+    conn.commit()
+
+
+def draft_was_sent(conn, mailbox, draft_id):
+    return conn.execute("SELECT 1 FROM sends WHERE mailbox=? AND draft_id=? AND status='sent'",
+                        (mailbox, draft_id)).fetchone() is not None
+
+
 def draft_thread_ids(conn, mailbox):
     """Threads in this mailbox that a hub employee has drafted a reply on."""
     rows = conn.execute("SELECT DISTINCT thread_id FROM drafts WHERE mailbox=? AND thread_id!=''",

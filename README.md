@@ -199,6 +199,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_REGISTRY_DIR` | Seed roster and access list directory; its `integrations/` folder layers the team's own tool pages and queries over the release ([docs/databases.md](docs/databases.md)) | `/etc/tico/registry` |
 | `TICO_INTEGRATIONS_DIR` | Where that team layer lives when it is not `<registry>/integrations` | `/etc/tico/integrations` |
 | `TICO_BLOB_DIR` or `TICO_BLOB_BUCKET` | Where attachments and meeting files are stored: a directory or an S3 bucket | `/var/lib/tico/blobs` |
+| `TICO_S3_VIEW_URLS` | Where people open a team bucket's objects: `bucket=https://base[/prefix]`, comma-separated. `s3://bucket/key` in bot text becomes `base/key` ([docs/files.md](docs/files.md#links-to-bucket-objects)) | `acme-files=https://d1234example.cloudfront.net` |
 | `TICO_ACCESS_ISSUER` and `TICO_ACCESS_AUDIENCE` | Identity proxy issuer and application audience. JWKS is read from `<issuer>/cdn-cgi/access/certs` | `https://acme.cloudflareaccess.com` |
 | `TICO_AUTH_PROXY` | `oidc` (built-in sign-in), `cloudflare` or `aws-alb`. Defaults to `cloudflare` when `TICO_ACCESS_ISSUER` is set, else none (loopback sign-in). See [Sign-in options](docs/environments.md#sign-in-options) | `oidc` |
 | `TICO_OIDC_ISSUER` | For `oidc`: `https://accounts.google.com`, `https://login.microsoftonline.com/<tenant-id>/v2.0`, or any issuer with OpenID discovery | `https://accounts.google.com` |
@@ -214,7 +215,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_GITHUB_OWNER` | Organization that completes bare bot repository names | `acme-inc` |
 | `TICO_CREDENTIAL_ADMINS` | Comma-separated emails allowed to write shared credentials. The owner and the Admins when empty | `you@example.com` |
 | `TICO_UNSOLICITED_PER_DAY` | How many messages a bot may start to one human in a day before it must file a task instead. Default 10; lower it to tighten | `3` |
-| `TICO_ESCAPE_QUARANTINE_AT` | How many times in a day a bot may try to reach another bot's files or a `secrets/` path before it is quarantined until a human clears it. Default 3 | `1` |
+| `TICO_STYLE_LINT` | What a writing problem in a bot's ask to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
 | `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
 | `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
 | `TICO_SCHEDULER` | `1` runs the routine scheduler in this process | `1` |

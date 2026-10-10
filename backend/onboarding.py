@@ -296,6 +296,8 @@ def config_view(c, settings, who=None):
     if who is not None:
         # A runner installs only the harnesses these providers need (runner/harness_tools.py).
         value["enabled_providers"] = list(chosen["enabled"])
+        # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
+        value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
     value["ui_build"] = ui_bundle.build_id(settings.ui_dir)      # an open page compares it with its own (ui/app/notices.js)
