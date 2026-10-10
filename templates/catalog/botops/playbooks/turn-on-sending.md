@@ -58,7 +58,7 @@ Taking an address off the list is reversible by asking again; do it at once.
 ## When it goes sideways
 
 - **The server refuses `hub tool add` or `hub tool update`.** They do not manage the bot. Say who does.
-- **`on_behalf_of` refused.** The run was not started by the human's own chat message. Tell whoever is on the task;
+- **`on_behalf_of` refused.** The run was not started by the human's own chat message or comment. Tell whoever is on the task;
   do not act as anyone and do not turn anything on.
 - **`mail.sh policy show` says outbound_send False.** The commit is not on the bot's computer yet, or the YAML is
   wrong. Fix it, never report "on" before it says so.

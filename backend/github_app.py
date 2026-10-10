@@ -694,9 +694,21 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         if who.role != "owner":
             with store.read() as c:
-                if not app.state.auth.bot_manager(c, who, bot):
+                if not (app.state.auth.bot_manager(c, who, bot) or app.state.auth.botops_manages(c, who, bot)):
                     raise Problem("forbidden", "Only the owner, or someone who manages this bot, sets its repositories", 403)
         return who
+
+    def botops_manages_repos(c, who):
+        """Whether BotOps' token also writes every other bot's repository (`Auth.botops_manages`): in its own run, and,
+        for its computer's git helper, only while every BotOps run in progress is its own."""
+        from . import botops_act, team_rules
+        if not team_rules.load(c)["botops_manages_bots"]:
+            return False
+        if who.role == "bot":
+            return who.actor == "bot:" + BOTOPS and not who.via and botops_act.own_run(c, who.attempt_id)
+        live = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
+                                           (BOTOPS,))]
+        return who.role == "runner" and all(botops_act.own_run(c, attempt) for attempt in live)
 
     @app.get("/api/v2/github/app")
     def status(request: Request):
@@ -803,6 +815,15 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
+            if body.bot == BOTOPS and botops_manages_repos(c, who):
+                have = {g['full_name'].lower() for g in grants}
+                for other in c.execute("SELECT bc.bot,bc.repo FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                                       "WHERE b.state<>'archived' ORDER BY bc.bot"):
+                    name = repo_of(other["repo"] or "", row["org"])
+                    if (name and name.lower() not in have and name.split("/")[0].lower() == row["org"].lower()
+                            and name.lower() not in missing and not app.state.auth.system_bot(other["bot"])):
+                        have.add(name.lower())
+                        grants.append({'full_name': name, 'access': 'write'})
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
         read_repos = [r['full_name'] for r in grants if r['access'] == 'read']

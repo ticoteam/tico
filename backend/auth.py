@@ -503,6 +503,17 @@ class Auth:
             return True
         return self.manages(c, who, "bot", slug)
 
+    def botops_manages(self, c, who, slug):
+        """BotOps in its own run (no requester, or the keeper's maintenance) manages every bot that is not built in:
+        its tools, repositories, contact and Instructions, not its people, credentials or deletion. A run a person or
+        a bot asked for keeps that requester's rights, so BotOps never lends this to anyone. The team rule
+        `botops_manages_bots` turns it off."""
+        if (who.actor != "bot:botops" or who.role != "bot" or who.via or self.system_bot(slug)
+                or not team_rules.load(c)["botops_manages_bots"]):
+            return False
+        from . import botops_act
+        return botops_act.own_run(c, who.attempt_id)
+
     @staticmethod
     def member_bot_row(c, slug):
         """The same as `member_bot`, from the database alone (Health has no Auth): the creator's role."""
@@ -728,10 +739,12 @@ class Auth:
         """Whether this sender may open something with `slug`.
 
         `tasks` is the strict one and the simplest to reason about: work arrives as a task and
-        nothing else. No bot may chat it, ask it anything or steer it — not its manager, not a
-        bot holding one of its tickets. A task is a thing to do and it is dispatched without a
-        reply; a message is a conversation, and a conversation between bots is a run spent on
-        somebody else's business. Bots file work on each other and walk away.
+        nothing else. No other bot may chat it, ask it anything or steer it — not a bot holding
+        one of its tickets. A task is a thing to do and it is dispatched without a reply; a
+        message is a conversation, and a conversation between bots is a run spent on somebody
+        else's business. Bots file work on each other and walk away. Its manager (`reports_to`)
+        and BotOps still leave it notes, comments and messages: the one directs it, the other
+        keeps it running.
 
         A bot set to `bot_contact: replies` does not take chats, questions or tasks from other
         bots it has no business with. Every run costs its operator real money, and a bot with a
@@ -766,11 +779,12 @@ class Auth:
             return True
         declared = json.loads(row["config_json"]) if row["config_json"] else {}
         mode = declared.get("bot_contact", "open")
+        manager = H.bot_actor(row["reports_to"] or declared.get("reports_to") or "")
         if mode == "tasks":
-            return kind == "task"
+            return kind == "task" or sender in (manager, "bot:" + H.FLEET_MAINTAINER)
         if mode != "replies":
             return True
-        if H.bot_actor(row["reports_to"] or declared.get("reports_to") or "") == sender:
+        if manager == sender:
             return True
         asked = "bot:" + slug
         if task_id:
@@ -804,7 +818,8 @@ class Auth:
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
         declared = json.loads(row["config_json"]) if row and row["config_json"] else {}
         if declared.get("bot_contact") == "tasks":
-            raise Problem("bot_contact", f"{slug} takes work as a task and nothing else. File one "
+            raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "
+                                         "and BotOps). File one "
                                          f"with `hub task create --owner {slug}`, say what you want "
                                          "done in the body, and do not wait for it.", 403)
         raise Problem("bot_contact", f"{slug} does not take contact from other bots. Ask its "

@@ -643,3 +643,22 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     assert api.put(path, json={'mode': 'own', 'create_repositories': False}, headers=auth()).json()['create_repositories'] is False
     assert create({'slug': 'newbie'}).status_code == 403
     assert api.get('/api/v2/bots/botops/repositories', headers=auth()).json()['create_repositories'] is True
+
+
+def test_botops_own_run_writes_every_bot_repository_and_a_bot_asked_run_only_its_own(api, gh):
+    from backend import team_rules
+    connect(api)
+    botops_turn(api)
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot='botops'")
+    wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
+    assert sorted(turn_token(api, "botops").json()["repositories"]) == wide
+    assert sorted(api.post("/api/v2/github/token", json={"bot": "botops"},
+                           headers=auth("botops-test")).json()["repositories"]) == wide
+    with api.app_state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+    with api.app_state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": True})
+        c.execute("UPDATE messages SET from_actor='bot:cmo' WHERE id='m-botops'")
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]

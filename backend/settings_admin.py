@@ -71,10 +71,12 @@ class SettingsAdmin:
                          "WHERE bc.created_by=? AND b.state<>'archived' AND bc.bot<>? "
                          "AND COALESCE(bc.onboarding_state,'') NOT IN " + PARKED_SQL, (actor, excluding)).fetchone()[0]
 
-    def _manager(self, c, who, bot):
+    def _manager(self, c, who, bot, botops=False):
         """The one "may manage this bot" check (`Auth.bot_manager`): the owner, an Admin, one of the bot's
-        owners, or a person it reports up to. They are also the people who always have full access to it."""
-        if who.role == "owner" or self.auth.bot_manager(c, who, bot):
+        owners, or a person it reports up to. They are also the people who always have full access to it.
+        `botops`: BotOps in its own run may also make this change (`Auth.botops_manages`)."""
+        if (who.role == "owner" or self.auth.bot_manager(c, who, bot)
+                or (botops and self.auth.botops_manages(c, who, bot))):
             return
         raise Problem("forbidden", "You may change only bots you own or that report up to you", 403)
 
@@ -460,7 +462,7 @@ class SettingsAdmin:
             raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
 
     def update_bot(self, c, who, bot, body):
-        self._manager(c, who, bot)
+        self._manager(c, who, bot, botops=True)
         source = shared_bots.source_of(shared_bots.declared(c, bot))
         if source and (H.bot(c, source) or {}).get("state") == "archived":
             raise Problem("original_archived", "Restore the original before changing its branch's status", 409)

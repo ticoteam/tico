@@ -2,8 +2,8 @@
 
 One record, `rules`, holds only what the owner changed. Each rule is on by default, the fast way; turning it off puts
 back the click or the limit the product had before. They are read wherever the decision is made: the Assistant's
-direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), who is a credential
-administrator (backend/auth.py), the SQL page and personal tokens.
+direct writes (backend/assistant.py), what BotOps does without a card (backend/botops_act.py), the bots BotOps
+manages in its own runs and who is a credential administrator (backend/auth.py), the SQL page and personal tokens.
 """
 import json
 
@@ -13,6 +13,7 @@ KEY = "rules"
 DEFAULTS = {
     "assistant_direct": True,       # the Assistant makes tasks for bots, comments and messages to bots without a card
     "botops_direct": True,          # BotOps sets AI providers and raises limits without a card
+    "botops_manages_bots": True,    # BotOps, in its own runs, manages every bot that is not built in (Auth.botops_manages)
     "admin_credentials": True,      # Admins store credentials, not only the owner
     "admin_sql": True,              # Admins see the SQL page
     "member_tokens": True,          # members make personal tokens
