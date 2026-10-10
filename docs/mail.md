@@ -99,7 +99,9 @@ with the reason. Read the reason. Do not retry the same text, and do not look fo
 ```bash
 $HUB_DIR/scripts/mail.sh draft --to ava@creator.example \
   --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt --issue 128 [--dry-run]
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128
+$HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128 \
+  --attach out/response-letter.pdf
+$HUB_DIR/scripts/mail.sh discard r-882... --issue 128
 ```
 
 `--reply-to <thread>` fills in the recipient and the subject from the thread and keeps
@@ -109,6 +111,15 @@ new one. `--cc` takes internal addresses only. `--dry-run` lints and reviews and
 The draft is keyed on (you, the task, the recipient, the subject, the body): running the same
 command twice **updates the same Gmail draft** instead of leaving two. Change a word and it is a
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
+
+`--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit). The
+type comes from the file's extension. Lint and the reviewer read the text, and the reviewer is
+told each file's name, type and size. Attaching lifts nothing: sending the draft goes through
+every send gate below, and a policy with `allow_attachments: false` refuses it.
+
+`discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
+draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
+the `draft` verb and is audited.
 
 ```json
 { "ok": true, "draft": "r-882...", "thread": "18f2c9a3b4d5e6f7", "to": ["ava@creator.example"],
