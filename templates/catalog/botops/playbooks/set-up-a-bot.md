@@ -107,8 +107,8 @@ for the human who asked in chat with `hub bot update <slug>` (it takes their rig
 repository and publishes the history with the bot's own token, and never forces: if the repository
 already holds different history it stops and Health says so. You do not push other bots'
 repositories. If the command says the app was not given permission to create repositories, do not
-work around it: say so in the note and leave it local. Never create a repository for a slug the
-task did not name.
+work around it or retry: ask the person once for the fix it names (AGENT.md rule 11) and leave it
+local. Never create a repository for a slug the task did not name.
 
 ## 5c. Close what you filed for a human
 
