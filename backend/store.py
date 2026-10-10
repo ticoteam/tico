@@ -636,6 +636,8 @@ class Store:
             _docs.ensure_schema(c, self.settings)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
+            from . import mail_settings as _mail_settings
+            c.executescript(_mail_settings.SCHEMA)
             from . import support as _support
             c.executescript(_support.SCHEMA)
             from . import credential_cards as _credential_cards

@@ -1963,8 +1963,10 @@ def cmd_policy_show(args):
     lines = [f"policy for {slug}" + (f" as {mailbox}" if mailbox else ""), "",
              f"  global send switch      {'on' if d['send_enabled'] else 'OFF (everything is a draft)'}",
              f"  mailbox paused          {d['mailbox_paused']}",
-             f"  outbound_send           {d['outbound_send']} (general email)",
-             f"  forward_to              {', '.join(d['forward_to']) or '(none)'}",
+             f"  outbound_send           {d['outbound_send']} (general email; {d['mail_setting']})",
+             f"  forward_to              {', '.join(d['forward_to']) or '(none)'} (approved in Tico)",
+             f"  bot.yaml asks           outbound_send {d['bot_yaml_asks']['outbound_send']}, forward_to "
+             f"{', '.join(d['bot_yaml_asks']['forward_to']) or '(none)'} (a request; Tico's setting decides)",
              f"  policy                  {d['policy_source']}",
              f"  scheduling_send         {d['scheduling_send']} (mail scheduling only)",
              f"  internal domains        {', '.join(d['internal_domains'])}",

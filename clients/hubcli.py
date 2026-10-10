@@ -204,6 +204,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
     hub bot owners <slug> [--add P ...] [--remove P ...]
                                            add or remove the humans who own a bot, as the requester (BotOps)
+    hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
+                                           show or set whether the bot sends mail without approval and its forward
+                                           targets; a person who manages the bot only, never a bot (docs/mail.md)
     hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
@@ -1346,6 +1349,14 @@ def parser():
     s.add_argument("--add", nargs="+", default=[], metavar="HUMAN")
     s.add_argument("--remove", nargs="+", default=[], metavar="HUMAN")
     s.set_defaults(fn="bot owners")
+    s = bot.add_parser("mail", help="show or set a bot's mail sending without approval (a person only)")
+    s.add_argument("slug")
+    s.add_argument("--send", dest="outbound_send", action=argparse.BooleanOptionalAction, default=None,
+                   help="--send: send without a per-message approval to the recipients docs/mail.md lists; --no-send: off")
+    s.add_argument("--forward-to", dest="forward_to", help="comma list of forward addresses; an empty string clears it")
+    s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
+                   help="take what the bot's bot.yaml asks, as its computer reported it")
+    s.set_defaults(fn="bot mail")
     s = bot.add_parser("setup-done", help="a starter bot marks its setup done, once its setup is done")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")

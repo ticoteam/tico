@@ -17,11 +17,11 @@ Two entry points:
 Order of the send chain (docs/mail-service.md, "The guardrails"):
 
   global.send_enabled -> mailbox paused -> the employee declares `send` on this mailbox ->
-  outbound_send: true -> recipient is internal | a forward target the owner listed (`forward_to:` in
-  bot.yaml) | the sender of the thread being replied to | an allowance covers it | --approval-issue N ->
+  outbound_send on (held on the Tico server, `switch()`) -> recipient is internal | a forward target a person
+  approved in Tico | the sender of the thread being replied to | an allowance covers it | --approval-issue N ->
   caps -> blocklist -> owner_handles_personally
 
-With `outbound_send: true` the owner has already said yes: the first three kinds of recipient need no
+With outbound_send on the owner has already said yes: the first three kinds of recipient need no
 per-message approval. Everything else still needs an allowance or an approval, and the caps, the blocklist and
 owner-handles-personally apply to every send.
 
@@ -60,7 +60,7 @@ FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
                      "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
 
-# What a computer with no registry runs on: sending is on globally (each bot still needs `outbound_send: true` and a
+# What a computer with no registry runs on: sending is on globally (each bot still needs sending on in Tico and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
 # recipients that need no approval (a forward target, the sender of the thread being answered) are written to again and
 # again; the daily cap is the brake. A registry's own policy file sets its own.
@@ -702,34 +702,77 @@ def approval_issue(number, recipients=(), thread_id="", repo=HUB_REPO):
 
 # ---------------------------------------------------------------- outbound_send
 
-def outbound_send(slug, manifest=None):
-    """`outbound_send:` from <bot-slug>/bot.yaml. The owner is the human; always true."""
+# Whether a bot sends without a per-message approval, and to which forward targets, is held on the Tico server
+# (GET /api/v2/bots/<slug>/mail-settings, backend/mail_settings.py), where only a person who manages the bot can
+# set it. `outbound_send` and `forward_to` in bot.yaml are only a request: a bot, or anything that can push to its
+# repository, writes that file, so it alone never turns sending on. Tests replace `SERVER_GET`.
+SERVER_GET = None
+SETTING_HINT = ("a person who manages the bot turns it on in Tico: Settings > Bots > {slug} > Mail sending, "
+                "or `hub bot mail {slug} --send`")
+
+
+def _server_row(slug):
+    get = SERVER_GET or (lambda s: HUB_GET(f"bots/{s}/mail-settings"))
+    try:
+        row = get(slug)
+    except Exception:
+        row = None
+    return row if isinstance(row, dict) and "outbound_send" in row else None
+
+
+def switch(slug, manifest=None):
+    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward}.
+
+    `on` and `forward_to` come from the server only. With no server value (none set yet, or no Tico reachable from
+    this run) sending without approval is off. `asks` / `asks_forward` are what bot.yaml requests, for messages."""
     if str(slug).strip().lower() == OWNER:
-        return True
-    if manifest is None:
+        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
+                "asks_forward": []}
+    try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
-        manifest = access.load(slug)
-    return bool((manifest or {}).get("outbound_send", False))
+        if manifest is None:
+            manifest = access.load(slug)
+        asks_forward = access.forward_to(manifest)
+    except Failure:
+        manifest, asks_forward = {}, []
+    asks = bool((manifest or {}).get("outbound_send", False))
+    out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
+    row = _server_row(slug)
+    hint = SETTING_HINT.format(slug=slug)
+    if row is None or not row.get("set"):
+        out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
+                          if row is not None else "this run cannot read " + slug + "'s mail setting from Tico")
+                         + "; " + hint
+                         + (". bot.yaml asks for outbound_send: true, which has no effect by itself" if asks else ""))
+        return out
+    out["source"] = "server"
+    out["on"] = bool(row.get("outbound_send"))
+    out["forward_to"] = [a for a in access.forward_to({"forward_to": row.get("forward_to") or []})]
+    who = str(row.get("updated_by") or "a person")
+    out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
+                     + ("" if out["on"] else "; " + hint))
+    return out
+
+
+def outbound_send(slug, manifest=None):
+    """Whether `slug` sends without a per-message approval: the server-held switch. The owner is the human; always true."""
+    return switch(slug, manifest)["on"]
 
 
 def forward_targets(slug, manifest=None):
-    """The addresses the owner lists as `slug`'s forward targets (`forward_to:` in bot.yaml); none for an unreadable
-    or missing manifest, and none for the owner's own handle (who needs no list)."""
-    if str(slug).strip().lower() == OWNER:
-        return []
-    try:
-        from . import access                            # noqa: PLC0415 - avoids a cycle
-        return access.forward_to(manifest if manifest is not None else access.load(slug))
-    except Failure:
-        return []
+    """The forward targets a person approved for `slug` on the server; none without a server value, and none for
+    the owner's own handle (who needs no list). A `forward_to:` address in bot.yaml alone is not one."""
+    return switch(slug, manifest)["forward_to"]
 
 
 def is_forward(pol, slug, to, manifest=None):
     """Whether every outside address on `to` is one of the bot's forward targets (and there is one): the message is
     the bot passing mail on to the owner, whose text quotes whatever the sender wrote."""
     outside = externals(pol, to)
-    return bool(outside) and outbound_send(slug, manifest) \
-        and all(a in set(forward_targets(slug, manifest)) for a in outside)
+    if not outside:
+        return False
+    sw = switch(slug, manifest)
+    return sw["on"] and all(a in set(sw["forward_to"]) for a in outside)
 
 
 def inbound_senders(messages, mailbox=""):
@@ -855,25 +898,26 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
             if approval else None)
     full = bool(appr and appr["full"])
 
-    if not outbound_send(slug, manifest):
+    sw = switch(slug, manifest)
+    if not sw["on"]:
         if full:
-            ok("outbound_send", f"false in {_where(slug)}, lifted for this message "
+            ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
                                 f"by {appr['detail']}")
         else:
-            return no("outbound_send", f"outbound_send is false in {_where(slug)}"
+            return no("outbound_send", f"outbound_send is false for {slug}: {sw['detail']}"
                       + ("; --approval-issue lifts it for a matching GitHub Issue, a Tico "
                          "send approval, or the owner's message telling this employee to send"
                          + (f". {appr['detail']}" if appr and appr.get("detail") else "")
                          if approval else ""))
     else:
-        ok("outbound_send", "true")
+        ok("outbound_send", f"true ({sw['detail']})")
 
     allowance = allowance_for(pol, slug, box)
-    # The owner turned sending on (`outbound_send: true` itself, not an approval lifting it): three kinds of
+    # A person turned sending on in Tico (the switch itself, not an approval lifting it): three kinds of
     # recipient then need no per-message yes. Internal addresses are not in `ext`; the other two are here.
     standing = {}
-    if outbound_send(slug, manifest):
-        targets = set(forward_targets(slug, manifest))
+    if sw["on"]:
+        targets = set(sw["forward_to"])
         senders = set(a.strip().lower() for a in thread_senders or []) if thread_id and not ext_cc else set()
         for addr in ext:
             if addr in targets:
@@ -913,9 +957,13 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         elif not covered:
             why.append("and no --approval-issue was given")
         if not covered:
+            unapproved = [a for a in need if a in sw["asks_forward"]]
+            if unapproved:
+                why.append(f"{', '.join(unapproved)} is in forward_to in bot.yaml but not approved in Tico; "
+                           + SETTING_HINT.format(slug=slug).replace("--send", "--forward-to <addresses>"))
             return no("recipient", "; ".join(why)
-                      + ". With outbound_send on, only internal addresses, forward_to targets in bot.yaml and the "
-                        "sender of the thread being replied to go without one")
+                      + ". With outbound_send on, only internal addresses, the forward targets approved in Tico and "
+                        "the sender of the thread being replied to go without one")
 
     caps = caps_for(pol, allowance)
     if attachments:
@@ -995,9 +1043,11 @@ def describe(pol, slug, mailbox=None, root=None):
     box = str(mailbox or "").strip().lower()
     a = allowance_for(pol, slug, box) if box else None
     caps = caps_for(pol, a)
+    sw = switch(slug)
     out = {"employee": slug, "mailbox": box, "send_enabled": pol["send_enabled"],
            "mailbox_paused": paused(pol, box) if box else None,
-           "outbound_send": outbound_send(slug), "forward_to": forward_targets(slug),
+           "outbound_send": sw["on"], "forward_to": sw["forward_to"], "mail_setting": sw["detail"],
+           "bot_yaml_asks": {"outbound_send": sw["asks"], "forward_to": sw["asks_forward"]},
            "policy_source": "built-in defaults (no registry)" if pol.get("builtin") else str(POLICY_FILE),
            "caps": caps,
            "internal_domains": pol["internal_domains"],

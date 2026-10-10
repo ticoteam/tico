@@ -152,28 +152,28 @@ the `draft` verb and is audited.
 $HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131] [--dry-run]
 ```
 
-**Once the owner has turned sending on (`outbound_send: true` in the bot's `bot.yaml`), the bot follows its rules without
+**Once a person has turned sending on for the bot in Tico (see "Turning sending on"), the bot follows its rules without
 asking for each message, to three kinds of recipient:**
 
 1. **Anyone in the team's own domain** (`@acme.example` here).
 2. **The sender of the thread it is replying to**: `reply --thread <id>`, to that one person, with nobody added. A
    message that also copies someone outside, or goes to a second outside address, is not covered.
-3. **The addresses the owner lists as forward targets**: `forward_to:` in the bot's `bot.yaml`, usually the owner's other
-   email. BotOps sets it when the owner asks.
+3. **The forward addresses a person approved in Tico**, usually the owner's other email. An address that is only in
+   `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
 Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
 table is one), or `--approval-issue N` where N is a **closed** task in Tico with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. With `outbound_send: false` a send is always a draft. The
+whose title or body names that address or the thread. With sending off in Tico a send is always a draft. The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
-to every send, the three kinds above included. `mail policy show` says which of these you have, what `forward_to`
-holds, and which policy it is reading.
+to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
+Tico holds, what bot.yaml asks, and which policy it is reading.
 
 `send` always answers in JSON and always exits 0 for a policy refusal. A refusal is a
 **downgrade**, not an error:
 
 ```json
 { "ok": true, "sent": false, "downgraded": "draft", "gate": "outbound_send",
-  "reason": "outbound_send is false in bot-influencer/bot.yaml",
+  "reason": "outbound_send is false for influencer: no person has turned sending on for influencer in Tico yet; ...",
   "draft": "r-882...", "to": ["ava@creator.example"],
   "note": "the draft is still in ana@acme.example Drafts; Ana can send it, or close the gate
            that refused it." }
@@ -275,7 +275,7 @@ lines you can paste straight into a draft - `Tue Sep 8, 1:00–1:20pm PT` - and
 `{"slots": [{"start": "...", "end": "...", "human": "Tue Sep 8, 1:00–1:20pm PT"}]}` with `--json`.
 
 `schedule` creates the event and sends the confirmation, or does neither: if the send fails the
-event is deleted again. While your `outbound_send` is false it puts **nothing** on the calendar
+event is deleted again. While your sending is off in Tico it puts **nothing** on the calendar
 and answers with the draft plus `"would_schedule": {...}` so Ana can do it in one click.
 
 ## Verbs, and the one thing that is implied
@@ -287,8 +287,8 @@ mailbox**. Moving a message between folders is not a send: nothing leaves the te
 change is visible in Gmail, and Ana undoes it by relabelling.
 
 `draft` is needed for `draft`, `reply` and `schedule`. `send` is needed on top of that for
-anything to leave, and `send` also needs `outbound_send: true` in your `bot.yaml`. With the
-flag false, every send is a draft, whatever an older instruction says.
+anything to leave, and `send` also needs sending turned on for you in Tico by a person. Until then every send
+is a draft, whatever your `bot.yaml` or an older instruction says.
 
 Anything you are not granted is refused with exit code 2 and a line telling you what to ask
 for. Do not work around a refusal: open a task with `owner:ana` and `type:decision` naming
@@ -482,13 +482,35 @@ in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the ru
 
 ## Turning sending on
 
-A message bot starts with sending off: everything it writes is a draft for the human. The owner turns it on by asking
-BotOps in chat, in plain words: "let my Inbox Manager reply to support senders that support has it, and forward job,
-partnership, investor and press mail to me at <address> with the subject `🔔 Tico inbound: <subject>`, plus a
-Needs you task". BotOps does it as that person (they must own the bot or manage it, and the server says so if they do not):
-it sets `outbound_send: true` and `forward_to:` in the bot's `bot.yaml`, writes the rules into the bot's
-`playbooks/inbox-preferences.md` under `## Sending`, and answers with one message naming the three kinds of recipient that
-now go without an approval. BotOps never turns sending on by itself; the owner asks, and can ask for it to be turned off.
+A message bot starts with sending off: everything it writes is a draft for the human. Whether it sends without a
+per-message approval, and to which forward addresses, is a switch held on the Tico server that only a person sets: the
+owner, or a human who manages the bot (its owner, a co-owner, an admin, or someone it reports up to). A bot cannot set
+it, and neither can BotOps, in its own runs or acting for a person, nor the Assistant. Set it in **Settings > Bots >
+the bot > Edit > Mail sending**, or with your own token:
+
+```bash
+hub bot mail <slug>                                  # show it, and what the bot's bot.yaml asks
+hub bot mail <slug> --send --forward-to me@personal.example
+hub bot mail <slug> --no-send                        # off again
+hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yaml asks, after reading it
+```
+
+The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
+
+`outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
+repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
+approval for each message and the refusal names the setting. The bot's computer reports what bot.yaml asks, and
+Settings > Health shows "<bot> asks to send mail without approval; a person must turn this on" (or names the new
+forward addresses) until a person turns it on or the request goes away.
+
+To have the rules written down, ask BotOps in chat in plain words: "let my Inbox Manager reply to support senders that
+support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
+inbound: <subject>`, plus a Needs you task". BotOps writes the rules into the bot's `playbooks/inbox-preferences.md`
+under `## Sending` and tells you which addresses to type in the switch; it never edits `outbound_send` or `forward_to`.
+
+**After upgrading.** Bots that sent with `outbound_send: true` in bot.yaml send drafts until a person confirms mail
+sending per bot: Health lists each one, and `hub bot mail <slug> --from-bot-yaml` (or the Mail sending row) turns on
+exactly what its bot.yaml asks.
 
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox

@@ -75,3 +75,26 @@ def declared_tools(access, environment, held=()):
         if len(rows) >= MAX_ENTRIES:
             break
     return rows
+
+
+MAX_FORWARD = 20        # backend/models.py MailRequest holds the same limit
+
+
+def mail_request(declared):
+    """What bot.yaml asks for its mail: `outbound_send` and the `forward_to` addresses, or None when it asks for
+    neither. A request only: the server holds the setting a person approved (backend/mail_settings.py), and Health
+    says when bot.yaml asks for more."""
+    if not isinstance(declared, dict):
+        return None
+    raw = declared.get("forward_to")
+    if isinstance(raw, str):
+        raw = raw.replace(";", ",").split(",")
+    targets = []
+    for item in raw if isinstance(raw, (list, tuple)) else []:
+        addr = text(item, 320).strip().lower()
+        if "@" in addr and " " not in addr and addr not in targets:
+            targets.append(addr)
+    on = declared.get("outbound_send") is True
+    if not on and not targets:
+        return None
+    return {"outbound_send": on, "forward_to": targets[:MAX_FORWARD]}

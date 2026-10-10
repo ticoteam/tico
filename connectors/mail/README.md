@@ -232,13 +232,19 @@ allowances:
 ```
 
 The send chain, in order: `global.send_enabled`, then the mailbox pause, then the employee
-declaring the `send` verb on this mailbox, then `outbound_send: true` in its `employee.yaml`,
-then the recipient being internal, listed in the bot's `forward_to:`, the sender of the thread being replied to, covered
-by an allowance, or named by `--approval-issue N` (the first three need no approval once `outbound_send` is true),
+declaring the `send` verb on this mailbox, then sending turned on for the bot in Tico,
+then the recipient being internal, one of the forward targets approved in Tico, the sender of the thread being replied
+to, covered by an allowance, or named by `--approval-issue N` (the first three need no approval once sending is on),
 then the caps, then the blocklist, then owner-handles-personally. Every one of those failing is
 a **downgrade to a draft with a reason**, exit 0. Only a broken policy file is an error, exit 1. With no
 `registry/mail-policy.yaml` (a Docker computer) `policy.builtin()` is the policy: sending on, the team's domains internal,
 the usual caps, an empty blocklist.
+
+Sending on and the forward targets come from the Tico server (`GET /api/v2/bots/<slug>/mail-settings`,
+backend/mail_settings.py), which only a person who manages the bot sets (`hub bot mail`, or Settings > Bots > Mail
+sending). `outbound_send` and `forward_to` in bot.yaml are a request with no effect of their own: with no server value,
+or no Tico reachable from the run, every outside send needs an approval. `policy.switch()` reads it once per check;
+tests replace `policy.SERVER_GET`.
 
 `check_draft` is the short version - blocklist, owner-handles-personally, attachments - and that
 one refuses with exit 2, because a draft nobody may write is a mistake to fix rather than

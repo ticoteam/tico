@@ -11,6 +11,7 @@ function settingsBotEditorRows(e) {
   return `${manage ? `<div class="sb-row"><span>Instructions</span><button class="ghost" type="button" data-edit-instructions="${esc(e.name)}">Edit Instructions</button></div>` : ''}<div class="sb-row"><span>Access</span><span data-access-summary>${esc(accessSummary(e.access_policy))}</span>${change('data-edit-access', 'access')}</div>
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
+    ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
@@ -72,7 +73,7 @@ function settingsEditBot(slug = '') {
   let rev = e?.revision, touched = false;
   const rows = dialog.querySelector('[data-bot-people]');
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); };
     const refresh = () => { if (!dialog.open) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
@@ -83,6 +84,8 @@ function settingsEditBot(slug = '') {
       if (access) void settingsEditAccess(access.dataset.editAccess);
       if (owners) settingsEditOwners(owners.dataset.editOwners);
       if (botOwners) void settingsEditBotOwners(botOwners.dataset.editBotOwners);
+      const mail = event.target.closest('[data-edit-mail]');
+      if (mail) void settingsEditMail(mail.dataset.editMail, () => settingsMailSummary(rows, slug));
       const credential = event.target.closest('[data-agent-credential]'), revoke = event.target.closest('[data-agent-revoke]'), pairing = event.target.closest('[data-agent-pair]');
       if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
       if (credential) void settingsAgentCredential(credential.dataset.agentCredential);

@@ -2104,9 +2104,12 @@ class Runner:
             configuration_valid = runtime in RUNTIMES
             manifest = manifest_path(path)
             tools = []
+            mail_request = None
             if repository_present and manifest.is_file():
                 try:
                     declared = yaml.safe_load(manifest.read_text()) or {}
+                    if time.monotonic() >= self.__dict__.get("_mail_request_after", 0):
+                        mail_request = declared_access.mail_request(declared)
                     access = tools_of(declared) or []
                     if access and time.monotonic() >= self._tools_after:
                         tools = declared_access.declared_tools(
@@ -2168,7 +2171,7 @@ class Runner:
                          "repository_present": repository_present, "repository_revision": revision,
                          "published": published,
                          "configuration_valid": configuration_valid, "problems": problems,
-                         "tools": tools,
+                         "tools": tools, "mail_request": mail_request,
                          # Local to `doctor` and `scripts/tico status`: the heartbeat's own
                          # contract (backend/models.py) takes only the keys `readiness` picks.
                          "materialized": materialized,
@@ -2430,6 +2433,8 @@ class Runner:
                 bots[row["bot"]]["published"] = row["published"]
             if row.get("tools"):
                 bots[row["bot"]]["tools"] = row["tools"]      # declared access, no values (runner/declared_access.py)
+            if row.get("mail_request"):
+                bots[row["bot"]]["mail_request"] = row["mail_request"]   # what bot.yaml asks; the server decides
             bots[row["bot"]]["warnings"] = list(row.get("warnings") or [])
             note = getattr(self, "publish_notes", {}).get(row["bot"])
             if note:
@@ -3532,6 +3537,12 @@ class Runner:
                         row.pop("profile", None)
                         row.pop("sign_in", None)
                     self._bot_profiles_after = time.monotonic() + 600
+                    continue
+                # A server from before the mail request refuses it; the rest of the report still goes.
+                if "mail_request" in detail and any("mail_request" in row for row in readiness.get("bots", {}).values()):
+                    for row in readiness.get("bots", {}).values():
+                        row.pop("mail_request", None)
+                    self._mail_request_after = time.monotonic() + 600
                     continue
                 # A validation path names the affected bot; preserve every other bot's tools.
                 bad = re.findall(r"readiness\.(?:StructuredReadiness\.)?bots\.([^. :;]+)\.tools(?:\.(\d+))?", detail)
