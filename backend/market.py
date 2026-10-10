@@ -386,6 +386,10 @@ def retrieve(conn, question, limit=8):
     return excerpts[: limit + 9]
 
 
+# The model the ask calls, with the server's Gemini key (clients/docs_qa.py).
+ASK_MODEL = "gemini-3.7-flash"
+
+
 def complete(question, excerpts):
     """One model call over the excerpts. Tests patch this; the retrieval above is real."""
     from clients.docs_qa import request
@@ -393,7 +397,7 @@ def complete(question, excerpts):
              "You are the market librarian. Answer in a few sentences from these excerpts only. "
              "Do not invent facts and do not mention excerpts or citation brackets.\n\nQuestion: "
              + question + "\n\n" + "\n\n".join(f"[{e['kind']}:{e['id']}] {e['text']}" for e in excerpts)}]}]}
-    with request("models/gemini-3.7-flash:generateContent", body) as response:
+    with request(f"models/{ASK_MODEL}:generateContent", body) as response:
         payload = json.load(response)
     parts = payload["candidates"][0]["content"]["parts"]
     return "".join(part.get("text", "") for part in parts).strip()
@@ -408,21 +412,33 @@ def _pulled(excerpts):
     return "Pulled from the market graph.\n\n" + "\n\n".join(lines[:8])
 
 
-def ask(conn, question):
-    """Answer from the graph as it is right now. The model writes the sentence; if it is down,
-    the rows that were just pulled are the answer.
+def ask(conn, question, use_model=True):
+    """Answer from the graph as it is right now. The model writes the sentence; if it is down, has no key,
+    or `use_model` is off, the rows that were just pulled are the answer.
+
+    Returns (result, call): `call` is what the audit keeps of the model call (model, latency, sizes, the
+    error's kind), or None when no call was made. Never the question or the excerpts.
     """
+    from clients.docs_qa import NoKey
     excerpts = retrieve(conn, question)
     citations = [{"kind": row["kind"], "id": row["id"]} for row in excerpts if row["kind"] in ("entity", "evidence")]
     if not excerpts:
-        return {"answer": "Nothing in the market graph matches that question.", "citations": [], "excerpts": []}
-    try:
-        answer = complete(question, excerpts)
-    except Exception:
-        answer = ""
+        return {"answer": "Nothing in the market graph matches that question.", "citations": [], "excerpts": []}, None
+    answer, call = "", None
+    if use_model:
+        started = datetime.now(timezone.utc)
+        call = {"model": ASK_MODEL, "excerpts": len(excerpts), "question_chars": len(question)}
+        try:
+            answer = complete(question, excerpts)
+        except NoKey:
+            call = None
+        except Exception as exc:
+            call["error"] = type(exc).__name__
+        if call is not None:
+            call["ms"] = round((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     if not answer:
         answer = _pulled(excerpts)
-    return {"answer": answer, "citations": citations, "excerpts": excerpts}
+    return {"answer": answer, "citations": citations, "excerpts": excerpts}, call
 
 
 # ----------------------------------------------------------------------------- writes
@@ -1600,13 +1616,25 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/market/ask")
     def market_ask(request: Request, body: M.MarketAsk):
+        # Each model call spends the server's Gemini key: a `market.ask` event, counted per person per day
+        # under the decision caps (backend/judge.py). Rehearsal sends nothing out and answers from the rows.
+        from .judge import daily_cap, used_today
         who = request.state.identity
         auth.domain(who)
+        cap = daily_cap(store.settings, who.role)
         with store.read() as c:
+            used = used_today(c, who.actor, action="market.ask")
+            if used >= cap:
+                raise Problem("budget", f"{who.actor} has made {used} market asks today; the cap is {cap} "
+                              "until midnight UTC", 429)
             try:
-                return ask(c, body.question)
+                result, call = ask(c, body.question, use_model=not store.settings.rehearsal)
             except Exception as exc:
                 raise Problem("market_ask", f"The market model call failed: {exc}", 503, True) from exc
+        if call is not None:
+            with store.transaction() as c:
+                H.event(c, who.actor, "market.ask", "", call)
+        return result
 
     @app.post("/api/v2/market/evidence")
     def evidence_create(request: Request, body: M.MarketEvidenceCreate):

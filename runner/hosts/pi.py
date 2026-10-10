@@ -3,7 +3,7 @@
 Pi (https://pi.dev) is Tico's catch-all harness (docs/harnesses.md): it serves every provider
 that has no CLI of its own (DeepSeek, Kimi, Llama, Mistral, ...) through OpenRouter, so a bot
 can move off a subscription window without a new host per vendor. Swap the provider or the
-OpenRouter id in MODELS below; the catalog id stays.
+OpenRouter id in clients/openrouter.py; the catalog id stays.
 
     pi --mode json -p --provider openrouter --model deepseek/deepseek-v4.1-flash
        --thinking low --session <uuid> --session-dir <dir> --approve
@@ -21,18 +21,14 @@ import threading
 import uuid
 from pathlib import Path
 
+from clients.openrouter import MODELS as OPENROUTER_MODELS, model_id as openrouter_id
+
 from .. import isolation
 from .base import Host, HostError, is_limit
 
 PROVIDER = "openrouter"
-# Catalog id -> OpenRouter model id. Change the right-hand side to swap models.
-MODELS = {"deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
-          "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
-          "kimi-k3": "moonshotai/kimi-k3",
-          "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
-          "llama-4-maverick": "meta-llama/llama-4-maverick",
-          "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
-          "devstral-2512": "mistralai/devstral-2512"}
+# Catalog id -> OpenRouter model id, shared with the server's decision model (clients/openrouter.py).
+MODELS = OPENROUTER_MODELS
 EFFORTS = {"low": "low", "medium": "low", "high": "high", "xhigh": "max", "max": "max"}
 DEFAULT_EFFORT = "low"
 STOP_TIMEOUT_S = 10
@@ -45,10 +41,7 @@ def effort_for(effort):
 
 
 def model_for(model):
-    m = str(model or "").strip()
-    if not m or m == "default":
-        return MODELS["deepseek-v4.1-flash"]
-    return MODELS.get(m, m)
+    return openrouter_id(model)
 
 
 def usage_tokens(usage):

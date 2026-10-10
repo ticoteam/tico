@@ -60,7 +60,16 @@ The decision model reading the previous routing and the open ask in its state, n
 Without a decisions key every message goes to the assistant (or BotOps) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
-reason on it, and Tico tells the human in the thread; nothing retries a failed message.
+reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try is one short HTTP
+attempt to TypeSafe (no client-side retries on top of the gateway's own), so an outage costs at most eleven attempts per
+question batch for a message.
+
+Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
+(`TICO_DECISIONS_DAILY_CALLS_OWNER` / `_HUMAN`, the same cap as `POST /api/v2/decisions`) and is audited as one
+`judge.call` event by the sender (`via: slack`, the label, the question count, the model, usage and latency; never the
+text). A message counts once, when it is routed or finally fails, however many tries it took. Over the cap the decision
+model is not asked: the message goes to the assistant (or BotOps) with `routed_by: budget` and the reason on it, and when
+neither is running it is recorded and Tico tells the human in the thread.
 
 Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
