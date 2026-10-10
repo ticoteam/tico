@@ -50,7 +50,7 @@ If a bot gets it wrong twice, change its instructions, not your message: ask Bot
 
 ## Sending and access
 
-A bot drafts messages to outsiders while `outbound_send` is off. Once its owner turns sending on, it sends
+A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico (bot.yaml's `outbound_send` only asks). Once it is on, it sends
 within the requested work, its Instructions and granted Tools, with no approval for each message.
 You may explicitly ask it to bring particular drafts to you for review.
 

@@ -210,7 +210,7 @@ head or `suggest`. Finish setup offers it on its own, off by default, beside the
 | `star` | `chief-of-staff` | Chief of Staff (head) | A weekly brief to the owner from goals, tasks, updates and meetings, stalled-goal follow-up, the Monday agenda, and hiring proposals for Leadership bots or a missing group head | niche | Tico only |
 | `strategy` | `strategy-planning` | Strategy Analyst | A quarterly plan and OKR draft (three to five objectives, about three measurable key results each), last quarter graded 0 to 1, and a mid-quarter check-in | niche | Tico only |
 
-Every starter drafts messages to outsiders until its owner turns on `outbound_send`.
+Every starter drafts messages to outsiders until a person who manages it turns mail sending on in Tico.
 Authorized work uses the bot's granted Tools directly; paying, changing a record or deleting does
 not add a blanket Confirm step. A bot may ask about an uncertain action.
 
@@ -224,8 +224,8 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
 3. **A routine that starts with setup.** It checks the first routine and tells the human what it does. The routine is declared in
    `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Start setup**, go-live) switches it on,
    so nobody approves it separately, and the bot logs it.
-4. **Draft until sending is on.** A bot drafts messages to outsiders until its owner turns on
-   `outbound_send`. Once it is on, the bot sends within the requested work and granted Tools.
+4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
+   (Settings → Bots → Mail sending). Once it is on, the bot sends within the requested work and granted Tools.
 5. **Parked until then.** Finish setup creates every starter `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
@@ -239,7 +239,7 @@ A starter's own prompt is not the gate. What the platform does, checked for ever
 
 | It might | The gate | Where |
 |---|---|---|
-| Send, reply to or forward email | The email tool downgrades a send to a Gmail draft unless the mailbox declares the `send` verb, `outbound_send: true` is set and the recipient is internal, allowed or covered by an approval. The starters declare `read` and `draft` only and `outbound_send: false`; a test refuses `send` in any starter's `access:` | `connectors/mail/policy.py`, `clients/tests/test_catalog.py` |
+| Send, reply to or forward email | The email tool downgrades a send to a Gmail draft unless the mailbox declares the `send` verb, a person has turned the bot's mail switch on in Tico and the recipient is internal, allowed or covered by an approval. The starters declare `read` and `draft` only and `outbound_send: false`; a test refuses `send` in any starter's `access:` | `connectors/mail/policy.py`, `clients/tests/test_catalog.py` |
 | Post to Slack | A post needs the `post` verb in the bot's Slack access, and the channel must be on the Slack channel list (Tools > Slack) with posting on, which it is unless an owner or admin turned it off; reading grants no posting right. Externally shared channels are always refused. The starters declare Slack read only, commented out until the owner connects it | [Slack gateway](slack-gateway.md) |
 | Comment on or label a GitHub issue, or review a pull request | **Added in this release.** The team's GitHub App token carries Issues: write, so nothing but a prompt stood between the QA Engineer (`issue-triage`) and a public comment. Its access is now `read`, and its `.claude/settings.json` denies `gh issue edit` and `gh issue comment` next to close, reopen, lock, transfer and create. It leaves proposed labels and comments with the exact commands on the task; writes need the corresponding Tool access. Senior Software Engineer, Release Manager, Technical Writer, Security Engineer, DevOps Engineer and Head of Engineering read GitHub the same way: `read` access, only `gh pr list`, `view`, `diff` and `checks` allowed, and `gh pr review`, `comment`, `merge`, `close`, `edit` and `create` denied, so a review is a draft on the task that a human posts. Turning writing on is the owner's edit of `bot.yaml` and the settings file, described in a comment there. The harness reads `.claude/settings.json`; the Codex runtime does not, so for a Codex-run bot the gate is the read-only access declared, the absence of any default write credential to a product repository, and the prompt | `templates/catalog/issue-triage`, `clients/tests/test_catalog.py` |
 | Invite someone to a calendar event | Any address may be invited. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to limit bots to humans on the team roster (`403 external_attendee` otherwise); an invitation to anyone else is then a human's act | `backend/connectors.py`, `backend/tests/test_security_review.py` |
@@ -325,7 +325,7 @@ team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, sp
 
 Same layout as every template, plus what makes a starter reviewable:
 
-- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching `outbound_send`), how it starts and ends a run, how it uses `hub`, quality
+- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the Tico mail switch), how it starts and ends a run, how it uses `hub`, quality
   standards and how it escalates. A head's also has `## Hiring`.
 - `playbooks/`: one for the first routine, one for the most common request, and `onboarding.md`.
 - `knowledge/examples/`: one sample of excellent output for the fictional team Acme. Never a real
@@ -345,7 +345,7 @@ The quality bar, in five checks a reviewer can apply to any bot in ten minutes:
 4. **Honest about gaps.** What it could not read is named. "Not found" is never used for "could not
    look". A missing fact is a marked gap, never an invented one.
 5. **Sending off by default.** The first result is a useful draft. Sending to outsiders starts when
-   the owner turns on `outbound_send`; requested work then uses the bot's granted Tools.
+   a person who manages it turns mail sending on in Tico; requested work then uses the bot's granted Tools.
 
 A worked example. A human asks Support Agent about a ticket. Weak:
 
