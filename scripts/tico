@@ -31,6 +31,9 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+# The supervisor: launchd on a Mac, systemd --user on Linux (TICO_OS=Linux is for tests).
+IS_LINUX=0
+[ "${TICO_OS:-$(uname -s)}" = Linux ] && IS_LINUX=1
 CONFIG="${TICO_RUNNER_CONFIG:-$HOME/.config/tico/runner.json}"
 # launchd can start before an external checkout volume is mounted, and macOS may deny
 # service log writes there. Keep service logs on the local home volume instead.
@@ -47,9 +50,6 @@ json_field() { "$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))
 config_field() { json_field "$CONFIG" "$1"; }
 env_field() { json_field "$ENV_DIR/environment.json" "$1"; }
 usage() { sed -n '2,13p' "$SELF"; }
-# The supervisor: launchd on a Mac, systemd --user on Linux (TICO_OS=Linux is for tests).
-IS_LINUX=0
-[ "${TICO_OS:-$(uname -s)}" = Linux ] && IS_LINUX=1
 UNIT_DIR="${TICO_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
 
 if [ -n "$ENV_SLUG" ]; then
@@ -57,7 +57,9 @@ if [ -n "$ENV_SLUG" ]; then
   [ -f "$ENV_DIR/environment.json" ] \
     || { echo "no environment $ENV_SLUG at $ENV_DIR (scripts/tico env list)" >&2; exit 1; }
   CONFIG="$ENV_DIR/runner.json"
-  LOG_DIR="$ENV_DIR/logs"
+  # On a Mac the environment directory may live on (or link to) an external volume, where launchd cannot
+  # open a job's log, so the job never starts (EX_CONFIG). Its logs stay on the home volume, like the default's.
+  if [ "$IS_LINUX" = 1 ]; then LOG_DIR="$ENV_DIR/logs"; else LOG_DIR="$HOME/.config/tico/logs/$ENV_SLUG"; fi
   SITE="$(env_field url)"
   ENROLL_HINT="scripts/tico -e $ENV_SLUG enroll --code-file <file> --label <name>"
 fi
@@ -251,14 +253,39 @@ PL
 }
 
 bootstrap() {
+  local i
   launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+  # Unloading a running job returns before its process has stopped, and loading the label again until it
+  # has fails with "Input/output error". Wait for launchd to let go of it.
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || break
+    sleep 1
+  done
   if ! launchctl bootstrap "$DOMAIN" "$2"; then
     # launchd can briefly retain a just-removed label. One bounded retry keeps an
     # upgrade safe without hiding a persistent configuration error.
     sleep 2
     launchctl bootstrap "$DOMAIN" "$2"
   fi
+  started "$1"
 }
+
+# A loaded job is not a running one: launchd refuses to spawn a job whose log or directory it cannot open
+# (exit 78, EX_CONFIG) and retries forever without a line in the log. Wait briefly for a process.
+started() {
+  local i info
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    info="$(launchctl print "$DOMAIN/$1" 2>/dev/null || true)"
+    printf '%s\n' "$info" | grep -q '^[[:space:]]*pid = [0-9]' && return 0
+    printf '%s\n' "$info" | grep -q 'last exit code = 78' && break
+    sleep 1
+  done
+  printf '%s\n' "$info" | grep -q 'last exit code = 78' || return 0
+  echo "$1 is installed but launchd cannot start it (EX_CONFIG): check that its program, working directory and" \
+    "log are readable ($(plutil -extract StandardOutPath raw -o - "$(plist_for "$1")" 2>/dev/null))" >&2
+  exit 1
+}
+plist_for() { printf '%s/%s.plist' "$AGENTS" "$1"; }
 
 uninstall_one() {
   if [ "$IS_LINUX" = 1 ]; then
@@ -546,8 +573,10 @@ PY
         else echo "server: not answering at $SITE/healthz"; fail=1; fi
         exit "$fail" ;;
       logs)
-        [ -f "$LOG_DIR/api.log" ] || { echo "no server log yet at $LOG_DIR/api.log"; exit 1; }
-        tail -n "${3:-60}" "$LOG_DIR/api.log" ;;
+        log="$LOG_DIR/api.log"
+        [ "$IS_LINUX" = 1 ] || [ ! -f "$(plist api)" ] || log="$(plutil -extract StandardOutPath raw -o - "$(plist api)")"
+        [ -f "$log" ] || { echo "no server log yet at $log"; exit 1; }
+        tail -n "${3:-60}" "$log" ;;
       *) usage; exit 1 ;;
     esac
     ;;

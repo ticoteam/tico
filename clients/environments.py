@@ -79,9 +79,12 @@ def environments():
     found = []
     for manifest in sorted(root_dir().glob("*/environment.json")):
         try:
-            found.append(json.loads(manifest.read_text()))
+            row = json.loads(manifest.read_text())
         except (OSError, ValueError):
             continue
+        # A manifest without a slug was not written by `env create` (an older or hand-made one): not an environment.
+        if isinstance(row, dict) and row.get("slug"):
+            found.append(row)
     return found
 
 
