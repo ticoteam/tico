@@ -762,7 +762,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def view(c, who, room):
         from .views import conversation_snapshot
-        snap = conversation_snapshot(c, room["id"]) if room else {"messages": [], "execution": None, "has_more": False,
+        snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
                                                                      "next_before": None}
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r)) for r in c.execute(

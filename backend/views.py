@@ -456,7 +456,7 @@ def operation_issues(c, who, auth):
     return issues
 
 
-def conversation_snapshot(c, cid, who=None):
+def conversation_snapshot(c, cid, who=None, settings=None):
     page = privacy.page(c, who, cid) if who else message_page(c, cid)
     job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
@@ -485,6 +485,7 @@ def conversation_snapshot(c, cid, who=None):
             label = "Reply failed — your message is saved"
         readiness_reason = ""
         if state == "queued":
+            from .getting_started import no_model_signed_in
             draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (job["bot"],)).fetchone()
             # A drain is either Tico updating itself (the deploy finishes each
             # bot's current run, then holds new ones until it is back) or a person pausing it.
@@ -504,6 +505,9 @@ def conversation_snapshot(c, cid, who=None):
                 if any(str(p).startswith("No AI provider is chosen") for p in problems):
                     readiness_reason = "missing_provider"
                     label = "Saved — no AI provider is chosen"
+                elif no_model_signed_in(c, settings):
+                    readiness_reason = "model_sign_in"
+                    label = "Saved — no computer is signed in to your model"
                 else:
                     label = "Saved — " + str(problems[0]) if problems else "Saved — waiting for computer setup"
         parts = []
@@ -1417,7 +1421,7 @@ def install_views(app, store, auth, mutate, task_view):
     def snapshot(request: Request, cid: str):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)
-            snap = conversation_snapshot(c, cid, request.state.identity)
+            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings)
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             return snap
 

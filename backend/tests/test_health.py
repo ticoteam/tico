@@ -191,6 +191,40 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     assert body["stuck"] == [] and "release" not in json.dumps(body)
 
 
+def test_a_chat_waiting_on_a_model_sign_in_says_so_like_health_models(environment):
+    """A provider is chosen and a computer is online, but none is signed in to the model: the queued chat names
+    that reason (the Set up chat shows a Sign in hint from it), from the same rule as Health > Models."""
+    import json
+    api = environment()
+    revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+    assert api.put("/api/v2/providers", headers=signed_in(), json={
+        "enabled": ["anthropic"], "runtime": "claude", "expected_revision": revision}).status_code == 200
+    runner = enrolled(api)
+    add_bot(api, "writer")
+
+    def report(authenticated):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+                "schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
+                "bots": {"writer": {"ready": authenticated == "ready", "runtime": "claude",
+                                    "problems": [] if authenticated == "ready" else ["Claude login required"]}}}), runner))
+
+    report("missing")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('writer',?,1,?,'t')",
+                  (runner, H.now()))
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        conversation = H.open_conversation(c, owner, [owner, "bot:writer"], kind="chat")
+        H._write_message(c, owner, "bot:writer", "start setup", conversation, "say", {}, None, None)
+    path = "/api/v2/conversations/" + conversation["id"] + "/snapshot"
+    snapshot = lambda: api.get(path, headers=signed_in()).json()["execution"]
+    execution = snapshot()
+    assert execution["state"] == "queued" and execution["readiness_reason"] == "model_sign_in"
+    assert health_of(api)[1]["models"]["summary"] == "No online computer is signed in to your model."
+    report("ready")
+    assert "readiness_reason" not in snapshot() and health_of(api)[1]["models"]["status"] == "ok"
+
+
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     """The company default is Codex but the bots here run on Claude: no Codex warning, still a Sign in button."""
     import json

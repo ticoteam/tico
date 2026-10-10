@@ -164,6 +164,17 @@ async function liveReply(browser) {
   assert.equal(pending.href,'#/settings');
   assert.equal(pending.tab,'providers');
   assert.match(pending.legacy,/No reply after 20 minutes/);
+  // A provider is chosen but no computer is signed in to it: the same place says so, with Sign in and Health.
+  const signIn = await page.evaluate(() => {
+    const state = {slug:'ops', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
+      execution:{message_id:'queued',state:'queued',label:'Saved — no computer is signed in to your model',readiness_reason:'model_sign_in'}};
+    const el = document.createElement('div');
+    el.innerHTML = v2PendingHTML(state);
+    clearTimeout(state.waitTimer);
+    return {text:el.textContent,tabs:[...el.querySelectorAll('a')].map(a => a.getAttribute('href') + ' ' + a.dataset.gsTab)};
+  });
+  assert.match(signIn.text,/No computer is signed in to your model/);
+  assert.deepEqual(signIn.tabs,['#/settings devices','#/settings health']);
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable:true,
     value:{writeText:async text => {window.copiedMessage=text;}}}));
   const liveCopy=page.locator('#v2-live').locator('..').getByRole('button',{name:'Copy message',exact:true});

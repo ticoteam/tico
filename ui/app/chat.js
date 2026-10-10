@@ -444,11 +444,16 @@ function v2PendingHTML(state) {
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
   const providerMissing = x?.state === 'queued' && x?.readiness_reason === 'missing_provider';
-  if (late && !providerMissing) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
+  // A provider is chosen but no online computer is signed in to it (Settings > Health > Models says the same).
+  const signInMissing = x?.state === 'queued' && x?.readiness_reason === 'model_sign_in';
+  const hint = providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>'
+    : signInMissing ? ' <span>No computer is signed in to your model: <a href="#/settings" data-gs-tab="devices">Sign in on Settings &gt; Computers</a> · <a href="#/settings" data-gs-tab="health">Health</a></span>'
+    : '';
+  if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="dot"></span>
     <span>No reply after 20 minutes · <button type="button" class="dismiss" data-pending-dismiss>dismiss</button></span></div>`;
   const t = v2PendingText(state);
   return `<div class="thinking" data-pending="${esc(key)}" title="${esc(t.tip)}" role="status" aria-label="${esc(t.tip)}">
-    <span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span>${t.word ? `<span class="thinking-word" aria-hidden="true">${esc(t.word)}</span>` : ''}${providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>' : ''}</div>`;
+    <span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span>${t.word ? `<span class="thinking-word" aria-hidden="true">${esc(t.word)}</span>` : ''}${hint}</div>`;
 }
 // Bot-to-bot messages from this bot's other conversations (v2BotsLoad), in time order with the chat's own. Those older
 // than the loaded page wait until older messages are loaded, so they never pile up above the history.
