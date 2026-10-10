@@ -34,7 +34,9 @@ not waiting on it. The human reads one message at the end.
    paused and report one specific blocker.
 6. **Take it live.** `hub bot go-live <slug>` (pass the verified requested Routines as `routines` with
    `hub_bot_go_live`, or `--routines-file` with the CLI): it puts the bot on a computer (the only one, or the
-   least busy), turns it on and starts its setup with them.
+   least busy), turns it on and starts its setup with them. If it answers `waiting_for_repository`, the bot is
+   placed and its computer is fetching the repository; Tico turns it on and starts the setup by itself once the
+   computer has it. Tell them that, do not call go-live again or wait for it, and skip step 7.
 7. **Optionally, test it once.** Give the bot one small, read-only job that proves the connection, with
    `hub task create --owner <slug> --title "..." --body "..."`, and wait for the answer. If it fails,
    read why, fix what is yours to fix, and try once more. Skip it when they want it live now, and say

@@ -1951,11 +1951,16 @@ def bot_place(api, args):
 
 
 @tool("hub_bot_go_live", "Take a built bot to working, as the person who asked you: place it if it has no computer, turn it on and "
-      "start its setup with the person. Then send it one small task to test it and report what happened.",
+      "start its setup with the person. Then send it one small task to test it and report what happened. When its computer "
+      "does not have its repository yet the answer is state waiting_for_repository: the placement is kept and Tico "
+      "finishes going live by itself when the computer reports the repository, so do not call it again or wait.",
       {"bot": _s("The bot's slug"), "computer": _s("A computer's label or id; leave out to pick one"),
        "setup": {"type": "boolean", "default": True, "description": "Start its setup chat when it is a starter bot"},
        "routines": {"type": "array", "items": {"type": "object"}, "description":
-                    "Requested live schedule: id, title, cron, timezone, enabled and on for each Routine; activation checks it"}},
+                    "The bot's live Routines as they must be, checked before activation (nothing is created): "
+                    '[{"id": "<bot>:<routine>", "title": "...", "cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", '
+                    '"enabled": true}]; id, title and timezone required, cron and on (an event) default "", enabled '
+                    "defaults to true, no other fields"}},
       required=("bot",), writes=True)
 def bot_go_live(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/go-live", {"computer": args.get("computer") or "",

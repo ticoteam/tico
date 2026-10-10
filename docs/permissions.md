@@ -246,7 +246,7 @@ The commands (with MCP tools of the same names):
 | `hub group list`, `hub group update [<group>] [--name] [--parent] [--add-human] [--add-bot] [--remove-human] [--remove-bot]` | the groups; create (no group given), rename, move or fill one, owners and admins only |
 
 | `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
-| `hub bot go-live <bot>` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester |
+| `hub bot go-live <bot> [--computer C] [--routines-file F]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. A repository GitHub does not have is refused (`repository_missing`) with how to create it. `--help` shows the `--routines-file` shape (docs/routines.md) |
 | `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
 | `hub computer list`, `hub health check` | the computers a bot may go on and what runs on each; what is wrong with the bots, most urgent first, each with its fix |

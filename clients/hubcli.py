@@ -210,8 +210,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
-    hub bot go-live <bot> [--computer C] [--no-setup]
-                                           place it if needed, turn it on, start its setup
+    hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
+                                           place it if needed, turn it on, start its setup; waits for the computer
+                                           to get its repository and finishes by itself (`--help`: the file's shape)
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
@@ -301,6 +302,56 @@ GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand;
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+# `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
+# the bot already has (`hub routine list <bot>`); go-live checks the live ones match before turning the bot on.
+ROUTINES_EXAMPLE = ('[{"id": "<bot>:<routine>", "title": "Weekday review", "cron": "0 9 * * 1-5", '
+                    '"timezone": "America/Los_Angeles", "enabled": true}]')
+ROUTINE_FIELDS = {"id": str, "title": str, "cron": str, "timezone": str, "enabled": bool, "on": str}
+ROUTINE_REQUIRED = ("id", "title", "timezone")
+ROUTINES_HELP = f"""--routines-file is a JSON array with one object per Routine the bot has, as it must be live:
+
+  {ROUTINES_EXAMPLE}
+
+  id        required  the Routine's id, <bot>:<routine> (`hub routine list <bot>` shows it)
+  title     required  its title
+  timezone  required  an IANA zone, e.g. America/Los_Angeles
+  cron      optional  its cron, "" when it runs on an event (default "")
+  on        optional  the event it runs on instead, e.g. meeting.ready (default "")
+  enabled   optional  true or false (default true)
+
+No other fields. Go-live refuses when a live Routine differs, or when an enabled Routine is not listed; it creates
+nothing (set Routines with `hub routine set`).
+
+When the computer does not have the bot's repository yet, go-live keeps the placement and answers
+waiting_for_repository: the computer clones it, and Tico finishes going live when it reports the repository."""
+
+
+def read_routines_file(path):
+    """The --routines-file entries, or a CliError naming the bad field and showing the expected shape."""
+    expected = f". Expected {ROUTINES_EXAMPLE} (see `hub bot go-live --help`)"
+    try:
+        data = json.loads(Path(path).read_text())
+    except OSError as exc:
+        raise CliError(f"--routines-file {path}: cannot read it ({exc.strerror or exc})" + expected) from None
+    except ValueError as exc:
+        raise CliError(f"--routines-file {path} is not JSON ({exc})" + expected) from None
+    if not isinstance(data, list):
+        raise CliError(f"--routines-file {path}: the top level is {type(data).__name__}, not an array" + expected)
+    names = {str: "a string", bool: "true or false"}
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise CliError(f"--routines-file {path}: [{i}] is {type(entry).__name__}, not an object" + expected)
+        for key in ROUTINE_REQUIRED:
+            if key not in entry:
+                raise CliError(f"--routines-file {path}: [{i}].{key} is missing" + expected)
+        for key, value in entry.items():
+            if key not in ROUTINE_FIELDS:
+                raise CliError(f"--routines-file {path}: [{i}].{key} is not a field" + expected)
+            if not isinstance(value, ROUTINE_FIELDS[key]):
+                raise CliError(f"--routines-file {path}: [{i}].{key} must be {names[ROUTINE_FIELDS[key]]}" + expected)
+    return data
 
 
 def out(obj):
@@ -1364,11 +1415,13 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
     s.set_defaults(fn="bot place")
-    s = bot.add_parser("go-live", help="place it if needed, turn it on and start its setup (BotOps)")
+    s = bot.add_parser("go-live", help="place it if needed, turn it on and start its setup (BotOps)",
+                       formatter_class=argparse.RawDescriptionHelpFormatter, epilog=ROUTINES_HELP)
     s.add_argument("bot")
     s.add_argument("--computer")
     s.add_argument("--no-setup", dest="no_setup", action="store_true", help="do not start its setup chat")
-    s.add_argument("--routines-file", dest="routines_file", help="requested live schedules as a JSON array")
+    s.add_argument("--routines-file", dest="routines_file",
+                   help="the bot's live Routines as a JSON array, checked before it is turned on: " + ROUTINES_EXAMPLE)
     s.set_defaults(fn="bot go-live")
     s = bot.add_parser("restore", help="bring an archived bot back, as the person who asked (BotOps)")
     s.add_argument("bot")
