@@ -252,10 +252,25 @@ def test_a_credential_card_stores_and_grants_without_the_value_touching_anything
         assert c.execute("SELECT revision FROM credentials WHERE env='JIRA_BASIC_AUTH'").fetchone()[0] == 2
 
 
-def test_only_a_credential_admin_can_fill_a_card_and_a_member_is_told_who(api, botops):
+def test_a_member_stores_a_credential_for_their_own_bot_and_the_team_rule_turns_it_off(api, botops):
     vault(api)
+    theirs = post(api, "credentials", {"name": "Shared Jira", "env": "JIRA_TOKEN", "secret": "admin-stored-value-123"})
     cara = turn(api, botops, person="cara-test", text="Connect my bot")
     register(api, cara, "jira-manager")
+    card = call(api, "post", "credential-requests", cara["token"], {"env": "JIRA_TOKEN", "for_bot": "jira-manager", "on_behalf_of": "turn"}).json()
+    assert get(api, f"credential-requests/{card['id']}", "cara-test")["can_save"] is True
+    saved = post(api, f"credential-requests/{card['id']}/save", {"value": "member-token-value-123"}, "cara-test")
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=?", (saved["credential_id"],)).fetchone()
+        assert row["created_by"] == "human:cara" and row["id"] != theirs["id"]           # another's is never replaced
+        assert c.execute("SELECT revision FROM credentials WHERE id=?", (theirs["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL",
+                         (row["id"],)).fetchall()[0][0] == "bot:jira-manager"
+    post(api, f"credentials/{row['id']}/reveal", {}, "cara-test", expected=403)
+    # Not for a bot she does not manage, and not at all once the owner turns the rule off.
+    assert call(api, "post", "credential-set", cara["token"], {"env": "OPS_TOKEN", "for_bot": "ops", "value": "v-123456789",
+                                                               "on_behalf_of": "turn"}).status_code == 403
+    assert call(api, "put", "access/rules", "ana-test", {"members_store_credentials": False}).status_code == 200
     card = call(api, "post", "credential-requests", cara["token"], {"env": "JIRA_TOKEN", "for_bot": "jira-manager", "on_behalf_of": "turn"}).json()
     seen = get(api, f"credential-requests/{card['id']}", "cara-test")
     assert seen["can_save"] is False and "credential admin" in seen["note"]
