@@ -108,7 +108,8 @@ $HUB_DIR/scripts/mail.sh discard r-882... --issue 128
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
 new one. `--cc` takes internal addresses only. `--dry-run` lints and reviews and writes nothing.
 
-The draft is keyed on (you, the task, the recipient, the subject, the body): running the same
+The draft is keyed on (you, the task, the recipient, the subject, the body, and the hashes of any
+attached files): running the same
 command twice **updates the same Gmail draft** instead of leaving two. Change a word and it is a
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 

@@ -259,23 +259,29 @@ class Cli(Stage2):
                                    "--approval-issue", APPROVAL)
         self.assertEqual((rc, out["sent"]), (0, True), out)
 
-    def test_swapping_the_file_after_approval_needs_a_new_approval(self):
+    def test_the_same_text_with_another_file_is_a_new_draft_the_approval_does_not_cover(self):
         self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
         f = self.root / "emp-inbox" / "answer.pdf"
         f.write_bytes(b"%PDF-1.4 the answer")
         args = ("draft", "--as", "inbox", "--reply-to", THREAD, "--to", AVA, "--body-file", self.body_file(BODY),
-                "--attach", "answer.pdf", "--issue", "1")
-        rc, p, err = self.run_json(*args, "--json")
+                "--attach", "answer.pdf", "--issue", "1", "--json")
+        rc, p, err = self.run_json(*args)
         self.assertEqual(rc, 0, err)
+        first_raw = self.service.drafts_by_id[p["draft"]]["message"]["raw"]
         hub(dict(send_approval([AVA], []), payload=p["approval_request"]["payload"]))
-        f.write_bytes(b"%PDF-1.4 something else entirely")                     # same name, same draft
-        rc, p2, err = self.run_json(*args, "--json")
-        self.assertEqual((rc, p2["draft"]), (0, p["draft"]), err)
-        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+        f.write_bytes(b"%PDF-1.4 something else entirely")                     # same name, same text
+        rc, p2, err = self.run_json(*args)
+        self.assertEqual(rc, 0, err)
+        self.assertNotEqual(p2["draft"], p["draft"])                           # a new draft, not the approved one
+        self.assertNotEqual(p2["key"], p["key"])
+        self.assertEqual(self.service.drafts_by_id[p["draft"]]["message"]["raw"], first_raw)
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p2["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)
         self.assertEqual((out["sent"], out["gate"]), (False, "attachments"), out)
-        self.assertIn("A changed or different file needs a new approval", out["reason"])
         self.assertEqual(self.service.sent, [])
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)               # the approved draft is intact
+        self.assertEqual((rc, out["sent"]), (0, True), out)
 
     def test_the_draft_text_shows_the_approval_request_with_the_files(self):
         self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))

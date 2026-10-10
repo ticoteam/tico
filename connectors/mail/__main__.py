@@ -1533,7 +1533,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                                                                 or []) + (verdict.get("problems")
                                                                           or []) or ["no reason"])
 
-    key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body)
+    key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body, files)
     row = db.get_draft(ctx.conn, key)
     raw = compose.build(to, subject, body, from_addr=ctx.mailbox, cc=cc,
                         in_reply_to=in_reply_to, references=references, attachments=attachments)

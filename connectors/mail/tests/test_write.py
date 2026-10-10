@@ -173,6 +173,15 @@ class AttachAndDiscard(Writing):
         opened.assert_not_called()
         self.assertEqual(os.stat(big).st_size, cli.MAX_ATTACH_BYTES + 1)
 
+    def test_a_draft_key_takes_the_files_and_stays_the_same_without_them(self):
+        args = ("influencer", "42", ["Ava@creator.example"], "Ava, 6 months of Acme on us", "Hi Ava")
+        old = "0b101c8a0bd8511311b4ab2fe7a6b20aa89e6fd66e86d1a4e6889dab9bb3691b"   # the key before files counted
+        self.assertEqual((compose.draft_key(*args), compose.draft_key(*args, [])), (old, old))
+        a, b = {"sha256": "a" * 64}, {"sha256": "b" * 64}
+        self.assertNotEqual(compose.draft_key(*args, [a]), old)
+        self.assertNotEqual(compose.draft_key(*args, [a]), compose.draft_key(*args, [b]))
+        self.assertEqual(compose.draft_key(*args, [a, b]), compose.draft_key(*args, [b, a]))
+
     def test_a_bot_discards_only_its_own_unsent_draft(self):
         rc, d, err = self.draft()
         self.assertEqual(rc, 0, err)
