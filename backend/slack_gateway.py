@@ -1570,7 +1570,9 @@ def main(argv=None, make_slack=None):
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
             store.initialize()
-            stored = slack_app.load(store, settings)
+            # Under KMS the API sealed the tokens with the vault's key (backend/slack_app.py); open them with the same.
+            from .credentials import Vault
+            stored = slack_app.load(store, settings, Vault(store) if settings.credential_kms_key else None)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:
