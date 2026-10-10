@@ -76,6 +76,55 @@ async function settingsEditBotOwners(slug) {
   dialog.onclose = () => { dialog.innerHTML = ''; };
   dialog.showModal();
 }
+// Mail sending (backend/mail_settings.py, docs/mail.md "Turning sending on"): whether a bot sends without a
+// per-message approval and its forward targets. Held in Tico and set by a person who manages the bot; bot.yaml only asks.
+function mailSettingText(m) {
+  if (!m.set) return 'Off: no one has turned it on';
+  return m.outbound_send ? `On${m.forward_to.length ? ` · forwards to ${m.forward_to.join(', ')}` : ''}` : 'Off';
+}
+async function settingsMailSummary(root, slug) {
+  const cell = root.querySelector(`[data-mail-summary="${CSS.escape(slug)}"]`);
+  if (!cell) return;
+  try {
+    const m = await get(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`);
+    cell.textContent = mailSettingText(m) + (m.unapproved ? ' · bot.yaml asks for more' : '');
+  } catch { cell.textContent = ''; }
+}
+async function settingsEditMail(slug, after) {
+  const e = S.emps.find(row => row.name === slug);
+  if (!e) return;
+  let dialog = $('#bot-mail-editor');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.className = 'owner-picker'; dialog.id = 'bot-mail-editor'; dialog.setAttribute('aria-labelledby', 'bot-mail-title');
+    document.body.append(dialog);
+  }
+  let m;
+  try { m = await get(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`); } catch (error) { toast(error.message); return; }
+  const asks = m.requested ? `bot.yaml asks: ${m.requested.outbound_send ? 'send without approval' : 'no sending'}${m.requested.forward_to.length ? `, forward to ${m.requested.forward_to.join(', ')}` : ''}.` : 'bot.yaml asks for nothing.';
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-mail-title">Mail sending for ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-mail-close aria-label="Close">✕</button></div>
+    <div class="owner-picker-body">
+      <p class="muted">With sending on, ${esc(e.display_name)} mails people in the team, the sender of a thread it answers and the forward addresses below without asking each time. Everyone else still needs an approval. ${esc(asks)}</p>
+      <label class="owner-option"><input type="checkbox" name="outbound_send" ${m.outbound_send ? 'checked' : ''}><span>Send without a per-message approval</span></label>
+      <label>Forward addresses<input name="forward_to" type="text" autocomplete="off" spellcheck="false" value="${esc((m.forward_to || []).join(', '))}" placeholder="me@personal.example"></label>
+      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
+  dialog.querySelectorAll('[data-mail-close]').forEach(button => button.onclick = () => dialog.close());
+  dialog.querySelector('form').onsubmit = async event => {
+    event.preventDefault();
+    const form = event.target, status = dialog.querySelector('[data-mail-status]');
+    const forward_to = form.elements.forward_to.value.split(/[,;\s]+/).map(a => a.trim()).filter(Boolean);
+    dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
+    try {
+      await post(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`, {outbound_send: form.elements.outbound_send.checked, forward_to});
+      dialog.close(); toast(`Updated mail sending for ${e.display_name}`); if (after) void after();
+    } catch (error) {
+      status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
+      dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
+    }
+  };
+  dialog.onclose = () => { dialog.innerHTML = ''; };
+  dialog.showModal();
+}
 // Which preset a stored policy is: Open, Visible-requests-only (See and Write Everyone, Read chosen),
 // Private (all three the same chosen audience), else Custom.
 function accessPresetOf(policy) {

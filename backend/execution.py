@@ -297,6 +297,8 @@ class Execution:
                 row.pop('published', None)
             if not row.get('tools'):
                 row.pop('tools', None)
+            if not row.get('mail_request'):
+                row.pop('mail_request', None)
         for row in readiness.get('runtimes', {}).values():
             if not row.get('profiles'):
                 row.pop('profiles', None)

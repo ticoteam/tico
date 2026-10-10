@@ -690,6 +690,16 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("bot_access", "Bot access", "info", str(notice.get("message") or ""),
                              [_fix("Open bots", "#/settings", "bots")]))
 
+    # A bot.yaml asking to send without approval, or to forward to new addresses, has no effect until a person turns
+    # it on in Tico (backend/mail_settings.py); the request itself is worth a look, since a bot or BotOps may write it.
+    from .mail_settings import alert_text, alerts as mail_alerts
+    asking = mail_alerts(c) if full else []
+    if asking:
+        checks.append(_check("mail_sending", "Mail sending", "warn",
+                             "; ".join(alert_text(bot, extra) for bot, extra in asking[:3])
+                             + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
+                             [_fix("Open bots", "#/settings", "bots"),
+                              _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
     unpublished = _unpublished(c) if full else []
     if unpublished:
         checks.append(_check("publish", "Bot history", "warn",

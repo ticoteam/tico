@@ -76,6 +76,34 @@ class Chain(Stage2):
         self.assertTrue(d.allowed, d)
         self.assertIn("sender of the thread", [c for c in d["checks"] if c["gate"] == "recipient"][0]["detail"])
 
+    def test_bot_yaml_alone_never_turns_sending_on(self):
+        # bot.yaml says outbound_send: true and lists forward targets (a bot, or BotOps' own run, pushed it), but no
+        # person has turned sending on in Tico, or this run cannot reach Tico: every outside send needs an approval.
+        reply = {"thread_id": THREAD, "thread_senders": [AVA]}
+        for server in ({"bot": "inbox", "set": False, "outbound_send": False, "forward_to": []}, None):
+            pl.SERVER_GET = lambda slug, row=server: row
+            for to, extra in (([AVA], reply), ([ME], {})):
+                d = self.decide(to, **extra)
+                self.assertEqual(d["gate"], "outbound_send", (server, d))
+                self.assertIn("Mail sending", d["reason"])
+            self.assertFalse(pl.is_forward(self.policy(), "inbox", [ME]))
+        # The owner's own per-message yes still sends that one message.
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
+        self.assertTrue(self.decide([AVA], approval="77").allowed)
+
+    def test_a_person_turning_it_on_in_tico_covers_only_the_targets_they_approved(self):
+        pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": True,
+                                      "forward_to": ["owner@personal-domain.example"], "updated_by": "human:ana"}
+        self.assertTrue(self.decide([AVA], thread_id=THREAD, thread_senders=[AVA]).allowed)
+        self.assertTrue(self.decide([ME]).allowed)
+        # press@agency.example is in bot.yaml's forward_to but not approved in Tico: it needs a per-message approval.
+        d = self.decide(["press@agency.example"])
+        self.assertEqual(d["gate"], "recipient", d)
+        self.assertIn("not approved in Tico", d["reason"])
+        # The person turning it off wins over bot.yaml's outbound_send: true.
+        pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": [ME]}
+        self.assertEqual(self.decide([ME])["gate"], "outbound_send")
+
     def test_nothing_else_does(self):
         self.assertEqual(self.decide([STRANGER])["gate"], "recipient")
         # Not a reply: the thread's sender is just another outside address.

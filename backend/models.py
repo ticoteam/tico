@@ -677,6 +677,21 @@ class ToolUpdate(Contract):
     title_prefix: str = Field(default="", max_length=100)
 
 
+class MailRequest(Contract):
+    """What a bot's bot.yaml asks for its mail (runner/declared_access.py `mail_request`): a request only. The
+    server-held setting (backend/mail_settings.py) decides; Health says when the two differ."""
+    outbound_send: bool = False
+    forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
+
+
+class MailSettingsUpdate(Contract):
+    """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
+    `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""
+    outbound_send: bool | None = None
+    forward_to: list[Annotated[str, Field(max_length=320)]] | None = Field(default=None, max_length=20)
+    from_request: bool = False
+
+
 class BotReadiness(GoalReadiness):
     ready: bool
     runtime: str = Field(default="", max_length=100)
@@ -703,6 +718,8 @@ class BotReadiness(GoalReadiness):
     sign_in: Literal["ready", "missing", "failed", "unknown"] = "unknown"
     # The bot's declared `access:`, for the Tools row on its page. A runner from before it omits it.
     tools: list[ToolAccess] = Field(default_factory=list, max_length=30)
+    # What bot.yaml asks for its mail sending; omitted when it asks for nothing.
+    mail_request: MailRequest | None = None
 
 
 class DiskReadiness(Contract):

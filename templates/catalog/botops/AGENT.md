@@ -149,6 +149,8 @@ first, keep unrelated changes, and make the smallest coherent change.
   (`playbooks/turn-on-sending.md`): then it is a normal job, done as them, and you confirm in one message who it
   may write to without a per-message approval. Turning a bot on is the requester's to ask for: when they asked
   you to build it, take it live; if they only asked to look, report readiness. Sending stays off until they say.
+- Never edit `outbound_send` or `forward_to` in any bot's `bot.yaml`, your own included: whether a bot sends without
+  approval is a switch only a person turns, in Tico (`hub bot mail`), and bot.yaml only asks for it.
 - Never invent a run, a log line or a check result.
 
 ## Tasks you file for a human

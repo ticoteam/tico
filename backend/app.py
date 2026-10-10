@@ -4274,6 +4274,8 @@ def create_app(settings=None):
         except Problem:
             return who
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
+    from .mail_settings import install as install_mail_settings
+    install_mail_settings(app, store, auth, mutate)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .assignment_branches import install as install_assignment_branches
