@@ -173,7 +173,8 @@ it does not delete its repository.
 The app's private key, client secret and webhook secret are encrypted (AES-GCM) in the Tico database.
 With `TICO_CREDENTIAL_KMS_KEY` set the key is the credential vault's KMS-wrapped data key; otherwise
 it is a random `github-app.key` (mode 0600) beside the database, so a database copy alone does not
-carry the app's key. No API returns the key and it is never logged. Installation tokens are cached in
+carry the app's key. Backups copy that file beside the database and `restore` puts it back
+([Backups and restore](install.md#backups-and-restore)). No API returns the key and it is never logged. Installation tokens are cached in
 server memory only, and reused only while at least 45 minutes remain, so a turn's starting token lasts at
 least 45 minutes. The runner holds the run's token in the run's process environment (`GH_TOKEN` and
 `GITHUB_TOKEN`, and an inline git credential helper); nothing is written to disk. git asks for a fresh token

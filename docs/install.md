@@ -680,15 +680,24 @@ limited to it, on Cloudflare an R2 bucket (with an API token that has Workers R2
 already have. Turn on bucket versioning yourself if you make one by hand; a deleted or overwritten backup is then
 still recoverable. With `TICO_BLOB_BUCKET` set, attachments already live in S3 and are not copied again.
 
-**The credential key is copied too.** When no `TICO_CREDENTIAL_KMS_KEY` is set, the stored credentials are encrypted with
-a local key in `/data/credential.key` ([Credentials](credential-vault.md)); Litestream carries the database, not that file, and a
-database restored without it cannot decrypt a credential. The backup loop copies the key to the same place as the rest
-(the bucket and prefix in `TICO_BACKUP_URL`, else the `tico-backups` volume), as `credential-key/credential.key`, when it
-first appears and whenever it changes. It is stored as the bucket stores everything: encrypted at rest by the bucket (S3
-and R2 encrypt every object by default), which also means anyone who can read the bucket can read the key and the database
-together, so keep the bucket private and its access key to that bucket alone. The key is never logged or sent anywhere else,
-and Health warns while a local key exists and has not been copied yet. `GET /api/v2/config` carries
-`backup.credential_key: {present, copied_at, current}`.
+**The key files are copied too.** Litestream carries the database, not the files beside it that decrypt what the
+database stores. A database restored without them cannot open those secrets:
+
+| File in `/data` | Opens | When it exists |
+|---|---|---|
+| `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
+| `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or a GitHub App connected before it was set) |
+| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` |
+
+The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
+`tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. They are stored as the
+bucket stores everything: encrypted at rest by the bucket (S3 and R2 encrypt every object by default), which also means
+anyone who can read the bucket can read the keys and the database together, so keep the bucket private and its access
+key to that bucket alone. The keys are never logged or sent anywhere else, and Health warns while one exists and has not
+been copied yet. `GET /api/v2/config` carries `backup.credential_key: {present, copied_at, current}` and
+`backup.key_files: {<file>: {present, copied_at, current}}`. `tico-session-secret`, which only signs the few minutes of an
+OpenID Connect sign-in, is not copied: a new one is made on the new volume and nobody's session ends (sessions are in the
+database).
 
 **A lost volume never becomes a blank team.** The server records that it is an existing team outside the
 database: a `.tico-environment` file in the data volume and an `environment.json` object beside the backup. When it
@@ -703,20 +712,23 @@ team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `
 
 ```
 docker compose stop server
-docker compose run --rm --no-deps server restore    # database, attachments and the credential key
+docker compose run --rm --no-deps server restore    # database, attachments and the key files
 docker compose up -d
 ```
 
-**The credential key is backed up with the database.** Credentials are encrypted with a key in `/data/credential.key`
-(docs/credential-vault.md). The backup copies it beside the database whenever it changes, and Health warns if it has not been
-copied. `restore` puts the key back at `/data/credential.key` (mode 0600) when the backup has one. A key already on the
-volume is left alone (with `--force` it is kept beside the restored one as `credential.key.before-restore.<time>`). If
-the database was restored by itself on first start, or from a bucket that has no key, run `restore` again or copy the
-object `credential-key/credential.key` from the backup location to `/data/credential.key` by hand, then restart. With
-`TICO_CREDENTIAL_KMS_KEY` set there is no file to keep.
+**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` and `slack.key` back
+in `/data` (mode 0600) when the backup has them, and says which it does not have. A key already on the volume is left
+alone (with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
+by itself on first start, or from a backup made before a file was copied, run `restore` again or copy the object
+`credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
+user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
+file to put back. A backup made before a key was copied cannot bring it back: copy it from the old server's volume if it
+still exists, else reconnect GitHub, save the directory sync credentials and paste the Slack tokens again. With
+`TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
+`github-app.key` or `slack.key` from before KMS was set needs keeping.
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
-to restore the database, attachments and Credential key together:
+to restore the database, attachments and key files together:
 
 ```
 docker compose stop server
@@ -724,8 +736,8 @@ docker compose run --rm --no-deps server restore --force
 docker compose up -d
 ```
 
-Tico keeps the current database as `hub.sqlite.before-restore.<time>` and the current key as
-`credential.key.before-restore.<time>` beside the restored files. The install's permanent id
+Tico keeps the current database as `hub.sqlite.before-restore.<time>` and each different key file as
+`<file>.before-restore.<time>` beside the restored files. The install's permanent id
 (`TICO_ENVIRONMENT_ID`) is stored in the database, so it comes back with the restore and the Macs and runners
 already enrolled keep working.
 
@@ -739,9 +751,10 @@ docker compose up -d
 
 and point the domain at the new computer (Cloudflare tunnel: run the same tunnel token there). Stop the old server
 first; two servers writing to one bucket corrupt the replica. A fresh volume that finds a backup also restores the
-database by itself on first start, but run `restore` so attachments and any error are visible. This needs the
-bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason to set
-`TICO_BACKUP_URL`.
+database by itself on first start, but run `restore` so attachments, the key files and any error are visible. This
+needs the bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason
+to set `TICO_BACKUP_URL`. Moving the volume by hand instead (a `docker cp` or a disk copy) needs every file in `/data`,
+not only `hub.sqlite`: `credential.key`, `github-app.key` and `slack.key` with it, or the secrets they seal are lost.
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
 
@@ -822,7 +835,7 @@ docker compose -f compose.yaml -f rehearsal.yaml exec server cat /data/local-own
 ```
 
 Open `http://127.0.0.1:8877/api/v2/local-signin?token=<token>` with that token. The backup is mounted read-only:
-restore reads the database, attachments and credential key; rehearsal does not write backups or call a decision provider.
+restore reads the database, attachments and key files; rehearsal does not write backups or call a decision provider.
 Restart the source from its original directory with `docker compose start server`. Remove the rehearsal when finished with
 `docker compose -f compose.yaml -f rehearsal.yaml down -v`; its external source backup volume is kept.
 

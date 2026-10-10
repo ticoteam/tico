@@ -122,6 +122,11 @@ location to `/data/credential.key` (32 bytes, mode 0600, owned by the server's u
 new key over an existing vault, so putting the file back loses nothing. Setting `TICO_CREDENTIAL_KMS_KEY` replaces the file
 as the thing to protect: the data key is then wrapped by KMS in the database.
 
+Two more key files sit beside it and are copied and restored the same way: `github-app.key` (the GitHub App's private key,
+client secret and webhook secret, and the directory sync credentials) and `slack.key` (the Slack tokens). They are not the
+vault's key, so a restore needs all three ([Backups and restore](install.md#backups-and-restore)). Health's **Stored
+secrets** check names any secret this server cannot open and the file to put back.
+
 ## Credentials asked for in the chat
 
 A bot that needs a credential opens a **credential card** in the conversation where it asked (`hub credential request <VARIABLE> --for-bot <bot> --label
