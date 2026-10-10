@@ -32,7 +32,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository
+from .execution import Execution, bot_repository, clear_limits
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -4046,6 +4046,18 @@ def create_app(settings=None):
     @app.post("/api/v2/settings/history/{change_id}/undo")
     def undo_setting(request: Request, change_id: str, body: M.SettingsUndo):
         return mutate(request, body, lambda c: settings_admin.undo(c, request.state.identity, change_id, body))
+
+    @app.post("/api/v2/bots/{bot}/limit/retry")
+    def limit_retry(request: Request, bot: str, body: M.LimitRetry):
+        """Try now: a person who renewed a plan need not wait out the usage-limit cooldown."""
+        who = request.state.identity
+        def work(c):
+            if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
+                raise Problem("forbidden", "Only a person who manages this bot can retry it now", 403)
+            if (H.status(c, bot) or {}).get("state") != "limited":
+                raise Problem("not_limited", "This bot is not waiting on a usage limit", 409)
+            return {"cleared": clear_limits(c, settings, who.actor, bot)}
+        return mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/stop")
     def stop_turn(request: Request, bot: str, body: M.StopTurn):

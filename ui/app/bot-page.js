@@ -160,7 +160,7 @@ function botAlertHTML(slug) {
   else if (e.agent?.credential && !e.online && ((S.status?.queued || []).some(q => (q.bot || q.employee) === slug) || s?.open_tasks))
     word = 'Offline with work waiting';
   // The way out sits beside the warning, for a person who may take it.
-  const resume = s?.bot_state === 'quarantined' && settingsCanManageBot(e) ? '<button class="primary bot-alert-resume" type="button" data-quarantine-resume>Resume bot</button>' : '';
+  const resume = s?.bot_state === 'quarantined' && settingsCanManageBot(e) ? '<button class="primary bot-alert-resume" type="button" data-quarantine-resume>Resume bot</button>' : limitRetryButton(slug, 'primary bot-alert-resume');
   return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>${resume}` : '';
 }
 // Under More for a person who manages a quarantined bot: why, the refused words and the task they were on.
@@ -393,6 +393,13 @@ async function pageBot(slug, tab) {
   // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
   // nothing to write or review.
   const resumeClick = async ev => {
+    const retry = ev.target.closest('[data-limit-retry]');
+    if (retry && !retry.disabled) {
+      retry.disabled = true;
+      try { await limitRetry(slug); botAlertDraw(); if (typeof pausedRender === 'function') pausedRender(); }
+      catch (error) { toast(error.message, true); retry.disabled = false; }
+      return;
+    }
     const button = ev.target.closest('[data-quarantine-resume]');
     if (!button || button.disabled) return;
     const result = $('#bot-quarantine-result');

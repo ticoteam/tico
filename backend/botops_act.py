@@ -68,7 +68,7 @@ def _routes(*rows):
 DO = _routes(
     ("POST", r"bots"), ("POST", r"bots/register"),
     ("POST", rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
-             rf"onboarded|goals|updates|routines|tools|quarantine/clear)"),
+             rf"onboarded|goals|updates|routines|tools|quarantine/clear|limit/retry)"),
     ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"), ("DELETE", rf"bots/{_S}/tools/{_S}"),
     # Copying a bot or a skill, bringing a copy up to date and suggesting its changes back: each is checked with the requester's own
     # rights on the bots it names (backend/bot_copy.py).

@@ -1483,6 +1483,10 @@ class Empty(Contract):
     pass
 
 
+class LimitRetry(Contract):
+    pass
+
+
 class StopTurn(Contract):
     attempt_id: ID | None = None   # the run the person saw; a newer one is not stopped by mistake
 

@@ -26,6 +26,7 @@ Do each fix as the human, with their rights. Do not ask first.
 | Failing runs | `playbooks/diagnose-a-failed-run.md`; fix instructions in the bot's repository if that is the cause |
 | A Hermes bot that is not reporting in, or archived and still reporting | `playbooks/connect-a-hermes-profile.md` |
 | A computer is offline | nothing you can do: say which one, and that its bots wait for it |
+| Waiting on a usage limit, and the person says the plan is renewed | `hub api POST /api/v2/bots/<bot>/limit/retry` (clears every bot limited on that runtime and computer) |
 | Stopped after refusing something | `hub api POST /api/v2/bots/<bot>/quarantine/clear` only after you read why |
 
 A Tool with too few verbs (a mail bot that cannot send) is changed in place with

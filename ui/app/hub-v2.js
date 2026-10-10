@@ -105,6 +105,15 @@ async function quarantineResume(slug) {
   await v2Refresh();
   toast(`${empName(slug)} resumed`);
 }
+// Try now: a person who renewed the plan clears the usage-limit cooldown for this bot and the others
+// limited on the same runtime and computer (backend/execution.py `clear_limits`).
+async function limitRetry(slug) {
+  await post(`/v2/bots/${encodeURIComponent(slug)}/limit/retry`, {});
+  await v2Refresh();
+  toast(`${empName(slug)} will try again now`);
+}
+const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(S.emps.find(x => x.name === slug))
+  ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
 function pausedNotice(slug) {
   const s = v2StatusOf(slug) || {};
   const when = since => since ? ` since ${clockTime(since)}` : '';
@@ -125,7 +134,7 @@ function pausedNotice(slug) {
     if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }
   }
   if (!why) return '';
-  return `${empName(slug)} is paused${esc(when(since))} — ${esc(why)}; your messages are saved and will run when it's back`;
+  return `${empName(slug)} is paused${esc(when(since))} — ${esc(why)}; your messages will run when it's back${limitRetryButton(slug)}`;
 }
 // A bot run by an external agent (a Hermes profile) is never dispatched to: the line says the
 // message waits for it, and whether the agent has been reporting in.
@@ -162,6 +171,15 @@ function pausedRender() {
       pausedRender();
       if (typeof botAlertDraw === 'function') botAlertDraw();
     } catch (error) { resume.disabled = false; toast(error.message, true); }
+  };
+  const retry = el.querySelector('[data-limit-retry]');
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true;
+    try {
+      await limitRetry(slug);
+      pausedRender();
+      if (typeof botAlertDraw === 'function') botAlertDraw();
+    } catch (error) { retry.disabled = false; toast(error.message, true); }
   };
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.

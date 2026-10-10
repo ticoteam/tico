@@ -242,7 +242,12 @@ refused text (credential values masked) and its task; one click releases that pa
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*), the bot shows
 *limited* and the cloud claims it again after 30 minutes. A third limit in a row waits two hours
-and says so in **Settings → Health**, with the retry time. If the bot has a fallback
+and says so in **Settings → Health**, with the retry time. A person's message to the bot written
+after the limit lets it try once at once; a run that hits the limit again goes back to the
+cooldown. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
+manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
+cooldown for that bot and every bot limited on the same runtime on the same computer, which share
+the subscription (`limit.cleared` in the event log). If the bot has a fallback
 harness in **Settings → Bots**, the runner reruns that run at once on the fallback (fresh
 session) and reports `fallback` as that harness, which **Runs** shows in the Session column.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses

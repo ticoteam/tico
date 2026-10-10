@@ -70,6 +70,35 @@ def limit_cooldown(c, bot):
     return LIMIT_COOLDOWN_LONG if limit_streak(c, bot) >= LIMIT_STRIKES else LIMIT_COOLDOWN
 
 
+def person_wrote_since(c, bot, since):
+    """Whether a person's message to the bot is queued from after its latest usage limit. A person
+    who writes to a limited bot has often just renewed the plan, so the bot tries once now; a
+    run that hits the limit again finishes after the message and the cooldown holds."""
+    last = c.execute("SELECT max(finished) FROM attempts WHERE bot=?", (bot,)).fetchone()[0]
+    return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
+                     "AND m.from_actor LIKE 'human:%' AND m.kind<>'notice' AND m.created>? LIMIT 1",
+                     (bot, max(since, last or ""))).fetchone() is not None
+
+
+def clear_limits(c, settings, actor, bot):
+    """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
+    runtime on the same computer, since they share the subscription a person has just renewed.
+    Returns how many bots it cleared."""
+    def runtime(slug):
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
+    mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    bots = [bot]
+    if place and place["runner_id"] and mine:
+        bots += [r[0] for r in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                                         "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
+                                         (place["runner_id"], bot)) if runtime(r[0]) == mine]
+    for slug in bots:
+        H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
+        H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
+    return len(bots)
+
+
 def _github_app(c):
     try:
         return c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
@@ -607,7 +636,8 @@ class Execution:
                 continue
             status = H.status(c, bot) or {}
             if (status.get("state") == "limited" and status.get("since")
-                    and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))):
+                    and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))
+                    and not person_wrote_since(c, bot, status["since"])):
                 continue
             bots.append(bot)
         if not bots:
