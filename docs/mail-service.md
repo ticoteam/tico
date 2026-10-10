@@ -46,7 +46,8 @@ State (visible in Gmail too)
   mail label   add|remove <msg> hub/needs-owner     labels: hub/triaged/<slug>, hub/drafted,
   mail archive <msg>   mail mark-read <msg>            hub/needs-owner, hub/handled/<slug>
 Writing (all go through the guardrails below)
-  mail draft   --to --subject --body-file [--reply-to <thread>] --issue N
+  mail draft   --to --subject --body-file [--reply-to <thread>] [--attach <path>] --issue N
+  mail discard <draft-id>                            an unsent draft this bot made, nothing else
   mail send    --draft <id> --issue N [--approval-issue M]
   mail reply   --thread <id> --body-file --issue N          draft, then send if allowed
 Calendar

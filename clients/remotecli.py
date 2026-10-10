@@ -13,6 +13,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):                          # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import s3links  # noqa: E402
 from clients.tico import APIError, Client  # noqa: E402
 
 
@@ -247,7 +248,9 @@ def run(args, who=None):
         return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
-        return post("notes", {"to": target(args.to), "text": text})["note"]
+        payload = {"to": target(args.to), "text": text}
+        links = s3links.apply(client, payload, ("text",))
+        return s3links.annotate(post("notes", payload)["note"], links)
     if fn == "note list":
         since = args.since
         m = re.fullmatch(r"(\d+)([hd])", since or "")
@@ -307,7 +310,8 @@ def run(args, who=None):
                 payload["next_run"] = True
             if getattr(args, "request_id", None):
                 payload["request_id"] = args.request_id
-            return post("tasks", payload)
+            links = s3links.apply(client, payload, ("body",))
+            return s3links.annotate(post("tasks", payload), links)
         if sub == "show":
             ids = args.id if isinstance(args.id, list) else [args.id]
             if len(ids) > 1:                       # one read for several (hub_task_show_many), not one GET each
@@ -332,11 +336,14 @@ def run(args, who=None):
                 body["attachments"] = references
             if ask is not None:
                 body["ask"] = ask
-            return post(f"tasks/{args.id}/comments", body)
+            links = s3links.apply(client, body, ("text",))
+            return s3links.annotate(post(f"tasks/{args.id}/comments", body), links)
         if sub == "answers":
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
-            return post(f"tasks/{args.id}/comments/{args.comment_id}", {"text": args.text})
+            body = {"text": args.text}
+            links = s3links.apply(client, body, ("text",))
+            return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
             return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
         if sub == "delete":
@@ -402,7 +409,8 @@ def run(args, who=None):
                         body[field] = getattr(args, field)
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
-            return post("tasks/" + args.id, body)
+            links = s3links.apply(client, body, ("note",))
+            return s3links.annotate(post("tasks/" + args.id, body), links)
     if cmd == "goal":
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body

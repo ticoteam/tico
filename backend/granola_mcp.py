@@ -31,17 +31,32 @@ RATE_LIMIT_RETRY = 5 * 60
 RETRY_AFTER_MAX = 24 * 3600        # a provider-named wait longer than this is treated as this
 RATE_LIMIT_MAX = 6 * 3600          # repeated throttling backs off to this, unless Granola asks for longer
 RETRY_IN_SYNC = 60                 # a get_meetings throttle is waited out in the sync only when Granola says it is this short
+GET_MEETINGS_RETRIES = (20, 60)    # spaced waits for a get_meetings throttle with no named wait, or a short one
+FIRST_GET_MEETINGS_GAP = 10        # the first get_meetings waits this long after the sync's previous MCP call
+HOLD_MAX = 3                       # syncs a checkpoint is held for untried notes before they are given up
+REVISIT = 24 * 3600                # an imported note is re-read for a late summary only while its meeting is this recent
 DEBOUNCE = 120
 GET_MEETINGS_INTERVAL = 6
+SIGNALS = (("rate limit", r"rate[\s_-]*limit"), ("slow down", r"slow[\s_-]+down"), ("too many requests", r"too many requests"))
 log = logging.getLogger(__name__)
 
 
 class GranolaError(Exception):
-    def __init__(self, code="provider_error", step=None, retry_after=None):
+    def __init__(self, code="provider_error", step=None, retry_after=None, http_status=None, rpc_code=None,
+                 tool_error=False, signal=None):
         self.code = code
         self.step = step
         self.retry_after = retry_after
+        # Fixed facts about Granola's answer, safe to store: never its text.
+        self.http_status, self.rpc_code, self.tool_error, self.signal = http_status, rpc_code, tool_error, signal
+        self.batch = None
         super().__init__(code)
+
+    def detail(self, step):
+        return {"step": self.step or step, "http_status": self.http_status, "rpc_code": self.rpc_code,
+                "tool_error": self.tool_error,
+                "retry_after": round(self.retry_after) if self.retry_after is not None else None,
+                "signal": self.signal, "batch": self.batch}
 
 
 class GranolaMCP:
@@ -268,7 +283,8 @@ class GranolaMCP:
                 "plan_hint": meta.get("plan_hint"), "last_sync": meta.get("last_sync"),
                 "last_error": meta.get("last_error"), "imported_count": meta.get("imported_count", 0),
                 "needs_signin": meta.get("needs_signin", False), "syncing": who.actor in self.jobs,
-                "skipped": meta.get("skipped", 0), "last_attempt": self.stamp(meta.get("last_attempt")),
+                "skipped": meta.get("skipped", 0), "skip_reasons": meta.get("skip_reasons", {}),
+                "last_error_detail": meta.get("last_error_detail"), "last_attempt": self.stamp(meta.get("last_attempt")),
                 "next_retry": self.stamp(self.next_retry(meta)), "failures": meta.get("failures", 0)}
 
     def failed_signin(self, row, meta, secret):
@@ -421,9 +437,15 @@ class GranolaMCP:
         return {"ok": True}
 
     @staticmethod
+    def signal(value):
+        """Which fixed throttle phrase the provider's text contains, or None. Only that label is ever kept."""
+        text = encode(value)
+        return next((name for name, pattern in SIGNALS if re.search(pattern, text, re.I)), None)
+
+    @staticmethod
     def rate_limited(value):
         # Provider text is used only for classification, never diagnostics or stored metadata.
-        return bool(re.search(r"rate[\s_-]*limit|slow[\s_-]+down|too many requests", encode(value), re.I))
+        return GranolaMCP.signal(value) is not None
 
     def retry_delay(self, response):
         value = response.headers.get("Retry-After")
@@ -449,6 +471,8 @@ class GranolaMCP:
                 body["id"] = uuid.uuid4().hex
             meetings = method == "tools/call" and (params or {}).get("name") == "get_meetings"
             response = await self.http("POST", MCP, headers=headers, json=body, meeting_meta=meta if meetings else None)
+            session["last_call"] = self.clock()
+            status = response.status_code
             if response.status_code == 401 and not session.get("refreshed"):
                 session["refreshed"] = True
                 await self.refresh_for_sync(row, meta, secret)
@@ -456,15 +480,16 @@ class GranolaMCP:
             if response.status_code == 429:
                 delay = self.retry_delay(response)
                 if meetings or attempt == 3 or (delay is not None and delay > RETRY_IN_SYNC):
-                    raise GranolaError("rate_limited", retry_after=delay)
+                    raise GranolaError("rate_limited", retry_after=delay, http_status=status)
                 await self.sleep(delay if delay is not None else 2 ** (attempt + 1))
                 continue
             if response.status_code >= 400 and self.rate_limited(response.text):
-                raise GranolaError("rate_limited", retry_after=self.retry_delay(response))
+                raise GranolaError("rate_limited", retry_after=self.retry_delay(response), http_status=status,
+                                   signal=self.signal(response.text))
             if response.status_code == 403:
-                raise GranolaError("forbidden")
+                raise GranolaError("forbidden", http_status=status)
             if response.status_code >= 400:
-                raise GranolaError("provider_error")
+                raise GranolaError("provider_error", http_status=status)
             if response.headers.get("Mcp-Session-Id"):
                 session["id"] = response.headers["Mcp-Session-Id"]
             if notification:
@@ -482,34 +507,37 @@ class GranolaMCP:
                         except (ValueError, AttributeError):
                             pass
                 if not isinstance(value, dict):
-                    raise GranolaError("bad_response")
+                    raise GranolaError("bad_response", http_status=status)
             else:
                 value = self.payload(response)
             if value.get("error"):
                 error = value["error"]
-                if self.rate_limited(error):
-                    raise GranolaError("rate_limited", retry_after=self.retry_delay(response))
                 code = error.get("code") if isinstance(error, dict) else None
-                raise GranolaError("forbidden" if code in (403, -32003) else "provider_error")
+                code = code if isinstance(code, int) and not isinstance(code, bool) else None
+                if self.rate_limited(error):
+                    raise GranolaError("rate_limited", retry_after=self.retry_delay(response), http_status=status,
+                                       rpc_code=code, signal=self.signal(error))
+                raise GranolaError("forbidden" if code in (403, -32003) else "provider_error", http_status=status, rpc_code=code)
             result = value.get("result", {})
             if not isinstance(result, dict):
-                raise GranolaError("bad_response")
+                raise GranolaError("bad_response", http_status=status)
             if result.get("isError"):
                 # Read only to classify; never save/return/log the tool's free-form error message.
                 if self.rate_limited(result):
-                    raise GranolaError("rate_limited", retry_after=self.retry_delay(response))
+                    raise GranolaError("rate_limited", retry_after=self.retry_delay(response), http_status=status,
+                                       tool_error=True, signal=self.signal(result))
                 if (params or {}).get("name") == "get_account_info":
                     # A completed optional-tool refusal is different from a transient HTTP/network failure.
-                    raise GranolaError("feature_unavailable")
+                    raise GranolaError("feature_unavailable", http_status=status, tool_error=True)
                 message = encode(result).lower()
                 if (params or {}).get("name") == "get_meeting_transcript" and any(word in message for word in
                         ("paid", "upgrade", "business", "enterprise")):
-                    raise GranolaError("transcripts_unavailable")
+                    raise GranolaError("transcripts_unavailable", http_status=status, tool_error=True)
                 raise GranolaError("forbidden" if any(word in message for word in
                                    ("permission", "paid", "upgrade", "forbidden", "not authorized", "access denied"))
-                                   else "provider_error")
+                                   else "provider_error", http_status=status, tool_error=True)
             return result
-        raise GranolaError("rate_limited", retry_after=self.retry_delay(response))
+        raise GranolaError("rate_limited", retry_after=self.retry_delay(response), http_status=response.status_code)
 
     async def refresh_for_sync(self, row, meta, secret):
         try:
@@ -654,17 +682,20 @@ class GranolaMCP:
 
     async def call(self, row, meta, secret, session, tool, values):
         params = {"name": tool["name"], "arguments": self.arguments(tool, values)}
-        for attempt in range(4):
+        meetings = tool["name"] == "get_meetings"
+        for attempt in range(len(GET_MEETINGS_RETRIES) + 1):
             try:
                 return self.content(await self.rpc(row, meta, secret, session, "tools/call", params),
                                     allow_text=tool["name"] == "get_meeting_transcript")
             except GranolaError as exc:
-                # Waiting is worth it only when Granola names a short wait; a guessed retry spends the same
-                # quota that is exhausted, so it fails the sync and the next one backs off instead.
-                if (tool["name"] != "get_meetings" or exc.code != "rate_limited" or attempt == 3
-                        or exc.retry_after is None or exc.retry_after > RETRY_IN_SYNC):
+                if meetings:
+                    exc.batch = len(values.get("meeting_ids") or values.get("ids") or values.get("note_ids") or [])
+                # A get_meetings throttle with no named wait, or a short one, is retried after spaced waits.
+                # A longer named wait fails the sync, and the next one backs off.
+                if (not meetings or exc.code != "rate_limited" or attempt == len(GET_MEETINGS_RETRIES)
+                        or (exc.retry_after is not None and exc.retry_after > RETRY_IN_SYNC)):
                     raise
-                await self.sleep(exc.retry_after)
+                await self.sleep(max(exc.retry_after or 0, GET_MEETINGS_RETRIES[attempt]))
 
     @staticmethod
     def account_details(result):
@@ -742,16 +773,17 @@ class GranolaMCP:
                              media_url=https_url(note.get("web_url"))) if summary or transcript else None
 
     def imported_ids(self, actor, ids):
-        """Which of these Granola notes this person already has as a meeting."""
+        """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
         keys = [f"{actor}:{nid}" for nid in ids]
-        found = set()
+        found = {}
         with self.store.read() as c:
             for start in range(0, len(keys), 500):
                 chunk = keys[start:start + 500]
-                found.update(r[0] for r in c.execute(
-                    "SELECT external_id FROM recording_source_refs WHERE source='granola' AND resource_type='meeting' "
-                    "AND external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
-        return {key[len(actor) + 1:] for key in found}
+                found.update((r[0], bool(r[1])) for r in c.execute(
+                    "SELECT r.external_id,m.transcript_original!='' FROM recording_source_refs r "
+                    "LEFT JOIN meetings m ON m.id=r.meeting_id WHERE r.source='granola' AND r.resource_type='meeting' "
+                    "AND r.external_id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        return {key[len(actor) + 1:]: value for key, value in found.items()}
 
     async def sync(self, actor):
         async with self.lock(actor):
@@ -774,10 +806,17 @@ class GranolaMCP:
             if meta["state"] != "connected":
                 return
             who = Identity(actor, "human", row["email"])
-            meta.update(last_attempt=self.clock(), skipped=0)
+            meta.update(last_attempt=self.clock(), skipped=0, skip_reasons={})
             await asyncio.to_thread(self.save, row, meta, secret)
             step = "initialize"
-            skipped_error = None
+            skipped_error = skipped_detail = None
+
+            def skip(reason, count=1, error=None):
+                nonlocal skipped_detail
+                meta["skipped"] += count
+                meta["skip_reasons"][reason] = meta["skip_reasons"].get(reason, 0) + count
+                skipped_detail = (error or GranolaError()).detail(reason.split(": ")[-1])
+                return reason
             try:
                 meta["transcripts_unavailable"] = False
                 meta["plan_hint"] = "paid" if meta.get("transcript_succeeded") else meta.get("account_plan_hint", "free")
@@ -853,21 +892,30 @@ class GranolaMCP:
                         ids.append(str(nid))
                         dates[str(nid)] = date or datetime.fromisoformat(since)
                     except Exception:
-                        meta["skipped"] += 1
-                        skipped_error = "bad_response: list_meetings"
+                        skipped_error = skip("bad_response: list_meetings")
                 ids = sorted(dict.fromkeys(ids), key=dates.get)
                 # Notes not imported yet go first: re-reading the overlap window's imported notes (for a
                 # regenerated summary) must not spend a tight quota before new meetings arrive.
                 imported = await asyncio.to_thread(self.imported_ids, actor, ids)
-                by_date, done, position = list(ids), set(), 0
-                ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported]
+                by_date, done, position, untried = list(ids), set(), 0, set()
+                # An imported note is re-read for a late summary only while its meeting (listed start) is under a day
+                # old; older ones count as done.
+                settled = {nid for nid in imported if dates[nid] < until - timedelta(seconds=REVISIT)}
+                done.update(settled)
+                ids = [nid for nid in ids if nid not in imported] + [nid for nid in ids if nid in imported and nid not in settled]
                 if len(ids) > 5000:
                     raise GranolaError("import_limit")
                 id_properties = (tools["get_meetings"].get("inputSchema") or {}).get("properties", {})
                 batch_size = max(1, min([10] + [v["maxItems"] for k, v in id_properties.items()
                                                 if k in ("meeting_ids", "ids", "note_ids") and isinstance(v.get("maxItems"), int)]))
+                if ids:
+                    # Keep the first note fetch out of the burst of setup and list calls.
+                    wait = session.get("last_call", 0) + FIRST_GET_MEETINGS_GAP - self.clock()
+                    if wait > 0:
+                        await self.sleep(wait)
                 for offset in range(0, len(ids), batch_size):
                     batch = ids[offset:offset + batch_size]
+                    left, failed = [], set()           # left: ids of this batch without an answer, held for a later sync
                     step = "get_meetings"
                     try:
                         value = await self.call(row, meta, secret, session, tools["get_meetings"],
@@ -877,8 +925,8 @@ class GranolaMCP:
                         if exc.code in ("unreachable", "rate_limited", "needs_signin"):
                             raise
                         # A bad ID must not hide the other meetings in its batch.
-                        notes = []
-                        for nid in batch:
+                        notes, first_codes = [], []
+                        for index, nid in enumerate(batch):
                             try:
                                 value = await self.call(row, meta, secret, session, tools["get_meetings"],
                                                         {"meeting_ids": [nid], "ids": [nid], "note_ids": [nid]})
@@ -886,16 +934,33 @@ class GranolaMCP:
                             except GranolaError as exc:
                                 if exc.code in ("unreachable", "rate_limited", "needs_signin"):
                                     raise
-                                meta["skipped"] += 1
-                                skipped_error = exc.code + ": get_meetings"
+                                skipped_error = skip(exc.code + ": get_meetings", error=exc)
+                                failed.add(nid)
+                                if index < 2:
+                                    first_codes.append(exc.code)
+                                # The first two single fetches failing alike means a systemic error, not a bad ID:
+                                # the rest of the batch is counted as skipped without spending more calls.
+                                if index == 1 and first_codes == [exc.code, exc.code] and len(batch) > 2:
+                                    skip(skipped_error, len(batch) - 2, exc)
+                                    left = batch[2:]
+                                    break
+                    returned = [n.get("id") or n.get("meeting_id") or n.get("note_id") for n in notes]
+                    missing = [nid for nid in batch if nid not in {str(r) for r in returned if r}
+                               and nid not in failed and nid not in left]
+                    # A row without an id is skipped below as bad_response and stands for one missing id: count each once.
+                    unexplained = len(missing) - sum(1 for r in returned if not r)
+                    if unexplained > 0:
+                        skipped_error = skip("missing: get_meetings", unexplained)
+                    left += missing
                     for note in notes:
                         transcript = ""
                         nid = note.get("id") or note.get("meeting_id") or note.get("note_id")
                         if not nid:
-                            meta["skipped"] += 1
-                            skipped_error = "bad_response: get_meetings"
+                            skipped_error = skip("bad_response: get_meetings")
                             continue
-                        if "get_meeting_transcript" in tools and not meta.get("transcripts_unavailable"):
+                        # A re-import keeps a stored transcript and ignores a new one, so it is not fetched again.
+                        if ("get_meeting_transcript" in tools and not meta.get("transcripts_unavailable")
+                                and not imported.get(str(nid))):
                             step = "get_meeting_transcript"
                             try:
                                 data = await self.call(row, meta, secret, session, tools["get_meeting_transcript"],
@@ -936,12 +1001,13 @@ class GranolaMCP:
                                     await worker
                                     raise
                         except Exception:
-                            meta["skipped"] += 1
-                            skipped_error = "bad_response: import_meeting"
+                            skipped_error = skip("bad_response: import_meeting")
                         await asyncio.to_thread(self.save, row, meta, secret)
                     # New notes go first, so the checkpoint is the last note in list-date order with every
                     # earlier one processed: it never passes an imported note not yet revisited.
-                    done.update(batch)
+                    # Ids left untried stay out of `done`, so the checkpoint stops before them and a later sync lists them again.
+                    done.update(nid for nid in batch if nid not in left)
+                    untried.update(left)
                     while position < len(by_date) and by_date[position] in done:
                         position += 1
                     checkpoint = dates[by_date[position - 1]] if position else None
@@ -952,8 +1018,13 @@ class GranolaMCP:
                     return
                 meta["failures"] = 0
                 meta.pop("retry_after", None)
-                meta.update(last_sync=H.now(), last_finished=self.clock(), cursor=until.isoformat(),
-                            last_error=skipped_error)
+                meta["held_syncs"] = meta.get("held_syncs", 0) + 1 if untried else 0
+                if meta["held_syncs"] >= HOLD_MAX:
+                    # Already counted as skipped; recorded under a fixed key once the checkpoint stops waiting for them.
+                    meta["skip_reasons"]["held: gave up after %d syncs" % HOLD_MAX] = len(untried)
+                    meta["held_syncs"], untried = 0, set()
+                meta.update(last_sync=H.now(), last_finished=self.clock(),
+                            cursor=meta.get("cursor") if untried else until.isoformat(), last_error=skipped_error, last_error_detail=skipped_detail if skipped_error else None)
                 if skipped_error:
                     log.warning("%s", skipped_error)
             except GranolaError as exc:
@@ -962,6 +1033,7 @@ class GranolaMCP:
                 if exc.code == "needs_signin":
                     return
                 meta["last_error"] = failure
+                meta["last_error_detail"] = exc.detail(step)
                 limited = exc.code == "rate_limited"
                 meta["failures"] = min(meta.get("failures", 0) + 1, 8 if limited else 4)
                 # Throttling backs off too: retrying every few minutes keeps a sliding quota exhausted.
@@ -971,6 +1043,7 @@ class GranolaMCP:
             except Exception:
                 # In particular never persist validation errors containing provider data.
                 meta["last_error"] = "sync_error: " + step
+                meta["last_error_detail"] = GranolaError().detail(step)
                 log.warning("%s", meta["last_error"])
             await asyncio.to_thread(self.save, row, meta, secret)
 

@@ -1,0 +1,16 @@
+{
+  "about": "s3:// URIs in bot text: what the hub CLI/MCP rewrite (clients/s3links.py) and the UI (ui/app/markdown.js) must both make of them. view lists the view URLs, in order; unmapped the URIs left as they are.",
+  "mapping": {"acme-files": "https://d1234example.cloudfront.net"},
+  "cases": [
+    {"text": "See s3://acme-files/reports/report(1).pdf.", "view": ["https://d1234example.cloudfront.net/reports/report%281%29.pdf"], "unmapped": []},
+    {"text": "<s3://acme-files/reports/report (1).pdf>", "view": ["https://d1234example.cloudfront.net/reports/report%20%281%29.pdf"], "unmapped": []},
+    {"text": "Mock: s3://acme-files/img/[draft].png", "view": ["https://d1234example.cloudfront.net/img/%5Bdraft%5D.png"], "unmapped": []},
+    {"text": "Brief: <s3://acme-files/a b.pdf>", "view": ["https://d1234example.cloudfront.net/a%20b.pdf"], "unmapped": []},
+    {"text": "Brief: s3://acme-files/a%20b.pdf", "view": ["https://d1234example.cloudfront.net/a%20b.pdf"], "unmapped": []},
+    {"text": "(see s3://acme-files/k.pdf)", "view": ["https://d1234example.cloudfront.net/k.pdf"], "unmapped": []},
+    {"text": "Done: s3://acme-files/notes/plan.md.", "view": ["https://d1234example.cloudfront.net/notes/plan.md"], "unmapped": []},
+    {"text": "The [x](s3://acme-files/k) file", "view": ["https://d1234example.cloudfront.net/k"], "unmapped": []},
+    {"text": "Old: s3://other-bucket/x/y(2).md.", "view": [], "unmapped": ["s3://other-bucket/x/y(2).md"]},
+    {"text": "As code: `s3://acme-files/in-code.md`", "view": [], "unmapped": []}
+  ]
+}
