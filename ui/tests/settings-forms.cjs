@@ -79,6 +79,21 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
     assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
+    // Bots search: it filters as typed, keeps the box and the cursor through a reload, and a bot it hides
+    // drops out of the selection, so a bulk change never reaches a bot that is not on screen.
+    const botSearch = page.locator('[data-bots-search]');
+    await page.locator('[data-bot-pick=helper]').check();
+    await botSearch.pressSequentially('HELP');
+    assert.equal(await page.locator('[data-bots-count]').innerText(), '1 bot');
+    await botSearch.press('x');
+    await page.evaluate(() => loadSettings());
+    assert.equal(await botSearch.inputValue(), 'HELPx', 'Search survives loadSettings');
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-bots-search]')), true);
+    assert.equal(await page.locator('#set-bots .empty').innerText(), 'No bots match “HELPx”.');
+    assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0, 'a hidden bot leaves the selection');
+    await page.locator('[data-bots-search-clear]').click();
+    assert.equal(await page.locator('[data-settings-bot]').count(), 1);
+    assert.equal(await botSearch.inputValue(), '');
     await page.locator('#settings-more > summary').click();
     await page.locator('[data-settings-tab=recurring]').click();
     await page.locator('#set-recurring [data-new-routine]').click();
