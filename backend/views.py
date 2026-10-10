@@ -20,7 +20,7 @@ from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution
 from pathlib import Path
 
 from . import read_cache
-from .store import H, P, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
+from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
 
 
@@ -401,7 +401,7 @@ def operation_issues(c, who, auth):
             if online:
                 checkout_issue(add, row, runner_busy(c, row["id"]))
         for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
-            if managed_backups and row["service"] in ("backup", "restore-check"):
+            if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
             detail = json.loads(row["detail_json"] or "{}")
             if row["service"] == "github:token":

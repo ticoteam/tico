@@ -153,6 +153,8 @@ class Scheduler:
             self.swept = at
             with self.store.transaction() as c:
                 c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
+                # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
+                c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
             sweep_idempotency(self.store, stamp(at))
             sweep_mail(self.store, stamp(at))
             from . import events

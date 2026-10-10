@@ -65,6 +65,26 @@ def test_starts_only_when_the_hub_assigns_it_here():
     assert [n for n, _ in rig.spawned] == ["importers"]     # started once, not once per pass
 
 
+def test_not_an_import_operator_is_quietly_not_wanted(monkeypatch):
+    from clients.tico import APIError
+    logged = []
+    monkeypatch.setattr(sidejobs, "log", logged.append)
+
+    class Forbidden(Hub):
+        def get(self, path):
+            if self.status:
+                raise APIError("forbidden", "not assigned", status=self.status)
+            return super().get(path)
+    hub = Forbidden(["zoom"])
+    hub.status = 403
+    rig = Rig(hub)
+    rig.side.tick()
+    assert rig.spawned == [] and logged == []      # a clear "not here", not an error every minute
+    hub.status = 0                                 # assigned later: it starts
+    rig.side.tick()
+    assert [n for n, _ in rig.spawned] == ["importers"]
+
+
 def test_stops_cleanly_when_unassigned():
     rig = Rig(Hub(["zoom"]))
     rig.side.tick()
