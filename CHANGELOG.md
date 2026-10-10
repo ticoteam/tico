@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Granola imports retry a throttled note fetch within the sync, after 20 and then 60 seconds, and keep the first note fetch ten seconds clear of the sync's setup calls. A failed batch whose first two single-note fetches fail alike stops without more calls, and the next sync fetches the notes left untried (or notes missing from Granola's reply), giving up after three syncs. An already-imported note is re-read only while the meeting is under a day old, counted from the meeting's listed start, and a stored transcript is never fetched again, so each sync spends far fewer calls. Status shows what Granola answered (`last_error_detail`: step, HTTP status, JSON-RPC code, tool error, `Retry-After`, the throttle phrase matched, batch size) and skipped counts per code (`skip_reasons`), without its text. See docs/meetings.md.
+
 ## [0.3.37] - 2026-10-09
 
 ### Added
