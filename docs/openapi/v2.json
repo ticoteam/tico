@@ -16788,6 +16788,65 @@
           },
           "skipped": {
             "type": "integer"
+          },
+          "skip_reasons": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Skipped items in the last attempt, by fixed code and step"
+          },
+          "last_error_detail": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "description": "Fixed facts about the last failure or skip; never provider text",
+            "properties": {
+              "step": {
+                "type": "string"
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "rpc_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool_error": {
+                "type": "boolean"
+              },
+              "retry_after": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "rate limit",
+                  "slow down",
+                  "too many requests",
+                  null
+                ]
+              },
+              "batch": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
           }
         },
         "required": [
@@ -16795,10 +16854,12 @@
           "email",
           "imported_count",
           "last_error",
+          "last_error_detail",
           "last_sync",
           "mode",
           "needs_signin",
           "plan_hint",
+          "skip_reasons",
           "skipped",
           "state",
           "syncing"
@@ -16859,6 +16920,65 @@
           },
           "skipped": {
             "type": "integer"
+          },
+          "skip_reasons": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Skipped items in the last attempt, by fixed code and step"
+          },
+          "last_error_detail": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "description": "Fixed facts about the last failure or skip; never provider text",
+            "properties": {
+              "step": {
+                "type": "string"
+              },
+              "http_status": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "rpc_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "tool_error": {
+                "type": "boolean"
+              },
+              "retry_after": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "signal": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "rate limit",
+                  "slow down",
+                  "too many requests",
+                  null
+                ]
+              },
+              "batch": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
           }
         },
         "required": [
@@ -16866,10 +16986,12 @@
           "email",
           "imported_count",
           "last_error",
+          "last_error_detail",
           "last_sync",
           "mode",
           "needs_signin",
           "plan_hint",
+          "skip_reasons",
           "skipped",
           "syncing"
         ],

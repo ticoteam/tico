@@ -408,6 +408,16 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
+GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
+                        "description": "Skipped items in the last attempt, by fixed code and step"}
+GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
+                        "description": "Fixed facts about the last failure or skip; never provider text",
+                        "properties": {"step": {"type": "string"}, "http_status": {"type": ["integer", "null"]},
+                                       "rpc_code": {"type": ["integer", "null"]}, "tool_error": {"type": "boolean"},
+                                       "retry_after": {"type": ["integer", "null"]},
+                                       "signal": {"type": ["string", "null"],
+                                                  "enum": ["rate limit", "slow down", "too many requests", None]},
+                                       "batch": {"type": ["integer", "null"]}}}
 
 
 def items(schema):
@@ -639,9 +649,11 @@ SCHEMAS = {
         obj({"actor": "s", "count": "i"})]},
     "GranolaStatus": obj({"mode": {"type": "string", "enum": ["account", "api_key", "off"]},
                           "connected": "b", "email": "n", "plan_hint": {"type": ["string", "null"], "enum": ["free", "paid", None]},
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"}),
+                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                         skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaSignIn": obj({"state": "s", "mode": "s", "connected": "b", "email": "n", "plan_hint": "n",
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"}),
+                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                         skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaDevice": obj({"user_code": "s", "verification_uri": "s", "verification_uri_complete": "s",
                           "expires_in": "i", "interval": "i"}, required=["user_code", "verification_uri", "expires_in", "interval"]),
     "GranolaSync": obj({"state": {"type": "string", "enum": ["syncing", "recent", "off", "needs_signin"]}, "last_sync": "n"}),
