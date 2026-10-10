@@ -5,7 +5,8 @@ the thread being replied to (a reply, no added recipients). Anything else still 
 the caps, the blocklist and owner-handles-personally still apply. A computer with no registry has a built-in policy.
 """
 
-import hashlib, sys, unittest
+import hashlib, os, sys, unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -13,6 +14,7 @@ import fake, harness                                                 # noqa: E40
 from harness import MANIFESTS, POLICY, Stage2                        # noqa: E402
 
 from connectors.mail import Refused, policy as pl, access            # noqa: E402
+from connectors.mail import __main__ as cli                          # noqa: E402
 
 AVA, STRANGER, ME = "ava@creator.example", "stranger@elsewhere.example", "owner@personal-domain.example"
 INBOX_ON = """
@@ -310,6 +312,51 @@ class Cli(Stage2):
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
                                    "--approval-issue", APPROVAL)               # the approved draft is intact
         self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_attached_files_go_on_the_task_and_the_file_id_is_not_part_of_the_approval(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        data = b"%PDF-1.4 the answer"
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(data)
+        task, uploads = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", []
+        cli.TASK_ATTACH = lambda *call: uploads.append(call) or "f-answer-0001"
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", task, "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([(t, n, d) for t, n, d, _ in uploads], [(task, "answer.pdf", data)])
+        request = p["approval_request"]
+        self.assertEqual(request["payload"]["attachments"],
+                         [dict(file_meta("answer.pdf", data), file_id="f-answer-0001")])
+        self.assertTrue(request["command"].endswith(f" --task {task}"))
+        # The approval matches on name, size and sha256: another file_id, or none, approves the same files.
+        approved = dict(request["payload"], attachments=[dict(file_meta("answer.pdf", data), file_id="f-other")])
+        hub(dict(send_approval([AVA], []), payload=approved))
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", task,
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+        # No credential or a failed upload: the draft and the request still stand, without file ids.
+        cli.TASK_ATTACH = lambda *call: (_ for _ in ()).throw(RuntimeError("offline"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(data + b" v2")
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", task, "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(p["approval_request"]["payload"]["attachments"], [file_meta("answer.pdf", data + b" v2")])
+
+    def test_a_bot_environment_never_reaches_a_server_from_the_tests(self):
+        # The variables a bot's run carries, pointing at a port nothing listens on: the harness's stub takes the upload.
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        task = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        os.environ.update(HUB_API_URL="http://127.0.0.1:9", HUB_TOKEN="t", HUB_TASK_ID=task)
+        attempts = []
+        def refuse(*a, **k):
+            attempts.append(a)
+            raise OSError("network is off in the mail tests")
+        with mock.patch("socket.socket.connect", refuse), mock.patch("socket.create_connection", refuse):
+            rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                       "--attach", "answer.pdf", "--issue", "1", "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(attempts, [])
+        self.assertEqual([(t, n) for t, n, _, _ in self.task_uploads], [(task, "answer.pdf")])
 
     def test_the_draft_text_shows_the_approval_request_with_the_files(self):
         self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))

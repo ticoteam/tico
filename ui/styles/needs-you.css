@@ -41,3 +41,16 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
   .req>summary{grid-template-columns:22px minmax(0,1fr) auto 14px;gap:8px}.req-meta{font-size:var(--t-xs)}
   .req-body{padding-left:4px;padding-right:4px}.issue-actions .github{margin-left:0}
 }
+/* a send approval: recipients and files readable, the exact payload folded under Details */
+.approval-facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0}
+.approval-facts dt{color:var(--muted)}
+.approval-facts dd{margin:0;overflow-wrap:anywhere}
+.approval-files{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.approval-files li{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;min-width:0}
+.approval-file-name{overflow-wrap:anywhere}
+.approval-file-warn{color:var(--wait);font-size:var(--t-sm)}
+.approval-file-size,.approval-file-hash{color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.approval-raw{margin-top:8px}
+.approval-raw>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
+.approval-raw pre{margin-top:6px}
+.approval-file-icon{flex:none;color:var(--muted);align-self:center}

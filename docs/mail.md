@@ -133,7 +133,12 @@ carries `draft` and `attachments: [{name, size, sha256}]`. At send time the conn
 files as they are in the Gmail draft and sends only if they are exactly the approved set for
 that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
 counts only when its `Send to:` line matches and it names each file and its sha256 (and no
-other hash). The owner's message telling the bot to send does not cover attachments.
+other hash). The owner's message telling the bot to send does not cover attachments. When the draft
+belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
+each file to it and adds its `file_id` to the request, so the approver can open the file from the
+approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
+file only to the version on the task whose stored sha256 and size are the approved ones. Attached
+files become readable by everyone who can read the task.
 
 `discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
 draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
