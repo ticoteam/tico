@@ -108,10 +108,11 @@ for the human who asked in chat with `hub bot update <slug>` (it takes their rig
 repository and publishes the history with the bot's own token, and never forces: if the repository
 already holds different history it stops and Health says so. You do not push other bots'
 repositories. If `hub bot create` failed with `github_permission_missing`, a person must act: the app
-was not given permission to create repositories. Finish steps 3 to 5 in the local repository anyway, then
-say plainly in the task note that the bot waits for its GitHub repository and that the owner has a
-Needs-you task with the two fixes. Do not work around it, and do not ask again: Tico finishes the
-repository on its own once the owner acts. Never create a repository for a slug the task did not name.
+was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 11). Finish
+steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
+GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
+once, and do not file another ask. Tico finishes the repository on its own once the owner acts, and the bot
+stays local until then. Never create a repository for a slug the task did not name.
 
 ## 5c. Close what you filed for a human
 
