@@ -90,7 +90,7 @@ const HELP_PLATFORMS = [
   ['Claude', 'Claude Code works with your team’s shared context and tools.'],
   ['OpenAI', 'Codex works with your team’s shared context and tools.'],
   ['Hermes', 'Connect a Hermes agent to your team’s shared work.'],
-  ['OpenClaw and more', 'Other supported agents connect through MCP and scoped access.'],
+  ['OpenClaw', 'Pair an OpenClaw profile with a code; it checks in on its own schedule.'],
 ];
 
 function pageHelp() {

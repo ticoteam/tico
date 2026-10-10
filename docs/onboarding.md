@@ -319,6 +319,8 @@ state are also placed. Existing assignments and repository grants stay in place.
 - **From a BotOps task**, inside a run: `hub bot create <slug> --template <template> --name
   "<Display>"`, then `hub bot check <slug>`. Both need `HUB_WORKSPACE`, which the runner puts in
   every run's environment.
+- **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
+  becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
 - **By hand on the Mac**: `scripts/tico -e <env> bot create <slug> --template <template>`. This
   materializes from the same templates with the environment's names but without the wizard
   answers, so `knowledge/company.md` says nobody has answered them. Register the bot in
