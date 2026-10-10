@@ -141,6 +141,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText: 'Updated the goal.'}).waitFor();
     gmExtra = Array.from({length:24}, (_, i) => ({id:'history-'+i, from_actor:'bot:goal-manager', body:'Earlier update '+i}));
+    // Streams held from earlier loads belong to pages that are gone: the change below must reach this page's own.
+    liveStreams.length = 0;
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText:'Earlier update 23'}).waitFor();
     const thread=page.locator('[data-gm-thread]');
