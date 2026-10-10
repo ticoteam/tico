@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Links and files show inline:** image links in task bodies, comments and chat show as a thumbnail that opens in the viewer, PDFs and documents (md, txt, csv, docx, xlsx, pptx, zip) as a card with the file's name and host, long links as host and a short path, and bare `https://` and `s3://` addresses become links. With `TICO_S3_VIEW_URLS` (`bucket=https://base`, such as a CloudFront distribution in front of the bucket), an `s3://` URI links to its view URL, and `hub` and the MCP tools rewrite it in a bot's text before sending; an unmapped one shows as a file chip with a Copy button. See docs/files.md, "Links to bucket objects".
+
 ### Fixed
 - Granola imports retry a throttled note fetch within the sync, after 20 and then 60 seconds, and keep the first note fetch ten seconds clear of the sync's setup calls. A failed batch whose first two single-note fetches fail alike stops without more calls, and the next sync fetches the notes left untried (or notes missing from Granola's reply), giving up after three syncs. An already-imported note is re-read only while the meeting is under a day old, counted from the meeting's listed start, and a stored transcript is never fetched again, so each sync spends far fewer calls. Status shows what Granola answered (`last_error_detail`: step, HTTP status, JSON-RPC code, tool error, `Retry-After`, the throttle phrase matched, batch size) and skipped counts per code (`skip_reasons`), without its text. See docs/meetings.md.
 

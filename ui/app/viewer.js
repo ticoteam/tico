@@ -57,7 +57,7 @@ function viewItemOf(el) {
   if (el.matches('.chat-thumb')) return {fileId: el.dataset.chatImage, name: el.dataset.name || 'image', kind: 'image'};
   if (el.matches('img')) return el.src ? {src: el.src, name: el.alt || 'image', kind: 'image'} : null;
   if (!el.matches('a[href]') || el.hasAttribute('download') || el.closest('#side, #mobile-nav, .nav-link, .upd-meta')) return null;
-  const text = (el.textContent || '').trim();
+  const text = (el.dataset.name || el.textContent || '').trim();      // a file card names its file in data-name
   const fileId = fileLinkId(el);
   if (fileId) return {fileId, name: text || 'file', kind: viewKindOf(text)};
   let url; try { url = new URL(el.getAttribute('href') || '', location.href); } catch { return null; }
@@ -267,10 +267,11 @@ function mediaInline(root = document) {
     const item = viewItemOf(a);
     if (item?.fileId && !item.kind) {
       fileMeta(item.fileId).then(meta => {
-        const kind = meta && viewKindOf(meta.name);
-        if (!kind || !a.isConnected) return;
+        const kind = meta && viewKindOf(meta.name), mark = meta && MD_FILE_MARK[extOf(meta.name)];
+        if (!(kind || mark) || !a.isConnected) return;
         if (kind === 'image' && meta.size <= INLINE_IMAGE_MAX && !a.closest('.chat-files')) mediaThumb(a, {...item, kind, name: meta.name});
-        else if (kind !== 'image') { a.classList.add('media-link'); a.dataset.media = MEDIA_MARK[kind] || ''; }
+        else if (mark && !a.closest('.chat-files')) fileCard(a, item.name, appName(), mark);
+        else if (kind && kind !== 'image') { a.classList.add('media-link'); a.dataset.media = MEDIA_MARK[kind] || ''; }
       });
       continue;
     }
@@ -286,6 +287,7 @@ function mediaThumb(a, item) {
     const b = Object.assign(document.createElement('button'), {type: 'button', className: 'inline-thumb'});
     b.setAttribute('aria-label', 'View ' + item.name);
     const img = document.createElement('img'); img.alt = item.name; img.decoding = 'async'; img.loading = 'lazy';
+    if (!item.fileId && !item.src.startsWith(location.origin + '/')) img.referrerPolicy = 'no-referrer';
     b.append(img); a.after(b);
     const set = src => { img.src = src; img.onload = () => b.classList.add('ready'); img.onerror = () => b.remove(); };
     if (item.fileId) viewFile(item.fileId, item.name).then(f => f.kind === 'image' ? set(f.url) : b.remove()).catch(() => b.remove());
