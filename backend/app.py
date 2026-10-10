@@ -393,7 +393,7 @@ def create_app(settings=None):
                 if not size.isdigit():
                     raise Problem("content_length", "Invalid Content-Length", 400)
                 upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
-                docs_import = (request.url.path == "/api/v2/docs/import"
+                docs_import = (request.url.path in ("/api/v2/docs/import", "/api/v2/market/import")
                                and request.state.identity.role in ("human", "owner", "bot"))
                 # A bot's computer publishes files up to 25 MB as raw bytes (backend/files.py).
                 published = (request.url.path in ("/api/v2/files/uploads", "/api/v2/files/imports")

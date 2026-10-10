@@ -184,10 +184,12 @@ def _need_evidence(conn, actor, ids):
 def _cite(conn, actor, kind, claim_id, evidence_ids, insight_id=None):
     if kind not in CLAIM_KINDS:
         H.refuse(conn, actor, "kind", f"a citation is {'|'.join(CLAIM_KINDS)}, not {kind}")
+    events = []
     for eid in evidence_ids:
         conn.execute("INSERT OR IGNORE INTO market_citations (claim_kind, claim_id, evidence_id) VALUES (?,?,?)",
                      (kind, claim_id, eid))
-        _event(conn, kind, claim_id, actor, "evidence", None, eid, insight_id)
+        events.append(_event(conn, kind, claim_id, actor, "evidence", None, eid, insight_id))
+    return events
 
 
 # ----------------------------------------------------------------------------- reads
@@ -446,21 +448,21 @@ def create_evidence(conn, actor, *, source_url="", source_kind="other", captured
     return evidence(conn, eid), [event_id]
 
 
+def _keys(name, aliases, external_ids):
+    """What an entity resolves by: its name, aliases and domain, lower case."""
+    keys = {str(name or "").strip().lower(), str((external_ids or {}).get("domain") or "").strip().lower()}
+    keys.update(str(a).strip().lower() for a in aliases or [])
+    keys.discard("")
+    return keys
+
+
 def _resolve_existing(conn, name, aliases, external_ids):
     """Entities whose name, alias or domain is one of these, active or merged."""
-    keys = {str(name or "").strip().lower()}
-    keys.update(str(a).strip().lower() for a in aliases or [] if str(a).strip())
-    domain = str((external_ids or {}).get("domain") or "").strip().lower()
-    if domain:
-        keys.add(domain)
-    keys.discard("")
+    keys = _keys(name, aliases, external_ids)
     found = []
     for row in conn.execute("SELECT * FROM market_entities"):
         item = _entity_row(row)
-        names = {item["name"].strip().lower()} | {str(a).strip().lower() for a in item["aliases"]}
-        if item["external_ids"].get("domain"):
-            names.add(str(item["external_ids"]["domain"]).strip().lower())
-        if names & keys:
+        if _keys(item["name"], item["aliases"], item["external_ids"]) & keys:
             found.append(item)
     return found
 
@@ -482,8 +484,8 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     eid = entity_id or f"{type}/{slug(name)}"
     if entity(conn, eid):
         H.refuse(conn, actor, "duplicate", f"{eid} already exists")
-    clash = [row for row in _resolve_existing(conn, name, aliases, external_ids) if row["id"] != eid]
-    if clash and not force:
+    clash = [] if force else [row for row in _resolve_existing(conn, name, aliases, external_ids) if row["id"] != eid]
+    if clash:
         H.refuse(conn, actor, "duplicate", f"{name} matches {clash[0]['id']}; pass force to create it anyway")
     ids = []
     if actor != SEED_ACTOR:
@@ -783,6 +785,151 @@ def apply_insight(conn, actor, insight_id, evidence_fields, *, entity_fields=Non
         events.extend(more)
     resolved = resolve(conn, actor, insight_id, "applied", resolution="Applied to the graph.", applied_events=events)
     return {"insight": resolved, "evidence": ev, "events": events}
+
+
+# ----------------------------------------------------------------------------- bulk import
+IMPORT_OUTCOMES = ("created", "updated", "skipped", "needs_human", "refused")
+
+
+def _filled(mapping):
+    """A merge never overwrites a value with an empty one."""
+    return {k: v for k, v in (mapping or {}).items() if v not in (None, "", [], {})}
+
+
+def _import_evidence(conn, actor, items, insight_id):
+    """One evidence row per item. The key is the source and its words, so importing a file again reuses them."""
+    ids, events = [], []
+    for item in items or []:
+        url, quote, read = str(item.get("url") or ""), str(item.get("quote") or ""), str(item.get("our_read") or "")
+        row, made = create_evidence(conn, actor, source_url=url, source_kind=item.get("source_kind") or "other",
+                                    captured_at=item.get("captured_at"), quote=quote, our_read=read,
+                                    insight_id=insight_id, evidence_key=evidence_id("\n".join((url, quote, read))))
+        ids.append(row["id"])
+        events.extend(made)
+    return ids, events
+
+
+def _import_entity_line(conn, actor, item, index, insight_id):
+    name = str(item.get("name") or "").strip()
+    aliases = [str(a).strip() for a in item.get("aliases") or [] if str(a).strip()]
+    external, properties = _filled(item.get("external_ids")), _filled(item.get("properties"))
+    explicit = str(item.get("id") or "").strip()
+    given = explicit or f"{item.get('type')}/{slug(name)}"
+    if explicit and entity(conn, given):
+        matches = {given}
+    else:
+        matches = set().union(*(index.get((item.get("type"), k), set()) for k in _keys(name, aliases, external)))
+        matches |= {given} if entity(conn, given) else set()
+    targets = set()
+    for found in (entity(conn, mid) for mid in matches):
+        targets.add(found["merged_into"] if found["status"] == "merged" and found["merged_into"] else found["id"])
+    if len(targets) > 1:
+        return "needs_human", f"{name or given} matches {', '.join(sorted(targets))}", [], None
+    ev_ids, events = _import_evidence(conn, actor, item.get("evidence"), insight_id)
+    if not targets:
+        row, more = create_entity(conn, actor, type=item.get("type"), name=name, aliases=aliases, external_ids=external,
+                                  tier=item.get("tier"), summary=item.get("summary") or "", properties=properties,
+                                  evidence_ids=ev_ids, force=True, insight_id=insight_id, entity_id=given)
+        return "created", f"created {row['id']}", events + more, row
+    row = entity(conn, targets.pop())
+    merged_aliases, seen = list(row["aliases"]), {a.lower() for a in row["aliases"]} | {row["name"].lower()}
+    for alias in [name, *aliases]:
+        if alias and alias.lower() not in seen:
+            merged_aliases.append(alias)
+            seen.add(alias.lower())
+    row, more = update_entity(conn, actor, row["id"], aliases=merged_aliases,
+                              external_ids={**row["external_ids"], **external}, tier=item.get("tier") or None,
+                              summary=str(item.get("summary") or "").strip() or None,
+                              properties={**row["properties"], **properties}, evidence_ids=ev_ids, insight_id=insight_id)
+    if more:
+        return "updated", f"updated {row['id']}", events + more, row
+    events += _cite(conn, actor, "entity", row["id"], ev_ids, insight_id)
+    return "skipped", f"{row['id']} already says this" + ("; evidence cited" if ev_ids else ""), events, row
+
+
+def _import_edge_line(conn, actor, item, ids, insight_id, today):
+    rel = item.get("rel")
+    src, dst = ids.get(item.get("src"), item.get("src")), ids.get(item.get("dst"), item.get("dst"))
+    same = [e for e in _same_pair(conn, rel, src, dst)
+            if (rel in SYMMETRIC or (e["src"], e["dst"]) == (src, dst)) and _current(e, today)]
+    ev_ids, events = _import_evidence(conn, actor, item.get("evidence"), insight_id)
+    if same:
+        row, more = same[0], []
+    else:
+        row, more = create_edge(conn, actor, src=src, rel=rel, dst=dst, since=item.get("since"),
+                                until=item.get("until"), confidence=item.get("confidence") or "medium",
+                                properties=item.get("properties") or {}, evidence_ids=ev_ids, insight_id=insight_id)
+    if more:
+        return "created", f"created edge {src} {rel} {dst}", events + more
+    events += _cite(conn, actor, "edge", row["id"], ev_ids, insight_id)
+    return "skipped", f"duplicate of edge {row['id']}" + ("; evidence cited" if ev_ids else ""), events
+
+
+def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=None):
+    """A verified batch, one JSON object per line: entities first, then edges, each line's evidence before the
+    write that cites it. A line that fails is rolled back and reported; the rest still apply. The whole import
+    is one market insight, applied with every event it produced. A dry run reports the same and keeps nothing."""
+    H._writer(conn, actor)
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    result = {"dry_run": bool(dry_run), "insight": None, **{k: 0 for k in IMPORT_OUTCOMES}, "lines": []}
+
+    def record(number, outcome, reason):
+        result[outcome] += 1
+        result["lines"].append({"line": number, "outcome": outcome, "reason": reason})
+
+    lines = []
+    for number, raw in enumerate(str(text or "").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            item = json.loads(raw)
+        except ValueError:
+            item = None
+        if not isinstance(item, dict) or item.get("kind") not in ("entity", "edge"):
+            record(number, "refused", 'not a JSON object with kind "entity" or "edge"')
+        else:
+            lines.append((number, item))
+    lines.sort(key=lambda pair: pair[1]["kind"] != "entity")
+    about = Path(str(source or "")).name or "market import"
+    conn.execute("SAVEPOINT market_import")
+    insight_id = report(conn, actor, kind="other", about=about,
+                        claim=str(note or "").strip() or f"Imported {about}.")["id"]
+    index, ids, applied = {}, {}, []
+    # Keyed by type too: a product that shares its company's domain is its own entity.
+    for row in conn.execute("SELECT id, type, name, aliases, external_ids FROM market_entities"):
+        for key in _keys(row["name"], loads(row["aliases"], []), loads(row["external_ids"], {})):
+            index.setdefault((row["type"], key), set()).add(row["id"])
+    for number, item in lines:
+        conn.execute("SAVEPOINT market_line")
+        try:
+            if item["kind"] == "entity":
+                outcome, reason, events, row = _import_entity_line(conn, actor, item, index, insight_id)
+            else:
+                (outcome, reason, events), row = _import_edge_line(conn, actor, item, ids, insight_id, today), None
+            conn.execute("RELEASE market_line")
+        except Exception as exc:
+            conn.execute("ROLLBACK TO market_line")
+            conn.execute("RELEASE market_line")
+            outcome, reason, events, row = "refused", exc.detail if isinstance(exc, H.Refused) else str(exc), [], None
+        if row:
+            for key in _keys(row["name"], row["aliases"], row["external_ids"]):
+                index.setdefault((row["type"], key), set()).add(row["id"])
+            if str(item.get("id") or "").strip():
+                ids[str(item["id"]).strip()] = row["id"]
+        applied.extend(events)
+        record(number, outcome, reason)
+    counts = ", ".join(f"{result[k]} {k.replace('_', '-')}" for k in IMPORT_OUTCOMES)
+    if applied:
+        resolve(conn, actor, insight_id, "applied", f"Imported {about}: {counts}.", applied)
+    else:
+        resolve(conn, actor, insight_id, "rejected", f"Nothing in {about} changed the graph: {counts}.")
+    if dry_run:
+        conn.execute("ROLLBACK TO market_import")
+    else:
+        result["insight"] = insight_id
+    conn.execute("RELEASE market_import")
+    result["lines"].sort(key=lambda line: line["line"])
+    return result
 
 
 def is_stale(row, today):
@@ -1582,6 +1729,16 @@ def install(app, store, auth, mutate):
                         update[field] = value
             return apply_insight(c, who.actor, insight_id, evidence_fields, entity_fields=entity_fields,
                                  edge_fields=edge_fields, entity_update=update)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/market/import")
+    def market_import(request: Request, body: M.MarketImport):
+        who = request.state.identity
+
+        def work(c):
+            require_writer(who)
+            return import_batch(c, who.actor, body.lines, source=body.name, note=body.note, dry_run=body.dry_run)
 
         return mutate(request, body, work)
 
