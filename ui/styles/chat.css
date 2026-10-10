@@ -36,14 +36,31 @@
 .conv-top{display:flex;justify-content:flex-end;color:var(--muted);font-size:var(--t-sm);min-height:18px;margin-bottom:var(--s2)}
 .conv-older{margin-bottom:6px}
 .conv-older[hidden]{display:none}
-.chat-activity{margin:8px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
-.chat-activity>summary{padding:9px 0;cursor:pointer}   /* the browser's ▸, as on the Note folds inside it */
-.chat-activity>summary b{color:var(--ink);font-weight:600}
-.chat-activity-items{padding:0 0 6px 18px;border-left:2px solid var(--line)}
-.chat-activity-items>.chat-system{margin:7px 0}
-.chat-activity-items>.chat-fold{margin:7px 0}
-.conv-bots{margin-top:10px}
-.conv-bots-box>summary{cursor:pointer;font-size:var(--t-sm);color:var(--muted);display:flex;gap:8px;align-items:center}
+/* Side traffic (bots between themselves, relays, notices, notes): one muted line per run, opened in place. */
+.chat-side{margin:4px 0;color:var(--muted);font-size:var(--t-sm);line-height:1.4}
+.chat-side>summary{padding:5px 0;cursor:pointer;display:flex;align-items:baseline;min-width:0}
+.chat-side>summary::before{content:"▶";flex:none;width:1.6em;font-size:.72em}
+.chat-side[open]>summary::before{content:"▼"}
+.chat-side>summary::-webkit-details-marker{display:none}
+.chat-side>summary b{flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-weight:500}
+.chat-side>summary .cs-gist{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.3em}
+.chat-side>summary .chat-time{flex:none;margin-left:8px}
+.chat-side-items{margin:2px 0 8px .45em;padding-left:12px;border-left:2px solid var(--line)}
+.cs-item{padding:5px 0}
+.cs-item+.cs-item{border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.cs-head{display:flex;align-items:baseline;gap:8px;min-width:0}
+.cs-head b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:500}
+.chat-side .cs-head .chat-time{flex:none;margin-left:auto}
+.cs-text{margin-top:1px;overflow-wrap:anywhere}
+.chat-side .cs-text.md{font-size:inherit;line-height:1.4;max-width:none}
+.cs-text.md>:first-child{margin-top:0}
+.cs-text.md>:last-child{margin-bottom:0}
+.cs-text.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;max-height:2.8em}
+.cs-text.clamp>*{margin:0;display:inline}
+.cs-text.clamp>*+*::before{content:" "}
+.cs-item.open .cs-text{color:var(--ink)}
+.cs-more{padding:2px 0;font-size:var(--t-sm);color:var(--muted);text-decoration:underline;background:none;border:0;cursor:pointer;min-height:28px}
+.cs-more:hover{color:var(--ink)}
 .conv-bots-one{margin:8px 0 12px;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
 .conv-bots-one .bubble{margin:6px 0;max-width:100%}
 /* a long-lived thread is tall: scroll it inside the card so the rest of the bot page stays reachable */
@@ -267,7 +284,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 #main.bot-split-layout #bot-chat-tasks{display:none!important}
 #pane-tasks .trow :is(summary,.trow-head){grid-template-columns:auto minmax(0,1fr) auto auto}   /* a long state pill never runs into the title */
 #main.chat-layout #conv-thread{flex:1;min-height:0;max-height:none;scrollbar-gutter:stable}
-#main.bot-chat-layout #conv-bots{flex:none;max-height:min(30vh,240px);overflow-y:auto}
 #main.bot-chat-layout #chat-composer{position:static;flex:none;z-index:auto;margin:var(--s3) 0 0;padding:0;background:transparent}
 #main.chat-layout .conv-top,#main.chat-layout .conv-older{flex:none}
 #main.chat-layout .conv-older:empty{display:none}
@@ -319,7 +335,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
    its run summary and a Confirm card stay on the page without one. The thread pads itself to the column, so
    its scrollbar stays on the pane's edge. */
 #main.bot-chat-layout #conv-thread{font-size:var(--read-size);padding-left:max(0px,calc((100% - var(--read-width)) / 2));padding-right:max(4px,calc((100% - var(--read-width)) / 2))}
-#main.bot-chat-layout #pane-chat>#conv-paused,#main.bot-chat-layout #pane-chat>#chat-composer,#main.bot-chat-layout #pane-chat>.bot-chat-tasks,#main.bot-chat-layout #conv-bots{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
+#main.bot-chat-layout #pane-chat>#conv-paused,#main.bot-chat-layout #pane-chat>#chat-composer,#main.bot-chat-layout #pane-chat>.bot-chat-tasks{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
 .bubble .md,.bubble.you{line-height:var(--read-leading)}
 .bubble.you{max-width:min(94%,96ch);background:var(--bubble);border:0;border-radius:12px;border-bottom-right-radius:4px;padding:7px 13px}
 .sess-turn.user .body{background:var(--bubble)}

@@ -270,7 +270,6 @@ async function pageBot(slug, tab) {
     <section class="card conv" id="conv"><div class="conv-top"><span class="sub" id="conv-state">Loading…</span><span class="spacer" style="flex:1"></span><span class="sub" id="conv-access"></span></div>
       <div class="conv-older" id="conv-older"></div>
       <div id="conv-thread"><div class="empty">Loading the thread…</div></div>
-      <div id="conv-bots" class="conv-bots"></div>
       <button type="button" class="conv-jump" id="conv-jump" hidden></button>
     </section>
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>

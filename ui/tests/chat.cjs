@@ -6,6 +6,8 @@
 //    ("keep the bot planned.I've filed the build").
 //  - outline: a prompt on a page not loaded yet is paged in and brought into view; the draft stays put.
 //  - activity fold: task and note cards in a row fold into one "N updates" row; older history loads only at the top.
+//  - side threads: the chat is the person and the bot; bot-to-bot talk, relays, notices and notes fold into one line
+//    per run, open in place, and never push the conversation's last message off the bottom.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -265,7 +267,7 @@ async function outlineJump(browser) {
   console.log('chat outline jump: ok');
 }
 
-// A lone card stays as it is; human prose that reads like a card is never folded.
+// Human prose that reads like a card is never folded.
 async function activityFold(browser) {
   const page = await browser.newPage({viewport: {width: 1100, height: 760}, serviceWorkers: 'block'}), errors = [], pages = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -313,9 +315,9 @@ async function activityFold(browser) {
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded);
 
-  const thread = page.locator('#conv-thread'), disclosure = page.locator('#conv-thread details.chat-activity'), summary = disclosure.locator('> summary');
-  assert.equal(await disclosure.count(), 1, 'consecutive typed task and note records share one row; a lone one stays as it is');
-  assert.match(await thread.innerText(), /Done: Review the next release/);
+  const thread = page.locator('#conv-thread'), disclosure = page.locator('#conv-thread details.chat-side').first(), summary = disclosure.locator('> summary');
+  assert.equal(await page.locator('#conv-thread details.chat-side').count(), 2, 'consecutive typed task and note records share one row; a lone one is a line of its own');
+  assert.match(await page.locator('#conv-thread details.chat-side').nth(1).locator('> summary').innerText(), /Done: Review the next release/);
   assert.equal(await summary.locator('b').innerText(), '4 updates');
   assert.equal(await summary.locator('time').getAttribute('title'), await page.evaluate(t => fmt(t), at(4)), 'one time: the latest');
   assert.equal(await disclosure.evaluate(el => el.open), false, 'activity starts collapsed');
@@ -328,8 +330,8 @@ async function activityFold(browser) {
   await page.setViewportSize({width:1100,height:760});
 
   assert.equal(await thread.locator('.chat-goal-line').count(), 1, 'the ended goal is not absorbed into the activity row');
-  const topOrder = await thread.evaluate(el => [...el.children].filter(x => x.matches('.chat-activity,.chat-goal-line'))
-    .map(x => x.classList.contains('chat-activity') ? 'activity' : 'goal'));
+  const topOrder = await thread.evaluate(el => [...el.children].filter(x => x.matches('.chat-side,.chat-goal-line'))
+    .map(x => x.classList.contains('chat-side') ? 'activity' : 'goal'));
   assert.deepEqual(topOrder.slice(0,2), ['activity','goal'], 'goal-line insertion stays after grouped activity');
   assert.equal(await thread.locator('.bubble').count(), 15, 'ordinary chat remains in its own messages');
   assert.match(await thread.innerText(), /New task from Head of Engineering is only a quote here/);
@@ -337,18 +339,16 @@ async function activityFold(browser) {
   assert.match(await thread.innerText(), /Note: I checked the release page\./);
 
   await summary.focus(); await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelector('#conv-thread details.chat-activity')?.open);
-  await page.waitForFunction(() => V2C.openFolds?.has('activity:task-created'));
+  await page.waitForFunction(() => document.querySelector('#conv-thread details.chat-side')?.open);
+  await page.waitForFunction(() => V2C.openFolds?.has('side:task-created'));
   await page.evaluate(() => v2ChatRender(V2C));
-  await page.waitForFunction(() => document.querySelector('#conv-thread details.chat-activity')?.open);
+  await page.waitForFunction(() => document.querySelector('#conv-thread details.chat-side')?.open);
   assert.match(await disclosure.innerText(), /New task from Head of Engineering: Review the next release/);
   assert.match(await disclosure.innerText(), /Cloud transcript shows performance goal\./);
-  const note = disclosure.locator('.chat-activity-items > details.chat-fold').first();
-  await note.locator('> summary').focus(); await page.keyboard.press('Enter');
-  await note.locator('a[href="https://example.test/audit"]').waitFor();
+  await disclosure.locator('.cs-item a[href="https://example.test/audit"]').waitFor();
   assert.equal(await disclosure.locator('time').count(), 5, 'summary and all original activity entries retain their timestamps');
   await summary.focus(); await page.keyboard.press('Enter');
-  await page.waitForFunction(() => !document.querySelector('#conv-thread details.chat-activity')?.open);
+  await page.waitForFunction(() => !document.querySelector('#conv-thread details.chat-side')?.open);
 
   const older = page.locator('#conv-older'), button = older.locator('[data-cloud-older]');
   await thread.evaluate(el => { el.scrollTop = el.scrollHeight; });
@@ -357,14 +357,14 @@ async function activityFold(browser) {
   await thread.evaluate(el => { el.scrollTop = 0; });
   await page.waitForFunction(() => !document.querySelector('#conv-older').hidden);
   const anchorBefore = await page.evaluate(() => {
-    const t = document.querySelector('#conv-thread'), a = t.querySelector('details.chat-activity').getBoundingClientRect();
+    const t = document.querySelector('#conv-thread'), a = t.querySelector('details.chat-side').getBoundingClientRect();
     return a.top - t.getBoundingClientRect().top;
   });
   await button.focus(); await page.keyboard.press('Enter');
   await page.waitForFunction(() => V2C.messages.some(m => m.id === 'older-a'));
   assert.deepEqual(pages, ['cursor-1'], 'keyboard activation requests the server cursor');
   const anchorAfter = await page.evaluate(() => {
-    const t = document.querySelector('#conv-thread'), a = t.querySelector('details.chat-activity').getBoundingClientRect();
+    const t = document.querySelector('#conv-thread'), a = t.querySelector('details.chat-side').getBoundingClientRect();
     return a.top - t.getBoundingClientRect().top;
   });
   assert.ok(Math.abs(anchorAfter - anchorBefore) <= 2, 'prepending keeps the previous content anchored');
@@ -381,6 +381,105 @@ async function activityFold(browser) {
   console.log('chat activity fold and top-only older control: ok');
 }
 
+// The chat is Ana and the CMO. Twenty pieces of side traffic in a row (other bots, a relay from another bot's run,
+// task notices, a note) are one line; what waits on Ana stays in the conversation; its last message stays at the bottom.
+async function sideThreads(browser) {
+  const page = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, serviceWorkers: 'block'}), errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
+  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
+  const long = 'From dot (Dots): the national continuation is delivered. ' + 'It adds reviewed records with samples in every provisional destination. '.repeat(6);
+  const side = Array.from({length: 20}, (_, i) => i === 7
+    ? say('relay', 'bot:cmo', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
+    : i === 11 ? say('note', 'bot:cmo', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
+    : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:cmo', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
+    : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:cmo', i % 2 ? 'bot:cmo' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
+  const messages = [
+    say('ask-1', 'human:ana', 'bot:cmo', 'Get me a new customer a day.', 1),
+    say('reply-1', 'bot:cmo', 'human:ana', 'On it.', 2, {in_reply_to: 'ask-1', refs: {turn_id: 'turn-1'}}),
+    ...side,
+    say('approval', 'bot:cmo', 'human:ana', 'Approve this send: the first outreach batch', 40, {kind: 'notice', refs: {approval: 'ap-1', task: 't1'}}),
+    say('ask-2', 'human:ana', 'bot:cmo', 'What did Dots find?', 41),
+    say('quote', 'bot:cmo', 'human:ana', 'From dot (Dots): 198 records. My read: go with managed homes.', 42, {in_reply_to: 'ask-2', refs: {turn_id: 'turn-2'}}),
+    say('late-1', 'bot:dots', 'bot:cmo', 'Switching the census to managed homes.', 43),
+    say('late-2', 'keeper', 'bot:cmo', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
+  ];
+  const snapshot = {messages, next_before: null, execution: null, goal: null};
+  const talk = [{id: 'b1', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:cmo', to_actor: 'bot:seo', body: 'Can SEO read Respona?', created: at(30), refs: {}},
+                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', from_actor: 'bot:seo', to_actor: 'bot:cmo', body: 'Yes, read-only.', created: at(31), refs: {}}];
+  const bots = ['cmo', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'cmo' ? 'CMO' : name[0].toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url()), p = url.pathname;
+    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
+    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+    if (p === '/api/employees') return json(bots);
+    if (p === '/api/issues') return json([]);
+    if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot')
+      ? [{id: 'c-ask', kind: 'ask', participants: ['bot:cmo', 'bot:seo'], subject: 'Respona access'}]
+      : [{id: 'c-cmo', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:cmo']}]});
+    if (p === '/api/v2/conversations/c-cmo/snapshot' || p === '/api/v2/conversations/c-cmo/messages') return json(snapshot);
+    if (p === '/api/v2/conversations/c-ask/messages') return json({messages: talk});
+    return json({});
+  });
+  await page.goto('https://tico-ui.test/#/bot/cmo/chat');
+  await page.waitForFunction(() => V2C?.rendered && V2C.loaded && V2C.botTalk?.length);
+
+  // Classified on fields, not words: the reply that quotes Dots is the conversation, the relay from Dots' run is not.
+  const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'cmo')])));
+  assert.deepEqual([kinds['ask-1'], kinds['reply-1'], kinds.quote, kinds.approval], ['', '', '', ''], 'the person, the bot\'s replies and an approval are the conversation');
+  assert.deepEqual([kinds.relay, kinds.note, kinds['side-1'], kinds['side-2'], kinds['side-3'], kinds['late-2']], ['relay', 'note', 'bots', 'bots', 'notice', 'notice']);
+  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', from_actor: 'bot:dots', to_actor: 'human:ana', body: 'Which ranking?'}, 'cmo')), '', 'a question to the person waits on them');
+
+  const thread = page.locator('#conv-thread'), runs = thread.locator('details.chat-side');
+  assert.equal(await page.locator('#conv-bots').count(), 0, 'no second strip for bot-to-bot talk');
+  const big = runs.first(), summary = big.locator('> summary');
+  assert.equal(await big.getAttribute('data-side-count'), '22', 'the twenty side items and the bot-to-bot ask between them are one line');
+  assert.match(await summary.innerText(), /^22 updates\s*· tasks, Dots, Botops \+2\s/, 'how many, who (first three), when');
+  assert.equal(await big.evaluate(el => el.open), false, 'it starts folded');
+  const box = await summary.boundingBox();
+  assert.ok(box.height < 34, `one compact line (${box.height}px)`);
+  assert.equal(await thread.locator('.bubble').count(), 4, 'four messages between Ana and the CMO');
+  assert.equal(await thread.locator('> .chat-system', {hasText: 'Approve this send'}).count(), 1, 'the approval stays in the conversation');
+  const order = await thread.evaluate(el => [...el.children].map(x => x.dataset.message || (x.matches('.chat-side') ? 'side' : x.className)));
+  assert.deepEqual(order, ['ask-1', 'reply-1', 'side', 'approval', 'ask-2', 'side', 'quote'],
+    'side items after the last reply join the line above it, so the conversation ends the thread');
+
+  await summary.tap();
+  await page.waitForFunction(() => V2C.openFolds?.has('side:side-0'));
+  assert.equal(await big.locator('.cs-item').count(), 22);
+  const relay = big.locator('.cs-item[data-message="relay"]'), more = relay.locator('[data-cs-more]');
+  assert.ok((await relay.locator('.cs-text').boundingBox()).height < 40, 'a long item shows two lines');
+  await more.tap();
+  await relay.locator('[data-cs-more]', {hasText: 'Show less'}).waitFor();
+  assert.ok((await big.locator('.cs-item[data-message="relay"] .cs-text').boundingBox()).height > 100, 'show more opens the whole message');
+  assert.equal(await big.locator('.cs-item[data-message="b1"]').count(), 1, 'the ask between bots is in the line');
+  await page.evaluate(() => v2ChatRender(V2C));
+  assert.equal(await big.evaluate(el => el.open), true, 'a redraw keeps the line open');
+
+  // New side traffic while reading (the open line makes the thread scroll) joins a line; a new reply brings the pill.
+  await thread.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+  await page.waitForFunction(() => !V2C.followLatest);
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:cmo', 'Granted.', 45));
+  assert.equal(await runs.count(), 2, 'no new line for it');
+  assert.equal(await runs.nth(1).getAttribute('data-side-count'), '3');
+  assert.equal(await page.locator('#conv-jump').isHidden(), true, 'side traffic is not a new reply');
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('reply-3', 'bot:cmo', 'human:ana', 'First prospects are out.', 46, {in_reply_to: 'ask-2'}));
+  await page.locator('#conv-jump', {hasText: 'New reply'}).waitFor();
+  await page.locator('#conv-jump').tap();
+  await page.waitForFunction(() => { const t = document.querySelector('#conv-thread'); return t.scrollTop + t.clientHeight >= t.scrollHeight - 2; });
+  assert.equal(await thread.evaluate(el => el.lastElementChild.dataset.message), 'reply-3');
+  await summary.tap();
+  await page.waitForFunction(() => !document.querySelector('#conv-thread details.chat-side').open);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no mobile overflow');
+  assert.deepEqual(errors, []);
+  console.log('chat side threads fold to one line: ok');
+}
+
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
   try {
@@ -388,5 +487,6 @@ async function activityFold(browser) {
     await liveReply(browser);
     await outlineJump(browser);
     await activityFold(browser);
+    await sideThreads(browser);
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

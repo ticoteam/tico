@@ -108,33 +108,24 @@ async function v2ChatFind(state) {
   }
   state.failed = true;
 }
-// Between bots: what this bot asked, answered, or was handed by other bots (asks and task
-// conversations), newest first, so a person can see the COO check with the CMO from either
-// page. The owner-only route answers 403 for anyone else, and the section stays empty.
+// What this bot asked, answered, or was handed by other bots (asks and task conversations), so a person sees the COO
+// check with the CMO from either page. They are side traffic in the chat (chatSideKind): each message joins the
+// folded line where its time falls. The owner-only route answers 403 for anyone else, and nothing is added.
 const BOTS_SHOWN = 5;
 async function v2BotsLoad(state) {
-  const el = $('#conv-bots');
-  if (!el || V2C !== state) return;
+  if (V2C !== state) return;
   const list = await v2Get(`/v2/conversations?bot=${encodeURIComponent(state.slug)}`);
   if (V2C !== state || !list) return;
   const me = `bot:${state.slug}`;
   const convs = (list.conversations || [])
-    .filter(c => c.kind !== 'chat' && c.kind !== 'notice'
+    .filter(c => c.kind !== 'chat' && c.kind !== 'notice' && c.id !== state.conv?.id
       && (c.participants || []).some(p => p !== me && String(p).startsWith('bot:')))
     .slice(0, BOTS_SHOWN);
-  if (!convs.length) { el.innerHTML = ''; return; }
+  if (!convs.length) return;
   const bodies = await Promise.all(convs.map(c => v2Get(`/v2/conversations/${encodeURIComponent(c.id)}/messages`)));
   if (V2C !== state) return;
-  el.innerHTML = `<details class="conv-bots-box"><summary>Between bots<span class="muted">${convs.length} recent</span></summary>${
-    convs.map((c, n) => {
-      const other = (c.participants || []).find(p => p !== me) || '';
-      const msgs = (bodies[n]?.messages || []);
-      return `<div class="conv-bots-one"><div class="conv-run-head">${actorChip(other)}
-          <span class="pill">${esc(c.kind || '')}</span>${c.subject ? `<span class="muted">${esc(c.subject)}</span>` : ''}
-          <span class="spacer" style="flex:1"></span><span class="tnum">${esc(ago(c.last_message_at || c.created))}</span></div>
-        ${msgs.map(m => `<div class="bubble ${m.from_actor === me ? 'bot reply' : 'you'}"><span class="who">${esc(actorLabel(m.from_actor))}</span><div class="md">${safeMd(m.body || '')}</div>${chatCopyHTML(m.body)}</div>`).join('')
-          || '<div class="empty">No messages yet.</div>'}</div>`;
-    }).join('')}</details>`;
+  state.botTalk = convs.flatMap((c, n) => (bodies[n]?.messages || []).map(m => ({...m, elsewhere: {kind: c.kind, subject: c.subject || ''}})));
+  if (state.botTalk.length) v2ChatRender(state);
 }
 async function v2ChatMessages(state) {
   if (!state.conv) return false;
@@ -324,7 +315,7 @@ function v2MessageHTML(m) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
     return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>Note</b> · ${esc(title)} ${when}</summary><div class="md">${safeMd(plainActors(m.body), {shortLinks: true})}</div></details>`;
   }
-  if (m.kind === 'notice') return `<div class="chat-system"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
+  if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
   if (String(m.from_actor || '').startsWith('bot:') && String(m.to_actor || '').startsWith('bot:') && m.to_actor !== m.from_actor)
     return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.from_actor))} → ${esc(actorLabel(m.to_actor))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
@@ -344,35 +335,82 @@ function v2MessageHTML(m) {
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
     ${v2RunHTML(m)}${v2MessageCards(m)}</div>`;
 }
-// The Hub writes task and mirrored-note cards with typed refs. Fold only those known automated
-// records; a human quote that happens to start with "New task" or "Note" remains ordinary chat.
-function v2ActivityMessage(m) {
-  const refs = m?.refs || {}, task = refs.task || refs.task_id;
-  if (!task || actorPerson(m.from_actor)) return false;
-  if (refs.note === true) return String(m.from_actor || '').startsWith('bot:');
-  return m.kind === 'notice' && m.from_actor === 'keeper';
+// The chat is the person and the bot. A person's own words, the bot's replies to them, and anything that waits on them
+// (a question, an approval, a Confirm or credential card) are the conversation. Everything else is side traffic:
+// bots talking to each other, a bot's message relayed from another bot's run, the keeper's task and system notices, a
+// task's notes. Side traffic folds into one line per run (v2MessagesHTML); nothing is dropped. Read from the message's
+// fields, never its words: a reply that quotes another bot is still a reply.
+const chatNeedsYou = m => !!(m.refs?.action || m.refs?.credential_request)
+  || !!actorPerson(m.to_actor) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
+function chatSideKind(m, slug) {
+  const from = String(m.from_actor || ''), refs = m.refs || {};
+  if (m.elsewhere) return 'bots';                       // a conversation between bots, shown in this chat's timeline
+  if (actorPerson(from)) return '';
+  if (chatNeedsYou(m) || refs.chat_goal) return '';
+  if (refs.note) return 'note';
+  // A reply addressed to a person (the bot's answer, or why it could not start) is the conversation.
+  if (m.in_reply_to && actorPerson(m.to_actor)) return '';
+  const self = slug && (from === `bot:${slug}` || from === `bot:${botBranchChatTarget(slug)}`);
+  if (self && !actorSlug(m.to_actor) && m.to_actor !== 'keeper')
+    // A loose message sent while a run another bot started was working: that bot's news, passed on (backend/turns.py).
+    return m.prompted_by === 'bot' && !refs.turn_id ? 'relay' : '';
+  return from === 'keeper' || m.kind === 'notice' ? 'notice' : 'bots';
 }
-// A run of two or more folds into one row: how many, and when the latest landed.
-function v2ActivityHTML(messages) {
-  const first = messages[0], last = messages.at(-1);
+// Who a side item is from, as the folded line names it: the other bot in a bot-to-bot message, else the sender.
+function chatSideName(m, slug) {
+  if (m.from_actor === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
+  const self = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
+  if (self.includes(m.from_actor) && actorSlug(m.to_actor) && !self.includes(m.to_actor)) return actorLabel(m.to_actor);
+  return actorLabel(m.from_actor);
+}
+function chatSideHead(m) {
+  if (m.refs?.note) return 'Note' + ((t => t ? ' · ' + t : '')(Object.values(m.ref_tasks || {})[0]?.title || ''));
+  if (m.from_actor === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
+  const to = m.to_actor && m.to_actor !== m.from_actor ? ' → ' + actorLabel(m.to_actor) : '';
+  return actorLabel(m.from_actor) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
+}
+// About two lines at phone width: longer text, or more than one line of it, gets "Show more".
+const CHAT_SIDE_SHORT = 110;
+// One side item, at most two lines; a longer one opens in place with "Show more", with its files.
+function chatSideItemHTML(m) {
+  const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
+  const open = long && V2C?.openSide?.has(m.id);
+  const when = m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : '';
+  return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
+    <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
+    <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
+    ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}</div>`;
+}
+// A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
+function chatSideHTML(messages, slug) {
+  const first = messages[0], last = messages.at(-1), key = `side:${first.id || ''}`;
   const when = last?.created ? `<time class="chat-time" title="${esc(fmt(last.created))}">${esc(ago(last.created))}</time>` : '';
-  return `<details class="chat-activity chat-fold" data-fold="activity:${esc(first.id || '')}"${v2FoldOpen({id: `activity:${first.id || ''}`}) ? ' open' : ''}>
-    <summary><b>${messages.length} updates</b>${when}</summary><div class="chat-activity-items">${messages.map(v2MessageHTML).join('')}</div></details>`;
+  const names = [...new Set(messages.map(m => chatSideName(m, slug)).filter(Boolean))];
+  const who = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
+  const label = messages.length === 1
+    ? `<b>${esc(chatSideHead(first))}</b><span class="cs-gist">· ${esc(chatLine(plainActors(first.body), 90))}</span>`
+    : `<b>${messages.length} updates</b><span class="cs-gist">· ${esc(who)}</span>`;
+  return `<details class="chat-side chat-fold" data-fold="${esc(key)}" data-side-count="${messages.length}"${v2FoldOpen({id: key}) ? ' open' : ''}>
+    <summary>${label}${when}</summary><div class="chat-side-items">${messages.map(chatSideItemHTML).join('')}</div></details>`;
 }
-function v2MessagesHTML(messages, goalLine) {
+// The thread: the conversation as it was, each run of side items folded to one line. Side items that came after the
+// last thing in the conversation join the line just above it, so the conversation's last message stays at the bottom
+// and a bot-to-bot exchange arriving while you read changes a count instead of pushing the chat up.
+function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
   const feed = [];
   messages.forEach((message, i) => {
     if (goalLine?.at === i) feed.push({html: goalLine.html});
-    feed.push({message});
+    feed.push({message, side: !!chatSideKind(message, slug)});
   });
   if (goalLine?.at === messages.length) feed.push({html: goalLine.html});
+  const lastMain = feed.findLastIndex(item => !item.side);
+  if (lastMain >= 0 && lastMain < feed.length - 1) feed.splice(lastMain, 0, ...feed.splice(lastMain + 1));
   const rows = [];
   for (let i = 0; i < feed.length;) {
-    const item = feed[i];
-    if (!item.message || !v2ActivityMessage(item.message)) { rows.push(item.html || v2MessageHTML(item.message)); i++; continue; }
-    const group = [];
-    while (i < feed.length && feed[i].message && v2ActivityMessage(feed[i].message)) group.push(feed[i++].message);
-    rows.push(group.length > 1 ? v2ActivityHTML(group) : v2MessageHTML(group[0]));
+    if (!feed[i].side) { rows.push(feed[i].html || v2MessageHTML(feed[i].message)); i++; continue; }
+    const run = [];
+    while (i < feed.length && feed[i].side) run.push(feed[i++].message);
+    rows.push(chatSideHTML(run, slug));
   }
   return rows.join('');
 }
@@ -412,11 +450,29 @@ function v2PendingHTML(state) {
   return `<div class="thinking" data-pending="${esc(key)}" title="${esc(t.tip)}" role="status" aria-label="${esc(t.tip)}">
     <span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span>${t.word ? `<span class="thinking-word" aria-hidden="true">${esc(t.word)}</span>` : ''}${providerMissing ? ' <a href="#/settings" data-gs-tab="providers">Add an AI provider</a>' : ''}</div>`;
 }
-// Scrolled up when something new lands: a small pill above the composer takes you to it.
+// Bot-to-bot messages from this bot's other conversations (v2BotsLoad), in time order with the chat's own. Those older
+// than the loaded page wait until older messages are loaded, so they never pile up above the history.
+function v2WithBotTalk(state, messages) {
+  const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created || '') || 0 : 0;
+  const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (Date.parse(m.created || '') || 0) >= from);
+  if (!talk.length) return messages;
+  // Merged in, never re-sorted: the chat's own order stays exactly as the server gave it.
+  const time = m => Date.parse(m.created || '') || 0, out = [];
+  talk.sort((a, b) => time(a) - time(b));
+  let t = 0;
+  for (const m of messages) {
+    while (t < talk.length && time(talk[t]) <= time(m)) out.push(talk[t++]);
+    out.push(m);
+  }
+  return out.concat(talk.slice(t));
+}
+const shownById = (state, id) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
+// Scrolled up when something new lands: a small pill above the composer takes you to it. Only the conversation
+// counts; a side item joins its folded line without a pill.
 function v2Jump(state, fresh) {
   const jump = $('#conv-jump'), thread = $('#conv-thread');
   if (!jump || !thread) return;
-  const last = state.messages.at(-1);
+  const last = state.lastMain;
   if (state.followLatest) state.seenLast = last?.id;
   const show = !state.followLatest && !!last && last.id !== state.seenLast;
   if (show && fresh) jump.textContent = actorPerson(last.from_actor) ? 'Latest ↓' : 'New reply ↓';
@@ -445,6 +501,13 @@ function v2ChatRender(state) {
       if (fold) { state.openFolds ||= new Set(); state.openFolds[ev.target.open ? 'add' : 'delete'](fold); }
     }, true);
     thread.addEventListener('click', ev => {
+      const more = ev.target.closest('[data-cs-more]');
+      if (more && V2C === state) {
+        state.openSide ||= new Set();
+        state.openSide[state.openSide.has(more.dataset.csMore) ? 'delete' : 'add'](more.dataset.csMore);
+        more.closest('.cs-item').outerHTML = chatSideItemHTML(shownById(state, more.dataset.csMore));
+        return;
+      }
       if (!ev.target.closest('[data-pending-dismiss]') || V2C !== state) return;
       state.dismissed = ev.target.closest('[data-pending]')?.dataset.pending;
       v2ChatRender(state);
@@ -458,9 +521,10 @@ function v2ChatRender(state) {
   const atEnd = !state.rendered || state.followLatest;
   const wasTop = thread.scrollTop, wasHeight = thread.scrollHeight;
   // A goal's controls (the /goal messages the server sends for Set, Pause, Clear) are the bar above, not bubbles.
-  const shown = state.messages.filter(m => m.refs?.maintenance !== 'checkpoint' && !chatGoalControl(m));
+  const shown = v2WithBotTalk(state, state.messages.filter(m => m.refs?.maintenance !== 'checkpoint' && !chatGoalControl(m)));
+  state.lastMain = shown.findLast(m => !chatSideKind(m, state.slug)) || null;
   const goalLine = chatGoalLine(state, shown);
-  const groups = v2MessagesHTML(shown, goalLine);
+  const groups = v2MessagesHTML(shown, goalLine, state.slug);
   const pending = state.live && !state.live.text ? v2PendingHTML(state) : '';
   if (!pending) clearTimeout(state.waitTimer);
   const live = state.live?.text
