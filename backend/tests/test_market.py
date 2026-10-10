@@ -109,6 +109,19 @@ def test_market_import_is_for_the_librarian_and_the_owner(api, tmp_path):
         assert not M.entity(c, "company/turno")
 
 
+def test_market_import_refuses_a_batch_over_the_line_cap(api, tmp_path):
+    _seed(api, tmp_path)
+    one = _jsonl({"kind": "entity", "type": "company", "name": "Turno", "evidence": _ev("Turno cleans.")}).strip()
+    lines = "\n".join([one] * (M.IMPORT_MAX_LINES + 1)) + "\n\n"
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COUNT(*) FROM market_insights").fetchone()[0]
+    body = post(api, "market/import", {"lines": lines}, expected=413)
+    assert body["error"]["code"] == "too_many_lines" and str(M.IMPORT_MAX_LINES) in body["error"]["detail"]
+    with api.app.state.store.read() as c:
+        assert not M.entity(c, "company/turno")
+        assert c.execute("SELECT COUNT(*) FROM market_insights").fetchone()[0] == before
+
+
 def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
     _seed(api, tmp_path)
     lines = _jsonl(

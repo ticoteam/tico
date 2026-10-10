@@ -1035,7 +1035,7 @@ def parser():
     s.add_argument("--edge-dst", dest="edge_dst")
     s.set_defaults(fn="market apply")
     s = market.add_parser("import", help="apply a verified batch: one JSON entity or edge per line, each with its evidence")
-    s.add_argument("file", help="the JSONL file; - reads stdin")
+    s.add_argument("file", help="the JSONL file, at most 2000 non-blank lines (split larger ones); - reads stdin")
     s.add_argument("--dry-run", dest="preview", action="store_true", help="report what would change and keep nothing")
     s.add_argument("--note", default="", help="one sentence on where the batch came from")
     s.set_defaults(fn="market import")

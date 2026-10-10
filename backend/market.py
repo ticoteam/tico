@@ -789,6 +789,8 @@ def apply_insight(conn, actor, insight_id, evidence_fields, *, entity_fields=Non
 
 # ----------------------------------------------------------------------------- bulk import
 IMPORT_OUTCOMES = ("created", "updated", "skipped", "needs_human", "refused")
+# Lines per request: the batch holds the write lock while it applies, so a larger one is split.
+IMPORT_MAX_LINES = 2000
 
 
 def _filled(mapping):
@@ -877,6 +879,10 @@ def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=
         result[outcome] += 1
         result["lines"].append({"line": number, "outcome": outcome, "reason": reason})
 
+    count = sum(1 for raw in str(text or "").splitlines() if raw.strip())
+    if count > IMPORT_MAX_LINES:
+        raise Problem("too_many_lines", f"This batch has {count} lines; an import takes at most {IMPORT_MAX_LINES}. "
+                      f"Split the file into batches of {IMPORT_MAX_LINES} lines or fewer and import each.", 413)
     lines = []
     for number, raw in enumerate(str(text or "").splitlines(), 1):
         if not raw.strip():
