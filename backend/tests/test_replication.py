@@ -276,3 +276,113 @@ def test_a_fresh_install_starts_and_leaves_markers_a_later_empty_volume_respects
         subprocess.run(["rm", "-rf", str(item)])
     again, _ = prepare(tmp_path, restore_fails=True)
     assert again.returncode != 0 and not (data / "hub.sqlite").exists()
+
+
+# -- every key file a restored database needs, not only credential.key ------------------------------------------------
+
+PEM = "-----BEGIN RSA PRIVATE KEY-----\nsynthetic\n-----END RSA PRIVATE KEY-----\n"
+SLACK_BOT, SLACK_APP = "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000"
+
+
+def seal_secrets(data):
+    """A local-key install (no TICO_CREDENTIAL_KMS_KEY) with a GitHub App, directory sync credentials and Slack tokens."""
+    from backend import slack_app
+    from backend.config import Settings
+    from backend.directory import Directory
+    from backend.github_app import GitHubApp
+    from backend.store import Store
+    settings = Settings(db_path=data / "hub.sqlite")
+    store = Store(settings)
+    store.initialize()
+    app = GitHubApp(settings, store)
+    directory = Directory(settings, store, app)
+    with store.transaction() as c:
+        app.save(c, "human:ana", "Acme", True, {"id": 7, "slug": "acme-tico", "client_id": "Iv1.synthetic", "pem": PEM,
+                                                 "webhook_secret": "whsec-synthetic", "client_secret": "cs-synthetic"})
+        directory.put_credentials(c, "human:ana", "entra", {"tenant": "t", "client_id": "c", "client_secret": "s"}, "app c in t")
+    slack_app.save(store, settings, "human:ana", SLACK_BOT, SLACK_APP)
+
+
+def open_secrets(data):
+    """What a server on `data` can decrypt: {github, directory, slack}, each the plaintext or the error."""
+    from backend import slack_app
+    from backend.config import Settings
+    from backend.directory import Directory
+    from backend.github_app import GitHubApp
+    from backend.store import Problem, Store
+    settings = Settings(db_path=data / "hub.sqlite")
+    store = Store(settings)
+    app = GitHubApp(settings, store)
+    directory = Directory(settings, store, app)
+    found = {}
+    with store.transaction() as c:
+        try:
+            found["github"] = app.private_key(c, app.row(c))
+        except Problem as exc:
+            found["github"] = exc.detail
+        try:
+            found["directory"] = directory.credentials(c, "entra")["client_secret"]
+        except Problem as exc:
+            found["directory"] = exc.detail
+    stored = slack_app.load(store, settings)
+    found["slack"] = stored["bot_token"] if stored else None
+    found["webhook"] = app.webhook_secret()
+    return found
+
+
+def test_a_restore_into_a_fresh_volume_can_decrypt_the_github_directory_and_slack_secrets(tmp_path):
+    """The real path: the backup loop copies what Litestream does not, a database copy stands in for Litestream's, and
+    `restore` (docker/entrypoint.sh) rebuilds an empty volume from both."""
+    live = tmp_path / "data"
+    live.mkdir()
+    seal_secrets(live)
+    assert open_secrets(live) == {"github": PEM, "directory": "s", "slack": SLACK_BOT, "webhook": "whsec-synthetic"}
+    replication.loop(key_env(tmp_path), sleep=lambda s: None, rounds=1)
+    from backend import manage
+    manage.main(["snapshot", str(live / "hub.sqlite"), str(tmp_path / "litestream-copy.sqlite")])
+    live.rename(tmp_path / "lost-server")
+    result = entrypoint(tmp_path, env={"STUB_DB": str(tmp_path / "litestream-copy.sqlite")})
+    assert result.returncode == 0, result.stderr
+    assert open_secrets(tmp_path / "data") == {"github": PEM, "directory": "s", "slack": SLACK_BOT, "webhook": "whsec-synthetic"}
+    for name in replication.KEY_FILES:
+        assert (tmp_path / "backups" / "credential-key" / name).stat().st_mode & 0o077 == 0
+        assert (tmp_path / "data" / name).stat().st_mode & 0o777 == 0o600
+    assert "restored github-app.key" in result.stdout and "restored slack.key" in result.stdout
+    status = replication.status(key_env(tmp_path))
+    assert set(status["key_files"]) == set(replication.KEY_FILES)
+
+
+def test_an_older_backup_without_the_other_key_files_still_restores_and_reads_create_no_new_key(tmp_path):
+    live = tmp_path / "data"
+    live.mkdir()
+    seal_secrets(live)
+    replication.loop(key_env(tmp_path), sleep=lambda s: None, rounds=1)
+    for name in replication.KEY_FILES:          # a backup made before these were copied
+        (tmp_path / "backups" / "credential-key" / name).unlink()
+    from backend import manage
+    manage.main(["snapshot", str(live / "hub.sqlite"), str(tmp_path / "litestream-copy.sqlite")])
+    live.rename(tmp_path / "lost-server")
+    result = entrypoint(tmp_path, env={"STUB_DB": str(tmp_path / "litestream-copy.sqlite")})
+    assert result.returncode == 0, result.stderr
+    assert "holds no github-app.key" in result.stdout and "holds no slack.key" in result.stdout
+    found = open_secrets(tmp_path / "data")
+    assert "github-app.key" in found["github"] and "missing" in found["github"]
+    assert "github-app.key" in found["directory"] and found["slack"] is None and found["webhook"] == ""
+    # Reading did not make a new key that would hide the missing one (and that a later restore would keep).
+    assert not any((tmp_path / "data" / name).exists() for name in replication.KEY_FILES)
+
+
+def test_the_other_key_files_go_to_the_bucket_beside_the_credential_key(tmp_path):
+    fake = FakeS3()
+    mirror = replication.S3Mirror(fake, "bucket", "tico/")
+    for name in replication.KEY_FILES:
+        (tmp_path / name).write_bytes(KEY)
+        assert replication.sync_credential_key(tmp_path / name, mirror, {}, replication.key_copy(name))
+        assert fake.objects["tico/credential-key/" + name] == KEY
+    env = {"TICO_DB": str(tmp_path / "fresh" / "hub.sqlite")}
+    assert replication.restore_key_files(env, mirror=mirror) == 0
+    assert all((tmp_path / "fresh" / name).read_bytes() == KEY for name in replication.KEY_FILES)
+    fake.objects["tico/credential-key/slack.key"] = b"short"
+    (tmp_path / "fresh" / "slack.key").unlink()
+    assert replication.restore_key_files(env, mirror=mirror) == 1         # said, and the other files still restored
+    assert not (tmp_path / "fresh" / "slack.key").exists()

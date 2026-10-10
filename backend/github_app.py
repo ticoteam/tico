@@ -120,6 +120,11 @@ def validate_product_repo_name(name):
     return name
 
 
+KEY_FILE = "github-app.key"
+MISSING_KEY = ("The GitHub App key file (github-app.key) is missing from the data volume: restore it from the backup "
+               "made with this database (docs/install.md, Backups and restore)")
+
+
 class GitHubApp:
     """The stored app, its at-rest encryption, and installation-token minting."""
 
@@ -145,21 +150,30 @@ class GitHubApp:
             c.executescript(SCHEMA)
 
     # -- secret storage ---------------------------------------------------------------------
-    def _key(self, c):
+    def key_file(self):
+        """The local key file: backed up beside credential.key (backend/replication.py), since a restored database
+        without it cannot open the app's secrets or the directory sync credentials."""
+        return Path(self.settings.db_path).parent / KEY_FILE
+
+    def _key(self, c, create=True):
         """The vault's KMS-wrapped key when the deployment has one; otherwise a local key file kept
-        beside the database, so a copy of the database alone does not carry the app's private key."""
+        beside the database, so a copy of the database alone does not carry the app's private key.
+        Only a save makes the file: a read with it missing returns None, so a restore that lost it is not
+        papered over by a new key that opens nothing."""
         if self.settings.credential_kms_key and self.vault is not None:
             return self.vault.cipher.key(c)
-        path = Path(self.settings.db_path).parent / "github-app.key"
+        path = self.key_file()
         if not path.exists():
+            if not create:
+                return None
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
         return path.read_bytes()
 
-    def secret_key(self, c):
+    def secret_key(self, c, create=True):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
-        return self._key(c)
+        return self._key(c, create)
 
     def save(self, c, actor, org, administration, conversion):
         secrets_blob = json.dumps({"pem": conversion["pem"], "webhook_secret": conversion.get("webhook_secret") or "",
@@ -182,8 +196,11 @@ class GitHubApp:
             return self.row(c)
 
     def private_key(self, c, row):
+        key = self._key(c, create=False)
+        if key is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
         try:
-            blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
+            blob = AESGCM(key).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
             return json.loads(blob)["pem"]
         except Exception:
             raise Problem("github_unavailable", "The stored GitHub App key could not be decrypted", 503) from None
@@ -194,7 +211,7 @@ class GitHubApp:
             if not row:
                 return ""
             try:
-                blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
+                blob = AESGCM(self._key(c, create=False)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
                 return json.loads(blob).get("webhook_secret") or ""
             except Exception:
                 return ""

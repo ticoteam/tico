@@ -291,8 +291,12 @@ class Directory:
         row = c.execute("SELECT * FROM directory_credentials WHERE source=?", (source,)).fetchone()
         if not row:
             raise Problem("credentials", "Save this source's credentials first", 409)
+        key = self.github_app.secret_key(c, create=False)
+        if key is None:
+            raise Problem("directory_unavailable", "The directory sync credentials need github-app.key, which is missing "
+                          "from the data volume: restore it from the backup made with this database", 503)
         try:
-            return json.loads(AESGCM(self.github_app.secret_key(c)).decrypt(row["nonce"], row["ciphertext"], AAD + source.encode()))
+            return json.loads(AESGCM(key).decrypt(row["nonce"], row["ciphertext"], AAD + source.encode()))
         except Exception:
             raise Problem("directory_unavailable", "The stored directory credentials could not be decrypted", 503) from None
 
