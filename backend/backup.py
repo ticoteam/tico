@@ -111,15 +111,45 @@ def record_verified_blobs(source, bucket, items):
                       [(bucket, item["sha256"], item["key"], H.now()) for item in items])
 
 
-def upload_bundle(source, bucket, key, s3, blobs):
+# The local key files beside the database (backend/credentials.py, github_app.py, slack_app.py): a database restored
+# without them cannot open the credentials, the GitHub App and directory sync secrets, or the Slack tokens.
+KEY_FILES = ("credential.key", "github-app.key", "slack.key")
+KEY_BYTES = 32
+
+
+def key_file_copy(key, name):
+    return key + ".keys/" + name
+
+
+def read_key_files(key_dir):
+    """{name: bytes} for the key files present in `key_dir`. One that is not 32 bytes is not a key: refused by name,
+    never carried, so a bundle never holds a copy that opens nothing."""
+    found = {}
+    for name in KEY_FILES:
+        path = Path(key_dir) / name
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        if len(data) != KEY_BYTES:
+            raise RuntimeError(name + " beside the database is not a valid key (32 bytes); the backup was not published")
+        found[name] = data
+    return found
+
+
+def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
     """Publish a manifest only after verifying the DB and every blob not verified before.
 
     No source deletions; the only live-database write records verified recovery
     copies. A failed upload leaves unreferenced backup objects, but cannot
     advertise a complete recovery point.
+
+    With `key_dir` (the hand-run `manage.py backup`: the database's directory) the key files present there are copied
+    beside the database as <key>.keys/<name>, read back, and listed in the manifest by name and SHA-256, so
+    restore_bundle can put them back. The key bytes are never in the manifest or the report.
     """
     if not key.startswith("backups/") or not key.endswith(".sqlite"):
         raise ValueError("Use a unique backups/*.sqlite object key")
+    keys = read_key_files(key_dir) if key_dir is not None else {}
     recovery = RecoveryBlobs(Settings(db_path=Path(source), blob_bucket=bucket), s3)
     # Keep the snapshot workspace beside the source database on the retained data
     # volume instead of relying on the instance's small PrivateTmp filesystem.
@@ -155,15 +185,30 @@ def upload_bundle(source, bucket, key, s3, blobs):
             verify_objects(iter_blob_inventory(local, unverified_in=bucket), verify)
         finally:
             record_verified_blobs(source, bucket, verified)
+        key_files = {}
+        for name, data in keys.items():
+            digest = hashlib.sha256(data).hexdigest()
+            copy = key_file_copy(key, name)
+            immutable_put(s3, bucket, copy, data, digest)
+            with s3.get_object(Bucket=bucket, Key=copy)["Body"] as stream:
+                if stream.read() != data:
+                    raise RuntimeError(name + " failed independent download verification")
+            key_files[name] = {"key": copy, "sha256": digest}
         manifest = {"format": "tico-backup-v1", "database": {"key": key, **expected}, "objects": inventory}
+        if key_files:
+            # Older restore tools ignore this field; they restore the database and blobs as before.
+            manifest["key_files"] = key_files
         encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
         immutable_put(s3, bucket, key + ".manifest.json", encoded, hashlib.sha256(encoded).hexdigest())
         with s3.get_object(Bucket=bucket, Key=key + ".manifest.json")["Body"] as stream:
             if stream.read() != encoded:
                 raise RuntimeError("Backup manifest failed independent download verification")
-        return {"bucket": bucket, "key": key, "verified": True, **expected,
-                "objects": inventory["count"], "object_bytes": inventory["bytes"],
-                "objects_verified": len(verified), "manifest_sha256": hashlib.sha256(encoded).hexdigest()}
+        report = {"bucket": bucket, "key": key, "verified": True, **expected,
+                  "objects": inventory["count"], "object_bytes": inventory["bytes"],
+                  "objects_verified": len(verified), "manifest_sha256": hashlib.sha256(encoded).hexdigest()}
+        if key_dir is not None:
+            report["key_files"] = sorted(key_files)
+        return report
 
 
 def restore_bundle(bucket, key, destination, s3):
@@ -186,6 +231,7 @@ def restore_bundle(bucket, key, destination, s3):
     manifest = json.loads(encoded)
     if manifest.get("format") != "tico-backup-v1" or manifest.get("database", {}).get("key") != key:
         raise ValueError("Not a complete Tico backup manifest for the requested database")
+    keys = fetch_key_files(manifest, bucket, key, s3, target.parent)
     target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".tico-restore-", dir=target.parent) as temporary:
         downloaded = Path(temporary) / "snapshot.sqlite"
@@ -210,7 +256,53 @@ def restore_bundle(bucket, key, destination, s3):
         verify_objects(iter_blob_inventory(downloaded), verify)
         result = restore_snapshot(downloaded, target)
         return {**result, "objects": inventory["count"], "object_bytes": inventory["bytes"],
-                "manifest_sha256": hashlib.sha256(encoded).hexdigest(), "verified": True}
+                "manifest_sha256": hashlib.sha256(encoded).hexdigest(), "verified": True,
+                "key_files": place_key_files(keys, target.parent)}
+
+
+def fetch_key_files(manifest, bucket, key, s3, directory):
+    """The bundle's key files ({name: bytes}), each checked against the manifest and 32 bytes long, before anything is
+    restored. A different key already in `directory` is refused by name: it may open another database, and it is never
+    overwritten."""
+    listed = manifest.get("key_files") or {}
+    if not isinstance(listed, dict) or not set(listed) <= set(KEY_FILES):
+        raise ValueError("The backup manifest lists unexpected key files")
+    found = {}
+    for name, entry in sorted(listed.items()):
+        if not isinstance(entry, dict) or entry.get("key") != key_file_copy(key, name):
+            raise ValueError("The backup manifest lists " + name + " in an unexpected place")
+        with s3.get_object(Bucket=bucket, Key=entry["key"])["Body"] as stream:
+            data = stream.read(KEY_BYTES + 1)
+        if len(data) != KEY_BYTES or hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+            raise RuntimeError(name + " in the backup does not match its manifest")
+        here = Path(directory) / name
+        if here.exists() and here.read_bytes() != data:
+            raise ValueError(here.name + " already exists beside the restore target and is a different key; restore "
+                             "to an empty directory (nothing was restored)")
+        found[name] = data
+    return found
+
+
+def place_key_files(keys, directory):
+    """Writes each key file beside the restored database, mode 0600, without overwriting: {name: restored|kept}."""
+    placed = {}
+    for name, data in keys.items():
+        path = Path(directory) / name
+        if path.exists():
+            placed[name] = "kept"          # the same key (fetch_key_files refused a different one)
+            continue
+        fd, temporary = tempfile.mkstemp(prefix=".restore-key-", dir=directory)    # mode 0600
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(data)
+                out.flush()
+                os.fsync(out.fileno())
+            os.chmod(temporary, 0o600)
+            os.link(temporary, path)       # fails rather than replace a key that appeared meanwhile
+        finally:
+            os.unlink(temporary)
+        placed[name] = "restored"
+    return placed
 
 
 def checksum(path):
