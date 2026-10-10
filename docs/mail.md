@@ -108,14 +108,32 @@ $HUB_DIR/scripts/mail.sh discard r-882... --issue 128
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
 new one. `--cc` takes internal addresses only. `--dry-run` lints and reviews and writes nothing.
 
-The draft is keyed on (you, the task, the recipient, the subject, the body): running the same
+The draft is keyed on (you, the task, the recipient, the subject, the body, and the hashes of any
+attached files): running the same
 command twice **updates the same Gmail draft** instead of leaving two. Change a word and it is a
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
-`--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit). The
-type comes from the file's extension. Lint and the reviewer read the text, and the reviewer is
-told each file's name, type and size. Attaching lifts nothing: sending the draft goes through
-every send gate below, and a policy with `allow_attachments: false` refuses it.
+`--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
+from the file sizes before anything is read). Attachments are off unless the mail policy sets
+`defaults.allow_attachments: true`. A file must be inside your own folder (`bot-<slug>`, or an
+older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
+refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
+`*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
+`credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
+`.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
+reviewer read the text, and the reviewer is told each file's name, type and size, not its
+contents. Attaching lifts nothing, and sending an attached draft always needs `--approval-issue`,
+even to a recipient who needs none without files (the sender of the thread, a forward target,
+an internal address or an allowance).
+
+That approval must name the files. `mail draft --attach` prints a ready request (and returns it
+as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
+and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
+carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
+files as they are in the Gmail draft and sends only if they are exactly the approved set for
+that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
+counts only when its `Send to:` line matches and it names each file and its sha256 (and no
+other hash). The owner's message telling the bot to send does not cover attachments.
 
 `discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
 draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs

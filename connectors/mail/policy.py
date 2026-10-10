@@ -58,7 +58,7 @@ LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": True}
+                     "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
 
 # What a computer with no registry runs on: sending is on globally (each bot still needs `outbound_send: true` and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
@@ -469,7 +469,23 @@ def _payload_addrs(value):
     return _addr_set(value)
 
 
-def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
+def file_set(files):
+    """{(name, size, sha256)} for attached files or an approval's `attachments` list; None when an entry
+    is not a well-formed {name, size, sha256}."""
+    out = set()
+    for f in files or ():
+        try:
+            name, size, digest = str(f["name"]), int(f["size"]), str(f["sha256"]).strip().lower()
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not name or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return None
+        out.add((name, size, digest))
+    return out
+
+
+def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", attachments=None,
+                   draft=""):
     """Read one per-message yes and say how far it reaches.
 
     `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
@@ -477,8 +493,27 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
     {"ok", "detail", "full", "named", "issue"}. `full` is the owner's yes to this exact message:
     it lifts the recipient caps, the cooldown, and `outbound_send: false`, and the second
     reviewer advises instead of blocking. docs/mail-service.md, "Per-message approval".
+
+    `attachments` ([{name, size, sha256}] of the files as they are in the draft) narrows it to an
+    approval of these exact files: a Tico send approval whose payload names this draft and each
+    file by name, size and sha256, or a GitHub Issue whose `Send to:` line matches and whose text
+    names each file and its sha256 and no other hash. The owner's message telling the bot to send
+    names no files, so it never approves a message with attachments.
     """
     n = str(number or "").strip()
+    if attachments:
+        if n.isdigit():
+            return _github_approval_check(n, to, cc, thread_id, repo, attachments)
+        if HUB_ID.match(n):
+            row = _hub_approval_check(n, to, cc, slug, attachments, draft)
+            if row:
+                return row
+        out = _blank_approval(n)
+        out["detail"] = (f"--approval-issue {number!r} is not a Tico send approval or a GitHub Issue; "
+                         "an owner's message to send does not cover attachments. A message with "
+                         "attachments needs an approval that names its files (`mail draft` prints "
+                         "the request)")
+        return out
     if n.isdigit():
         return _github_approval_check(n, to, cc, thread_id, repo)
     if HUB_ID.match(n):
@@ -489,7 +524,7 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
     return out
 
 
-def _github_approval_check(n, to, cc, thread_id, repo):
+def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     out = _blank_approval(n)
     r = RUN(["gh", "issue", "view", n, "-R", repo, "--json", "state,labels,title,body"],
             capture_output=True, text=True)
@@ -523,14 +558,27 @@ def _github_approval_check(n, to, cc, thread_id, repo):
     ext_to = [str(x).strip().lower() for x in to if str(x).strip()]
     ext_cc = [str(x).strip().lower() for x in cc if str(x).strip()]
     out["full"] = bool(ext_to) and _send_spec_matches(text, ext_to, ext_cc)
+    if attachments:
+        want = file_set(attachments)
+        named = set(re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", text))
+        unnamed = [f"{name} ({digest[:12]})" for name, _, digest in sorted(want or ())
+                   if name.lower() not in text or digest not in named]
+        if not want or not out["full"] or unnamed or named != {d for _, _, d in want}:
+            out["ok"] = out["full"] = False
+            out["detail"] = (f"Issue {n} does not approve these files: it needs a `Send to:` line for "
+                             "every address and each file's name and sha256, and no other file"
+                             + (f" (missing {', '.join(unnamed)})" if unnamed else "")
+                             + ". A changed or different file needs a new approval")
+            return out
     out["detail"] = (f"Issue {n}: closed, {', '.join(APPROVAL_LABELS)}, "
                      + ("its `Send to:` line matches every address on this message, To and Cc: "
                         "per-message approval" if out["full"] else f"names {named[0]}"))
     return out
 
 
-def _hub_approval_check(n, to, cc, slug):
-    """A decided Tico `send` approval whose payload names every external address."""
+def _hub_approval_check(n, to, cc, slug, attachments=None, draft=""):
+    """A decided Tico `send` approval whose payload names every external address and, for a
+    message with files, this draft and exactly its files by name, size and sha256."""
     row = _hub_row("approvals", n)
     if not row:
         return None
@@ -553,12 +601,29 @@ def _hub_approval_check(n, to, cc, slug):
         out["detail"] = (f"Tico approval {n} names to={sorted(got_to)} cc={sorted(got_cc)}, "
                          f"not this message's to={sorted(ext_to)} cc={sorted(ext_cc)}")
         return out
+    if attachments:
+        want, got = file_set(attachments), file_set(payload.get("attachments"))
+        if str(payload.get("draft") or "") != str(draft or "") or not draft:
+            out["detail"] = (f"Tico approval {n} is for draft {payload.get('draft') or '(none)'}, "
+                             f"not {draft or '(none)'}")
+            return out
+        if not want or got != want:
+            out["detail"] = (f"Tico approval {n} names files "
+                             + _files_text(got) + "; the draft carries " + _files_text(want)
+                             + ". A changed or different file needs a new approval")
+            return out
     out["ok"] = out["full"] = True
     out["named"] = sorted(ext_to | ext_cc)
     who = f"bot:{slug}" if slug else "the requester"
     out["detail"] = (f"Tico send approval {n}: approved, names every address on this message: "
                      f"per-message approval for {who}")
     return out
+
+
+def _files_text(files):
+    if files is None:
+        return "(not a list of name, size and sha256)"
+    return ", ".join(f"{n} ({sz} bytes, {d[:12]})" for n, sz, d in sorted(files)) or "(none)"
 
 
 def _hub_message_check(n, slug):
@@ -704,12 +769,19 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                    if is_reply else "the hub does not write to them."),
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
-    if attachments and not pol["defaults"]["allow_attachments"]:
-        raise Refused("attachments are not allowed on mail the hub writes "
-                      "(defaults.allow_attachments: false in registry/mail-policy.yaml).",
-                      "Draft it without --attach and put the file on the task, or ask for the "
-                      "policy to allow attachments.")
+    if attachments:
+        check_attachments_allowed(pol)
     return everyone
+
+
+def check_attachments_allowed(pol):
+    """Refuses (exit 2) any attachment unless the policy opts in. Checked before a file is read."""
+    if not pol["defaults"]["allow_attachments"]:
+        raise Refused("attachments are not allowed on mail the hub writes "
+                      "(defaults.allow_attachments is false in registry/mail-policy.yaml; "
+                      "it is off unless the team turns it on).",
+                      "Draft it without --attach and put the file on the task, or ask the owner "
+                      "to set defaults.allow_attachments: true.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -726,17 +798,22 @@ def _decide(checks, gate="", reason=""):
     return Decision({"allowed": not reason, "gate": gate, "reason": reason, "checks": checks})
 
 
-def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
+def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                approval=None, manifest=None, verbs=None, conn=None, now=None,
-               root=None, repo=HUB_REPO, thread_senders=()):
+               root=None, repo=HUB_REPO, thread_senders=(), draft=""):
     """The whole chain. Never raises for a policy problem - the caller downgrades to a draft.
 
     `verbs` is the employee's declared gmail verbs on this mailbox (access.resolve); pass None
     and it is looked up. `conn` is the mail database, for the caps; without it caps are skipped
     (a --dry-run with no state). `thread_senders` are the addresses that wrote into the thread this
     message answers (`inbound_senders`); with `outbound_send: true`, a reply goes to them without an approval.
+    `attachments` is [{name, size, sha256}] of the files in the draft `draft`; a bare count is
+    treated as files no approval can name.
     """
     checks = []
+    files = list(attachments) if isinstance(attachments, (list, tuple)) else []
+    attachments = len(files) if files else int(attachments or 0)
+    bound = files if attachments else None
 
     def ok(gate, detail=""):
         checks.append({"gate": gate, "ok": True, "detail": detail})
@@ -773,7 +850,9 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
     ext_cc = externals(pol, cc)
     # One read of the approval Issue for the whole chain. `full` means it names every external
     # address on this message, To and Cc: the owner's per-message yes.
-    appr = approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug) if approval else None
+    appr = (approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug,
+                           attachments=bound or ([{}] if attachments else None), draft=draft)
+            if approval else None)
     full = bool(appr and appr["full"])
 
     if not outbound_send(slug, manifest):
@@ -839,6 +918,24 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
                         "sender of the thread being replied to go without one")
 
     caps = caps_for(pol, allowance)
+    if attachments:
+        # A file can carry anything the bot's computer holds, and a reviewer only sees its name and
+        # size, so no standing path (an internal address, a forward target, the thread's sender or an
+        # allowance) covers it: every attached send needs the owner's per-message yes.
+        if not caps["allow_attachments"]:
+            return no("attachments", "attachments are not allowed (defaults.allow_attachments is "
+                                     "false in registry/mail-policy.yaml)")
+        seen = appr
+        if seen is not None and not seen["ok"] and not ext and not ext_cc:
+            seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal
+                                  attachments=bound or [{}], draft=draft)
+        if not (seen and seen["ok"]):
+            return no("attachments", "a message with attachments needs a Tico send approval "
+                      "naming this draft and its files (name, size and sha256), even to a recipient "
+                      "who needs none without them; request the one `mail draft` printed and pass "
+                      "its id as --approval-issue"
+                      + (f". {seen['detail']}" if seen and seen.get("detail") else ""))
+        ok("attachments", f"{attachments} file(s) approved by {seen['detail']}")
     if full:
         ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
                    f"Issue {appr['issue']}, which names every address on it")
@@ -853,8 +950,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
                               f"({', '.join(ext_cc)})"
                               + ("; an --approval-issue that names every address lifts it"
                                  if not approval else ""))
-    if attachments and not caps["allow_attachments"]:
-        return no("caps", "attachments are not allowed")
     if conn is not None:
         from . import db                                # noqa: PLC0415
         day = now.astimezone(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")

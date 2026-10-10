@@ -3,8 +3,10 @@
 Pure. Nothing here talks to Google; `gmail.py` takes the raw string this produces.
 
 Two keys, both sha256 hex:
-  draft_key(employee, issue, to, subject, body)   a retried `draft` updates the same Gmail draft
-                                                  rather than making a second one
+  draft_key(employee, issue, to, subject, body, attachments)
+                                                  a retried `draft` updates the same Gmail draft
+                                                  rather than making a second one; other files
+                                                  make another draft
   send_key(employee, issue, draft_id)             written to the database *before* the send call,
                                                   so a crash between the call and the row cannot
                                                   turn into a double send
@@ -30,8 +32,14 @@ def key(*parts):
     return h.hexdigest()
 
 
-def draft_key(employee, issue, to, subject, body):
-    return key(employee, issue, ",".join(sorted(str(a).lower() for a in to or [])), subject, body)
+def draft_key(employee, issue, to, subject, body, attachments=()):
+    """With files, their sorted sha256s are part of the key, so the same text with other files is
+    a new draft and never rewrites one whose files a person approved. With none, the key is the
+    one drafts without attachments have always had."""
+    parts = [employee, issue, ",".join(sorted(str(a).lower() for a in to or [])), subject, body]
+    if attachments:
+        parts.append("attachments:" + ",".join(sorted(str(a["sha256"]).lower() for a in attachments)))
+    return key(*parts)
 
 
 def send_key(employee, issue, draft_id):

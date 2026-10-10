@@ -5,7 +5,7 @@ the thread being replied to (a reply, no added recipients). Anything else still 
 the caps, the blocklist and owner-handles-personally still apply. A computer with no registry has a built-in policy.
 """
 
-import sys, unittest
+import hashlib, sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,6 +34,34 @@ BODY = ("Hi Ava,\n\nThanks for writing in. Support has it and will answer within
         "Founder, Acme\n")
 FORWARD = ("A press request came in; the sender wrote: please see https://press.example/story about us.\n"
            "The original is in the mailbox.\n\nAna\n")
+
+
+APPROVAL, ORDER = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+
+
+def file_meta(name, data):
+    return {"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+FILE_A, FILE_B = file_meta("a.pdf", b"%PDF-1.4 A"), file_meta("b.pdf", b"%PDF-1.4 B")
+
+
+def send_approval(to, files, draft="d-1", **row):
+    """A decided Tico `send` approval as GET approvals/<id> returns it."""
+    return dict({"id": APPROVAL, "kind": "send", "decision": "approved", "consumed_at": None,
+                 "payload": {"to": to, "cc": [], "subject": "s", "body_sha256": "a" * 64,
+                             "mailbox": "ana@acme.example", "draft": draft, "attachments": files}}, **row)
+
+
+def owner_order(slug="inbox"):
+    """The owner's Tico message telling the bot to send: a standing yes for mail without files."""
+    return {"id": ORDER, "from_actor": f"human:{access.OWNER}", "to_actor": f"bot:{slug}",
+            "body": "Please send it to them."}
+
+
+def hub(*rows):
+    found = {f"approvals/{r['id']}" if "kind" in r else f"messages/{r['id']}": r for r in rows}
+    pl.HUB_GET = lambda path: found.get(path)
 
 
 class Chain(Stage2):
@@ -95,6 +123,92 @@ class Chain(Stage2):
         d = self.decide([ME], conn=conn)
         self.assertEqual((d["gate"], "cooldown" in d["reason"]), ("caps", True))
 
+    def test_an_attachment_needs_an_approval_on_every_path_that_otherwise_needs_none(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        reply = {"thread_id": THREAD, "thread_senders": [AVA]}
+        self.assertTrue(self.decide([AVA], **reply).allowed)             # no file: the sender needs no yes
+        for to, extra in (([AVA], reply), ([ME], {}), (["colleague@acme.example"], {})):
+            d = self.decide(to, attachments=[FILE_A], draft="d-1", **extra)
+            self.assertEqual(d["gate"], "attachments", (to, d))
+        hub(send_approval([AVA], [FILE_A]))
+        self.assertTrue(self.decide([AVA], attachments=[FILE_A], draft="d-1", approval=APPROVAL, **reply).allowed)
+        hub(send_approval(["colleague@acme.example"], [FILE_A]))              # all internal: the same approval
+        self.assertTrue(self.decide(["colleague@acme.example"], attachments=[FILE_A], draft="d-1",
+                                    approval=APPROVAL).allowed)
+        hub(send_approval([AVA], [FILE_A], decision="pending"))                # undecided is no yes
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], draft="d-1", approval=APPROVAL,
+                                     **reply)["gate"], "attachments")
+        # A count with no file details can never match an approval.
+        hub(send_approval([AVA], [FILE_A]))
+        self.assertEqual(self.decide([AVA], attachments=1, draft="d-1", approval=APPROVAL, **reply)["gate"],
+                         "attachments")
+
+    def test_an_approval_for_file_a_does_not_send_file_b_or_a_changed_a(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        reply = {"thread_id": THREAD, "thread_senders": [AVA], "approval": APPROVAL}
+        hub(send_approval([AVA], [FILE_A]))
+        changed = dict(FILE_A, sha256=hashlib.sha256(b"%PDF-1.4 A, edited").hexdigest())
+        for files, draft in (([FILE_B], "d-1"), ([changed], "d-1"), ([dict(FILE_A, size=FILE_A["size"] + 1)], "d-1"),
+                             ([dict(FILE_A, name="b.pdf")], "d-1"), ([FILE_A, FILE_B], "d-1"), ([FILE_A], "d-2")):
+            d = self.decide([AVA], attachments=files, draft=draft, **reply)
+            self.assertEqual(d["gate"], "attachments", (files, draft, d))
+        hub(send_approval([AVA], [FILE_A, FILE_B]))                            # nor a subset of what was approved
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], draft="d-1", **reply)["gate"], "attachments")
+        self.assertTrue(self.decide([AVA], attachments=[FILE_B, FILE_A], draft="d-1", **reply).allowed)
+
+    def test_an_owner_send_message_does_not_approve_files(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        hub(owner_order())
+        self.assertTrue(self.decide([STRANGER], approval=ORDER).allowed)                   # without files: as before
+        d = self.decide([AVA], attachments=[FILE_A], draft="d-1", approval=ORDER, thread_id=THREAD,
+                        thread_senders=[AVA])
+        self.assertEqual(d["gate"], "attachments", d)
+        self.assertIn("not a Tico send approval", d["reason"])
+
+    def test_a_send_approval_must_list_the_files(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        kw = {"attachments": [FILE_A], "draft": "d-1", "approval": APPROVAL,   # a reply: only the files need a yes
+              "thread_id": THREAD, "thread_senders": [AVA]}
+        row = send_approval([AVA], [FILE_A])
+        del row["payload"]["attachments"]
+        hub(row)                                                               # the old payload: recipients only
+        self.assertTrue(self.decide([AVA], approval=APPROVAL).allowed)         # still fine without files
+        self.assertEqual(self.decide([AVA], **kw)["gate"], "attachments")
+        hub(send_approval([AVA], [{"name": "a.pdf", "size": FILE_A["size"]}]))  # no hash
+        self.assertEqual(self.decide([AVA], **kw)["gate"], "attachments")
+        hub(send_approval([AVA], [FILE_A]))
+        self.assertTrue(self.decide([AVA], **kw).allowed)
+
+    def test_a_github_issue_approves_files_only_when_it_names_each_one(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        kw = {"draft": "d-1", "approval": "77", "thread_id": THREAD, "thread_senders": [AVA]}
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
+        self.assertTrue(self.decide([AVA], approval="77").allowed)                        # without files: as before
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], **kw)["gate"], "attachments")
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}\n\nAttach: a.pdf sha256 {FILE_A['sha256']}")
+        self.assertTrue(self.decide([AVA], attachments=[FILE_A], **kw).allowed)
+        for files in ([FILE_A, FILE_B], [FILE_B], [dict(FILE_B, name="a.pdf")]):          # one unnamed, or changed
+            self.assertEqual(self.decide([AVA], attachments=files, **kw)["gate"], "attachments", files)
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}\n\nAttach: {FILE_A['sha256']}")  # the hash, no name
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], **kw)["gate"], "attachments")
+        pl.RUN = harness.gh_answer(body=f"Send to: {AVA}\n\na.pdf {FILE_A['sha256']}\nb.pdf {FILE_B['sha256']}")
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], **kw)["gate"], "attachments")   # not the set
+        pl.RUN = harness.gh_answer(body=f"About {AVA}: a.pdf {FILE_A['sha256']}")           # no Send to: line
+        self.assertEqual(self.decide([AVA], attachments=[FILE_A], **kw)["gate"], "attachments")
+
+    def test_the_default_policy_refuses_attachments_and_an_explicit_true_allows_them(self):
+        self.write_policy(harness.POLICY.replace("  allow_attachments: false\n", ""))
+        self.assertFalse(self.policy()["defaults"]["allow_attachments"])
+        self.assertFalse(pl.FALLBACK_DEFAULTS["allow_attachments"])
+        with self.assertRaises(Refused):
+            pl.check_draft(self.policy(), "inbox", "ana@acme.example", [AVA], attachments=1)
+        hub(send_approval([AVA], [FILE_A]))
+        kw = {"attachments": [FILE_A], "draft": "d-1", "approval": APPROVAL}
+        self.assertEqual(self.decide([AVA], **kw)["gate"], "attachments")
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        pl.check_draft(self.policy(), "inbox", "ana@acme.example", [AVA], attachments=1)
+        self.assertTrue(self.decide([AVA], **kw).allowed)
+
     def test_forward_to_reads_a_list_or_a_comma_string_and_nothing_else(self):
         self.assertEqual(access.forward_to({"forward_to": "A@x.example, b@y.example;a@x.example, nope"}),
                          ["a@x.example", "b@y.example"])
@@ -121,6 +235,65 @@ class Cli(Stage2):
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "2")
         self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_an_attached_reply_to_the_sender_waits_for_an_approval(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                   "--attach", "answer.pdf", "--issue", "1", "--json")
+        self.assertEqual((rc, p.get("send_needs_approval")), (0, True), err)
+        request = p["approval_request"]
+        self.assertEqual((request["kind"], request["payload"]["draft"], request["payload"]["to"]),
+                         ("send", p["draft"], [AVA]))
+        self.assertEqual(request["payload"]["attachments"], [file_meta("answer.pdf", b"%PDF-1.4 the answer")])
+        self.assertIn("hub approval request --kind send --payload", request["command"])
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1")
+        self.assertEqual((out["sent"], out["gate"]), (False, "attachments"), out)
+        hub(owner_order())                                                    # last week's "send it" is not enough
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", ORDER)
+        self.assertEqual(out["sent"], False, out)
+        self.assertEqual(self.service.sent, [])
+        hub(dict(send_approval([AVA], []), payload=request["payload"]))       # the request, approved
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_the_same_text_with_another_file_is_a_new_draft_the_approval_does_not_cover(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        f = self.root / "emp-inbox" / "answer.pdf"
+        f.write_bytes(b"%PDF-1.4 the answer")
+        args = ("draft", "--as", "inbox", "--reply-to", THREAD, "--to", AVA, "--body-file", self.body_file(BODY),
+                "--attach", "answer.pdf", "--issue", "1", "--json")
+        rc, p, err = self.run_json(*args)
+        self.assertEqual(rc, 0, err)
+        first_raw = self.service.drafts_by_id[p["draft"]]["message"]["raw"]
+        hub(dict(send_approval([AVA], []), payload=p["approval_request"]["payload"]))
+        f.write_bytes(b"%PDF-1.4 something else entirely")                     # same name, same text
+        rc, p2, err = self.run_json(*args)
+        self.assertEqual(rc, 0, err)
+        self.assertNotEqual(p2["draft"], p["draft"])                           # a new draft, not the approved one
+        self.assertNotEqual(p2["key"], p["key"])
+        self.assertEqual(self.service.drafts_by_id[p["draft"]]["message"]["raw"], first_raw)
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p2["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((out["sent"], out["gate"]), (False, "attachments"), out)
+        self.assertEqual(self.service.sent, [])
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)               # the approved draft is intact
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_the_draft_text_shows_the_approval_request_with_the_files(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        rc, out, err = self.run_cli("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                    "--attach", "answer.pdf", "--issue", "1")
+        self.assertEqual(rc, 0, err)
+        digest = hashlib.sha256(b"%PDF-1.4 the answer").hexdigest()
+        self.assertIn(f"Attach: answer.pdf (19 bytes, sha256 {digest[:12]})", out)
+        self.assertIn(f"Send from ana@acme.example to {AVA}", out)
+        self.assertIn("hub approval request --kind send --payload", out)
+        self.assertIn(digest, out)                                              # the full hash, in the payload
 
     def test_a_stranger_is_still_a_draft(self):
         rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Hello there",
@@ -152,7 +325,7 @@ class NoRegistry(Stage2):
         self.assertEqual(pol["blocklist"], {"addresses": [], "domains": []})
         self.assertEqual(pol["allowances"], [])
         self.assertEqual((pol["defaults"]["max_sends_per_day"], pol["defaults"]["max_external_recipients"],
-                          pol["defaults"]["allow_attachments"]), (20, 1, True))
+                          pol["defaults"]["allow_attachments"]), (20, 1, False))
         self.assertEqual(pol["internal_domains"], ["acme.example"])            # the bot's own mailbox domain
 
     def test_internal_domains_come_from_the_roster_without_public_providers(self):

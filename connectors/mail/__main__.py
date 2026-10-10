@@ -41,12 +41,12 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, hashlib, json, mimetypes, os, sys, weakref
+import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import AUDIT_PATH, DB_PATH, DEFAULT_TZ, INTERNAL_DOMAIN, Failure, RULES_FILE, Refused
-from . import now_utc, parse_since, report, stamp, zone
+from . import now_utc, parse_since, repo_dir, report, stamp, zone
 from . import access, audit as audit_log, auth, db, gmail as gm, labels as lb, rules as rl
 from . import calendar as cal, compose, judge as jd, lint as ln, policy as pl, review as rv
 
@@ -1250,25 +1250,142 @@ def body_of(path):
 MAX_ATTACH_BYTES = gm.MAX_ATTACHMENT_BYTES   # Gmail's own limit, for all of a message's files
 
 
-def attachments_of(paths):
-    """[{name, type, size, sha256, data}] for `--attach`, refused before any gate runs when a file
-    is missing or the files together pass Gmail's 25 MB."""
-    found, total = [], 0
-    for path in paths or []:
-        p = Path(path).expanduser()
-        if not p.is_file():
-            raise Refused(f"there is no file to attach at {p}.",
-                          "Pass the path of a file on this computer: --attach <path>.")
-        data = p.read_bytes()
-        total += len(data)
+# Names and folders that usually hold keys, passwords or tokens. A file matching one is never
+# attached, even from the bot's own folder: the reviewer sees only a file's name and size, so the
+# name is the one thing the connector can judge. Matched case-insensitively against every part of
+# the path below the workspace; an entry ending in "/" is a folder anywhere on that path.
+SECRET_FILES = (
+    ".env", ".env.*", "*.env", ".envrc", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", "_netrc", ".npmrc", ".pypirc",
+    ".pgpass", ".git-credentials", "credentials*", "*secret*", "*token*",
+    "secrets/", "private keys/", "private_keys/", "private-keys/", ".ssh/", ".aws/", ".gnupg/",
+    ".config/gh/", ".git/",
+)
+
+
+def attach_root(slug):
+    """The one folder `--attach` reads from: the bot's own repository folder (bot-<slug>, or an older
+    bot's emp-<slug>) under the projects directory. None when there is no such folder."""
+    root = repo_dir(access.PROJECTS, slug)
+    return root.resolve() if root.is_dir() else None
+
+
+def _secret_match(parts):
+    """The SECRET_FILES entry that `parts` (lowercased path parts) hits, or ''."""
+    folders = "/" + "/".join(parts[:-1]) + "/"
+    for pattern in SECRET_FILES:
+        if pattern.endswith("/"):
+            if "/" + pattern in folders:
+                return pattern
+        elif any(fnmatch.fnmatchcase(part, pattern) for part in parts):
+            return pattern
+    return ""
+
+
+def _attach_path(path, root):
+    """The real path of one `--attach` file, refused unless it is a regular file inside `root`
+    and not a secret-looking one. A relative path is read from `root`."""
+    text = str(path or "")
+    hint = (f"Attach only files from this bot's own folder ({root}); copy what you mean to send "
+            "there first.")
+    if not text or "\0" in text:
+        raise Refused("--attach must name a file.", hint)
+    given = Path(text).expanduser()
+    if any(part == ".." for part in given.parts):
+        raise Refused(f"--attach may not contain '..' path traversal: {text}.", hint)
+    target = (given if given.is_absolute() else root / given).resolve()   # follows every symlink
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        raise Refused(f"{text} is outside this bot's folder ({target}); attachments come only "
+                      "from there.", hint)
+    no_send = [Path(auth.key_path()).expanduser(), DB_PATH.parent, Path(access.PROJECTS) / "secrets"]
+    for place in no_send:
+        place = place.resolve()
+        if target == place or place in target.parents:
+            raise Refused(f"{text} is in Tico's own data or secrets ({place}); it is never attached.",
+                          hint)
+    hit = _secret_match([p.lower() for p in rel.parts]) or _secret_match([given.name.lower()])
+    if hit:
+        raise Refused(f"{text} looks like a key, password or token file (matches {hit!r}); "
+                      "it is never attached.",
+                      "Send the document itself, not credentials. If the name only looks like one, "
+                      "rename the copy you attach.")
+    if not target.is_file():
+        raise Refused(f"there is no file to attach at {target}.",
+                      "Pass the path of a file in this bot's folder: --attach <path>.")
+    return target
+
+
+def attachments_of(paths, root):
+    """[{name, type, size, sha256, data}] for `--attach`. Every file must sit inside `root` (the
+    bot's own folder) and not look like a secret; each is sized with os.stat before it is read, so
+    files over Gmail's 25 MB together are refused without being loaded."""
+    if not paths:
+        return []
+    if root is None:
+        raise Refused("this employee has no folder of its own to attach files from.",
+                      "Attachments come only from the bot's own folder under the projects "
+                      "directory. Attach the file in Gmail instead.")
+    targets = [_attach_path(path, root) for path in paths]
+    total = 0
+    for target in targets:
+        total += os.stat(target).st_size
         if total > MAX_ATTACH_BYTES:
             raise Refused(f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
                           "Gmail's limit for one message.",
                           "Attach fewer or smaller files, or put the big one on the task and link it.")
-        kind = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-        found.append({"name": gm.safe_filename(p.name), "type": kind, "size": len(data),
+    found, total = [], 0
+    for target in targets:
+        with open(target, "rb") as f:                   # read no more than the limit allows
+            data = f.read(MAX_ATTACH_BYTES - total + 1)
+        total += len(data)
+        if total > MAX_ATTACH_BYTES:                    # the file grew after it was sized
+            raise Refused(f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
+                          "Gmail's limit for one message.",
+                          "Attach fewer or smaller files, or put the big one on the task and link it.")
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        found.append({"name": gm.safe_filename(target.name), "type": kind, "size": len(data),
                       "sha256": hashlib.sha256(data).hexdigest(), "data": data})
     return found
+
+
+def draft_files(ctx, draft):
+    """[{name, type, size, sha256}] of the files in a Gmail draft as it stands, hashed from the bytes
+    Gmail holds, so a send is checked against what would actually go out."""
+    message = (draft or {}).get("message") or {}
+    found, total = [], 0
+    for item in gm.attachment_refs(message.get("payload") or {}):
+        if item["inline"]:
+            encoded, declared = item["_data"], item["size"]
+        elif item["attachment_id"]:
+            fetched = ctx.gmail.get_attachment(message.get("id", ""), item["attachment_id"]) or {}
+            encoded, declared = fetched.get("data"), item["size"]
+        else:
+            raise Failure(f"draft attachment {item['name']} has neither data nor a Gmail attachment id.",
+                          "Open the draft in Gmail and attach the file again.")
+        data = gm.attachment_bytes(encoded, declared, limit=MAX_ATTACH_BYTES - total)
+        total += len(data)
+        found.append({"name": item["name"], "type": item["type"], "size": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest()})
+    return found
+
+
+def approval_request(ctx, draft_id, to, cc, subject, body, files):
+    """The Tico send approval a human decides for a draft with files: the existing `send` payload
+    plus this draft's id and each file's name, size and sha256, which the send checks again."""
+    payload = {"to": list(to), "cc": list(cc), "subject": subject,
+               "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
+               "mailbox": ctx.mailbox, "draft": draft_id,
+               "attachments": [{"name": a["name"], "size": a["size"], "sha256": a["sha256"]}
+                               for a in files]}
+    task = f" --task {ctx.issue}" if pl.HUB_ID.match(ctx.issue or "") else ""
+    command = ("hub approval request --kind send --payload "
+               + shlex.quote(json.dumps(payload, sort_keys=True)) + task)
+    lines = [f"Send from {ctx.mailbox} to {', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else ""),
+             f"Subject: {subject}", f"Draft: {draft_id or '(dry run: no draft yet)'}"]
+    lines += [f"Attach: {a['name']} ({a['size']} bytes, sha256 {a['sha256'][:12]})" for a in files]
+    return {"kind": "send", "payload": payload, "command": command, "text": "\n".join(lines)}
 
 
 def attachment_meta(atts):
@@ -1416,7 +1533,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                                                                 or []) + (verdict.get("problems")
                                                                           or []) or ["no reason"])
 
-    key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body)
+    key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body, files)
     row = db.get_draft(ctx.conn, key)
     raw = compose.build(to, subject, body, from_addr=ctx.mailbox, cc=cc,
                         in_reply_to=in_reply_to, references=references, attachments=attachments)
@@ -1442,6 +1559,9 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "draft": draft_id, "key": key, "thread": thread_id, "message": message_id,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
                "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
+               "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
+               "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files)
+                                    if files else None),
                "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
                "needs_owner": review_no,
                "why_needs_owner": review_why if review_no else "",
@@ -1464,7 +1584,8 @@ def draft_text(p):
              f"  subject: {p['subject']}",
              f"  thread:  {p['thread'] or '(new)'}",
              *(["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)"
-                                          for a in p["attachments"])] if p.get("attachments") else []),
+                                          for a in p["attachments"])
+                + "; sending it needs the approval below"] if p.get("attachments") else []),
              f"  draft:   {p['draft'] or '(not created: dry run)'}",
              f"  key:     {p['key'][:16]}...",
              f"  lint:    {p['lint']['summary']}",
@@ -1478,15 +1599,23 @@ def draft_text(p):
                      "downgraded to a draft.")
     if not p["dry_run"]:
         lines.append(f"  labelled {p['label']}; the owner can see it in Gmail.")
+    if p.get("approval_request"):
+        req = p["approval_request"]
+        lines += ["", "  sending it needs this approval (a person decides it; then "
+                      "`mail send --draft ... --approval-issue <approval id>`):",
+                  *("    " + line for line in req["text"].splitlines()),
+                  "  request it with:", "    " + req["command"]]
     return "\n".join(lines) + "\n"
 
 
 def cmd_draft(args):
     ctx = Ctx(args, "draft")
+    if args.attach:                                     # the policy says no before any file is read
+        pl.check_attachments_allowed(ctx.policy)
     payload, _ = make_draft(ctx, args.to, args.subject, body_of(args.body_file),
                             reply_to=args.reply_to, cc=args.cc or [],
                             approval=args.approval_issue,
-                            attachments=attachments_of(args.attach))
+                            attachments=attachments_of(args.attach, attach_root(ctx.slug)))
     return out(args, payload, draft_text(payload))
 
 
@@ -1518,9 +1647,10 @@ def send_result(ctx, payload):
 def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, approval=None,
                  extra=None, attachments=()):
     """The full send chain. Returns a payload; a policy problem is a downgrade, not an error.
-    Attachments ride the same chain: they are counted for the policy's caps and named in the
-    audit, and lift nothing."""
+    Attachments ride the same chain: they need allow_attachments and a per-message approval
+    whoever the recipient is, are named in the audit, and lift nothing."""
     names = [a["name"] for a in attachments or ()]
+    files = list(attachments or ())
     base = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
             "draft": draft_id, "to": to, "cc": cc, "subject": subject, "thread": thread_id,
             "attachments": names, "dry_run": ctx.dry}
@@ -1539,7 +1669,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # is recorded, but it advises rather than blocks: it does not get to overrule the owner.
     appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
                               pl.externals(ctx.policy, cc), thread_id,
-                              slug=ctx.slug) if approval else None)
+                              slug=ctx.slug, attachments=files or None, draft=draft_id)
+            if approval else None)
     full = bool(appr and appr["full"])
     review_note = ""
     if not verdict.get("available"):
@@ -1561,7 +1692,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         base["review_advisory"] = review_note
 
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
-                             attachments=len(names), thread_id=thread_id,
+                             attachments=files, draft=draft_id, thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn,
                              thread_senders=pl.inbound_senders(msgs, ctx.mailbox))
     if not decision.allowed:
@@ -1602,7 +1733,7 @@ def cmd_send(args):
     msg = ctx.normalize(draft.get("message") or {})
     to, cc, subject, body = msg["to"], msg["cc"], msg["subject"], msg["body"]
     thread_id = msg["thread_id"]
-    files = msg.get("attachments") or []
+    files = draft_files(ctx, draft)                     # hashed as they stand in Gmail now
     if not to:
         raise Refused(f"draft {args.draft} has no recipient.",
                       "Draft it again with --to; a draft with no To: cannot be sent.")
@@ -2505,8 +2636,9 @@ def build_parser():
                     help="GitHub Issue, Tico send approval id, or the owner's Tico message id; "
                          "a full yes allows external Cc")
     df.add_argument("--attach", action="append", default=None, metavar="PATH",
-                    help="a file to attach; repeat for several (25 MB in all). Sending still "
-                         "goes through every send gate")
+                    help="a file in this bot's own folder to attach (relative paths start "
+                         "there); repeat for several (25 MB in all). Needs allow_attachments in "
+                         "the policy, and sending it needs --approval-issue")
     df.set_defaults(func=cmd_draft)
 
     dc = writes(base(sub.add_parser("discard", help="delete an unsent draft this employee made")))

@@ -120,7 +120,11 @@ crash between the call and the answer cannot become a second email; a call that 
 deletes its own claim, so a retry is still allowed. `sends` is also where `sent-log --reconcile`
 puts the owner's own sends, as employee `human`, which is how the owner's sends count towards a bot's
 per-recipient cooldown. `reviews` holds every verdict; a send re-uses one only while it is under
-24 hours old, and never for a draft with attachments, which is reviewed again as it stands.
+24 hours old, and never for a draft with attachments, which is reviewed again as it stands and
+always needs a per-message approval to send. That approval is bound to the files: `send` hashes the
+draft's parts from Gmail and `policy.approval_check` matches them, by name, size and sha256, to the
+Tico send approval's `attachments` (and its `draft`), or to the names and hashes in a GitHub Issue.
+An owner's message to send is not accepted for attachments. `mail draft --attach` prints the request.
 `mail discard` deletes a Gmail draft only when its `drafts` row names the same employee and
 mailbox and no `sends` row has sent it, then drops the row.
 
@@ -209,7 +213,7 @@ defaults:                                   # the stricter of these and an allow
   per_recipient_cooldown_days: 14
   max_external_recipients: 1
   allow_cc_external: false
-  allow_attachments: true                   # `draft --attach`; false refuses any attached draft or send
+  allow_attachments: false                  # opt-in; true lets `draft --attach` add files from the bot's folder
 blocklist: { addresses: [], domains: [] }                  # never written to, in any verb
 owner_handles_personally: { addresses: [], domains: [] }   # forces hub/needs-owner
 allowances:
