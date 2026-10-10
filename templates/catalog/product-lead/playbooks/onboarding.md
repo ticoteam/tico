@@ -18,7 +18,7 @@ already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly product summary, scored proposals, routing and hiring proposals), that requested roadmap changes use your Tools, while feature claims need evidence and outside messages stay drafts until outbound_send is on.
+What you do (a weekly product summary, scored proposals, routing and hiring proposals), that requested roadmap changes use your Tools, while feature claims need evidence and outside messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

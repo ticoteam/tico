@@ -60,7 +60,7 @@ owner now.
 
 Keep `plan.json` on the task with each issue and its exact labels to add or remove. Apply the
 requested changes with `gh issue edit` when your Tools allow it. Post requested comments with
-`gh issue comment` and the exact issue number and text when `outbound_send` is on; otherwise
+`gh issue comment` and the exact issue number and text when a person has turned mail sending on in Tico; otherwise
 keep the draft. If GitHub writing is unavailable in `bot.yaml` or `.claude/settings.json`, name
 the missing Tool and attach the exact commands for the teammate who has access. Record the
 changes and verify them; do not claim a prepared command was run.

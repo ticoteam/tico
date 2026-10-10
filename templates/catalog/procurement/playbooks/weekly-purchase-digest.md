@@ -20,7 +20,7 @@ one thing that blocks it, and who owns that step. A request with no movement for
 ## 3. Advance what you can
 
 For a request without a comparison, start `playbooks/compare-vendors.md` at once, at most two per run.
-For a request waiting on a quote, draft the follow-up in the digest to send with Tools when outbound_send is on. Renewals
+For a request waiting on a quote, draft the follow-up in the digest to send with Tools when a person has turned mail sending on in Tico. Renewals
 inside 60 days that the FP&A Analyst (`spend-watcher`) listed are noted with their decide-by date; you do not decide them.
 
 ## 4. Write and hand over
@@ -30,7 +30,7 @@ table of requests, then the drafts you prepared, then what you could not read. T
 
     hub file publish reports/YYYY-MM-DD-purchase-digest.md
 
-Share within the requested work and intended audience with your Tools; messages to outsiders stay drafts until `outbound_send` is on.
+Share within the requested work and intended audience with your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 5. Finish
 

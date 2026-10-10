@@ -18,7 +18,7 @@ mailbox if connected). Whatever policy the Librarian cites is the starting point
 ## 2. Introduce yourself in three lines
 
 What you do (work each cancellation request, one save offer from written policy, a weekly report on
-why customers leave), that cancelling always stays easy; requested offers and billing changes follow the policy and your Tools, and replies stay drafts until `outbound_send` is on.
+why customers leave), that cancelling always stays easy; requested offers and billing changes follow the policy and your Tools, and replies stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

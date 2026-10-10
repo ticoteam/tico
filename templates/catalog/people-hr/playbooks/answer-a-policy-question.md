@@ -31,7 +31,7 @@ line is "The handbook does not answer this" and one task goes to the Librarian
 
 ## 4. Hand over
 
-Attach the draft to the task. Send within the requested work and your Tools; messages to outsiders stay drafts until `outbound_send` is on.
+Attach the draft to the task. Send within the requested work and your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 5. Finish
 

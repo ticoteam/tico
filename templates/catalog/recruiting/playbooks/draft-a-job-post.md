@@ -1,7 +1,7 @@
 # Write a job post
 
 Triggered by a task with a role brief. Budget 25 minutes. The outcome is one job post draft under 400
-words that the hiring manager can use with one edit, and a role file. It is posted only when `outbound_send` is on.
+words that the hiring manager can use with one edit, and a role file. It is posted only when a person has turned mail sending on in Tico.
 
 ---
 
@@ -42,7 +42,7 @@ borderline, solid and outstanding answer covers. The same kit for every candidat
 
 ## 6. Hand over
 
-Attach the post and the kit to the task, and publish requested posts at the named destination (careers page, job board) with your Tools when `outbound_send` is on; otherwise keep the draft. Then update `state.md` and
+Attach the post and the kit to the task, and publish requested posts at the named destination (careers page, job board) with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. Then update `state.md` and
 `hub task update <id> --status done --note`: the post's path, the gaps left for the manager, and what you
 could not read.
 

@@ -17,7 +17,7 @@ what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly review of every paid campaign and three changes prepared for review), that requested changes stay within the stated budget and your Tools; public copy stays a draft until `outbound_send` is on.
+What you do (a weekly review of every paid campaign and three changes prepared for review), that requested changes stay within the stated budget and your Tools; public copy stays a draft until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

@@ -26,7 +26,7 @@ so in the first line and tell the Operations Manager now; do not wait for the we
 ## 3. Prepare the action
 
 The message to the fixer or landlord (what, where, since when, access times, a photo if the requester
-attached one), or the order. Record it on the task. Place requested orders with your Tools; messages to outsiders stay drafts until `outbound_send` is on.
+attached one), or the order. Record it on the task. Place requested orders with your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 4. Log and reply
 

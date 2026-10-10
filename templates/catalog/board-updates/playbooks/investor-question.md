@@ -27,4 +27,4 @@ about a legal, tax or valuation matter, say so and draft only a holding reply fo
 ## 4. Hand over
 
 Attach the draft to the task with the facts and sources under it, and say what you could not confirm.
-Send the requested text to its recipient with your Tools when `outbound_send` is on; otherwise keep the draft. `hub task update <id> --status done --note`.
+Send the requested text to its recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. `hub task update <id> --status done --note`.

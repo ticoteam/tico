@@ -42,7 +42,7 @@ reviewed", beside how tomorrow is planned today if the human shares it, so they 
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "tomorrow's plan will be ready at 15:00 every weekday, with the arrival notices ready to send when outbound_send is on." They
+`hub routine update <id> --enable`) and tell the human in one line what it does: "tomorrow's plan will be ready at 15:00 every weekday, with the arrival notices ready to send when a person has turned mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a

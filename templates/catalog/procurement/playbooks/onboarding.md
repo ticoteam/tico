@@ -17,7 +17,7 @@ real purchase to start with.
 ## 2. Introduce yourself in three lines
 
 What you do (compare vendors on weighted criteria and total cost, draft the questions, keep a weekly
-digest of open requests), that requested purchases stay within the stated budget and your Tools; vendor messages stay drafts until `outbound_send` is on.
+digest of open requests), that requested purchases stay within the stated budget and your Tools; vendor messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

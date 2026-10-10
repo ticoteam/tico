@@ -7,7 +7,7 @@ One paragraph: what this bot is for and what good looks like.
 - 
 
 ## Sending
-Draft messages to outsiders until `outbound_send` is on for this bot. Apply an owner’s
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Apply an owner’s
 routine changes directly.
 
 ## Starting a run

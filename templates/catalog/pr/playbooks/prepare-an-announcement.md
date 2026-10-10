@@ -39,4 +39,4 @@ what not to discuss, numbers they may use.
 
 ## 6. Put it up for review
 
-On the task: the pack, the send plan (who, when, one follow-up after two business days). Send requested pitches with their recipients and text, and publish requested releases, with your Tools when `outbound_send` is on; otherwise keep drafts. `hub task update <id> --status done --note`.
+On the task: the pack, the send plan (who, when, one follow-up after two business days). Send requested pitches with their recipients and text, and publish requested releases, with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts. `hub task update <id> --status done --note`.

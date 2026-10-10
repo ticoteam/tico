@@ -17,7 +17,7 @@ roles already report (`hub update list --kind weekly`). Do not ask what these al
 
 ## 2. Introduce yourself in three lines
 
-What you do (win/loss notes, talk tracks and objection answers, ramp plans), that you coach the work and never grade a human; buyer messages stay drafts until `outbound_send` is on.
+What you do (win/loss notes, talk tracks and objection answers, ramp plans), that you coach the work and never grade a human; buyer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

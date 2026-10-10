@@ -45,7 +45,7 @@ Every comment is polite, about the code, and specific. Never "this is wrong": sa
 ## 5. Finish
 
 You post nothing. Commit, then `hub task update <id> --status done --note`: the pull request, the number of
-blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your Tools when `outbound_send` is on; otherwise keep the draft.
+blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
 
 ## When you cannot tell
 

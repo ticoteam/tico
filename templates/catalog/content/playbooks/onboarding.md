@@ -14,7 +14,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a rolling content plan and finished drafts with short versions), that requested publication uses your Tools when `outbound_send` is on; otherwise the work stays a draft.
+What you do (a rolling content plan and finished drafts with short versions), that requested publication uses your Tools when a person has turned mail sending on in Tico; otherwise the work stays a draft.
 
 ## 3. Ask, in one message
 

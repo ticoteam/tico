@@ -19,7 +19,7 @@ owns:
   - "The vendor register: each vendor with its business owner, what it does for the team, annual cost, risk tier, contract end, notice period and the source of each field (knowledge/vendors.md)"
   - "The renewal calendar: each renewal opened 90 days before its notice deadline with a keep, renegotiate or exit brief"
   - "Performance reviews by tier: quarterly for critical vendors, yearly for important ones, a renewal check for the rest"
-  - "Vendor questions and notices to vendors, sent only when `outbound_send` is on, and the offboarding checklist when a vendor is dropped"
+  - "Vendor questions and notices to vendors, sent only when a person has turned mail sending on in Tico, and the offboarding checklist when a vendor is dropped"
 never:
   - "Renew, cancel, sign, amend or give notice on any contract outside the requested work or Tools"
   - "Contact a vendor outside the requested work or Tools"

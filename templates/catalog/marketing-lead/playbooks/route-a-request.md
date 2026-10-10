@@ -33,7 +33,7 @@ already planned, say what would slip.
 
 On the task, in under 100 words: owner, one-line brief, deadline, what it displaces if anything,
 and the one thing the owner needs from the requester. Anything that leaves the team or changes a
-live page is marked "draft until `outbound_send` is on".
+live page is marked "draft until a person turns mail sending on in Tico".
 
 ## 5. Finish
 

@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 60
 
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then every
-# public reply is prepared on the task, and requested replies are posted with Tools when outbound_send is on.
+# public reply is prepared on the task, and requested replies are posted with Tools when a person has turned mail sending on in Tico.
 outbound_send: false
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
@@ -24,7 +24,7 @@ routines:
 
 # What this bot may touch. Not listed is not allowed. Public forums are read on the open web and need no entry.
 # The SDK and examples repositories are read with the team's GitHub App token once the owner lists them.
-# Optional, uncomment when connected. These entries start read only. Requested writes need the necessary Tools; public messages stay drafts until outbound_send is on.
+# Optional, uncomment when connected. These entries start read only. Requested writes need the necessary Tools; public messages stay drafts until a person turns mail sending on in Tico.
 # tools:
 #   - service: github
 #     identity: "the SDK, examples and discussion repositories the owner lists for this bot"

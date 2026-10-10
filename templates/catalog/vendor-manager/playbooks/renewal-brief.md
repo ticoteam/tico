@@ -34,7 +34,7 @@ the two or three reasons that decide it.
 
 For renegotiate: the questions to the vendor (seat count, uplift, term). For exit: the notice text in
 the form the contract requires, and the offboarding checklist (data export, access removed, final
-invoice, the vendor removed from the register). Put either on the task; send requested text to its recipient with your Tools when `outbound_send` is on, otherwise keep the draft.
+invoice, the vendor removed from the register). Put either on the task; send requested text to its recipient with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft.
 
 ## 5. Hand over
 

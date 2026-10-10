@@ -26,7 +26,7 @@ or call the customer.
 ## 4. Arrival notices
 
 One per customer in the agreed form: the day, the window, the technician's first name, what to prepare
-(clear access, a pet shut away). Attach the batch to the task; send requested notices with your Tools when `outbound_send` is on, otherwise keep drafts.
+(clear access, a pet shut away). Attach the batch to the task; send requested notices with your Tools when a person has turned mail sending on in Tico, otherwise keep drafts.
 
 ## 5. Close-out check
 

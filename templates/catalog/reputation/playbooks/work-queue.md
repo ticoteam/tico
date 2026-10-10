@@ -48,7 +48,7 @@ scope and attach the payload to the task. Set each row's `status` to `drafted` w
 
 Execute the requested items when your Tools include browser `act` access. If it is missing,
 attach the exact payload and name the missing Tool. Replies and other messages to outsiders
-stay drafts until `outbound_send` is on. With browser `act` access:
+stay drafts until a person turns mail sending on in Tico. With browser `act` access:
 
     $HUB_DIR/connectors/browser.py repl --as reputation "..."
 

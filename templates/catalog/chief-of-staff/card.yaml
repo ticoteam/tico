@@ -19,7 +19,7 @@ pains:
   - "status updates take hours to compile"
 owns:
   - "The weekly team brief to the owner, with the evidence behind every line"
-  - "The follow-up on stalled goals and open loops, as a drafted nudge until `outbound_send` is on"
+  - "The follow-up on stalled goals and open loops, as a drafted nudge until a person turns mail sending on in Tico"
   - "The draft agenda for the Monday leadership meeting"
   - "The thresholds and topics that shape the brief (knowledge/rhythm.md)"
   - "Hiring proposals for the Leadership bots, and for a group head where a group has none"

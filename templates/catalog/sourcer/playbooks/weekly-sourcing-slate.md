@@ -1,7 +1,7 @@
 # Weekly sourcing slate
 
 Schedule: Tuesdays at 09:00 team time (routine `weekly-sourcing-slate`), after setup. Budget 45 minutes. The outcome is one slate per open role: new profiles with evidence and a
-first message each, the week's replies, and yeses handed to the Recruiter. Messages to outsiders stay drafts until `outbound_send` is on.
+first message each, the week's replies, and yeses handed to the Recruiter. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -34,7 +34,7 @@ current employees. Record only the public link, current role and the evidence.
 
 ## 5. Write the first messages
 
-Follow `playbooks/write-an-outreach-sequence.md` for each profile. Send requested touches with your Tools when `outbound_send` is on; otherwise keep drafts. The log records each actual send date. Follow-ups
+Follow `playbooks/write-an-outreach-sequence.md` for each profile. Send requested touches with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts. The log records each actual send date. Follow-ups
 due this week (touch two on day 5, touch three on day 12) go up the same way.
 
 ## 6. Write and hand over

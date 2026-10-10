@@ -30,5 +30,5 @@ as scope changes with a new date.
 
 ## 4. Hand over
 
-Save it to `knowledge/poc/<deal>.md` and attach it. Send the requested plan to its recipient with your Tools when `outbound_send` is on; otherwise keep the draft. Access to a sandbox is a separate request
+Save it to `knowledge/poc/<deal>.md` and attach it. Send the requested plan to its recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. Access to a sandbox is a separate request
 for a human. `hub task update <id> --status done --note`: the criteria, the dates, what is ready to act on.

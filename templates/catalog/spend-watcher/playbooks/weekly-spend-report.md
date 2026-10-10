@@ -46,7 +46,7 @@ headline, anomalies, movers, new, overlaps, renewals, could not read, sources. T
 
     hub file publish reports/YYYY-MM-DD-spend-report.md
 
-Share within the requested work and intended audience with your Tools; messages to outsiders stay drafts until `outbound_send` is on.
+Share within the requested work and intended audience with your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 7. Finish
 

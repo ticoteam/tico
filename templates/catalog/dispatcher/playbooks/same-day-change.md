@@ -20,7 +20,7 @@ window still holds. An urgent job goes to the nearest qualified crew whose next 
 
 ## 3. Recommend
 
-One revised plan, the jobs that move, and the messages to the customers whose window changes. Apply requested changes with your Tools and verify the revised schedule. Customer messages stay drafts until `outbound_send` is on.
+One revised plan, the jobs that move, and the messages to the customers whose window changes. Apply requested changes with your Tools and verify the revised schedule. Customer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 4. Apply the requested work
 

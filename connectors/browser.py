@@ -20,7 +20,8 @@ Gated in code, not in prompts:
     task text, must stay on those hosts (a subdomain of a listed host counts)
   - `can: [read]` allows repl reads only: clicking, typing, submitting, and `task` are refused.
     `can: [read, act]` allows actions in repl and `task`; sends and posts still follow
-    `outbound_send` and hub policies/shared-rules.md, which is the playbook's job to honour
+    the mail sending switch a person sets in Tico (bot.yaml's outbound_send only asks) and hub
+    policies/shared-rules.md, which is the playbook's job to honour
   - every call is appended to <projects>/runtime/browser-audit.jsonl (who, what, sites, outcome)
   - The owner's social sessions (X, Reddit, LinkedIn, Facebook, Instagram, TikTok, YouTube, ...) are
     Listening's alone: any other employee naming one of those hosts, in its

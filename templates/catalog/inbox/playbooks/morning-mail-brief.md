@@ -37,7 +37,7 @@ Brief is id, date, from, subject, labels, a snippet, and a `decision:` word from
 | Decision | What it is | What you do |
 |---|---|---|
 | needs-owner | Only the human can act: legal, money, an investor, a regulator, a relationship only they hold | Top of the brief. Label `hub/needs-owner` only if Filing is On |
-| reply | A real person waits on an answer a careful assistant could draft | Draft it (step 5); send requested replies only when `outbound_send` is on |
+| reply | A real person waits on an answer a careful assistant could draft | Draft it (step 5); send requested replies only when a person has turned mail sending on in Tico |
 | route | It belongs to another team: a lead, a customer, a candidate, a vendor | `hub task create --owner <slug> --parent <id>` per `## Routed to someone else`; do not flag it as needing the human |
 | archive | Nothing is asked: a receipt, a notification, a cold pitch | List it as "would file". Archive only if Filing is `labels and archive` |
 | read, or unsure | The model was not sure enough | Open the thread and decide yourself |

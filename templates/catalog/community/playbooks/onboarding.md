@@ -17,7 +17,7 @@ team's public site links to a forum. Do not ask what these already say.
 ## 2. Introduce yourself in three lines
 
 What you do (a weekly community digest, sourced replies to waiting questions, champions and feedback
-routed), that requested replies and moderation use your Tools, with public messages kept as drafts until `outbound_send` is on.
+routed), that requested replies and moderation use your Tools, with public messages kept as drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

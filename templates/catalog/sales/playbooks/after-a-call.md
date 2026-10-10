@@ -31,7 +31,7 @@ they gave one. A step with no date is marked "date to agree".
 
 Under 150 words, plain text, the seller's voice: what we heard (two or three lines in their words), what we
 agreed, who does what by when, the next meeting. A price or term question is not answered: it is a line
-for the seller. Put the exact text and recipients on the task. Send requested recaps with your Tools when `outbound_send` is on; otherwise leave a draft in the seller's mailbox.
+for the seller. Put the exact text and recipients on the task. Send requested recaps with your Tools when a person has turned mail sending on in Tico; otherwise leave a draft in the seller's mailbox.
 
 ## 5. Hand over
 

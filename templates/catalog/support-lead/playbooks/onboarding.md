@@ -18,7 +18,7 @@ is a gap to name in the summary and a task for the owner if they want it connect
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly summary of how support is doing, routing proposals, and proposals for which support role to add when work has no owner), that requested routing uses your Tools; customer messages stay drafts until `outbound_send` is on.
+What you do (a weekly summary of how support is doing, routing proposals, and proposals for which support role to add when work has no owner), that requested routing uses your Tools; customer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 
