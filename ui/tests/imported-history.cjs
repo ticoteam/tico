@@ -1,5 +1,5 @@
 // Imported history is a snapshot, with no runtime credential actions; real agents retain them. A human's Grok Bots
-// sit in one cluster under them, Grok's sections nested; their Dots is a plain row.
+// sit in one cluster under them, pinned ones first; their Dots is a plain row.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -83,7 +83,7 @@ const {html, uiFile} = require('./support/page.cjs');
     const cluster = page.locator('#tree li.org-cluster:not(.org-cluster-section)');
     await cluster.waitFor();
     assert.match(await cluster.locator('> .noderow').innerText(),/Grok Bot\s*3/);
-    assert.deepEqual(await cluster.locator('li.org-cluster-section a.node .nm').allInnerTexts(),['Groky']);
+    assert.equal(await cluster.locator('li.org-cluster-section').count(),0,'Pinned is not its own section');
     assert.deepEqual(await cluster.locator('> ul > li a.node .nm').allInnerTexts(),['Groky','Grok Scout','Poetry Post'],
       'Pinned leads, as in Grok');
     assert.equal(await page.locator('#tree li.org-cluster a.node[href="#/bot/dots"]').count(),0,'Dots is one agent: no cluster');
