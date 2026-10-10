@@ -69,6 +69,8 @@ the credential.
   delivered to a chat. It lives in the profile's Gateway, so the Gateway must be running for it to fire. Unlike
   Hermes there is no pre-check that keeps the agent asleep, so every run is one agent turn: its first step is a
   one-line check that ends the run at once when nothing is waiting (a small, cheap model call).
+- **The Gateway announces itself on the local network** (Bonjour) by default. On shared office Wi-Fi, check
+  OpenClaw's Gateway settings if you don't want it visible to other machines.
 
 ## Keep it in sync
 
