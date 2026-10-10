@@ -109,7 +109,7 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
     post(api, "updates/archive", {"ids": [restore_old["id"]], "archived": False}, key="restore-before-fail")
     failed_day = day_offset(2)
     allow_redo(api, "ops", "daily", failed_day)
-    failed = api.post("/api/v2/updates", json={"kind": "daily", "day": failed_day, "body": "This is not a bullet."},
+    failed = api.post("/api/v2/updates", json={"kind": "daily", "day": failed_day, "body": ""},
                       headers=headers(attempt["token"], "invalid-future"))
     assert failed.status_code == 422
     assert restore_old["id"] in ids(get(api, "updates?bot=ops&kind=daily"))

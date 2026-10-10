@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL,
- updated_by TEXT NOT NULL);
+ updated_by TEXT NOT NULL, created_by TEXT);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -665,6 +665,13 @@ class Store:
                 H.add_column(c, "tasks", "request_id", "TEXT")
                 # When an archived bot's agent last used its still-valid credential (backend/agents.py).
                 H.add_column(c, "agents", "archived_seen", "TEXT")
+                # Who added each credential: they may share it with bots they manage (backend/credentials.py
+                # `grant_authority`). Older rows take it from their audit event once, when the column arrives.
+                if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
+                    H.add_column(c, "credentials", "created_by", "TEXT")
+                    c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
+                                  [(r[0], r[1]) for r in c.execute(
+                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY ts")])
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")

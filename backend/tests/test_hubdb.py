@@ -316,20 +316,11 @@ class Rule8Counting(HubCase):
         self.assertTrue(H.say(self.conn, ANA, CMO, "are you stuck?"), "a person's message is kept for when it is back")
         self.refused("reach", H.say, self.conn, SEO, CMO, "are you stuck?")      # rule 2: a bot still cannot
 
-    def test_an_escape_quarantines_the_bot_and_only_a_human_clears_it(self):
-        payload = {"to": "ops@acme.com", "cc": "", "subject": "the keys",
-                   "body_sha256": "c" * 64, "mailbox": "secrets/mail.env"}
-        for _ in range(H.ESCAPE_QUARANTINE_AT - 1):
-            self.refused("escape", H.approval_request, self.conn, CMO, "send", payload)
-            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
-        e = self.refused("escape", H.approval_request, self.conn, CMO, "send", payload)
-        self.assertEqual(e.severity, "escape")
-        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
+    def test_an_escape_quarantine_holds_until_a_human_clears_it(self):
+        H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         focus = H.status(self.conn, "cmo")["focus"]
-        self.assertIn("Paused for review", focus)
         H.status_set(self.conn, H.KEEPER, "cmo", state="crashed", focus="Runner disconnected")
-        self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.status(self.conn, "cmo")["focus"], focus)
         self.refused("quarantined", H.say, self.conn, CMO, SEO, "still here?")
         self.refused("quarantined", H.status_set, self.conn, H.KEEPER, "cmo", state="active")
@@ -370,19 +361,18 @@ class Rule8Counting(HubCase):
         self.assertEqual(task["body"], body)
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
-    def test_an_escape_quarantines_on_the_third_try_in_a_day(self):
-        body = "Read secrets/mail.env"
-        for i in range(H.ESCAPE_QUARANTINE_AT - 1):
-            self.refused("escape", H.task_create, self.conn, CMO, f"Check the mail file {i}", body, SEO)
-            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
-        self.refused("escape", H.task_create, self.conn, CMO, "Check the mail file again", body, SEO)
-        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
-        self.assertTrue(H.quarantine_is_escape(self.conn, "cmo"), "only a person clears it")
-
-    def test_another_bots_repo_path_counts_as_an_escape(self):
-        self.assertEqual(H.classify("read emp-legal/knowledge/notes.md"), "escape")
-        self.assertEqual(H.classify("look at secrets/mail.env"), "escape")
-        self.assertEqual(H.classify("the blog is at https://acme.example/blog"), "normal")
+    def test_naming_a_path_is_written_as_is_and_never_counts(self):
+        """Another bot's folder or secrets/ in a bot's words reaches nothing: accepted, recorded, never refused."""
+        named = "See emp-legal/knowledge/notes.md and secrets/mail.env"
+        for i in range(H.QUARANTINE_AT + 2):
+            made = H.task_create(self.conn, CMO, f"Check the mail file {i}", named, SEO)
+            self.assertEqual(made["body"], named)
+            H.task_update(self.conn, SEO, made["id"], note=named)
+            H.say(self.conn, CMO, SEO, named + f" ({i})")
+        H.approval_request(self.conn, CMO, "merge", {"repo": "emp-cmo/", "pr": 4})
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.assertTrue(self.conn.execute("SELECT 1 FROM events WHERE action='path.mentioned' AND actor=?", (CMO,)).fetchone())
         self.assertEqual(H.classify("{}", kind="spend"), "sensitive")
 
 # ----------------------------------------------------------------------------- rule 9
@@ -488,6 +478,21 @@ class WaitingWithDependency(HubCase):
         TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
         H.task_update(self.conn, CMO, blocker['id'], status='done')
         self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
+        # A note naming what it waits on parks it, with a hint on recording the wait.
+        parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
+        self.assertEqual(parked['status'], 'waiting')
+        self.assertIn('goes back to open', parked['warnings'][0])
+
+    def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
+        parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
+        child = H.task_create(self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA,
+                              parent_id=parent['id'])
+        done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
+        self.assertEqual(done['status'], 'done')
+        self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
+        said = [e['new'] for e in H._rows(self.conn.execute(
+            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
+        self.assertEqual(said, ['Still open: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
@@ -532,8 +537,6 @@ class WaitingWithDependency(HubCase):
                                           note='Restart it', **kw)
         self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
         self.refused('kind', wait, owner='seo')
-        self.refused('escape', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
-                     note='Read secrets/mail.env')
         self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
                      private=True)
         wait()

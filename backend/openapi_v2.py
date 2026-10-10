@@ -408,6 +408,16 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
+GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
+                        "description": "Skipped items in the last attempt, by fixed code and step"}
+GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
+                        "description": "Fixed facts about the last failure or skip; never provider text",
+                        "properties": {"step": {"type": "string"}, "http_status": {"type": ["integer", "null"]},
+                                       "rpc_code": {"type": ["integer", "null"]}, "tool_error": {"type": "boolean"},
+                                       "retry_after": {"type": ["integer", "null"]},
+                                       "signal": {"type": ["string", "null"],
+                                                  "enum": ["rate limit", "slow down", "too many requests", None]},
+                                       "batch": {"type": ["integer", "null"]}}}
 
 
 def items(schema):
@@ -540,7 +550,12 @@ SCHEMAS = {
                      required=["bot", "see", "read", "write", "revision"]),
     "Me": obj({"actor": "s", "role": "s", "email": "s"}),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
-                   "public_url": "s", "owner_email": "s", "version": "s"}),
+                   "public_url": "s", "owner_email": "s", "version": "s",
+                   "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
+                                    "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
+                                                   "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
+                  required=["company_name", "app_name", "assistant_name", "assistant_bot", "public_url", "owner_email",
+                            "version"]),
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
                   "bots": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),
@@ -634,9 +649,11 @@ SCHEMAS = {
         obj({"actor": "s", "count": "i"})]},
     "GranolaStatus": obj({"mode": {"type": "string", "enum": ["account", "api_key", "off"]},
                           "connected": "b", "email": "n", "plan_hint": {"type": ["string", "null"], "enum": ["free", "paid", None]},
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"}),
+                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                         skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaSignIn": obj({"state": "s", "mode": "s", "connected": "b", "email": "n", "plan_hint": "n",
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"}),
+                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                         skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaDevice": obj({"user_code": "s", "verification_uri": "s", "verification_uri_complete": "s",
                           "expires_in": "i", "interval": "i"}, required=["user_code", "verification_uri", "expires_in", "interval"]),
     "GranolaSync": obj({"state": {"type": "string", "enum": ["syncing", "recent", "off", "needs_signin"]}, "last_sync": "n"}),

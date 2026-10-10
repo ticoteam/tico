@@ -152,7 +152,7 @@ class NoRegistry(Stage2):
         self.assertEqual(pol["blocklist"], {"addresses": [], "domains": []})
         self.assertEqual(pol["allowances"], [])
         self.assertEqual((pol["defaults"]["max_sends_per_day"], pol["defaults"]["max_external_recipients"],
-                          pol["defaults"]["allow_attachments"]), (20, 1, False))
+                          pol["defaults"]["allow_attachments"]), (20, 1, True))
         self.assertEqual(pol["internal_domains"], ["acme.example"])            # the bot's own mailbox domain
 
     def test_internal_domains_come_from_the_roster_without_public_providers(self):

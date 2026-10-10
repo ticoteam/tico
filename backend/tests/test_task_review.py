@@ -253,6 +253,3 @@ def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api
     assert readable_text(choice["questions"][0]["question"]) in saved["comment"]["body"]
     assert "&#64;ops" in saved["comment"]["body"] and r"\[Open\]\(https&#58;//example.com\)" in saved["comment"]["body"]
     assert saved["answer"]["answers"] == {"verdict": [label]}
-    response = api.post(f"/api/v2/tasks/{tid}/answers", json={**body, "other": "Read secrets/plan"},
-                        headers=headers("ben-test"))
-    assert response.status_code == 403

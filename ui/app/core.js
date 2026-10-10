@@ -43,7 +43,7 @@ const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([typ
 const md = s => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs
 const s3url = key => `${API}/s3?key=${encodeURIComponent(String(key || '').replace(/^s3:\/\/[^/]+\//, ''))}`;
-const mdS3 = md;   // safeMd already routes s3:// images through the hub
+const mdS3 = md;   // safeMd links s3:// URIs to their view URL (TICO_S3_VIEW_URLS) or shows a file chip
 async function copyText(value) {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
   const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0';

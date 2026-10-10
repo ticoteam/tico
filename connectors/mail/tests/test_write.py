@@ -77,5 +77,48 @@ class Sending(Writing):
         rc, out, _ = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual((rc, out["sent"], out["gate"]), (0, False, "global"))
 
+class AttachAndDiscard(Writing):
+    def test_an_attached_draft_still_goes_through_every_send_gate(self):
+        pdf = self.root / "letter.pdf"
+        pdf.write_bytes(b"%PDF-1.4 response letter")
+        rc, _, _ = self.draft("--attach", str(pdf))             # the harness policy says no
+        self.assertEqual(rc, 2)
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        p = self.root / "emp-influencer" / "employee.yaml"
+        p.write_text(p.read_text().replace("outbound_send: true", "outbound_send: false"))
+        rc, d, err = self.draft("--attach", str(pdf), "--reply-to", "t-ava")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([(a["name"], a["type"]) for a in d["attachments"]],
+                         [("letter.pdf", "application/pdf")])
+        raw = compose.decode(self.service.drafts_by_id[d["draft"]]["message"]["raw"])
+        self.assertIn('filename="letter.pdf"', raw)
+        self.assertIn("In-Reply-To: <ava-1@creator.example>", raw)
+        rc, out, _ = self.run_json("send", "--as", "influencer", "--draft", d["draft"], "--issue", "42")
+        self.assertEqual((rc, out["sent"], out["gate"], out["attachments"]),
+                         (0, False, "outbound_send", ["letter.pdf"]))
+        self.assertEqual(self.service.sent, [])
+        down = [a for a in self.audit_lines() if a["action"] == "send-downgraded"]
+        self.assertEqual(down[-1]["detail"]["attachments"], ["letter.pdf"])
+
+    def test_a_bot_discards_only_its_own_unsent_draft(self):
+        rc, d, err = self.draft()
+        self.assertEqual(rc, 0, err)
+        did = d["draft"]
+        for slug, target in (("inbox", did), ("influencer", "m-ava")):   # not its draft; a received message
+            rc, _, _ = self.run_cli("discard", target, "--as", slug)
+            self.assertEqual(rc, 2)
+        self.assertIn(did, self.service.drafts_by_id)
+        self.assertIn("m-ava", self.service.store)
+        rc, out, err = self.run_json("discard", did, "--as", "influencer", "--json")
+        self.assertEqual((rc, out["discarded"]), (0, True), err)
+        self.assertEqual(self.service.deleted_drafts, [did])
+        self.assertIsNone(db.draft_by_gmail_id(self.conn(), "ana@acme.example", did))
+        self.assertIn("discard", [a["action"] for a in self.audit_lines()])
+        rc, s, _ = self.draft()                                          # sent mail is never deleted
+        self.run_json("send", "--as", "influencer", "--draft", s["draft"], "--issue", "42")
+        rc, _, _ = self.run_cli("discard", s["draft"], "--as", "influencer")
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

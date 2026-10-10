@@ -26,6 +26,7 @@ class HistoryExpired(Failure):
 RETRY_STATUS = (403, 429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 4
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+INLINE_RAW_LIMIT = 4 * 1024 * 1024          # a bigger draft goes up as media (_draft_body)
 ATTACHMENT_REF_RE = re.compile(r"a[1-9][0-9]{0,5}\Z")
 
 
@@ -179,18 +180,14 @@ class Gmail:
 
     # -- drafts and sending (stage 2; every caller is behind policy.py and lint.py) --
     def create_draft(self, raw, thread_id=""):
-        body = {"message": {"raw": raw}}
-        if thread_id:
-            body["message"]["threadId"] = thread_id
-        return self._exec(self.service.users().drafts().create(userId="me", body=body),
+        body, media = _draft_body(raw, thread_id)
+        return self._exec(self.service.users().drafts().create(userId="me", body=body, **media),
                           "drafts.create")
 
     def update_draft(self, draft_id, raw, thread_id=""):
-        body = {"message": {"raw": raw}}
-        if thread_id:
-            body["message"]["threadId"] = thread_id
+        body, media = _draft_body(raw, thread_id)
         return self._exec(
-            self.service.users().drafts().update(userId="me", id=draft_id, body=body),
+            self.service.users().drafts().update(userId="me", id=draft_id, body=body, **media),
             "drafts.update")
 
     def get_draft(self, draft_id):
@@ -206,6 +203,22 @@ class Gmail:
         return self._exec(
             self.service.users().drafts().send(userId="me", body={"id": draft_id}),
             "drafts.send")
+
+
+def _draft_body(raw, thread_id=""):
+    """(body, extra kwargs) for drafts.create/update. A message with large attachments goes as a
+    resumable media upload: a plain JSON request body is capped well below Gmail's 25 MB."""
+    body = {"message": {"raw": raw}}
+    if thread_id:
+        body["message"]["threadId"] = thread_id
+    if len(raw or "") <= INLINE_RAW_LIMIT:
+        return body, {}
+    from googleapiclient.http import MediaInMemoryUpload  # noqa: PLC0415  (only real sends get here)
+    s = str(raw).replace("-", "+").replace("_", "/")
+    mime = base64.b64decode(s + "=" * (-len(s) % 4))
+    body = {"message": {"threadId": thread_id}} if thread_id else {}
+    return body, {"media_body": MediaInMemoryUpload(mime, mimetype="message/rfc822",
+                                                    resumable=True)}
 
 
 def gmail_hint(exc, mailbox):
