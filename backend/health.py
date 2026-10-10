@@ -471,6 +471,28 @@ def _github(c, github):
     return _check("github", "GitHub", "ok", f"Connected to {row['org']}.")
 
 
+def _github_repo_create(c, github):
+    """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person.
+    The stored flag follows the installation's live permission whenever Tico asks GitHub, so this reads no network."""
+    row = github.row(c) if github else None
+    if not row or row["administration"]:
+        return None
+    from .repo_waits import fixes, waits
+    waiting = waits(c)
+    named = sorted(waiting)
+    fix = fixes(c, row, named[0] if len(named) == 1 else "")
+    summary = ("Bots BotOps builds cannot get a GitHub repository: the GitHub App lacks Administration (write). "
+               "Let BotOps create repositories (turn on Administration for the app, then accept it for the organisation), "
+               "or create each bot's repository yourself as an empty private repository.")
+    if named:
+        summary += " Waiting: " + ", ".join((waiting[bot].get("repository") or bot) for bot in named[:3]) \
+                   + ("." if len(named) <= 3 else f"; and {len(named) - 3} more.")
+    return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
+                  [_fix("Let BotOps create repositories", fix["permissions_url"]),
+                   _fix("Create " + fix["repository"] if fix["repository"] else "Create a repository", fix["create_url"]),
+                   _fix("Open GitHub settings", "#/integrations")])
+
+
 def _slack(c):
     """Only once the owner has pasted tokens: the gateway reports its own state (backend/slack_app.py)."""
     from . import slack_app
@@ -927,6 +949,8 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Computers", "#/settings", "devices")]))
     if full:
         checks.append(_github(c, github))
+        if repo_create := _github_repo_create(c, github):
+            checks.append(repo_create)
         slack = _slack(c)
         if slack:
             checks.append(slack)

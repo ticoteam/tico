@@ -4,6 +4,8 @@ The command surface (docs/history/hub-v2.md §5) and the exit codes are the cont
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
 trip is `backend/tests/test_runner.py`; here the API is a stub or absent.
 """
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -13,6 +15,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
+from unittest import mock
 
 import pytest
 
@@ -218,11 +221,16 @@ class BotSetup(unittest.TestCase):
     class FakeClient:
         def __init__(self, cards=None, onboarding=ONBOARDING):
             self.cards, self.record, self.seen, self.posted = cards, onboarding, [], []
+            self.github = None          # the APIError `github/repos` answers with; None creates the repository
 
         def post(self, path, body, key=None):
             self.posted.append((path, body))
             if path == "bots/register":
                 return {"created": True, "status": "planned", "bot_owners": ["cara"]}
+            if path == "github/repos":
+                if self.github:
+                    raise self.github
+                return {"repository": "Acme/bot-" + body["slug"], "empty": True}
             return {"routine": {"id": path.split("/")[1] + ":" + body["key"]}}
 
         def get(self, path, **query):
@@ -266,6 +274,26 @@ class BotSetup(unittest.TestCase):
         self.assertEqual(self.client.posted[0][0], "bots/register")
         self.assertEqual(self.client.posted[0][1]["on_behalf_of"], "turn")
         self.assertEqual(made["registered"]["bot_owners"], ["cara"])
+        self.assertEqual(made["github"]["repository"], "Acme/bot-seo")
+        self.assertIn(("github/repos", {"slug": "seo", "empty": True}), self.client.posted)
+
+    def test_creating_a_bot_without_repo_permission_fails_and_says_a_person_must_act(self):
+        from clients.tico import APIError
+        self.client.github = APIError("github_permission_missing", "A person must act: the GitHub App was set up "
+                                      "without permission to create repositories.", 409, False)
+        args = hubcli.parser().parse_args(["bot", "create", "seo", "--template", "specialist"])
+        out = io.StringIO()
+        with mock.patch.object(self.remotecli, "Client", lambda *a, **k: self.client), \
+                mock.patch.dict(os.environ, {"HUB_API_URL": "http://hub.invalid"}), contextlib.redirect_stdout(out):
+            code = self.remotecli.main(args)
+        self.assertNotEqual(code, 0)
+        said = json.loads(out.getvalue())
+        self.assertEqual(said["error"], "github_permission_missing")
+        self.assertTrue(said["detail"].startswith("Not finished: A person must act"))
+        self.assertIn("stays planned", said["detail"])
+        self.assertTrue(any(self.workspace.iterdir()), "the local build is kept")
+        self.client.github = APIError("github_not_connected", "GitHub is not connected.", 409, False)
+        self.assertIn("skipped", self.remotecli.github_repository(self.client, "seo", self.workspace))
 
 
 

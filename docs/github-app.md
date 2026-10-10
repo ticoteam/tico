@@ -13,7 +13,7 @@ changes; bots keep using whatever git access their computer already has.
 | Pull requests | write | a bot opens pull requests for its work |
 | Issues | write | a bot files and comments on issues |
 | Metadata | read | required by GitHub for every app |
-| Administration | write, optional | create bot repositories and delete repositories the Owner requests; omit it by leaving the box unchecked |
+| Administration | write, on by default | BotOps creates each new bot's repository, and deletes repositories the Owner requests; untick **Let BotOps create bot repositories** to leave it out, and a person then creates every new bot's repository |
 
 The app is private, receives installation change webhooks to refresh the repository list when its webhook is active, and requests no
 workflow permission, so a bot cannot change `.github/workflows` files. Add Workflows: write on the
@@ -23,8 +23,9 @@ Run tokens carry write permissions for write grants and contents read for read g
 
 ## Set up
 
-1. As the owner, open Tools, GitHub. Enter the organization, optionally rename
-   the app, and choose whether Tico may create bot repositories. Select Connect GitHub.
+1. As the owner, open Tools, GitHub. Enter the organization and optionally rename
+   the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
+   create every bot's repository by hand. Select Connect GitHub.
 2. GitHub shows the app to create. Confirm it. GitHub returns to Tico, which stores the app's
    credentials and sends you to install the app on the organization.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
@@ -60,9 +61,30 @@ broaden the bot’s normal repository access. A bot without it should ask BotOps
 repository, rather than changing its own permissions. It is limited to the name `bot-<slug>` for a bot that exists (planned or
 active, not archived), always private, in the connected organization, from the default template or
 one in that organization. Every creation is audited (`github.repo_created`) with the acting bot.
-Anyone else gets 403 with the reason. Without the administration permission the command says so and
-how to create the repository by hand. If the app is installed on selected repositories only, add the
+Anyone else gets 403 with the reason. If the app is installed on selected repositories only, add the
 new repository to the installation.
+
+### When the app cannot create repositories
+
+An app connected without Administration cannot create repositories, so a new bot cannot get one by itself.
+Health shows **GitHub can't create bot repositories** to the owner and admins, and Tools, GitHub shows the
+one-step fix:
+
+1. Select **Let BotOps create repositories**. It opens the app's permissions page on GitHub
+   (`https://github.com/organizations/<org>/settings/apps/<app>/permissions`; for an app a user owns,
+   `https://github.com/settings/apps/<app>/permissions`).
+2. Set **Administration** to **Read and write** and save. GitHub asks the organization to accept the new
+   permission; accept it.
+3. Back in Tico, select **Check again** (`POST /api/v2/github/app/check-permissions`). Tico also notices on
+   its own: through the installation webhook, or within a few minutes.
+
+When BotOps builds a bot without that permission, `hub bot create` (and `hub bot repo-create`) stops with
+`github_permission_missing` and a non-zero exit: a person must act. The bot stays planned with its files on
+the computer that built it, and the owner gets one Needs-you task for that bot (repeating the command never
+adds a second) with two fixes: create `<org>/bot-<slug>` as an empty private repository (the link opens
+GitHub's new-repository page with the owner and name filled in), or turn on Administration as above. Once
+either is done, Tico creates the empty repository if it is still missing, closes the task, and the bot's
+computer publishes its history into it on the bot's next run, as for any empty repository below.
 
 ## Creating a product repository
 

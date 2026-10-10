@@ -158,6 +158,9 @@ def create_app(settings=None):
                     await asyncio.to_thread(releases.notice)
                     from .repositories import daily
                     daily(app.state.github_app)
+                    # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
+                    from . import repo_waits
+                    await asyncio.to_thread(repo_waits.tick, app.state.github_app)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging

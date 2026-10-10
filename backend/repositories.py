@@ -369,6 +369,13 @@ def queue_sync(service, refresh=False):
                     service.repository_sync_failures += 1
                     service.repository_sync_attempt = time.time()
                     logging.getLogger('tico.repositories').warning('Repository refresh failed; retrying later')
+                if refresh_now:
+                    # An installation change (a permission accepted, a repository added) can finish a waiting bot.
+                    try:
+                        from .repo_waits import tick
+                        tick(service, force=True)
+                    except Exception:
+                        logging.getLogger('tico.repositories').warning('Waiting bot repositories could not be checked')
         service.repository_running = True
         service.repository_worker = threading.Thread(target=work, daemon=True)
         service.repository_worker.start()
