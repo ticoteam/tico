@@ -127,9 +127,12 @@ A member cannot change a bot that is not theirs, through Settings, the API or Bo
 A bot gets only credentials granted to it, including its own local credentials; it does not inherit another bot's credentials.
 Credential administrators store, delete and grant credentials. The human who stored a credential may give it to, and take it from,
 bots they own or manage (`Auth.bot_manager`), directly or through BotOps, and sees its metadata (never its value unless it is
-also granted to them); another person's bot stays an administrator's call. A human who holds a credential may also delegate it to a bot
-they own or run, directly or through BotOps. Revoking the human's grant removes the delegated bot access; changing the bot owner
-invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
+also granted to them); another person's bot stays an administrator's call. This holds only for a credential a member stored for
+their bot: one an administrator added stays the company's, even after that person stops being an administrator, and a stored
+credential stops being the member's once someone else saves a new value for it or the owner turns **Members store credentials for
+their bots** off. Giving it to a bot with co-owners puts the value in every co-owner's runs of that bot. A human who holds a
+credential may also delegate it to a bot they own or run, directly or through BotOps. Revoking the human's grant removes the
+delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
 and its declared profile and runtime keys. New bots do not inherit the whole environment or `_shared.env`.
 

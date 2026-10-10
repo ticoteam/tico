@@ -23,7 +23,7 @@ Four words, used the same way everywhere:
 
 ## Tico's Credentials
 
-Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. The person who stored a credential sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage; giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
+Tools → Credentials lists team credentials, usernames and masked previews. The owner and admins administer the vault. Each credential has its own grants. A member who stored a credential for their bot sees it listed (name, variable, grants; no **Reveal** unless it is also granted to them) and gives it to, or takes it from, bots they own or manage, while it is still theirs ([permissions.md](permissions.md#bot-owners)); giving it to someone else's bot is refused with who to ask. A granted human may reveal/copy it or attach it to bots they manage; a direct bot grant works on its assigned computer during an active run. Revoking the parent grant removes delegated bot access. Changing a bot owner invalidates delegation from its former owner.
 
 Credentials use AES-256-GCM with per-write random nonces and credential-bound authenticated data. Reveal operations are audited; credential values are excluded from audit and idempotency receipts. Restoring a snapshot revokes restored grants to avoid resurrecting permissions.
 
