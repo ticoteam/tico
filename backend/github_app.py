@@ -16,6 +16,7 @@ import secrets
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,8 @@ log = logging.getLogger("tico.github_app")
 API = "https://api.github.com"
 STATE_TTL = 3600
 LIVE_TTL = 60                 # how long the installation's live permissions are trusted
+# Token requests sit on the request thread pool, so GitHub failing to answer must fail fast, not hold a thread.
+TIMEOUT = httpx.Timeout(10, connect=3)
 # Start-of-turn tokens seed `GH_TOKEN` and may be used throughout a turn, so keep at least 45 minutes
 # remaining. The git credential helper can ask again per call, so its explicit purpose needs only ten.
 TURN_START_REFRESH_MARGIN = 45 * 60
@@ -87,7 +90,7 @@ CREATE TABLE IF NOT EXISTS github_product_repo_operations(
 
 
 def _client():
-    return httpx.Client(base_url=API, timeout=15, transport=TRANSPORT,
+    return httpx.Client(base_url=API, timeout=TIMEOUT, transport=TRANSPORT,
                         headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                                  "User-Agent": "Tico-GitHub-App"})
 
@@ -129,6 +132,7 @@ class GitHubApp:
         self.audited_tokens = {}
         self.live = {}
         self.lock = threading.Lock()
+        self.minting = {}             # (cache key, diagnose) -> Future of the one mint in flight for it
         # Serialize confirmed product creates in this process so same-process retries see the
         # completed receipt. The committed operation row is the cross-process/crash fence.
         self.product_repo_create_lock = threading.Lock()
@@ -213,9 +217,25 @@ class GitHubApp:
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
         now = int(time.time())
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
+                return hit[2]
         # GitHub rejects an exp more than ten minutes out; iat is backdated for clock drift.
-        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
-                          self.private_key(c, row), algorithm="RS256")
+        token = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
+                           self.private_key(c, row), algorithm="RS256")
+        with self.lock:
+            self.live["jwt"] = (row["app_id"], now + 540, token)
+        return token
+
+    def _jwt(self):
+        """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[1] - 60 > time.time():
+                return hit[2]
+        with self.store.transaction() as c:    # the at-rest key may be written the first time it is read
+            return self.app_jwt(c, self.row(c))
 
     def _call(self, method, path, **kw):
         if self.settings.rehearsal:
@@ -237,13 +257,12 @@ class GitHubApp:
 
     def installation(self, refresh=False):
         """The org's installation id, discovered through the app and remembered."""
-        with self.store.transaction() as c:
-            row = self.row(c)
-            if not row:
-                return None
-            if row["installation_id"] and not refresh:
-                return int(row["installation_id"])
-            token = self.app_jwt(c, row)
+        row = self.row()
+        if not row:
+            return None
+        if row["installation_id"] and not refresh:
+            return int(row["installation_id"])
+        token = self._jwt()
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
@@ -262,9 +281,7 @@ class GitHubApp:
                 return hit[1]
         try:
             installation = self.installation()
-            with self.store.transaction() as c:
-                row = self.row(c)
-                token = self.app_jwt(c, row) if row else None
+            token = self._jwt() if installation else None
             if not installation or not token:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
@@ -319,16 +336,38 @@ class GitHubApp:
         Cached until it has less than `refresh_margin` seconds left."""
         repos = sorted(set(repos or ()))
         key = (tuple(repos), tuple(sorted(permissions.items())))
-        with self.lock:
-            hit = self.cache.get(key)
-            if hit and hit["exp"] - refresh_margin > time.time():
-                result = (hit["token"], hit["expires_at"])
-                return (*result, True) if include_cache_status else result
+        while True:
+            with self.lock:
+                hit = self.cache.get(key)
+                if hit and hit["exp"] - refresh_margin > time.time():
+                    result = (hit["token"], hit["expires_at"])
+                    return (*result, True) if include_cache_status else result
+                flight = self.minting.get((key, diagnose))
+                if flight is None:
+                    flight = self.minting[(key, diagnose)] = Future()
+                    break
+            # Another request is minting this exact scope: share its token (or its refusal), not a second mint.
+            try:
+                flight.result()
+            except Problem as problem:
+                raise Problem(problem.code, problem.detail, problem.status, problem.retryable, problem.extra) from None
+        try:
+            entry = self._mint(key, repos, permissions, diagnose)
+            flight.set_result(None)
+        except BaseException as exc:
+            flight.set_exception(exc)
+            raise
+        finally:
+            with self.lock:
+                self.minting.pop((key, diagnose), None)
+        result = (entry["token"], entry["expires_at"])
+        return (*result, False) if include_cache_status else result
+
+    def _mint(self, key, repos, permissions, diagnose):
         installation = self.installation()
         if not installation:
             raise Problem("github_not_installed", "The GitHub App is not installed on the organization yet", 409)
-        with self.store.transaction() as c:
-            token = self.app_jwt(c, self.row(c))
+        token = self._jwt()
         body = {"permissions": permissions}
         if repos:
             body["repositories"] = [r.split("/", 1)[1] for r in repos]
@@ -355,8 +394,7 @@ class GitHubApp:
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry
-        result = (entry["token"], entry["expires_at"])
-        return (*result, False) if include_cache_status else result
+        return entry
 
     def should_audit_token(self, bot, token):
         """Keep token values out of durable state and audit each bot/token pair at most once."""
@@ -457,8 +495,7 @@ class GitHubApp:
         if status == 403:
             return problem
         try:
-            with self.store.transaction() as c:
-                token = self.app_jwt(c, self.row(c))
+            token = self._jwt()
             info = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             selection = info.json().get("repository_selection") if info.status_code < 300 else ""
             absent = known_absent

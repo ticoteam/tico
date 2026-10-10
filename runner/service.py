@@ -1017,12 +1017,12 @@ class Runner:
             if not self.__dict__.get("github_token_legacy_purpose", False):
                 body["purpose"] = "git"       # checkout work is not a new 45-minute turn
             try:
-                granted = self.client.post("github/token", body)
+                granted = git_credentials.hub_token(self.client, body)
             except APIError as exc:
                 if "purpose" not in body or not credential_socket._server_rejects_token_purpose(exc):
                     raise
                 self.github_token_legacy_purpose = True
-                granted = self.client.post("github/token", {"bot": bot})
+                granted = git_credentials.hub_token(self.client, {"bot": bot})
         except APIError as exc:
             problem = str(exc.detail or exc.code)[:400]
             if exc.status == 409 and exc.code == "assignment_repository" and key is not None:
