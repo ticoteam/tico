@@ -58,7 +58,7 @@ LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": False}
+                     "allow_attachments": True}
 
 # What a computer with no registry runs on: sending is on globally (each bot still needs `outbound_send: true` and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
@@ -705,9 +705,10 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
     if attachments and not pol["defaults"]["allow_attachments"]:
-        raise Refused("attachments are not allowed on mail the hub writes.",
-                      "Put the file in the S3 bucket and reference the s3:// URI on the Issue "
-                      "(policies/shared-rules.md).")
+        raise Refused("attachments are not allowed on mail the hub writes "
+                      "(defaults.allow_attachments: false in registry/mail-policy.yaml).",
+                      "Draft it without --attach and put the file on the task, or ask for the "
+                      "policy to allow attachments.")
     return everyone
 
 

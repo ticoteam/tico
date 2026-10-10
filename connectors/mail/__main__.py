@@ -13,6 +13,8 @@
   scripts/mail.sh rules run --as ana --mailbox ana@acme.example --dry-run
   scripts/mail.sh rules backtest --as inbox --since 14d [--rules candidate.yaml]
   scripts/mail.sh draft --as influencer --to a@b.example --subject "..." --body-file f --issue 128
+  scripts/mail.sh draft --as legal --reply-to 18f... --body-file f --attach private/letter.pdf
+  scripts/mail.sh discard r-88... --as legal          (only a draft this bot made, never sent mail)
   scripts/mail.sh send  --as influencer --draft r-88... --issue 128 [--approval-issue 131]
   scripts/mail.sh reply --as legal --thread 18f... --body-file f --issue 128
   scripts/mail.sh lint  --body-file f --subject "..." [--check-calendar]
@@ -39,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, hashlib, json, os, sys, weakref
+import argparse, hashlib, json, mimetypes, os, sys, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1245,6 +1247,36 @@ def body_of(path):
     return text
 
 
+MAX_ATTACH_BYTES = gm.MAX_ATTACHMENT_BYTES   # Gmail's own limit, for all of a message's files
+
+
+def attachments_of(paths):
+    """[{name, type, size, sha256, data}] for `--attach`, refused before any gate runs when a file
+    is missing or the files together pass Gmail's 25 MB."""
+    found, total = [], 0
+    for path in paths or []:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            raise Refused(f"there is no file to attach at {p}.",
+                          "Pass the path of a file on this computer: --attach <path>.")
+        data = p.read_bytes()
+        total += len(data)
+        if total > MAX_ATTACH_BYTES:
+            raise Refused(f"the attachments come to more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB, "
+                          "Gmail's limit for one message.",
+                          "Attach fewer or smaller files, or put the big one on the task and link it.")
+        kind = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        found.append({"name": gm.safe_filename(p.name), "type": kind, "size": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest(), "data": data})
+    return found
+
+
+def attachment_meta(atts):
+    """What the audit, the payload and the reviewer see of each file: never its bytes."""
+    return [{k: a.get(k) for k in ("name", "type", "size", "sha256") if a.get(k) is not None}
+            for a in atts or []]
+
+
 def thread_context(ctx, thread_id):
     """(messages, in-reply-to, references, subject, participants) for a reply."""
     raw = ctx.gmail.thread(thread_id)
@@ -1268,7 +1300,7 @@ def busy_window(ctx, days=60):
     return ctx.calendar.busy(now, now + timedelta(days=days))
 
 
-def run_review(ctx, body, subject, incoming=""):
+def run_review(ctx, body, subject, incoming="", attachments=()):
     """The reviewer sees what the employee is *for*: its Role, plus its standing allowance.
 
     Without the allowance an approved standing offer reads as a fresh commitment, and every
@@ -1286,6 +1318,10 @@ def run_review(ctx, body, subject, incoming=""):
     if allowance and allowance.get("purpose"):
         purpose = (purpose + "\n\nStanding allowance (registry/mail-policy.yaml): "
                    + allowance["purpose"]).strip()
+    if attachments:                                     # the reviewer reads the text; it is told the files
+        body = (body + "\n\n[Attached files: "
+                + "; ".join(f"{a['name']} ({a.get('type') or '?'}, {a.get('size') or 0} bytes)"
+                            for a in attachments) + "]")
     return rv.review(body, subject, incoming, purpose=purpose,
                      company=rv.company_context(), rules=REVIEW_RULES)
 
@@ -1302,7 +1338,7 @@ def label_thread(ctx, name, msgs, fallback_ids=()):
 
 
 def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
-               check_calendar=False, minutes=cal.DEFAULT_MINUTES, approval=None):
+               check_calendar=False, minutes=cal.DEFAULT_MINUTES, approval=None, attachments=()):
     """Policy -> lint -> reviewer -> the Gmail draft. Raises Refused when a gate says no.
 
     `approval` is `--approval-issue`: a GitHub Issue number, a Tico send approval id, or
@@ -1338,7 +1374,9 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                       "and the policy allows one of those. The exception is --approval-issue: "
                       "a GitHub Issue that names every address, a Tico send approval, or "
                       "The owner's Tico message telling this employee to send.")
-    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, is_reply=bool(thread_id))
+    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, attachments=len(attachments or ()),
+                   is_reply=bool(thread_id))
+    files = attachment_meta(attachments)
 
     allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
     busy = busy_window(ctx) if check_calendar else None
@@ -1363,10 +1401,11 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         ctx.audit("gate", target, {"set": gate["set"], "available": gate["available"],
                                    "ok": gate["ok"], "flags": gate["flags"],
                                    "probabilities": gate["probabilities"], "error": gate.get("error")})
-    verdict = run_review(ctx, body, subject, thread_text(msgs))
+    verdict = run_review(ctx, body, subject, thread_text(msgs), files)
     review_id = db.record_review(ctx.conn, ctx.slug, ctx.mailbox, target, verdict)
     ctx.audit("review", target, {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
                                  "available": verdict.get("available"),
+                                 "attachments": [a["name"] for a in files],
                                  "commitments": verdict.get("commitments"),
                                  "claims_not_in_thread": verdict.get("claims_not_in_thread"),
                                  "problems": verdict.get("problems")})
@@ -1380,7 +1419,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
     key = compose.draft_key(ctx.slug, ctx.issue, to, subject, body)
     row = db.get_draft(ctx.conn, key)
     raw = compose.build(to, subject, body, from_addr=ctx.mailbox, cc=cc,
-                        in_reply_to=in_reply_to, references=references)
+                        in_reply_to=in_reply_to, references=references, attachments=attachments)
     draft_id = (row or {}).get("draft_id", "")
     message_id, created = "", not row
     if not ctx.dry:
@@ -1397,12 +1436,12 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
     ctx.audit("draft", draft_id or key[:12],
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
                "created": created, "reply": bool(reply_to), "chars": len(body),
-               "review": verdict.get("backend"),
+               "attachments": files, "review": verdict.get("backend"),
                "review_ok": None if not verdict.get("available") else verdict.get("ok")})
     payload = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
                "draft": draft_id, "key": key, "thread": thread_id, "message": message_id,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
-               "created": created, "updated": not created, "dry_run": ctx.dry,
+               "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
                "label": lb.DRAFTED if not review_no else f"{lb.DRAFTED}+{lb.NEEDS_OWNER}",
                "needs_owner": review_no,
                "why_needs_owner": review_why if review_no else "",
@@ -1411,7 +1450,8 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                           else ("ok" if verdict.get("ok") else "not ok")),
                "review_detail": verdict, "gate": gate}
     state = {"msgs": msgs, "verdict": verdict, "to": to, "cc": cc, "subject": subject,
-             "body": body, "thread_id": thread_id, "draft_id": draft_id, "lint": res}
+             "body": body, "thread_id": thread_id, "draft_id": draft_id, "lint": res,
+             "attachments": files}
     return payload, state
 
 
@@ -1423,6 +1463,8 @@ def draft_text(p):
                                                    if p["cc"] else ""),
              f"  subject: {p['subject']}",
              f"  thread:  {p['thread'] or '(new)'}",
+             *(["  attach:  " + ", ".join(f"{a['name']} ({a['size']} bytes)"
+                                          for a in p["attachments"])] if p.get("attachments") else []),
              f"  draft:   {p['draft'] or '(not created: dry run)'}",
              f"  key:     {p['key'][:16]}...",
              f"  lint:    {p['lint']['summary']}",
@@ -1443,7 +1485,8 @@ def cmd_draft(args):
     ctx = Ctx(args, "draft")
     payload, _ = make_draft(ctx, args.to, args.subject, body_of(args.body_file),
                             reply_to=args.reply_to, cc=args.cc or [],
-                            approval=args.approval_issue)
+                            approval=args.approval_issue,
+                            attachments=attachments_of(args.attach))
     return out(args, payload, draft_text(payload))
 
 
@@ -1473,16 +1516,19 @@ def send_result(ctx, payload):
 
 
 def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, approval=None,
-                 extra=None):
-    """The full send chain. Returns a payload; a policy problem is a downgrade, not an error."""
+                 extra=None, attachments=()):
+    """The full send chain. Returns a payload; a policy problem is a downgrade, not an error.
+    Attachments ride the same chain: they are counted for the policy's caps and named in the
+    audit, and lift nothing."""
+    names = [a["name"] for a in attachments or ()]
     base = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
             "draft": draft_id, "to": to, "cc": cc, "subject": subject, "thread": thread_id,
-            "dry_run": ctx.dry}
+            "attachments": names, "dry_run": ctx.dry}
     base.update(extra or {})
 
     def downgrade(reason, gate="", checks=None):
         ctx.audit("send-downgraded", draft_id or thread_id,
-                  {"reason": reason, "gate": gate, "to": to})
+                  {"reason": reason, "gate": gate, "to": to, "attachments": names})
         return dict(base, sent=False, downgraded="draft", reason=reason, gate=gate,
                     checks=checks or [],
                     note=f"the draft is still in {ctx.mailbox} Drafts; the owner can send it, or "
@@ -1514,7 +1560,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                   {"reason": review_note, "approval": appr["issue"], "to": to, "cc": cc})
         base["review_advisory"] = review_note
 
-    decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc, thread_id=thread_id,
+    decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
+                             attachments=len(names), thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn,
                              thread_senders=pl.inbound_senders(msgs, ctx.mailbox))
     if not decision.allowed:
@@ -1543,7 +1590,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,
               {"to": to, "cc": cc, "subject": subject, "thread": thread_id, "key": key,
-               "draft": draft_id, "review": verdict.get("backend")})
+               "draft": draft_id, "attachments": names, "review": verdict.get("backend")})
     return dict(base, sent=True, message=message_id, thread=thread_id, key=key,
                 label=handled, checks=decision["checks"])
 
@@ -1555,10 +1602,12 @@ def cmd_send(args):
     msg = ctx.normalize(draft.get("message") or {})
     to, cc, subject, body = msg["to"], msg["cc"], msg["subject"], msg["body"]
     thread_id = msg["thread_id"]
+    files = msg.get("attachments") or []
     if not to:
         raise Refused(f"draft {args.draft} has no recipient.",
                       "Draft it again with --to; a draft with no To: cannot be sent.")
-    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, is_reply=bool(thread_id))
+    pl.check_draft(policy, ctx.slug, ctx.mailbox, to, cc, attachments=len(files),
+                   is_reply=bool(thread_id))
     msgs = []
     if thread_id:
         try:
@@ -1592,16 +1641,19 @@ def cmd_send(args):
             "lint": {"ok": False, "findings": res["findings"]}})
 
     row = db.draft_by_gmail_id(ctx.conn, ctx.mailbox, args.draft)
-    verdict = fresh_verdict(ctx.conn, row)
+    # A draft with files is reviewed again as it stands: the files may have changed in Gmail
+    # since the stored verdict was given.
+    verdict = None if files else fresh_verdict(ctx.conn, row)
     reused = verdict is not None
     if verdict is None:
-        verdict = run_review(ctx, body, subject, thread_text(msgs))
+        verdict = run_review(ctx, body, subject, thread_text(msgs), files)
         db.record_review(ctx.conn, ctx.slug, ctx.mailbox, args.draft, verdict)
         ctx.audit("review", args.draft,
                   {"backend": verdict.get("backend"), "ok": verdict.get("ok"),
-                   "available": verdict.get("available")})
+                   "available": verdict.get("available"),
+                   "attachments": [a["name"] for a in files]})
     payload = attempt_send(ctx, args.draft, to, cc, subject, thread_id, msgs, verdict,
-                           approval=args.approval_issue,
+                           approval=args.approval_issue, attachments=files,
                            extra={"lint": {"ok": True, "findings": res["findings"]},
                                   "review": ("ok" if verdict.get("ok") else
                                              ("unavailable" if not verdict.get("available")
@@ -1618,13 +1670,53 @@ def cmd_reply(args):
                                 approval=args.approval_issue)
     sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                         state["thread_id"], state["msgs"], state["verdict"],
-                        approval=args.approval_issue)
+                        approval=args.approval_issue, attachments=state["attachments"])
     payload = dict(payload, sent=sent.get("sent", False))
     for k in ("downgraded", "reason", "gate", "message", "key", "already_sent", "would_send",
               "note", "checks"):
         if k in sent:
             payload[k] = sent[k]
     return send_result(ctx, payload)
+
+
+def cmd_discard(args):
+    """Delete an unsent draft, and only one this employee made: the drafts table is the proof.
+    It takes a draft id, never a message id, so received and sent mail cannot reach it."""
+    ctx = Ctx(args, "draft")
+    did = str(args.draft_id or "").strip()
+    row = db.draft_by_gmail_id(ctx.conn, ctx.mailbox, did) if did else None
+    if not row or row["employee"] != ctx.slug:
+        ctx.audit("discard-refused", did, {"reason": "not this employee's draft",
+                                           "made_by": (row or {}).get("employee", "")})
+        raise Refused(f"draft {did} in {ctx.mailbox} was not made by {ctx.slug}; "
+                      "only a draft this employee wrote with `mail draft` can be discarded.",
+                      "Leave it for the person who wrote it, or ask the owner to delete it in Gmail.")
+    if db.draft_was_sent(ctx.conn, ctx.mailbox, did):
+        ctx.audit("discard-refused", did, {"reason": "already sent"})
+        raise Refused(f"draft {did} was already sent; sent mail is never deleted.")
+    draft = ctx.gmail.get_draft(did)                    # notFound: gone already, a Failure
+    labels = set((draft.get("message") or {}).get("labelIds") or [])
+    if "SENT" in labels:                                # pragma: no cover - Gmail drafts carry DRAFT
+        ctx.audit("discard-refused", did, {"reason": "already sent"})
+        raise Refused(f"draft {did} was already sent; sent mail is never deleted.")
+    thread_id = row["thread_id"]
+    if not ctx.dry:
+        ctx.gmail.delete_draft(did)
+        db.drop_draft(ctx.conn, ctx.mailbox, did)
+        if thread_id and thread_id not in db.draft_thread_ids(ctx.conn, ctx.mailbox):
+            try:                                        # no hub draft left on the thread
+                ids = [m["id"] for m in ctx.gmail.thread(thread_id) or []]
+                modify(ctx, ids, remove=[lb.DRAFTED], action="label-remove",
+                       detail={"label": lb.DRAFTED})
+            except (Failure, Refused):
+                pass
+    ctx.audit("discard", did, {"key": row["key"], "to": row["recipients"].split(","),
+                               "subject": row["subject"], "thread": thread_id})
+    return out(args, {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "draft": did,
+                      "discarded": not ctx.dry, "thread": thread_id, "subject": row["subject"],
+                      "dry_run": ctx.dry},
+               f"{'would discard' if ctx.dry else 'discarded'} draft {did} in {ctx.mailbox} "
+               f"({row['subject']})")
 
 
 # -- the record ----------------------------------------------------
@@ -2412,7 +2504,14 @@ def build_parser():
     df.add_argument("--approval-issue", default=None, metavar="N",
                     help="GitHub Issue, Tico send approval id, or the owner's Tico message id; "
                          "a full yes allows external Cc")
+    df.add_argument("--attach", action="append", default=None, metavar="PATH",
+                    help="a file to attach; repeat for several (25 MB in all). Sending still "
+                         "goes through every send gate")
     df.set_defaults(func=cmd_draft)
+
+    dc = writes(base(sub.add_parser("discard", help="delete an unsent draft this employee made")))
+    dc.add_argument("draft_id", metavar="DRAFT_ID", help="the Gmail draft id from `mail draft`")
+    dc.set_defaults(func=cmd_discard)
 
     sd = writes(base(sub.add_parser("send", help="send a draft (the full policy chain)")))
     sd.add_argument("--draft", required=True, help="the Gmail draft id from `mail draft`")
