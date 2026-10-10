@@ -74,6 +74,34 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
 
 
+def test_the_person_who_added_a_credential_shares_it_only_with_their_own_bots(api):
+    setup(api)
+    settings=api.app.state.store.settings
+    settings.credential_admins=('ana@acme.example','cara@acme.example')
+    mine=post(api,'credentials',{'name':'PostHog','secret':'phx-synthetic-private-987654','env':'POSTHOG_API_KEY'},'cara-test')['id']
+    theirs=create(api,name='Other',env='OTHER_KEY')['id']
+    settings.credential_admins=('ana@acme.example',)          # Cara is a member again
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+    listing=get(api,'credentials','cara-test')
+    assert [r['id'] for r in listing['credentials']]==[mine] and not listing['credentials'][0]['can_reveal']
+    assert 'finance' in [b['id'] for b in listing['bots']] and 'ops' not in [b['id'] for b in listing['bots']]
+    post(api,f'credentials/{mine}/reveal',{},'cara-test',expected=403)
+    given=post(api,f'credentials/{mine}/grants',{'subject':'bot:finance'},'cara-test')
+    refused=post(api,f'credentials/{mine}/grants',{'subject':'bot:ops'},'cara-test',expected=403)
+    assert 'bots you own or manage' in refused['error']['detail'] and 'Ask' in refused['error']['detail']
+    post(api,f'credentials/{mine}/grants',{'subject':'human:ben'},'cara-test',expected=403)
+    post(api,f'credentials/{theirs}/grants',{'subject':'bot:finance'},'cara-test',expected=403)
+    ops=post(api,f'credentials/{mine}/grants',{'subject':'bot:ops'})
+    post(api,f'credentials/{mine}/grants/{ops["id"]}/revoke',{},'cara-test',expected=403)
+    machine=runner(api);assign(api,machine,'finance');ready(api,machine,['finance'])
+    post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
+    attempt=claim(api,machine)
+    assert [r['id'] for r in get(api,'credential-runtime',attempt['token'])['credentials']]==[mine]
+    post(api,f'credentials/{mine}/grants/{given["id"]}/revoke',{},'cara-test')
+    assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
+
+
 def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
     setup(api)
     row=create(api)

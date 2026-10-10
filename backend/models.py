@@ -1283,6 +1283,7 @@ class AccessRules(Contract):
     assistant_direct: bool | None = None
     botops_direct: bool | None = None
     admin_credentials: bool | None = None
+    members_store_credentials: bool | None = None
     admin_sql: bool | None = None
     member_tokens: bool | None = None
 

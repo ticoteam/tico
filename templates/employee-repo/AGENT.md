@@ -104,5 +104,6 @@ html, pdf, office files; up to 25 MB; never credentials), or at once with `hub f
 reports/<name>.md`; publishing it again adds a version. A Google Doc, Sheet, Slides, Notion page or
 Figma file you created or edited is listed with `hub file link <url> --title "..."`, and again
 with `hub file touch <url>` after each edit (Tico keeps the address, never the document). An S3
-object is copied on this computer with `hub file import s3://bucket/key`. Files humans send you are
-inputs, not yours to list.
+object is copied on this computer with `hub file import s3://bucket/key`. Share a file as a viewable URL or a Tico
+file, never a bare `s3://` URI: `hub` rewrites one to its view URL when the server maps the bucket, and otherwise
+`hub file import` makes it a Tico file. Files humans send you are inputs, not yours to list.

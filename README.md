@@ -199,6 +199,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_REGISTRY_DIR` | Seed roster and access list directory; its `integrations/` folder layers the team's own tool pages and queries over the release ([docs/databases.md](docs/databases.md)) | `/etc/tico/registry` |
 | `TICO_INTEGRATIONS_DIR` | Where that team layer lives when it is not `<registry>/integrations` | `/etc/tico/integrations` |
 | `TICO_BLOB_DIR` or `TICO_BLOB_BUCKET` | Where attachments and meeting files are stored: a directory or an S3 bucket | `/var/lib/tico/blobs` |
+| `TICO_S3_VIEW_URLS` | Where people open a team bucket's objects: `bucket=https://base[/prefix]`, comma-separated. `s3://bucket/key` in bot text becomes `base/key` ([docs/files.md](docs/files.md#links-to-bucket-objects)) | `acme-files=https://d1234example.cloudfront.net` |
 | `TICO_ACCESS_ISSUER` and `TICO_ACCESS_AUDIENCE` | Identity proxy issuer and application audience. JWKS is read from `<issuer>/cdn-cgi/access/certs` | `https://acme.cloudflareaccess.com` |
 | `TICO_AUTH_PROXY` | `oidc` (built-in sign-in), `cloudflare` or `aws-alb`. Defaults to `cloudflare` when `TICO_ACCESS_ISSUER` is set, else none (loopback sign-in). See [Sign-in options](docs/environments.md#sign-in-options) | `oidc` |
 | `TICO_OIDC_ISSUER` | For `oidc`: `https://accounts.google.com`, `https://login.microsoftonline.com/<tenant-id>/v2.0`, or any issuer with OpenID discovery | `https://accounts.google.com` |

@@ -71,7 +71,8 @@ $HUB_DIR/scripts/mail.sh attachments 18f2... --format json           # reference
 $HUB_DIR/scripts/mail.sh attachment 18f2... a1 --out /private/dir/file.pdf
 $HUB_DIR/scripts/mail.sh label add 18f2... hub/needs-owner           # label remove, archive, mark-read, star, triaged
 $HUB_DIR/scripts/mail.sh draft --to person@example.org --subject "..." --body-file out/draft.txt --issue 128
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128
+$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128 --attach out/letter.pdf   # repeat --attach; 25 MB in all
+$HUB_DIR/scripts/mail.sh discard r-882... --issue 128                # only an unsent draft you made
 $HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131]
 $HUB_DIR/scripts/mail.sh reply --thread 18f2... --body-file out/reply.txt --issue 128   # draft, then send if allowed
 $HUB_DIR/scripts/mail.sh lint --body-file out/draft.txt --subject "..." [--to addr]

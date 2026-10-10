@@ -28,6 +28,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from clients import s3links
 from clients.agent_skill import WHO_NEEDS_ME
 from clients.task_review import ASK_SCHEMA
 
@@ -137,6 +138,13 @@ def whoami(api, args):
                 "description": "References like `task:<id>` or `approval:<id>`"}},
       required=("to", "text"), writes=True)
 def message_send(api, args):
+    # Free text a person reads: an s3:// URI becomes its view URL first (clients/s3links.py); a command goes verbatim.
+    args = dict(args)
+    links = None if args.get("command") else s3links.apply(api, args, ("text",))
+    return s3links.annotate(_message_send(api, args), links)
+
+
+def _message_send(api, args):
     if str(args["to"]).lower() == "assistant":
         return assistant_send(api, args)
     if args.get("fyi"):
@@ -218,7 +226,9 @@ def meeting_delete(api, args):
       {"to": _s("The bot: a slug or `bot:<slug>`"), "text": _s("What it should know")},
       required=("to", "text"), writes=True)
 def note(api, args):
-    return api.post("notes", {"to": args["to"], "text": args["text"]}, key=_key(args))["note"]
+    body = {"to": args["to"], "text": args["text"]}
+    links = s3links.apply(api, body, ("text",))
+    return s3links.annotate(api.post("notes", body, key=_key(args))["note"], links)
 
 
 @tool("hub_note_list", "Quiet notes, newest first: the ones left for you and the ones you left.",
@@ -500,7 +510,8 @@ def task_create(api, args):
         body["roles"] = roles
     if args.get("dry_run"):
         return api.post("tasks/dry-run", body)
-    return api.post("tasks", body, key=_key(args))
+    links = s3links.apply(api, body, ("body",))
+    return s3links.annotate(api.post("tasks", body, key=_key(args)), links)
 
 
 @tool("hub_task_child_create", "Create a subtask carrying its parent's requester rights.",
@@ -640,7 +651,8 @@ def task_update(api, args):
     roles = _roles(api, args)
     if roles:
         body["roles"] = roles
-    return api.post("tasks/" + args["id"], body, key=_key(args))
+    links = s3links.apply(api, body, ("note",))
+    return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
 def _roles(api, args):
@@ -706,8 +718,9 @@ def task_type_delete(api, args):
        "attachments": {"type": "array", "items": {"type": "string"}, "description": "File versions as file_id@version"}},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    return api.post(f"tasks/{args['id']}/comments",
-                    {k: args[k] for k in ("text", "ask", "attachments") if k in args}, key=_key(args))
+    body = {k: args[k] for k in ("text", "ask", "attachments") if k in args}
+    links = s3links.apply(api, body, ("text",))
+    return s3links.annotate(api.post(f"tasks/{args['id']}/comments", body, key=_key(args)), links)
 
 
 @tool("hub_task_answers", "List all structured answers on a task, oldest first.",
@@ -724,7 +737,9 @@ COMMENT_ID = _s("The comment's id (`id` in the task's `comments`)")
       {"id": TASK_ID, "comment_id": COMMENT_ID, "text": _s("The new text")},
       required=("id", "comment_id", "text"), writes=True)
 def task_comment_edit(api, args):
-    return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}", {"text": args["text"]}, key=_key(args))
+    body = {"text": args["text"]}
+    links = s3links.apply(api, body, ("text",))
+    return s3links.annotate(api.post(f"tasks/{args['id']}/comments/{args['comment_id']}", body, key=_key(args)), links)
 
 
 @tool("hub_task_comment_delete", "Take back a comment you wrote on a task: it is no longer listed or handed to a "
@@ -1495,8 +1510,9 @@ def task_close(api, args):
                 raise
             # Fleet work has no human request; BotOps keeps its own task-closing rights.
     current = current or api.get("tasks/" + args["id"])["task"]
-    return api.post("tasks/" + args["id"], {"version": current["version"], "note": args.get("note"),
-                                            "close": True, "quiet": bool(args.get("quiet"))}, key=_key(args))
+    body = {"version": current["version"], "note": args.get("note"), "close": True, "quiet": bool(args.get("quiet"))}
+    links = s3links.apply(api, body, ("note",))
+    return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
 @tool("hub_conversation_show", "What was said in a conversation: the newest 200 messages, oldest first. The "
@@ -2281,11 +2297,12 @@ def _bot_of_credentials(listing, ref):
     return str(ref or "").strip()
 
 
-@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator): from then "
+@tool("hub_credential_grant", "Give a bot a stored credential, as the person who asked you (a credential administrator, or the "
+      "person who stored it, for a bot they own or manage): from then "
       "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
       "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
-      "hub_credential_import it first. Then run the bot's own read-only check of the connection. A member who is not a "
-      "credential administrator is refused, with who to ask.",
+      "hub_credential_import it first. Then run the bot's own read-only check of the connection. Anyone else is "
+      "refused, with who to ask.",
       {"credential": _s("The credential's name (or its variable's name)"), "to_bot": _s("The bot's slug or name")},
       required=("credential", "to_bot"), writes=True)
 def credential_grant(api, args):
@@ -2297,7 +2314,8 @@ def credential_grant(api, args):
     return {"credential": row.get("name"), "env": row.get("env"), "bot": bot, **{k: v for k, v in given.items() if k != "subject"}}
 
 
-@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator). "
+@tool("hub_credential_revoke", "Take a stored credential away from a bot, as the person who asked you (a credential administrator, "
+      "or the person who stored it, for a bot they own or manage). "
       "Its next run no longer has it. Safe to repeat.",
       {"credential": _s("The credential's name (or its variable's name)"), "from_bot": _s("The bot's slug or name")},
       required=("credential", "from_bot"), writes=True)

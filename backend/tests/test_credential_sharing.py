@@ -143,6 +143,19 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     assert act(api, ben, "POST", f"credentials/{row['id']}/grants/{done.json()['id']}/revoke", {}).status_code == 200
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked IS NULL").fetchone()[0] == 0
+    finish(api, botops, ben)
+    # A member who added a credential shares it with their own bot through BotOps, at once, and nobody else's.
+    settings = api.app.state.store.settings
+    settings.credential_admins = ("ana@acme.example", "cara@acme.example")
+    mine = post(api, "credentials", {"name": "Sentry", "env": "SENTRY_TOKEN", "secret": JIRA}, "cara-test")["id"]
+    settings.credential_admins = ("ana@acme.example",)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+    cara = turn(api, botops, person="cara-test", text="Give finance my Sentry token")
+    given = act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:finance"})
+    assert given.status_code == 200 and "needs_confirm" not in given.json(), given.text
+    assert act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:ops"}).status_code == 403
+    assert act(api, cara, "POST", f"credentials/{mine}/grants/{given.json()['id']}/revoke", {}).status_code == 200
 
 
 # ------------------------------------------------------------------ hub credential grant | revoke | import
