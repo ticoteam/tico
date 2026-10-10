@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from clients.agent_skill import WHO_NEEDS_ME
 
 from . import go_live as pending_go_lives
+from . import repo_waits
 from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
@@ -3786,6 +3787,19 @@ def create_app(settings=None):
 
     execution.readiness_reported = finish_pending_go_live
 
+    def waiting_for_permission(bot, wait):
+        """The refusal for a bot whose repository could not be created because the GitHub App may not create
+        repositories (backend/repo_waits.py): it points at the owner's Needs-you task with the two fixes, not at
+        `hub bot repo-create`, which would only hit the same missing permission. No placement is kept."""
+        task_id = str(wait.get("task_id") or "")
+        url = f"{settings.public_url}/#/task/{task_id}" if task_id and settings.public_url else ""
+        where = (f"the owner has a Needs you task with the two fixes ({task_id}{', ' + url if url else ''})" if task_id
+                 else "the owner is asked in Needs you to create it or let BotOps create repositories")
+        return Problem("repository_waiting_for_permission",
+                       f"{bot} is waiting for its GitHub repository" + (f" {wait['repository']}" if wait.get("repository") else "") + f": {where}. "
+                       f"Once either fix is in, Tico creates or finds it; then run `hub bot go-live {bot}` again", 409,
+                       extra={"task_id": task_id, **({"task_url": url} if url else {})})
+
     def repository_on_github(bot):
         """Before the write (GitHub is never called while holding it): whether GitHub has the bot's repository, for a
         bot whose computer has not reported it yet. ("unknown", None) when there is nothing to ask."""
@@ -3824,6 +3838,8 @@ def create_app(settings=None):
                         building = True
                     elif github == "present":
                         return wait_for_repository(c, who, bot, placed, body)
+                    elif (permission_wait := repo_waits.waits(c).get(bot)):
+                        raise waiting_for_permission(bot, permission_wait)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
                             raise Problem("repository_missing", "Its repository is not built yet. Add BotOps to build it", 409)

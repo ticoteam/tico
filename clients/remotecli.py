@@ -911,6 +911,10 @@ def main(args, who=None):
             print("hub: " + str(result["warning"]), file=sys.stderr)
         return 0
     except APIError as exc:
+        if exc.code == "repository_waiting_for_permission":
+            # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
+            print(f"{exc.detail}.")
+            return 2
         print(json.dumps({"error": exc.code, "detail": exc.detail, "retryable": exc.retryable,
                           "operation_id": exc.operation_id}, indent=2))
         return 1 if exc.retryable else 2

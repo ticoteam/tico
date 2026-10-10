@@ -232,3 +232,27 @@ def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monk
     assert seen("ana-test") is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"
+
+
+def test_go_live_for_a_bot_waiting_on_the_repo_create_permission_names_the_owners_task(api, monkeypatch, capsys):
+    from backend.store import Problem
+    _new_bot(api, monkeypatch, ("missing", Problem("github_repo_missing", "acme/bot-cpo does not exist yet.", 409)))
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO registry_metadata VALUES('github-repo-waits',?)", (encode({"cpo": {
+            "repository": "acme/bot-cpo", "task_id": "task-fixes-1", "template": "", "since": "2026-10-10T00:00:00Z"}}),))
+    machine = runner(api, label="Studio Mac")
+    ready(api, machine, [])
+    refused = post(api, "bots/cpo/go-live", {"computer": "Studio Mac"}, expected=409)["error"]
+    assert refused["code"] == "repository_waiting_for_permission" and not refused["retryable"]
+    assert "Needs you task with the two fixes" in refused["detail"] and "task-fixes-1" in refused["detail"]
+    assert "repo-create" not in refused["detail"]
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM assignments WHERE bot='cpo'").fetchone()
+    from clients import hubcli, remotecli
+    from clients.tico import APIError
+
+    def refuse(args, who):
+        raise APIError(refused["code"], refused["detail"], 409)
+    monkeypatch.setattr(remotecli, "run", refuse)
+    assert remotecli.main(hubcli.parser().parse_args(["bot", "go-live", "cpo"])) == 2
+    assert capsys.readouterr().out.startswith("cpo is waiting for its GitHub repository acme/bot-cpo")
