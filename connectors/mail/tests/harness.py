@@ -10,6 +10,7 @@ tested against a fake backend in test_review.py.
 
 import contextlib, io, json, os, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake                    # noqa: E402,F401  (puts the hub on sys.path)
@@ -134,7 +135,18 @@ class Stage2(unittest.TestCase):
     creators = CREATORS
     policy_yaml = POLICY
 
+    # A bot's run carries these; with them a draft would upload its files to the run's live task.
+    HUB_ENV = ("HUB_API_URL", "HUB_TOKEN", "HUB_TASK_ID")
+
     def setUp(self):
+        self._env = mock.patch.dict(os.environ)
+        self._env.start()
+        for name in self.HUB_ENV:
+            os.environ.pop(name, None)
+        # Every `mail draft --attach` records its task uploads here and nothing leaves the process.
+        self.task_uploads = []
+        self._task_attach, cli.TASK_ATTACH = cli.TASK_ATTACH, (
+            lambda task, name, data, key: self.task_uploads.append((task, name, data, key)) or "")
         self.dir = tempfile.TemporaryDirectory()
         self.root = Path(self.dir.name)
         for slug, text in self.manifests.items():
@@ -190,6 +202,8 @@ class Stage2(unittest.TestCase):
             os.environ.pop("MAIL_DECISIONS", None)
         else:
             os.environ["MAIL_DECISIONS"] = self._saved["judge"]
+        cli.TASK_ATTACH = self._task_attach
+        self._env.stop()
         self.dir.cleanup()
 
     def confirmed_setting(self, slug):

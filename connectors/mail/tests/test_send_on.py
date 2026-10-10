@@ -5,7 +5,8 @@ the thread being replied to (a reply, no added recipients). Anything else still 
 the caps, the blocklist and owner-handles-personally still apply. A computer with no registry has a built-in policy.
 """
 
-import hashlib, sys, unittest
+import hashlib, os, sys, unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -317,8 +318,6 @@ class Cli(Stage2):
         data = b"%PDF-1.4 the answer"
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(data)
         task, uploads = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", []
-        saved = cli.TASK_ATTACH
-        self.addCleanup(setattr, cli, "TASK_ATTACH", saved)
         cli.TASK_ATTACH = lambda *call: uploads.append(call) or "f-answer-0001"
         rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
                                    "--attach", "answer.pdf", "--issue", task, "--json")
@@ -341,6 +340,23 @@ class Cli(Stage2):
                                    "--attach", "answer.pdf", "--issue", task, "--json")
         self.assertEqual(rc, 0, err)
         self.assertEqual(p["approval_request"]["payload"]["attachments"], [file_meta("answer.pdf", data + b" v2")])
+
+    def test_a_bot_environment_never_reaches_a_server_from_the_tests(self):
+        # The variables a bot's run carries, pointing at a port nothing listens on: the harness's stub takes the upload.
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
+        task = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        os.environ.update(HUB_API_URL="http://127.0.0.1:9", HUB_TOKEN="t", HUB_TASK_ID=task)
+        attempts = []
+        def refuse(*a, **k):
+            attempts.append(a)
+            raise OSError("network is off in the mail tests")
+        with mock.patch("socket.socket.connect", refuse), mock.patch("socket.create_connection", refuse):
+            rc, p, err = self.run_json("draft", "--as", "inbox", "--reply-to", THREAD, "--body-file", self.body_file(BODY),
+                                       "--attach", "answer.pdf", "--issue", "1", "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(attempts, [])
+        self.assertEqual([(t, n) for t, n, _, _ in self.task_uploads], [(task, "answer.pdf")])
 
     def test_the_draft_text_shows_the_approval_request_with_the_files(self):
         self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
