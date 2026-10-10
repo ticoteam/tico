@@ -1,4 +1,5 @@
 """Encrypted company credentials with explicit human and run-bound bot grants."""
+import base64
 import hashlib
 import hmac
 import json
@@ -151,6 +152,7 @@ class CredentialMigration(Contract):
 LOCAL = 'local'                                   # `credential_keys.kms_key` for a data key kept in a file
 KEY_CHECK = b'tico-credential-key-check:v1'       # what the row keeps of a local key: proof of it, never the key
 KEY_FILE = 'credential.key'
+SEALED = 'sealed:v1:'                             # the prefix of a value `CredentialCipher.seal` made
 _key_file_lock = threading.Lock()
 
 
@@ -279,6 +281,25 @@ class CredentialCipher:
     def encrypt(self, c, cid, secret):
         nonce = os.urandom(12)
         return AESGCM(self.key(c)).encrypt(nonce, secret.encode(), ('tico-credential:v1:' + cid).encode()), nonce
+
+    def seal(self, c, context, value):
+        """`value` sealed with the vault's data key for one named use (`context`, e.g. "support_tickets:<id>"), as text
+        a column keeps: SEALED + base64(nonce + ciphertext). Makes the vault's key on first use, as a credential does."""
+        nonce = os.urandom(12)
+        sealed = AESGCM(self.key(c)).encrypt(nonce, value.encode(), b'tico-sealed:v1:' + context.encode())
+        return SEALED + base64.b64encode(nonce + sealed).decode()
+
+    def unseal(self, c, context, stored):
+        """What `seal` sealed. A value without the SEALED prefix is plaintext kept before sealing: returned as it is."""
+        if not stored or not stored.startswith(SEALED):
+            return stored
+        try:
+            blob = base64.b64decode(stored[len(SEALED):])
+            return AESGCM(self.key(c)).decrypt(blob[:12], blob[12:], b'tico-sealed:v1:' + context.encode()).decode()
+        except Problem:
+            raise
+        except Exception:
+            raise Problem('vault_unavailable', 'A stored secret could not be decrypted', 503) from None
 
     def decrypt(self, c, row):
         try:

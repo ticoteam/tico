@@ -5,7 +5,7 @@ is automatic and nothing is sent in demo mode. The counting choice (PRIVACY.md) 
 person chose to send, and what goes with it is shown on the form and switchable there.
 
 HQ answers with a ticket id and a secret for that ticket alone. This server keeps both (the secret never reaches a
-browser), and asks HQ for the status and messages of the caller's open tickets when the page asks (`refresh`), never on a
+browser, and is sealed with the credential vault's key: `seal_plaintext_secrets`), and asks HQ for the status and messages of the caller's open tickets when the page asks (`refresh`), never on a
 timer of its own. Every route shows a person their own tickets and no one else's. Ticket text, from either side, is data:
 it is stored as plain text and the page escapes it.
 
@@ -26,6 +26,7 @@ from . import diagnostics
 from .census import hq_url
 from .models import Contract
 from .replication import rehearsal_on
+from .credentials import SEALED
 from .store import H, Problem, encode
 
 log = logging.getLogger("tico.support")
@@ -176,10 +177,42 @@ def view(row):
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
+def _context(ticket_id):
+    return "support_tickets:" + ticket_id
+
+
+def seal_plaintext_secrets(store, vault):
+    """Seal, with the credential vault, every ticket secret an older release kept in plaintext. Idempotent: a sealed one
+    is left alone. Returns how many were sealed. Run on start; a vault that cannot be opened now (KMS unreachable)
+    leaves them for the next start or the next use (`Support.secret`)."""
+    with store.transaction() as c:
+        rows = c.execute("SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?",
+                         (len(SEALED), SEALED)).fetchall()
+        for row in rows:
+            c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=? AND hq_secret=?",
+                      (vault.cipher.seal(c, _context(row["id"]), row["hq_secret"]), row["id"], row["hq_secret"]))
+    if rows:
+        log.info("Sealed %d support ticket secret(s) kept in plaintext by an earlier release", len(rows))
+    return len(rows)
+
+
 class Support:
-    def __init__(self, store, settings, census):
-        self.store, self.settings, self.census = store, settings, census
+    def __init__(self, store, settings, census, vault=None):
+        self.store, self.settings, self.census, self.vault = store, settings, census, vault
         self.previews = diagnostics.Previews()
+
+    def secret(self, row):
+        """The ticket's HQ secret, opened with the vault. One still in plaintext (sealing failed at start) is sealed
+        now, best effort, and used as it is."""
+        stored = row["hq_secret"]
+        if not stored.startswith(SEALED):
+            try:
+                seal_plaintext_secrets(self.store, self.vault)
+            except Exception as exc:
+                log.warning("Support ticket secrets are still in plaintext: %s", type(exc).__name__)
+            return stored
+        with self.store.read() as c:
+            return self.vault.cipher.unseal(c, _context(row["id"]), stored)
 
     # ------------------------------------------------------------------ the form
     def compose(self, who):
@@ -249,6 +282,11 @@ class Support:
                                (who.actor, since)).fetchone()[0]
         if recent >= PER_DAY:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
+        # The secret HQ answers with is sealed with the vault's key: make sure it opens (or, on a fresh install, make
+        # it, as the first saved credential would) before anything goes to HQ, so no ticket is made that this server
+        # could not keep.
+        with self.store.transaction() as c:
+            self.vault.cipher.key(c)
         sent, payload = {}, {"message": message}
         if email:
             payload["email"] = email
@@ -271,7 +309,8 @@ class Support:
         with self.store.transaction() as c:
             c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent_json,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id, hq_secret, key or None))
+                      (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
+                       self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
             H.event(c, who.actor, "support.filed", ticket_id, {"email": bool(email), "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
                                                               "diagnostics": "diagnostics" in sent})
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
@@ -283,7 +322,7 @@ class Support:
         payload = {"message": text}
         if attachment:
             payload["diagnostics"] = self.attachment(who, attachment)
-        answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body=payload, secret=row["hq_secret"])
+        answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body=payload, secret=self.secret(row))
         if answer.status_code == 422 and attachment:
             raise Problem("diagnostics_rejected", "Support could not accept this attachment. Review it or remove diagnostics to send just the message.", 422)
         _answer(answer, (201, 200))
@@ -293,7 +332,7 @@ class Support:
     def remove(self, who, ticket_id):
         """Delete the ticket at HQ, then here."""
         row = self._own(who, ticket_id)
-        answer = _ask_hq("DELETE", f"/v1/support/{row['hq_id']}", secret=row["hq_secret"])
+        answer = _ask_hq("DELETE", f"/v1/support/{row['hq_id']}", secret=self.secret(row))
         if answer.status_code not in (200, 404):        # 404: the team already deleted it
             _answer(answer, (200,))
         with self.store.transaction() as c:
@@ -322,7 +361,7 @@ class Support:
     def _pull(self, row):
         """Ask HQ about one ticket and keep the answer. Returns False when HQ could not be reached."""
         try:
-            answer = _ask_hq("GET", f"/v1/support/{row['hq_id']}", secret=row["hq_secret"])
+            answer = _ask_hq("GET", f"/v1/support/{row['hq_id']}", secret=self.secret(row))
         except Problem:
             return False
         if answer.status_code == 404:
@@ -370,7 +409,13 @@ class Support:
 def install(app, store, settings, census):
     from fastapi import Request
 
-    support = Support(store, settings, census)
+    vault = app.state.vault
+    support = Support(store, settings, census, vault)
+    try:
+        seal_plaintext_secrets(store, vault)
+    except Exception as exc:              # KMS unreachable, or credential.key missing: Health names the vault's state
+        log.warning("Support ticket secrets kept in plaintext by an earlier release are not sealed yet: %s",
+                    type(exc).__name__)
     diagnostics.watch_logs()
 
     def person(request):
