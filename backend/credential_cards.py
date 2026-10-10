@@ -7,7 +7,8 @@ granted to that one bot. The bot is told it is saved; the value never enters a m
 
 `hub credential set` takes a value a person gave BotOps in chat instead: the same store, as the person, and the
 words they pasted are taken out of the conversation (`redact_value`). What the vault allows is unchanged: only a
-credential administrator stores a credential, and only for a bot they may manage.
+credential administrator, or (team rule "Members store credentials") a person who manages the bot, stores a credential, and
+only for a bot they may manage.
 
 `hub credential import` moves a secret a bot already has in its own file on its computer (`secrets/<bot>.env`) into the vault,
 granted to that bot (`POST /api/v2/credential-imports`): the computer reads the one variable and hands it over its own
@@ -159,17 +160,21 @@ def admin_names(c, vault):
 def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", username=""):
     """The credential for `env` on `bot`, created or replaced, and granted to that bot alone. `who` is the person."""
     validate_identity(c, who)
-    if not administrator(c, who, vault.admins):
-        names = admin_names(c, vault)
-        raise Problem("forbidden", "Only a credential admin can store credentials" + (". Ask " + ", ".join(names[:3]) if names else ""), 403)
     row = H.bot(c, bot)
+    admin = administrator(c, who, vault.admins)
+    if not admin and not (row and vault.member_stores(c, who, bot)):
+        names = admin_names(c, vault)
+        raise Problem("forbidden", "Only a credential admin, or someone who manages this bot, can store credentials for it"
+                      + (". Ask " + ", ".join(names[:3]) if names else ""), 403)
     if not row:
         raise Problem("not_found", "Bot not found", 404)
     subject = "bot:" + bot
     grants = {}
     for g in c.execute("SELECT credential_id,subject FROM credential_grants WHERE revoked IS NULL"):
         grants.setdefault(g["credential_id"], set()).add(g["subject"])
-    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created", (env,))]
+    # A member replaces only a credential they stored themselves; anyone else's stays, and theirs is a new one.
+    rows = [r for r in c.execute("SELECT * FROM credentials WHERE env=? ORDER BY created", (env,))
+            if admin or r["created_by"] == who.actor]
     own = next((r for r in rows if grants.get(r["id"], set()) <= {subject} and r["id"] in grants), None)
     unused = next((r for r in rows if not grants.get(r["id"])), None)
     existing = own or unused
@@ -179,7 +184,7 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     write = CredentialWrite(name=existing["name"] if existing else label, username=username or (existing["username"] if existing else ""),
                             kind=kind, env=env, secret=SecretStr(value), source="",
                             expected_revision=existing["revision"] if existing else None)
-    saved = vault.write(c, who, write, existing["id"] if existing else None)
+    saved = vault.write(c, who, write, existing["id"] if existing else None, for_bot=bot)
     vault.grant(c, who, saved["id"], subject)
     # A shared credential that already carried this variable to the bot is replaced by its own.
     for r in rows:
@@ -232,11 +237,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     def view(c, row, viewer):
         bot = H.bot(c, row["bot"]) or {}
         name = bot.get("display_name") or row["bot"]
-        allowed = administrator(c, viewer, vault.admins)
+        allowed = administrator(c, viewer, vault.admins) or vault.member_stores(c, viewer, row["bot"])
         note = None
         if row["status"] == "pending" and not allowed:
             names = admin_names(c, vault)
-            note = "Only a credential admin can store this" + (". Ask " + ", ".join(names[:3]) if names else "") + "."
+            note = "Only a credential admin, or someone who manages this bot, can store this" + (". Ask " + ", ".join(names[:3]) if names else "") + "."
         return {"id": row["id"], "status": row["status"], "env": row["env"], "bot": row["bot"], "bot_name": name,
                 "label": row["label"], "title": f"{name} needs {row['label'] or row['env']}", "format": row["format"],
                 "help_url": row["help_url"], "kind": row["kind"], "can_save": allowed and row["status"] == "pending",

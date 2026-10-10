@@ -294,8 +294,18 @@ class Vault:
         return {k: row[k] for k in ('id', 'name', 'username', 'kind', 'env', 'preview', 'source', 'revision', 'created', 'updated')} | {
             'stored': row['ciphertext'] is not None, 'env': model_env(row['name'], row['kind'], row['env'])}
 
-    def write(self, c, who, body, cid=None):
-        require_admin(c, who, self.admins)
+    def member_stores(self, c, who, bot):
+        """Whether this person, not a credential administrator, may store a credential for `bot`: the team rule
+        "Members store credentials" is on and they own or manage the bot. It is granted to that bot at once."""
+        from . import team_rules
+        return (who.role in ('human', 'owner') and team_rules.load(c)['members_store_credentials']
+                and bool(self.manages_bot(c, who, 'bot:' + bot)))
+
+    def write(self, c, who, body, cid=None, for_bot=None):
+        """`for_bot`: storing it for that bot (backend/credential_cards.py `store_for_bot`), which a member who manages the bot
+        may do too, for a new credential or one they stored themselves; everything else is an administrator's."""
+        if not (for_bot and self.member_stores(c, who, for_bot) and (not cid or creator(c, who, cid))):
+            require_admin(c, who, self.admins)
         old = self.row(c, cid) if cid else None
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)

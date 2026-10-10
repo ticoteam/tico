@@ -73,19 +73,22 @@ for the owner.
 
 **Credential administrators** are the owner and the Admins, so a team gets going without the owner storing every credential. When the
 server names its own list with `TICO_CREDENTIAL_ADMINS` it is that list (the owner and whoever it names), nobody else: the Admins
-are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)); a member is
-never one.
+are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)). A member is
+never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `hub credential set --for-bot`), granted to
+that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
+read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
 ## Team rules
 
 The product favours getting going fast, and the owner tightens it later. Settings > Humans (owner only, saved as they change;
-`GET` and `PUT /api/v2/access/rules`) has five switches, all **on** by default:
+`GET` and `PUT /api/v2/access/rules`) has six switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot is a card |
 | **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
+| **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 

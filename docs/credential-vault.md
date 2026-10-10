@@ -12,7 +12,8 @@ Oversized files are left out of publication; scrubbing never writes through a sw
 Four words, used the same way everywhere:
 
 - A **human** signs in. The owner and the admins are the **credential administrators**: they store, delete and grant credentials
-  (`TICO_CREDENTIAL_ADMINS` names a different list; a member is never one).
+  (`TICO_CREDENTIAL_ADMINS` names a different list). A member is never one, but stores a credential for a bot they own or manage,
+  granted to that bot, and shares it with their other bots (team rule **Members store credentials for their bots**, on by default).
 - A **bot** is a worker. It has the credentials it was given and nothing else. **A bot never uses a credential that was not
   granted to it**, and never another bot's: having one in its own file on its computer does not make it anyone else's.
 - A **credential** is a stored secret with a name and, for a bot, the environment variable it arrives in (`JIRA_BASIC_AUTH`). Its value
@@ -129,8 +130,9 @@ A bot that needs a credential opens a **credential card** in the conversation wh
 The server checks its shape (a `:` where the format has one; never echoing the value), stores it in this vault under the variable's name
 (a credential already holding that name for that bot is replaced, one shared with other bots is left alone), grants it to that one bot, and wakes the
 asking bot with "Saved". The value is in no message, event, receipt or log, and never reaches the model. Only the human who was asked, or a
-credential admin, can fill a card, and only a credential admin can store (the vault's rule: the owner and the Admins, unless
-the owner limits it to the owner in Settings > Humans); anyone else sees who to ask.
+credential admin, can fill a card. A credential admin stores any; a member stores one for a bot they own or manage, replacing only a
+credential they stored themselves, unless the owner turns **Members store credentials for their bots** off in Settings > Humans; anyone
+else sees who to ask.
 
 If a human pastes a credential into the chat instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
