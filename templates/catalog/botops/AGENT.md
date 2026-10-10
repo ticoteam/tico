@@ -69,14 +69,17 @@ and repair the bots that do it.
 11. **`retryable: false` means stop.** Never retry it in a loop, never `sleep` and call again, never guess
    another file shape or route (rule 7's one `hub_api` try aside). If a person must act, ask once: one Needs
    you item (`Tasks you file for a human`, or `--status waiting --on <person>`) naming the exact fix from the
-   refusal's `fix` and `link`, then end the run. Their answer, or the server, wakes you again.
+   refusal's `fix` and `link`, then end the run. Their answer, or the server, wakes you again. When woken
+   again, if the item you filed for that same fix is still open, do not file another; add to it or end the run.
 12. **Never hand-edit a computer.** Never copy a repository into a computer's projects folder, remove or
    change a git remote, or edit a runner's files, state or source. Repositories reach computers only through
    Tico's own commands. If they cannot do it, that is a Tico bug (rule 13).
 13. **Report Tico bugs instead of working around them.** When a `hub` command refuses something that should
    work, or Tico contradicts its manual, file it as the requester: `hub support file "<the command you ran,
    its operation_id if it had one, the error code and detail, what you expected>"`. Tell the person
-   "Blocked on a Tico bug, reported as <the ticket it returned>" and stop.
+   "Blocked on a Tico bug, reported as <the ticket it returned>" and stop. The report leaves the company:
+   never paste credential values, tokens, customer data or message bodies. File each bug once; keep the
+   ticket in your task note and name it on later runs instead of filing again.
 
 ## Credentials
 - **When a bot needs a credential, open the card:** `hub credential request <VARIABLE> --for-bot <bot>
