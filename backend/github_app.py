@@ -190,7 +190,7 @@ class GitHubApp:
 
     def key_lost(self, c):
         """No local key file, and secrets sealed with the one that was there: nothing here can open them again."""
-        if self.settings.credential_kms_key and self.vault is not None:
+        if self.kms():
             return False
         return not self.key_file().exists() and self._sealed_elsewhere(c, "")
 
@@ -210,6 +210,20 @@ class GitHubApp:
         H.event(c, actor, "github.lost_key_replaced", app["slug"] if app else "",
                 {"github_app": bool(app), "directory_sources": sources})
         return True
+
+    def kms(self):
+        return bool(self.settings.credential_kms_key and self.vault is not None)
+
+    def open_sealed(self, c, row, aad, table="github_app", where="id", value="app"):
+        """A sealed row's plaintext, or None when no key is there to open it. Under KMS a row saved before
+        TICO_CREDENTIAL_KMS_KEY was set opens with github-app.key (if it is still on the data volume) and is
+        re-sealed with the vault key once. Raises when no key opens it."""
+        key = self._key(c, create=False)
+        if key is None:
+            return None
+        from .credentials import open_or_reseal
+        return open_or_reseal(c, key, self.key_file() if self.kms() else None, row["nonce"], row["ciphertext"], aad,
+                              table, where, value, log)
 
     def secret_key(self, c, create=True, replacing=""):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
@@ -236,14 +250,15 @@ class GitHubApp:
             return self.row(c)
 
     def private_key(self, c, row):
-        key = self._key(c, create=False)
-        if key is None:
-            raise Problem("github_unavailable", MISSING_KEY, 503)
         try:
-            blob = AESGCM(key).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
-            return json.loads(blob)["pem"]
+            blob = self.open_sealed(c, row, b"tico-github-app:v1")
+        except Problem:
+            raise
         except Exception:
             raise Problem("github_unavailable", "The stored GitHub App key could not be decrypted", 503) from None
+        if blob is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
+        return json.loads(blob)["pem"]
 
     def webhook_secret(self):
         with self.store.read() as c:
@@ -251,8 +266,7 @@ class GitHubApp:
             if not row:
                 return ""
             try:
-                blob = AESGCM(self._key(c, create=False)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
-                return json.loads(blob).get("webhook_secret") or ""
+                return json.loads(self.open_sealed(c, row, b"tico-github-app:v1")).get("webhook_secret") or ""
             except Exception:
                 return ""
 

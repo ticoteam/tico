@@ -11,6 +11,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi.testclient import TestClient
 
 from backend import github_app as G
@@ -804,3 +805,61 @@ def test_a_proposal_cannot_carry_the_lost_key_replacement():
     body = {"source": "entra", "replace_lost_key": True}
     with pytest.raises(Problem, match="person directly"):
         assistant.create_proposal(None, settings, None, None, "botops", "Save Entra", "PUT", "/api/v2/directory", body)
+
+
+def enable_kms(api):
+    """TICO_CREDENTIAL_KMS_KEY set after the install already sealed secrets with github-app.key."""
+    from backend.credentials import CredentialCipher
+    from backend.tests.test_credentials import FakeKMS
+    state = api.app_state
+    state.store.settings.credential_kms_key = "test-key"
+    state.vault.cipher = CredentialCipher("test-key", FakeKMS())
+
+
+def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_resealed_once(api, gh, caplog):
+    connect(api)
+    state = api.app_state
+    with state.store.transaction() as c:
+        state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "entra-synthetic"}, "app c in t")
+    legacy = state.github_app.key_file().read_bytes()
+    with state.store.read() as c:
+        before = {"app": bytes(state.github_app.row(c)["ciphertext"]),
+                  "entra": bytes(c.execute("SELECT ciphertext FROM directory_credentials").fetchone()[0])}
+    enable_kms(api)
+    from backend import health
+    with state.store.read() as c:
+        state.vault.cipher.key(c)            # the vault's KMS data key, as the first save under KMS makes it
+        # Health has nothing to flag: github-app.key still opens them, and the next read re-seals them.
+        assert health._sealed_secrets(c, state.store.settings, state.github_app) is None
+        assert bytes(state.github_app.row(c)["ciphertext"]) == before["app"]       # Health only looks
+    caplog.set_level("INFO")
+    assert state.github_app.webhook_secret() == "whs"
+    with state.store.read() as c:
+        assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
+        assert state.directory.credentials(c, "entra")["client_secret"] == "entra-synthetic"
+        app_row, source = state.github_app.row(c), c.execute("SELECT * FROM directory_credentials").fetchone()
+        vault_key = state.vault.cipher.key(c)
+    # Re-sealed with the vault key, once: the legacy key no longer opens them, the vault key does.
+    assert bytes(app_row["ciphertext"]) != before["app"] and bytes(source["ciphertext"]) != before["entra"]
+    AESGCM(vault_key).decrypt(app_row["nonce"], app_row["ciphertext"], b"tico-github-app:v1")
+    with pytest.raises(Exception):
+        AESGCM(legacy).decrypt(app_row["nonce"], app_row["ciphertext"], b"tico-github-app:v1")
+    resealed = [r.getMessage() for r in caplog.records if "re-sealed" in r.getMessage().lower()]
+    assert len(resealed) == 2 and not any("whs" in m or "entra-synthetic" in m or "BEGIN" in m for m in resealed)
+    caplog.clear()
+    with state.store.read() as c:
+        assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
+    assert not [r for r in caplog.records if "re-sealed" in r.getMessage().lower()]
+    assert state.github_app.key_file().read_bytes() == legacy     # left as it was, for an older backup's rows
+
+
+def test_without_github_app_key_a_pre_kms_secret_still_fails_and_no_key_file_is_made(api, gh):
+    connect(api)
+    state = api.app_state
+    state.github_app.key_file().unlink()
+    enable_kms(api)
+    with state.store.read() as c:
+        with pytest.raises(Problem, match="could not be decrypted"):
+            state.github_app.private_key(c, state.github_app.row(c))
+    assert state.github_app.webhook_secret() == ""
+    assert not state.github_app.key_file().exists()

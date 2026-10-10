@@ -154,6 +154,41 @@ KEY_FILE = 'credential.key'
 _key_file_lock = threading.Lock()
 
 
+def legacy_key(path):
+    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, slack.key):
+    its 32 bytes, or None when it is absent or not a key. Read only: a read never makes a key file."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    return data if len(data) == 32 else None
+
+
+def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, value, log):
+    """Open a row sealed with `key` (the vault's under KMS). One that `key` cannot open but the pre-KMS key file at
+    `legacy_path` can was sealed before TICO_CREDENTIAL_KMS_KEY was set: it is opened with that file and re-sealed
+    with `key` once, in place, so the next read needs only the vault. Raises what AESGCM raises when neither opens.
+    The re-seal is skipped (and tried again on the next read) when this connection cannot write now; it only replaces
+    the row it read, so a save in between is never overwritten. Logs the table and the row's name, never a secret."""
+    try:
+        return AESGCM(key).decrypt(nonce, ciphertext, aad)
+    except Exception:
+        old = legacy_key(legacy_path) if legacy_path else None
+        if old is None:
+            raise
+    plain = AESGCM(old).decrypt(nonce, ciphertext, aad)
+    fresh = os.urandom(12)
+    try:
+        c.execute(f"UPDATE {table} SET ciphertext=?,nonce=? WHERE {where}=? AND nonce=?",
+                  (AESGCM(key).encrypt(fresh, plain, aad), fresh, value, nonce))
+        log.info("Re-sealed %s %s with the credential vault key (it was sealed with %s before TICO_CREDENTIAL_KMS_KEY "
+                 "was set)", table, value, Path(legacy_path).name)
+    except Exception as exc:
+        log.warning("Could not re-seal %s %s with the credential vault key yet (%s); it opens with %s meanwhile",
+                    table, value, type(exc).__name__, Path(legacy_path).name)
+    return plain
+
+
 class CredentialCipher:
     """One AES-256 data key encrypts every credential. With `key_id` (TICO_CREDENTIAL_KMS_KEY) it is an AWS KMS data key and
     only its wrapped form is in the database. Without one it is 32 random bytes in `key_file` (mode 0600, beside the database

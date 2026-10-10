@@ -575,12 +575,16 @@ def _sealed_secrets(c, settings, github):
 
     from . import credentials, directory, slack_app
 
-    def opens(key, row, aad):
-        try:
-            AESGCM(key).decrypt(row["nonce"], row["ciphertext"], aad)
-            return True
-        except Exception:
-            return False
+    def opens(key, row, aad, legacy=None):
+        # Under KMS a row sealed before TICO_CREDENTIAL_KMS_KEY was set still opens with its key file (`legacy`),
+        # and the next read re-seals it with the vault key (credentials.open_or_reseal). Health only looks.
+        for candidate in (key, credentials.legacy_key(legacy) if legacy else None):
+            try:
+                AESGCM(candidate).decrypt(row["nonce"], row["ciphertext"], aad)
+                return True
+            except Exception:
+                continue
+        return False
 
     def table(name):
         return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
@@ -596,14 +600,16 @@ def _sealed_secrets(c, settings, github):
         if app or sources:
             key = github.secret_key(c, create=False)
             lost = []
-            if app and not (key and opens(key, app, b"tico-github-app:v1")):
+            legacy = github.key_file() if kms else None
+            if app and not (key and opens(key, app, b"tico-github-app:v1", legacy)):
                 lost.append("The GitHub App's private key and webhook secret")
-            if sources and not (key and all(opens(key, r, directory.AAD + r["source"].encode()) for r in sources)):
+            if sources and not (key and all(opens(key, r, directory.AAD + r["source"].encode(), legacy) for r in sources)):
                 lost.append("the directory sync credentials" if lost else "The directory sync credentials")
             if lost:
                 problems.append(" and ".join(lost) + " cannot be decrypted: " + (
                     "github-app.key is missing." if key is None else
-                    "they were sealed with another key (github-app.key, from before TICO_CREDENTIAL_KMS_KEY was set?)." if kms else
+                    "they were sealed with another key (github-app.key from before TICO_CREDENTIAL_KMS_KEY was set, "
+                    "which is no longer on the data volume?)." if kms else
                     "github-app.key does not open them."))
                 fixes.append(SEALED_FIX.format(file="github-app.key", redo="disconnect GitHub and connect it again, or save "
                                                "the directory sync credentials again, and confirm replacing the lost key: "
@@ -615,7 +621,7 @@ def _sealed_secrets(c, settings, github):
         if slack:
             # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
             key = slack_app._key(settings, github.vault if kms else None, c, create=False)
-            if not (key and opens(key, slack, slack_app.AAD)):
+            if not (key and opens(key, slack, slack_app.AAD, slack_app.key_file(settings) if kms else None)):
                 problems.append("The Slack tokens cannot be decrypted: " + (
                     "slack.key is missing." if key is None else "the key they were sealed with is not this server's."))
                 fixes.append(SEALED_FIX.format(file="slack.key", redo="paste the Slack tokens again (Settings > Slack)"))
