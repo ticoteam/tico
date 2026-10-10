@@ -98,7 +98,7 @@ function pageHelp() {
     <header class="help-hero">
       <h1>Your human and AI team</h1>
       <p class="help-lede">Tico brings your human and AI teammates together around shared goals, tasks, conversations, and knowledge. People set direction and review results. AI teammates carry out work with their instructions and the tools you give them. Your server keeps the shared record; your computers run the bots.</p>
-      <div class="help-actions"><a class="gs-link" href="${GH}/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">Docs</a><button class="ghost" type="button" data-gs-tour>Take the tour</button><a class="gs-link help-support-link" href="#support-rail">Support</a></div>
+      <div class="help-actions"><a class="gs-link" href="${GH}/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">Docs</a><a class="gs-link" id="help-first-result" href="${GH}/blob/main/docs/install.md#your-first-result" target="_blank" rel="noopener noreferrer">Your first result</a><button class="ghost" type="button" data-gs-tour>Take the tour</button><a class="gs-link help-support-link" href="#support-rail">Support</a></div>
     </header>
 
     <figure class="help-map" id="help-map" role="img" aria-label="${esc(HELP_MAP_ALT)}">${helpMapSVG(false)}${helpMapSVG(true)}</figure>

@@ -161,3 +161,49 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
         tasks = c.execute("SELECT * FROM tasks WHERE owner='bot:librarian' AND title='Refresh the map'").fetchall()
         assert len(tasks) == 1 and tasks[0]["next_run"] == 1
         assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]
+
+
+# ------------------------------------------------------------------ the first-result tutorial (docs/install.md)
+def test_the_first_result_tutorial_names_one_bot_and_prompt_and_its_links_resolve():
+    """README, the install guide's tutorial and the app's Help link all lead to the same first result: one bot, one
+    prompt. Every repository link those pages use resolves, anchors included. Offline: a public GitHub link to this
+    repository is checked against the checkout; tico.team pages are built outside this repository, with no route list here."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    bot = "Content Marketer"
+    prompt = ("Draft a 200-word blog post introducing our example app to project teams from these facts: our example app "
+              "keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent "
+              "no claims. Return a draft on this task.")
+    flat = lambda text: " ".join(text.split())
+    install = (root / "docs/install.md").read_text()
+    tutorial = install[install.index("### Your first result"):install.index("### Sample answers for Content Marketer")]
+    readme = (root / "README.md").read_text()
+    for name, text in (("README.md", readme), ("docs/install.md#your-first-result", tutorial)):
+        assert bot in text and prompt in flat(text), name
+        assert "Project Coordinator" in text, name            # the meeting-notes workflow is the named next step
+    help_page = (root / "ui/app/help.js").read_text()
+    assert "${GH}/blob/main/docs/install.md#your-first-result" in help_page
+
+    def anchors(path):
+        slug = lambda heading: re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+        return {slug(line.lstrip("#")) for line in path.read_text().splitlines() if re.match(r"#{1,6} ", line)}
+
+    pages = {"README.md": readme, "docs/install.md": install, "docs/README.md": (root / "docs/README.md").read_text(),
+             "ui/app/help.js": help_page}
+    broken = []
+    for page, text in pages.items():
+        here = (root / page).parent
+        links = re.findall(r"\]\(([^)\s]+)\)", text) + re.findall(r'href="([^"]+)"', text)
+        for link in links:
+            if link.startswith("${GH}/blob/main/") or link.startswith("https://github.com/ticoteam/tico/blob/main/"):
+                target, base = link.split("/blob/main/", 1)[1], root
+            elif re.match(r"[a-z]+:|\$\{|#/", link):
+                continue                                   # another site, mail, an app route or a built value
+            else:
+                target, base = link, here
+            path, _, anchor = target.partition("#")
+            resolved = (base / path) if path else root / page
+            if not resolved.exists() or (anchor and resolved.suffix == ".md" and anchor not in anchors(resolved)):
+                broken.append(f"{page}: {link}")
+    assert not broken, broken

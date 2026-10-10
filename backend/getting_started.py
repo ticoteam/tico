@@ -111,7 +111,7 @@ def _next_bot(c, settings):
     ranked = sorted(((json.loads(row["config_json"] or "{}"), row) for row in rows),
                     key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]))
     row = ranked[0][1]
-    why = "Press Start setup on its page and answer its questions; it drafts a first result for you to approve."
+    why = "Press Set up on its page and answer its questions; it drafts a first result for you to approve."
     return row["bot"], row["display_name"], why
 
 

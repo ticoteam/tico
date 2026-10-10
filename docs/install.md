@@ -40,7 +40,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > AI providers adds it.
-2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group.
+2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
+   below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
@@ -50,14 +51,39 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
    profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
-6. **Set up one starter.** Select **Content Marketer** (`content`) in the **Marketing** group, open its page and press **Set up**.
-   It needs only Tico; no GitHub or outside Tool is required. Tell it the readers, publishing plans, voice, topics and privacy rules
-   using the sample answers below. Answer any remaining questions and review its first draft in the same chat. Outbound
-   sending stays off until you turn it on for that bot.
-7. **Finish one task.** On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+
+### Your first result
+
+One bot, one fictional input, one reviewed draft: **Content Marketer** writes a short blog post about a made-up product, a
+person reviews it, and the person who asked closes the task. [Demo mode](demo.md) does not run bots, so do this on an install
+like the one above.
+
+**You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
+a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
+
+1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
+   in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
+   [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
+   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
+   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
+   and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
+   Outbound sending stays off until you turn it on for that bot.
+3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” Open the task to read its result, then close it. Success is a reviewed draft and a
-   completed task, with the computer online and no blocking Health issue.
+   no claims. Return a draft on this task.”
+4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
+   `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
+5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
+   press **Close** on the task (or **Close task** in its menu).
+
+Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
+Health issue.
+
+**Next: meeting notes.** Once this works, add **Project Coordinator** (`meeting-notes`, in **Operations**, or **Settings > Bots >
+Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
+summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Marketer
 
