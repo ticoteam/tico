@@ -725,6 +725,18 @@ def view(c, who, settings, auth, github, config):
                              + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots"),
                               _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
+    # A go-live waiting for its computer to get the repository finishes by itself (backend/go_live.py); until then
+    # the bot is placed but not on. Seen by the owner and admins, and by a person who manages that bot.
+    from .go_live import EXPIRY_DAYS, waiting as waiting_go_lives
+    pending = waiting_go_lives(c, who, auth, full)
+    if pending:
+        checks.append(_check("go_live_waiting", "Going live", "info",
+                             "; ".join(f"{bot} is waiting for {computer} to get its repository (since {since})"
+                                       for bot, computer, since in pending[:3])
+                             + ("" if len(pending) <= 3 else f"; and {len(pending) - 3} more")
+                             + f". Tico turns each on when its computer has the repository; after {EXPIRY_DAYS} days "
+                             "it stops and tells the person who asked.",
+                             [_fix("Open bots", "#/settings", "bots")]))
     unpublished = _unpublished(c) if full else []
     if unpublished:
         checks.append(_check("publish", "Bot history", "warn",

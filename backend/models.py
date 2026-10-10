@@ -1483,6 +1483,14 @@ class BotPlace(Contract):
     computer: str = Field(default="", max_length=200)
 
 
+# The `routines` of a go-live (`hub bot go-live --routines-file`): the bot's live Routines as they must be before it is
+# turned on. Each names an existing Routine by its id; nothing is created. Shown in help and in a refusal of a bad file.
+ROUTINES_SHAPE = ('a JSON array of objects, one per live Routine: [{"id": "<bot>:<routine>", "title": "Weekday review", '
+                  '"cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "enabled": true}]. id, title and timezone '
+                  'are required; cron (default "") and on (an event name, default "") say when it runs; enabled defaults '
+                  'to true; no other fields')
+
+
 class RoutineExpectation(Contract):
     id: ID
     title: str

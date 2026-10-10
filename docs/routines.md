@@ -79,9 +79,19 @@ it ran, and a link to the task. `hub sql` reads the same rows: `schedules`,
 `schedule_config` (timezone, enabled) and `schedule_occurrences`.
 
 Before taking a bot live, BotOps reads its live Routines with the requester's rights, applies the requested schedule,
-and disables unrelated template Routines. `hub_bot_go_live` accepts `routines`, an expected list of `id`, `title`,
-`cron` (or `on`), `timezone` and `enabled`; the server checks it before activation. In the CLI, pass the JSON list
-with `hub bot go-live <bot> --routines-file <file>`. This also preserves disabled Routines during activation.
+and disables unrelated template Routines. `hub_bot_go_live` accepts `routines`, an expected list of the bot's live
+Routines; the server checks it before activation and creates nothing. In the CLI, pass the same JSON in a file with
+`hub bot go-live <bot> --routines-file <file>` (`hub bot go-live --help` shows it):
+
+```json
+[{"id": "<bot>:<routine>", "title": "Weekday review", "cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "enabled": true}]
+```
+
+`id` (the Routine's id, as `hub routine list` shows it), `title` and `timezone` are required; `cron` and `on` (an
+event name) default to `""`; `enabled` defaults to `true`; no other field is accepted. Go-live refuses when a listed
+Routine differs from the live one or an enabled Routine is not listed, and a malformed list is refused with the field
+named and this shape shown. This also preserves disabled Routines during activation. When go-live waits for the
+computer to get the bot's repository (docs/permissions.md), the list is checked again when it finishes.
 
 ## Templates
 

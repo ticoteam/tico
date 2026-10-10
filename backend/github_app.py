@@ -483,6 +483,22 @@ class GitHubApp:
                        f"GitHub answers 404 for {', '.join(absent)}: it does not exist yet, or the app is not installed on it. "
                        f"If it does not exist yet: {create[0].lower() + create[1:]}. If it exists: {access}.", 409)
 
+    def repository_state(self, repository):
+        """Whether GitHub has `repository` (`owner/name`): ("present", None), ("missing", the Problem naming the fix),
+        or ("unknown", None) when it cannot be learned (no app connected, GitHub unreachable or answering oddly)."""
+        if not repository or not self.row():
+            return "unknown", None
+        try:
+            wide, _ = self.mint(None, {"metadata": "read"})
+            r = self._call("GET", "/repos/" + repository, headers={"Authorization": "Bearer " + wide})
+            if r.status_code < 300:
+                return "present", None
+            if r.status_code != 404:
+                return "unknown", None
+            return "missing", self._unreachable(self.installation(), [repository], 404, known_absent=[repository])
+        except Problem:
+            return "unknown", None
+
     def create_repo(self, slug, template, empty=False):
         row = self.row()
         if not row:

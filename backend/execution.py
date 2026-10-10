@@ -185,6 +185,9 @@ class Execution:
         self.booted = H.now()
         # Set by create_app: onboarding gives a newly enrolled machine the bots nobody placed.
         self.runner_enrolled = None
+        # Set by create_app: a readiness report finishes the go-lives that were waiting for this computer to get a
+        # bot's repository (backend/app.py finish_pending_go_live).
+        self.readiness_reported = None
         self.served_at = None   # when this process last answered a runner (heartbeat, claim, attempt call)
 
     def runner(self, c, who):
@@ -322,6 +325,8 @@ class Execution:
                    encode(readiness), encode(sorted(set(body.capabilities))), who.runner_id))
         from . import bot_tools
         bot_tools.reconcile(c, {bot: row.get('tools') for bot, row in readiness.get('bots', {}).items()})
+        if self.readiness_reported:
+            self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
         if body.checkout:

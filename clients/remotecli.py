@@ -647,7 +647,8 @@ def bots(client, args):
         if getattr(args, "no_setup", False):
             fields["setup"] = False
         if getattr(args, "routines_file", None):
-            fields["routines"] = json.loads(Path(args.routines_file).read_text())
+            from clients.hubcli import read_routines_file
+            fields["routines"] = read_routines_file(args.routines_file)
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
@@ -899,12 +900,21 @@ def main(args, who=None):
             print(integration_text(result))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
+        elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
+            # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
+            print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "
+                  "Tico finishes going live (turns it on and starts its setup) when "
+                  f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
         return 0
     except APIError as exc:
+        if exc.code == "repository_waiting_for_permission":
+            # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
+            print(f"{exc.detail}.")
+            return 2
         print(json.dumps({"error": exc.code, "detail": exc.detail, "retryable": exc.retryable,
                           "operation_id": exc.operation_id}, indent=2))
         return 1 if exc.retryable else 2

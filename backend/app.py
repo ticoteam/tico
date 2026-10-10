@@ -1,6 +1,7 @@
 """Authenticated, deterministic API. No runtime launch or local-machine dependency."""
 
 import asyncio
+import logging
 import time
 import json
 from dataclasses import replace
@@ -19,6 +20,8 @@ from fastapi.exceptions import RequestValidationError
 
 from clients.agent_skill import WHO_NEEDS_ME
 
+from . import go_live as pending_go_lives
+from . import repo_waits
 from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
@@ -237,6 +240,8 @@ def create_app(settings=None):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
         detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
                            for error in exc.errors())
+        if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
+            detail += ". routines must be " + M.ROUTINES_SHAPE
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
@@ -3658,25 +3663,165 @@ def create_app(settings=None):
         who = request.state.identity
         return mutate(request, body, lambda c: place_now(c, who, bot, body.computer))
 
+    GO_LIVE_PENDING = pending_go_lives.PREFIX
+
+    def check_routines(c, who, bot, expected):
+        """The live Routines match the schedule the caller asked to go live with (`--routines-file`)."""
+        settings_admin._manager(c, who, bot)
+        live = {r["id"]: r for r in routines.listing(c, bot)}
+        requested = {r.id for r in expected}
+        for want in expected:
+            row = live.get(want.id)
+            if not row or any((row.get(key) if key == "enabled" else row.get(key) or "") != value for key, value in (
+                    ("title", want.title), ("cron", want.cron), ("timezone", want.timezone),
+                    ("enabled", int(want.enabled)), ("event_name", want.on))):
+                raise Problem("routine_mismatch", f"The live Routine {want.id} does not match the requested schedule; "
+                              "verify it before activating", 409)
+        if any(r["enabled"] and rid not in requested for rid, r in live.items()):
+            raise Problem("routine_mismatch", "An unrelated Routine is enabled; disable it before activating", 409)
+
+    def finish_go_live(c, who, bot, setup, expected):
+        """What going live does once the bot's computer has its repository: active, its setup started with the
+        person, and its first routine on (or the requested schedule checked). Shared by the request itself and by
+        the readiness report that completes a go-live that was waiting for the repository."""
+        if expected is not None:
+            check_routines(c, who, bot, expected)
+        row = H.bot(c, bot)
+        if row["state"] == "quarantined":
+            raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
+        activated = row["state"] != "active"
+        if activated:
+            settings_admin.update_bot(c, who, bot, M.BotDefinitionUpdate(
+                status="active", expected_revision=settings_admin._config(c, bot)["revision"]))
+        started = False
+        config = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
+            send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
+            started = True
+        # Going live turns its first routine on too: nobody approves it separately.
+        armed = onboarding.arm_first_routine(c, who, bot) if expected is None else None
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
+        return {"activated": activated, "setup_started": started, "routine_armed": armed}
+
+    def wait_for_repository(c, who, bot, placed, body, github_asked=True):
+        """Keep the placement and remember the go-live: the computer is told about the bot on its next heartbeat,
+        clones the repository, and the readiness report that says it has it finishes the go-live
+        (`finish_pending_go_live`). It expires after backend/go_live.py EXPIRY_DAYS."""
+        computer = placed.get("computer") or "its computer"
+        runner = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (GO_LIVE_PENDING + bot, encode({
+                      "bot": bot, "runner_id": runner["runner_id"] if runner else "", "computer": computer,
+                      "actor": who.actor, "role": who.role, "email": who.email, "via": who.via,
+                      "setup": body.setup,
+                      "routines": None if body.routines is None else [r.model_dump() for r in body.routines],
+                      "requested_at": H.now()})))
+        H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
+        message = (f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
+                   f"when {computer} has it; nothing needs to run again")
+        if not github_asked:
+            message += ". GitHub could not be asked; if the repository doesn't exist, this won't finish"
+        return {"bot": bot, "state": "waiting_for_repository", "bot_state": H.bot(c, bot)["state"],
+                "computer": computer, "placed": placed.get("placed", False), "activated": False, "setup_started": False,
+                "github_checked": github_asked,
+                "message": message}
+
+    def finish_pending_go_live(c, runner_id, readiness):
+        """A computer's readiness report completes the go-lives waiting for it to get a bot's repository. Each one
+        finishes once: the record is removed when it completes, so later reports do nothing. One past its deadline
+        is expired; one that can no longer finish is marked failed. Either way the person is told once, and nothing
+        here fails the heartbeat."""
+        from datetime import datetime, timezone
+        from .auth import validate_identity
+        reports = readiness.get("bots") or {}
+        now = datetime.now(timezone.utc)
+        for key, bot, pending in pending_go_lives.rows(c):
+            if pending.get("failed"):
+                continue
+            c.execute("SAVEPOINT go_live_finish")
+            try:
+                if pending_go_lives.expired(pending, now):
+                    pending_go_lives.fail(c, key, bot, pending, "expired", pending_go_lives.expire_notice(bot, pending))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                report = reports.get(bot)
+                if (not isinstance(report, dict) or report.get("repository_present") is not True
+                        or not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?",
+                                         (bot, runner_id)).fetchone()):
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                row = H.bot(c, bot)
+                if not row or row["state"] == "archived":
+                    c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                role = pending.get("role") or "human"
+                if role == "owner" and H.actor_id(pending.get("actor") or "") != auth.owner_id(c):
+                    role = "human"
+                who = Identity(pending.get("actor") or "", role, pending.get("email") or "", via=pending.get("via") or "")
+                expected = (None if pending.get("routines") is None
+                            else [M.RoutineExpectation(**r) for r in pending["routines"]])
+                validate_identity(c, who)
+                done = finish_go_live(c, who, bot, bool(pending.get("setup", True)), expected)
+                H.event(c, who.actor, "bot.go_live_finished", bot, {"computer": pending.get("computer") or "", **done})
+                c.execute("RELEASE go_live_finish")
+            except Exception as exc:
+                c.execute("ROLLBACK TO go_live_finish")
+                c.execute("RELEASE go_live_finish")
+                where = pending.get("computer") or "its computer"
+                if isinstance(exc, Problem):
+                    code, notice = exc.code, f"{bot} has its repository on {where}, but going live could not finish: {str(exc.detail).rstrip('.')}."
+                else:
+                    # A fault in Tico, not something the person did: its text stays in the log.
+                    logging.getLogger("tico.go_live").exception("Finishing the go-live of %s failed", bot)
+                    telemetry.capture("go_live_finish", exc, 500)
+                    code, notice = "finish_error", f"Going live for {bot} could not finish because of an error in Tico."
+                c.execute("SAVEPOINT go_live_fail")
+                try:
+                    pending_go_lives.fail(c, key, bot, pending, code, notice)
+                    c.execute("RELEASE go_live_fail")
+                except Exception:
+                    c.execute("ROLLBACK TO go_live_fail")
+                    c.execute("RELEASE go_live_fail")
+                    logging.getLogger("tico.go_live").exception("Recording the failed go-live of %s failed", bot)
+
+    execution.readiness_reported = finish_pending_go_live
+
+    def waiting_for_permission(bot, wait):
+        """The refusal for a bot whose repository could not be created because the GitHub App may not create
+        repositories (backend/repo_waits.py): it points at the owner's Needs-you task with the two fixes, not at
+        `hub bot repo-create`, which would only hit the same missing permission. No placement is kept."""
+        task_id = str(wait.get("task_id") or "")
+        url = f"{settings.public_url}/#/task/{task_id}" if task_id and settings.public_url else ""
+        where = (f"the owner has a Needs you task with the two fixes ({task_id}{', ' + url if url else ''})" if task_id
+                 else "the owner is asked in Needs you to create it or let BotOps create repositories")
+        return Problem("repository_waiting_for_permission",
+                       f"{bot} is waiting for its GitHub repository" + (f" {wait['repository']}" if wait.get("repository") else "") + f": {where}. "
+                       f"Once either fix is in, Tico creates or finds it; then run `hub bot go-live {bot}` again", 409,
+                       extra={"task_id": task_id, **({"task_url": url} if url else {})})
+
+    def repository_on_github(bot):
+        """Before the write (GitHub is never called while holding it): whether GitHub has the bot's repository, for a
+        bot whose computer has not reported it yet. ("unknown", None) when there is nothing to ask."""
+        with store.read() as c:
+            if not H.bot(c, bot) or agents.external_harness(c, bot) or repository_present(c, bot):
+                return "unknown", None
+            repository = bot_repository(c, settings, bot)
+        service = getattr(app.state, "github_app", None)
+        return service.repository_state(repository) if service and repository else ("unknown", None)
+
     @app.post("/api/v2/bots/{bot}/go-live")
     def go_live(request: Request, bot: str, body: M.BotGoLive):
         """Everything between "built" and "working": a computer, active, and its setup started with the person.
-        Each step is the same one the app's own buttons take, checked with the caller's rights."""
+        Each step is the same one the app's own buttons take, checked with the caller's rights. A bot whose
+        computer does not have its repository yet keeps its placement and finishes when the computer reports it
+        (202, state `waiting_for_repository`)."""
         who = request.state.identity
+        github, missing = repository_on_github(bot)
 
         def work(c):
             if body.routines is not None:
-                settings_admin._manager(c, who, bot)
-                live = {r["id"]: r for r in routines.listing(c, bot)}
-                requested = {r.id for r in body.routines}
-                for expected in body.routines:
-                    row = live.get(expected.id)
-                    if not row or any((row.get(key) if key == "enabled" else row.get(key) or "") != value for key, value in (
-                            ("title", expected.title), ("cron", expected.cron), ("timezone", expected.timezone),
-                            ("enabled", int(expected.enabled)), ("event_name", expected.on))):
-                        raise Problem("routine_mismatch", "The live Routine does not match the requested schedule; verify it before activating", 409)
-                if any(r["enabled"] and rid not in requested for rid, r in live.items()):
-                    raise Problem("routine_mismatch", "An unrelated Routine is enabled; disable it before activating", 409)
+                check_routines(c, who, bot, body.routines)
             # An external agent (a Hermes profile) has a credential, not a computer.
             placed = ({"computer": None, "placed": False} if agents.external_harness(c, bot)
                       else place_now(c, who, bot, body.computer))
@@ -3691,6 +3836,10 @@ def create_app(settings=None):
                     declared = onboarding._declared(c, bot)
                     if settings_admin.computer_builds_repository(c, bot):
                         building = True
+                    elif github == "present":
+                        return wait_for_repository(c, who, bot, placed, body)
+                    elif (permission_wait := repo_waits.waits(c).get(bot)):
+                        raise waiting_for_permission(bot, permission_wait)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
                             raise Problem("repository_missing", "Its repository is not built yet. Add BotOps to build it", 409)
@@ -3698,24 +3847,24 @@ def create_app(settings=None):
                                                            declared.get("instructions") or "", queue_build=True)
                         return {"bot": bot, "state": row["state"], **placed, **build, "building": True,
                                 "setup_started": False, "note": "BotOps is building its repository; watch setup_task_id"}
+                    elif missing is not None:
+                        raise Problem("repository_missing", missing.detail.rstrip(".")
+                                      + f". Then run `hub bot go-live {bot}` again", 409)
+                    elif bot_repository(c, settings, bot):
+                        # GitHub could not be asked: the computer tries the clone and says why if it cannot.
+                        return wait_for_repository(c, who, bot, placed, body, github_asked=False)
                     else:
-                        raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
-            activated = row["state"] != "active"
-            if activated:
-                settings_admin.update_bot(c, who, bot, M.BotDefinitionUpdate(
-                    status="active", expected_revision=settings_admin._config(c, bot)["revision"]))
-            setup = False
-            config = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            if body.setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
-                send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
-                setup = True
-            # Going live turns its first routine on too: nobody approves it separately.
-            armed = onboarding.arm_first_routine(c, who, bot) if body.routines is None else None
+                        raise Problem("repository_missing", "It has no repository yet. Ask BotOps to build it "
+                                      f"(`hub bot repo-create {bot}`), then run `hub bot go-live {bot}` again", 409)
+            done = finish_go_live(c, who, bot, body.setup, body.routines)
             return {"bot": bot, "state": H.bot(c, bot)["state"], "computer": placed["computer"], "placed": placed["placed"],
-                    "activated": activated, "setup_started": setup, "routine_armed": armed,
+                    **done,
                     **({"building": True, "note": "The computer is building its repository; queued work starts when it is ready"}
                        if building else {})}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        if isinstance(result, dict) and result.get("state") == "waiting_for_repository":
+            return JSONResponse(result, status_code=202)
+        return result
 
     @app.post("/api/v2/runners/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
