@@ -5,7 +5,7 @@ An [OpenClaw](https://openclaw.ai/) profile can be a bot in Tico, the same way a
 credential to use when it chooses. Tico never starts a run for it. It uses the same `hermes_agent.py` Tool,
 with `--harness openclaw`.
 
-**Tested with** OpenClaw 2026.9.9 (stable, October 2026) on macOS with Node 24, and earlier with 2026.3.13.
+**Tested with** OpenClaw 2026.9.9 (stable, October 2026) on macOS with Node 24, and earlier with 2026.3.13. The 2026.9.9 check used a scripted stand-in model; a run with a real model, the macOS heartbeat timer and the Gateway as an installed service were not exercised.
 OpenClaw 2026.9 needs Node `>=24.16 <25` or `>=26.1`.
 
 ## Connect an OpenClaw profile in 2 minutes
