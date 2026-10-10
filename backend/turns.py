@@ -193,15 +193,19 @@ def mark_prompts(c, messages):
     bots = sorted({m["from_actor"][4:] for m in loose})
     lo, hi = min(m["created"] for m in loose), max(m["created"] for m in loose)
     runs = c.execute(
-        f"SELECT a.bot,coalesce(a.started,a.created) AS began,a.finished,t.from_actor,"
+        f"SELECT a.bot,a.state,coalesce(a.started,a.created) AS began,a.finished,t.from_actor,"
         " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
         "  WHERE i.attempt_id=a.id AND im.from_actor LIKE 'human:%') AS person"
         " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
         f" WHERE a.bot IN ({','.join('?' * len(bots))}) AND coalesce(a.started,a.created)<=?"
-        " AND (a.finished IS NULL OR a.finished>=?)", (*bots, hi, lo)).fetchall()
+        " AND ((a.finished IS NULL AND a.state IN ('leased','running')) OR a.finished>=?)",
+        (*bots, hi, lo)).fetchall()
+    # A run that failed before it started has no `finished`; only a live one is open-ended.
+    runs = sorted(runs, key=lambda r: r["began"], reverse=True)
     for m in loose:
         run = next((r for r in runs if "bot:" + r["bot"] == m["from_actor"] and r["began"] <= m["created"]
-                    and (r["finished"] is None or m["created"] <= r["finished"])), None)
+                    and (r["finished"] is None and r["state"] in ("leased", "running")
+                         or r["finished"] is not None and m["created"] <= r["finished"])), None)
         if not run:
             continue
         sender = str(run["from_actor"] or "")
