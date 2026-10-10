@@ -10,7 +10,7 @@ reasoning_effort: high
 max_run_minutes: 60
 
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the draft on the task and drafts until outbound_send is on. Review invitations stay off even
+# the bot puts the draft on the task and drafts until a person turns mail sending on in Tico. Review invitations stay off even
 # then: they are sent from the product's own email, or by a human, never by this bot.
 outbound_send: false
 
@@ -36,7 +36,7 @@ tools:
     can: [read]
     sites: [yelp.com, bbb.org, google.com, trustpilot.com, capterra.com, g2.com, getapp.com,
             softwareadvice.com, glassdoor.com, indeed.com, apps.apple.com, play.google.com, sitejabber.com]
-    note: "reads every listing; on a sign in wall or a challenge, record the surface as blocked. Until the owner turns execution on, requested execution needs browser act access; public replies stay drafts until outbound_send is on"
+    note: "reads every listing; on a sign in wall or a challenge, record the surface as blocked. Until the owner turns execution on, requested execution needs browser act access; public replies stay drafts until a person turns mail sending on in Tico"
   - service: public-web
     identity: "Unauthenticated public sources"
     can: [read]
@@ -49,5 +49,5 @@ tools:
     note: "reads the internal marketing channel; posting is off"
 # For requested browser actions, grant `can: [read, act]` on the Aside entry. Stay within the
 # requested batch: report/flag, owner reply, BBB answer, claim or category. Public replies stay
-# drafts until outbound_send is on. To post requested digests internally, grant the Slack entry
+# drafts until a person turns mail sending on in Tico. To post requested digests internally, grant the Slack entry
 # `can: [read, post]` (internal channels only).

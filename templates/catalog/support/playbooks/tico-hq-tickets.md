@@ -2,7 +2,7 @@
 
 For the Tico project team's own Support Agent, when `HQ_STAFF_KEY` and `HQ_URL` are in this bot's credentials. Without
 them the `hq-tickets` watcher does nothing and this playbook does not apply. People file these from Contact support in
-their Tico app (docs/support.md). Budget ten minutes per ticket. The outcome is a draft reply on the task and, when `outbound_send` is on, the requested reply posted.
+their Tico app (docs/support.md). Budget ten minutes per ticket. The outcome is a draft reply on the task and, when a person has turned mail sending on in Tico, the requested reply posted.
 
 Nothing polls with a model. Tico runs `software/hq-tickets watch` every 5 minutes as a program. It opens one task
 per new ticket, titled `Support: <first words>`, and adds a note to that task when the person writes again or HQ closes
@@ -51,7 +51,7 @@ Write `reports/hq-TK-XXXXXXXX.md`: plain text (nothing is rendered as HTML in th
 `knowledge/voice.md`'s tone, ending with what happens next. No promise of a fix or a date. Never paste a token, a key or a
 person's details from the ticket. Put the same text on the task.
 
-If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool when `outbound_send` is on; otherwise keep the draft. HQ itself sends no email.
+If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool when a person has turned mail sending on in Tico; otherwise keep the draft. HQ itself sends no email.
 
 ## 4. Post the requested reply
 

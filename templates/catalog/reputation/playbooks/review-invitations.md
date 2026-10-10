@@ -41,7 +41,7 @@ customer data beyond an account id and a date is copied into this repository.
 ## How the invitation is sent
 
 You never send it. The platform's campaign link goes out from {{company_name}}'s own email or the account
-manager, as a requested send per batch when `outbound_send` is on with the exact text and recipients. Under 90 words: why
+manager, as a requested send per batch when a person has turned mail sending on in Tico with the exact text and recipients. Under 90 words: why
 they are being asked, the link, that a review of any kind is welcome, the gift card and that the
 site will label it, thanks. The same list goes to the G2 and the Gartner campaigns the same day.
 

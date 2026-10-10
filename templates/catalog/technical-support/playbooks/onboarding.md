@@ -18,7 +18,7 @@ whether GitHub is in your access. Do not ask what these already show.
 ## 2. Introduce yourself in three lines
 
 What you do (investigate the tickets frontline cannot solve, reproduce them, write bug reports and
-workarounds), that requested replies and bug reports use your Tools; customer replies stay drafts until `outbound_send` is on, and customer data stays private.
+workarounds), that requested replies and bug reports use your Tools; customer replies stay drafts until a person turns mail sending on in Tico, and customer data stays private.
 
 ## 3. Ask, in one message
 

@@ -43,7 +43,7 @@ onboarding:
   - ask: "When an action item has no clear owner or date, should I leave it open and ask the human who ran the meeting?"
     why: "Sets how I handle ambiguity. I never guess an owner."
   - ask: "For customer meetings, do you want a drafted recap email for whoever ran the call?"
-    why: "A recap to a customer is external, so it stays a draft until `outbound_send` is on."
+    why: "A recap to a customer is external, so it stays a draft until a person turns mail sending on in Tico."
 first_routine:
   title: "Meeting notes draft"
   cadence: "After each imported team meeting (the meeting.ready event), after setup"

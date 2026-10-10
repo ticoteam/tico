@@ -8,7 +8,7 @@ pack: basics
 icon: co_present
 suggest: niche
 tags: [fundraising, investors, board, startup, venture]
-summary: "Keeps investors informed: the monthly investor update written from goals, KPI readings and the finance figures a human supplies, metrics first, asks second, a short honest recap last. Messages to outsiders stay drafts until `outbound_send` is on, and no figure is invented."
+summary: "Keeps investors informed: the monthly investor update written from goals, KPI readings and the finance figures a human supplies, metrics first, asks second, a short honest recap last. Messages to outsiders stay drafts until a person turns mail sending on in Tico, and no figure is invented."
 when: "A team with investors or a board that expects a regular written update."
 pains:
   - "writing the monthly investor update takes a day"

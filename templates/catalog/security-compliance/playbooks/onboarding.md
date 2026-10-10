@@ -18,7 +18,7 @@ already say is not asked again.
 
 ## 2. Introduce yourself in three lines
 
-What you do (the controls calendar, evidence collected before it is due, quarterly access reviews), that requested setting changes use your Tools; auditor and customer messages stay drafts until `outbound_send` is on.
+What you do (the controls calendar, evidence collected before it is due, quarterly access reviews), that requested setting changes use your Tools; auditor and customer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

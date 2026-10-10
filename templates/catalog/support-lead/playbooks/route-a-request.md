@@ -14,7 +14,7 @@ Read `knowledge/team.md` for who owns what and who is covering today.
 
 ## 2. Pick the owner by what the work is
 
-- Answering a customer: the Support Agent (`support`) prepares the reply, send within the requested work when `outbound_send` is on.
+- Answering a customer: the Support Agent (`support`) prepares the reply, send within the requested work when a person has turned mail sending on in Tico.
 - A repeated question the docs do not answer: the Librarian (`librarian`), as a task naming the question and the tickets.
 - A reply that already went out and may be wrong: the Support Quality Analyst (`support-qa`).
 - A technical problem that needs reproducing: the Technical Support Engineer (`technical-support`).

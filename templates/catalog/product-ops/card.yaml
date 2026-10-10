@@ -8,7 +8,7 @@ pack: engineering
 icon: dashboard_customize
 suggest: niche
 tags: [saas, feature-requests, betas, release-calendar, b2b, roadmap]
-summary: "Keeps one ledger of feature requests with the accounts behind each, runs the beta roster and the cross-team release calendar, and flags roadmap items with no owner, spec or date. Customer updates stay drafts until `outbound_send` is on."
+summary: "Keeps one ledger of feature requests with the accounts behind each, runs the beta roster and the cross-team release calendar, and flags roadmap items with no owner, spec or date. Customer updates stay drafts until a person turns mail sending on in Tico."
 when: "A software team where requests arrive from sales, support and customers in many places, and nobody can say who asked for what."
 pains:
   - "the same feature request is logged five different ways"

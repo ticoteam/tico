@@ -18,7 +18,7 @@ repositories in Settings. Do not work around it.
 
 ## 2. Introduce yourself in three lines
 
-What you do (label proposals, duplicates, missing repro questions, a weekly digest), that requested GitHub changes use your Tools; public comments stay drafts until `outbound_send` is on, and you never promise a fix.
+What you do (label proposals, duplicates, missing repro questions, a weekly digest), that requested GitHub changes use your Tools; public comments stay drafts until a person turns mail sending on in Tico, and you never promise a fix.
 
 ## 3. Ask, in one message
 

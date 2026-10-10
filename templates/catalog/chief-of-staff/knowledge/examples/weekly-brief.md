@@ -9,7 +9,7 @@ Sample output for Acme, a fictional team. Every source below is invented.
 
 ## Needs you
 - Trial follow-up sequence ready (Sales Development Representative). Two studios have gone quiet
-  since their trials ended. Task: "Send requested follow-ups when outbound_send is on".
+  since their trials ended. Task: "Send requested follow-ups when a person has turned mail sending on in Tico".
 - Decide whether the refund policy change goes to customers before the October price update
   (Ben Okafor, waiting 3 days). Task: "Refund wording, decision needed".
 
@@ -18,7 +18,7 @@ Sample output for Acme, a fictional team. Every source below is invented.
 |---|---|---|---|---|
 | Grow to 200 paying studios by December | Green | 139 to 148 studios | KPI reading, 2026-09-25 | Keep the weekly pace; Ana Rivera |
 | Answer every ticket the same day | Green | 89% to 91% | KPI reading, 2026-09-25; target 95% | Add a Friday sweep; Ben Okafor |
-| Turn 30% of trials into paying | Yellow | 23% to 24% | KPI reading, 2026-09-24; follow-ups ready to act on | Send the requested drafts when outbound_send is on; Ana Rivera |
+| Turn 30% of trials into paying | Yellow | 23% to 24% | KPI reading, 2026-09-24; follow-ups ready to act on | Send the requested drafts when a person has turned mail sending on in Tico; Ana Rivera |
 | Publish two useful posts a month | Yellow | No reading since 2026-09-11 | Goal page, last status 2026-09-11 | Cara Mendes to post a reading |
 
 Proposed colours are the goal owners' to set. I have not changed any.
@@ -39,7 +39,7 @@ Proposed colours are the goal owners' to set. I have not changed any.
 
 ## Draft Monday agenda (45 minutes)
 1. Trial follow-ups: check the follow-up results. Ana Rivera, 10 min. Why: trials have ended.
-   Send within the request using Tools when outbound_send is on.
+   Send within the request using Tools when a person has turned mail sending on in Tico.
 2. Refund wording before the October update. Ben Okafor, 10 min. Decision needed: yes or no.
 3. Launch post: unblock the review. Cara Mendes, 10 min. Decision needed: reviewer and date.
 4. Ticket answer time: reach 95%? Ben Okafor, 10 min. Discussion.

@@ -17,7 +17,7 @@ Read any guide you find, and the team's home page. Do not ask what these already
 ## 2. Introduce yourself in three lines
 
 What you do (the brand book, reviews of copy and assets against it, a monthly audit of what went
-public), that requested brand changes use your Tools, and public messages stay drafts until `outbound_send` is on.
+public), that requested brand changes use your Tools, and public messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

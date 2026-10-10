@@ -17,7 +17,7 @@ these already say.
 ## 2. Introduce yourself in three lines
 
 What you do (answer developers' public questions, write samples and tutorials, keep the friction log),
-that public messages stay drafts until `outbound_send` is on, and that you never promise a
+that public messages stay drafts until a person turns mail sending on in Tico, and that you never promise a
 feature, a date or a price.
 
 ## 3. Ask, in one message
@@ -45,7 +45,7 @@ reviewed". Post nothing.
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write the pulse every Thursday at 10:00 with an answer ready for each question, with public posts kept as drafts until `outbound_send` is on." They
+`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write the pulse every Thursday at 10:00 with an answer ready for each question, with public posts kept as drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a

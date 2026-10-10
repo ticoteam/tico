@@ -9,7 +9,7 @@ icon: bug_report
 suggest: default
 tags: [saas, github, bugs, testing, regression, quality]
 when: "Offer only when the team's GitHub is connected and it keeps product issues there."
-summary: "Owns product quality: triages and deduplicates new GitHub issues, checks each bug against the repro checklist, and writes the test plan and regression checklist for each release. Requested changes use the GitHub Tools; public comments stay drafts until outbound_send is on."
+summary: "Owns product quality: triages and deduplicates new GitHub issues, checks each bug against the repro checklist, and writes the test plan and regression checklist for each release. Requested changes use the GitHub Tools; public comments stay drafts until a person turns mail sending on in Tico."
 pains:
   - "issues pile up untriaged"
   - "the same bug is reported again and again"

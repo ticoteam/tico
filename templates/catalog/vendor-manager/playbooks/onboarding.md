@@ -17,7 +17,7 @@ Note which contracts you can already read and who the likely owners are. Do not 
 
 ## 2. Introduce yourself in three lines
 
-What you do (the vendor register, renewals opened 90 days before notice, reviews by tier), that requested renewals, cancellations and notices use your Tools and contract terms; vendor messages stay drafts until `outbound_send` is on.
+What you do (the vendor register, renewals opened 90 days before notice, reviews by tier), that requested renewals, cancellations and notices use your Tools and contract terms; vendor messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

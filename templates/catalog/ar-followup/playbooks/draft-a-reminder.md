@@ -2,7 +2,7 @@
 
 Triggered by a task naming one invoice or customer, and used for each invoice in
 `playbooks/weekly-receivables-reminders.md`. Budget 10 minutes per invoice. The outcome is one draft on the
-task to send with Tools when outbound_send is on. You never send it.
+task to send with Tools when a person has turned mail sending on in Tico. You never send it.
 
 The cadence and tone follow public collections guidance (see the sources in docs/starter-bots.md): polite
 first, firmer later, short, one clear action, and a human takes over at the end.
@@ -34,5 +34,5 @@ term or a payment-plan answer is needed, write "[for you to decide]" and ask on 
 
 ## 4. Finish
 
-Attach the draft with recipient, subject, body and its source row. Send that exact text to the recipient with your Tools when `outbound_send` is on; otherwise keep the draft. Then `hub task update <id> --status done --note`: the
+Attach the draft with recipient, subject, body and its source row. Send that exact text to the recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. Then `hub task update <id> --status done --note`: the
 invoice, its step, and what needs a human. Never send it yourself.

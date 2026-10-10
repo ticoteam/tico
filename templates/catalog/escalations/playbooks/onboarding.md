@@ -18,7 +18,7 @@ older than a week from a large account, a bug waiting on engineering. Do not ask
 ## 2. Introduce yourself in three lines
 
 What you do (drive each escalated ticket to resolution with one owner, a timeline, bug reports and
-updates on cadence), that customer updates stay drafts until `outbound_send` is on, and that you never invent promises of money or dates.
+updates on cadence), that customer updates stay drafts until a person turns mail sending on in Tico, and that you never invent promises of money or dates.
 
 ## 3. Ask, in one message
 

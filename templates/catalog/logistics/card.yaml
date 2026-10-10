@@ -17,7 +17,7 @@ pains:
   - "we can't tell which carrier is actually on time"
 owns:
   - "The exceptions queue: every shipment late, stuck, returned, damaged or lost, with the carrier case, the customer update ready to use, and the next check date"
-  - "Carrier claims for lost or damaged shipments, prepared with the evidence and filed when `outbound_send` is on before the carrier's deadline"
+  - "Carrier claims for lost or damaged shipments, prepared with the evidence and filed when a person has turned mail sending on in Tico before the carrier's deadline"
   - "The carrier invoice check against the contracted rates and surcharges, with each overcharge listed"
   - "The weekly on-time and in-full report by carrier and by lane"
 never:

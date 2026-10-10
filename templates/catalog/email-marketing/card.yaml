@@ -8,7 +8,7 @@ pack: marketing
 icon: forward_to_inbox
 suggest: common
 tags: [email, newsletter, lifecycle, ecommerce, b2c, subscription]
-summary: "Writes the next campaign email or nurture sequence with three subject lines, a preview line and a send checklist, ready to load. Customer messages stay drafts until `outbound_send` is on; requested schedules use your Tools."
+summary: "Writes the next campaign email or nurture sequence with three subject lines, a preview line and a send checklist, ready to load. Customer messages stay drafts until a person turns mail sending on in Tico; requested schedules use your Tools."
 when: "A team that emails customers or a newsletter list and wants the drafts written in its own voice, on time."
 pains:
   - "writing campaign emails takes days"

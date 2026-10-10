@@ -33,7 +33,7 @@ Paid or gifted endorsements carry a clear disclosure. Alt text for every image y
 
 Write the batch to `reports/social/YYYY-MM-DD-plan.md`: date, account, text, link, image brief, source.
 The payload lists each post's account, time and exact text. Publish or schedule requested posts
-with your Tools when `outbound_send` is on; otherwise keep the drafts and their destinations.
+with your Tools when a person has turned mail sending on in Tico; otherwise keep the drafts and their destinations.
 
 ## 5. Record and finish
 

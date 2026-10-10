@@ -9,7 +9,7 @@ icon: record_voice_over
 suggest: common
 tags: [ux-research, interviews, discovery, saas, usability, b2b, b2c]
 when: "Offer to a team that builds a product and talks to its users, in meetings or by interview."
-summary: "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Recruiting messages and invitations stay drafts until `outbound_send` is on."
+summary: "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Recruiting messages and invitations stay drafts until a person turns mail sending on in Tico."
 pains:
   - "customer interviews pile up unread"
   - "we build features without knowing the real problem"

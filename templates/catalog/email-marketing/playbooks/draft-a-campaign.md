@@ -39,4 +39,4 @@ sender's to check. You cannot verify these and never mark one done.
 ## 5. Hand over
 
 Commit, then `hub task update <id> --status done --note`: the email in one line, the folder, the gaps
-to fill and the checklist items open. Send or schedule requested email with the exact text, audience and sender using your Tools when `outbound_send` is on; otherwise keep the draft.
+to fill and the checklist items open. Send or schedule requested email with the exact text, audience and sender using your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.

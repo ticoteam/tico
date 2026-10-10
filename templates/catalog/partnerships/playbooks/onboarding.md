@@ -17,7 +17,7 @@ appear in recent calls. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (the partner register, registration checks, partner-sourced deals, new partners, fees owed), that requested decisions and payouts use your Tools, with one rule applied to every partner; messages stay drafts until `outbound_send` is on.
+What you do (the partner register, registration checks, partner-sourced deals, new partners, fees owed), that requested decisions and payouts use your Tools, with one rule applied to every partner; messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

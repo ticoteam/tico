@@ -2,7 +2,7 @@
 
 Triggered by a new registration from a partner (a form, an email, a task), and for each waiting one in the
 weekly review. Budget 10 minutes. The outcome is a proposed decision with the rule that decides it.
-Apply requested registration decisions with your Tools; partner messages stay drafts until `outbound_send` is on.
+Apply requested registration decisions with your Tools; partner messages stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -32,5 +32,5 @@ approve, and who works the deal. Draft the reply to the partner in two to four s
 
 ## 5. Carry out the requested work
 
-Send the requested reply with your Tools when `outbound_send` is on, otherwise keep the draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `hub task create --owner sales` with the partner noted
+Send the requested reply with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `hub task create --owner sales` with the partner noted
 as source. `hub task update <id> --status done --note`.

@@ -33,7 +33,7 @@ or "skip", with the numbers.
 
 ## 4. Prepare the outbound
 
-Draft the promotion and follow-up emails and posts in `reports/<event>/`. Send requested messages with their text and audience using your Tools when `outbound_send` is on; otherwise keep drafts.
+Draft the promotion and follow-up emails and posts in `reports/<event>/`. Send requested messages with their text and audience using your Tools when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## 5. Put it up for review
 

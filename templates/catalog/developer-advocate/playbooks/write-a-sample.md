@@ -32,4 +32,4 @@ how to check it worked, what to try next. Second person, present tense.
 ## 5. Hand over
 
 Save to `samples/<topic>/`, attach it to the task, `hub file publish` it, commit, and `hub task update <id>
---status done --note` with the reviewer from `knowledge/channels.md`. Public publication uses your Tools and stays a draft until `outbound_send` is on.
+--status done --note` with the reviewer from `knowledge/channels.md`. Public publication uses your Tools and stays a draft until a person turns mail sending on in Tico.

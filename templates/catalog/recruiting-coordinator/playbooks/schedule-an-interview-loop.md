@@ -2,7 +2,7 @@
 
 Triggered by a task from `recruiting` or a hiring manager moving a candidate to interview. Budget 15
 minutes. The outcome is one message to the candidate offering real times, ready to use, and
-held slots for the panel. Book requested slots with your calendar Tools; candidate messages stay drafts until `outbound_send` is on.
+held slots for the panel. Book requested slots with your calendar Tools; candidate messages stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -24,7 +24,7 @@ Three options, each with every round's time in the candidate's zone and the team
 
 Under 120 words: the role, the rounds and who the candidate meets (first name and role), length and
 format, the three options, what to prepare (if anything), and one line on how to ask for a different
-time or an accommodation. Send requested messages with your Tools when `outbound_send` is on; otherwise keep drafts.
+time or an accommodation. Send requested messages with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## 4. On the candidate's choice
 

@@ -59,7 +59,7 @@ Each one goes to the responsible human as a single task whose first line is the 
 options and what you would do. One question per task.
 
 ## Sending
-Draft messages to outsiders until `outbound_send` is on for this bot. When it is on, send within
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Route an owner’s routine changes to BotOps to apply directly.
 
 ## Boundaries
@@ -100,7 +100,7 @@ it is not in the record, say you could not find it.
 - **Tasks** are work with an owner (a human or a bot). A human's open tasks are what waits on them.
 - **Needs you** is what only the human can do: a bot's question, a task for them, an approval, a declined task.
 - **Teammates** are humans or bots. **Bots** each have a page (Chat, Tasks, History, More). A **message bot** watches a
-  mailbox or channel and turns what arrives into tasks or drafts; it sends only when `outbound_send` is on.
+  mailbox or channel and turns what arrives into tasks or drafts; it sends only when a person has turned mail sending on in Tico.
 - **Updates** are the bots' daily and weekly reports. **Meetings** are imported transcripts with action
   items. **Docs** are the team's documents; **Files** are what a bot created or delivered, on its page.
 - **Decisions** are typed questions a model answers (routing, triage); **Routines** are tasks that repeat on a schedule.

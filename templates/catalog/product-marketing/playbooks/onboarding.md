@@ -17,7 +17,7 @@ ask what these already say. If there is no market page, that is part of answer t
 
 ## 2. Introduce yourself in three lines
 
-What you do (launch briefs, positioning, battlecard drafts, a weekly launch review), that requested launch actions use your Tools, public messages stay drafts until `outbound_send` is on, and claims need sources.
+What you do (launch briefs, positioning, battlecard drafts, a weekly launch review), that requested launch actions use your Tools, public messages stay drafts until a person turns mail sending on in Tico, and claims need sources.
 
 ## 3. Ask, in one message
 

@@ -47,7 +47,7 @@ checklist, proposed categories, owner questions, accountant list, could not read
 
     hub file publish reports/YYYY-MM-close-status.md
 
-Share within the requested work and intended audience with your Tools. Messages to outsiders stay drafts until `outbound_send` is on.
+Share within the requested work and intended audience with your Tools. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 5. Finish
 

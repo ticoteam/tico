@@ -18,7 +18,7 @@ these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (renewals from 120 days out, expansion from evidence, renewal packs ready to price), that requested prices and terms come from the team's rules, and that customer messages stay drafts until `outbound_send` is on.
+What you do (renewals from 120 days out, expansion from evidence, renewal packs ready to price), that requested prices and terms come from the team's rules, and that customer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

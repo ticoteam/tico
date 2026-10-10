@@ -1,7 +1,7 @@
 # Daily interview logistics
 
 Schedule: weekdays at 08:00 team time (routine `daily-interview-logistics`), after setup. Budget 20 minutes. The outcome is one sheet: today and tomorrow ready, waiting candidates
-offered times, scorecards chased, debriefs ready to book. Messages to outsiders stay drafts until `outbound_send` is on.
+offered times, scorecards chased, debriefs ready to book. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ---
 

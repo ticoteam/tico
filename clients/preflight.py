@@ -363,7 +363,7 @@ def check_runtime(r, entry, defaults):
         # The registry names no runtime: the company's provider choice decides on the server.
         r.warn("runtime: none in the registry; the bot runs on the company default "
                "(Settings > AI providers)")
-        r.ok(f"outbound_send: {bool(e.get('outbound_send'))}")
+        r.ok(f"outbound_send requested in bot.yaml: {bool(e.get('outbound_send'))} (a person turns sending on in Tico)")
         return
     # Grok Build takes low|medium|high: the higher Codex tiers map to high, and `low` and
     # an unset effort both map to medium, which is never `low` by design.
@@ -387,7 +387,7 @@ def check_runtime(r, entry, defaults):
                 r.fail(f"runtime: `grok models` does not offer {model}")
     else:
         r.fail(f"runtime: `{binary}` is not on PATH")
-    r.ok(f"outbound_send: {bool(e.get('outbound_send'))}")
+    r.ok(f"outbound_send requested in bot.yaml: {bool(e.get('outbound_send'))} (a person turns sending on in Tico)")
 
 
 # ----------------------------------------------------------------------------- driver

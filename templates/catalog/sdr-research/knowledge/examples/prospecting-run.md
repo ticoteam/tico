@@ -6,7 +6,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 Sample output for Acme, a fictional studio-software team. Every lead is invented and every address
 uses a reserved example domain. Nothing has been sent and the CRM is untouched.
 
-**Headline: 1 meeting booked, 2 inbound qualified, 7 new leads (2 A, 3 B, 1 C); 5 touches stay drafts until `outbound_send` is on.**
+**Headline: 1 meeting booked, 2 inbound qualified, 7 new leads (2 A, 3 B, 1 C); 5 touches stay drafts until a person turns mail sending on in Tico.**
 
 ## Needs a human now
 - **Cedar Barre** (inbound, 2026-09-28 18:40): asked whether multi-location pricing is per studio. Price is

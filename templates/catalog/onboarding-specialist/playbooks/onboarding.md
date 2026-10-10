@@ -17,7 +17,7 @@ access, read closed-won deals from the same window. Do not ask what these alread
 
 ## 2. Introduce yourself in three lines
 
-What you do (a plan per new customer, kickoff prep, milestone tracking, a weekly board), that customer messages stay drafts until `outbound_send` is on, and that requested account changes use your Tools and verified facts.
+What you do (a plan per new customer, kickoff prep, milestone tracking, a weekly board), that customer messages stay drafts until a person turns mail sending on in Tico, and that requested account changes use your Tools and verified facts.
 
 ## 3. Ask, in one message
 

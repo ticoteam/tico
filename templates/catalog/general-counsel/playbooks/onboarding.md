@@ -48,7 +48,7 @@ Summary for a human, not legal advice." Route nothing and send nothing yet; rout
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this legal summary every Monday at 08:30, and messages to outsiders stay drafts until outbound_send is on." They
+`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this legal summary every Monday at 08:30, and messages to outsiders stay drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
