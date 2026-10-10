@@ -1158,6 +1158,20 @@ def market_apply(api, args):
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
 
 
+@tool("hub_market_import", "Librarian (the market curator): apply a verified batch. `lines` is JSONL, one entity "
+      "{kind: entity, id, type, name, aliases, external_ids, tier, summary, properties, evidence: [...]} or edge "
+      "{kind: edge, src, rel, dst, since, confidence, properties, evidence: [...]} per line. Matches by id, name, alias "
+      "or domain update; duplicates are skipped; each line is reported. dry_run keeps nothing.",
+      {"lines": _s("The JSONL text"), "name": _s("The file name", default=""),
+       "note": _s("One sentence on where the batch came from", default=""),
+       "dry_run": {"type": "boolean", "default": False}},
+      required=("lines",), writes=True)
+def market_import(api, args):
+    return api.post("market/import", {"lines": args["lines"], "name": args.get("name") or "",
+                                      "note": args.get("note") or "", "dry_run": bool(args.get("dry_run"))},
+                    key=_key(args))
+
+
 @tool("hub_market_sweep", "Librarian (the market curator): one task on the team owner for every needs-human insight in this run, and a "
       "Listening task only for an entity you mark unverified that is past its verification window.",
       {"today": _s("YYYY-MM-DD; default today"),

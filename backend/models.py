@@ -500,6 +500,14 @@ class MarketApply(Contract):
     last_verified: str | None = None
 
 
+class MarketImport(Contract):
+    """A verified batch, one JSON object per line (backend/market.py `import_batch`)."""
+    name: str = Field(default="", max_length=300)
+    lines: str = Field(min_length=1, max_length=20_000_000)
+    note: str = Field(default="", max_length=2000)
+    dry_run: bool = False
+
+
 class MarketUnverified(Contract):
     id: str = Field(min_length=1, max_length=200)
     look_for: str = Field(default="", max_length=2000)

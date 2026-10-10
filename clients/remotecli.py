@@ -59,7 +59,7 @@ def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
     fn = args.fn
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -461,6 +461,10 @@ def run(args, who=None):
             if args.edge_src and args.edge_rel and args.edge_dst:
                 body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
             return post(f"market/insights/{args.id}/apply", body)
+        if sub == "import":
+            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8-sig")
+            return post("market/import", {"name": "" if args.file == "-" else Path(args.file).name, "lines": text,
+                                          "note": args.note or "", "dry_run": bool(args.preview)})
         if sub == "refresh":
             return post("market/delta/refresh", {"today": args.today})
         if sub == "page":

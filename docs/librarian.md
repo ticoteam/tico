@@ -110,7 +110,8 @@ thirty, then finishes the task with a short note saying what it found and what i
 After that the Librarian keeps the map current. It is the market's only curator besides the owner: everyone else reports
 (`hub market report`) and it decides. Its daily **Curate the market** routine (04:00) turns new insights into evidence, entities,
 edges and pages, and refreshes the weekly delta on Mondays; it stops at once when there is nothing new. Its **Urgent market
-insight** routine runs when someone reports with `--urgent`. Both are seeded when the Librarian is built in, and an older install
+insight** routine runs when someone reports with `--urgent`. A large verified batch goes in with `hub market import
+<file.jsonl>` (`--dry-run` to preview), one entity or edge per line with its evidence, recorded as one insight. Both are seeded when the Librarian is built in, and an older install
 gets them at its next start. The server accepts market writes only from the Librarian and the owner. Outside market work it
 still writes only under `_librarian/` and `FAQ.md`. Earlier releases had a separate Market Analyst bot; an install that still has
 one archives it at its next start and hands its open tasks to the Librarian.
