@@ -2610,8 +2610,8 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
-        """A comment on a task. It wakes the bot on the task when a mover, the owner or the
-        requester left it; anyone else's is saved for the bot's next turn on the task."""
+        """A comment on a task. It wakes the bot on the task when the comment is meant for it
+        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
         who = request.state.identity
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
@@ -2626,9 +2626,21 @@ def create_app(settings=None):
                 attached.append({"id": fid, "file_id": fid, "version": int(number), "ref": reference,
                                  "name": version["name"], "size": version["size"], "content_type": version["mime"],
                                  "url": f"/api/v2/files/{fid}?v={number}"})
-            wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or mover(c, who)
+            moves = mover(c, who)
+            # A person @mentioned in a comment gets it as a question, so it reaches their Needs you.
+            # The comment itself is the question to the first one, unless it also names the bot,
+            # which must hear it; everyone else mentioned gets their own copy.
+            people = [] if ask or who.role == "bot" else H.mentioned_people(c, body.text, row, who.actor)
+            if people and not H.names_a_filer(c, body.text, row):
+                ask, people = H.mention_ask(body.text, people[0]), people[1:]
+            if ask:
+                wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
+            else:
+                wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves)
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask,
                                  extra_refs={"attachments": attached, "files": body.attachments} if attached else None)
+            for person in people:
+                H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
             for item in attached:
                 c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)",
                           (item["id"], item["version"]))

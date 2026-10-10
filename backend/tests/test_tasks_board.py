@@ -157,6 +157,29 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
 
 
+def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api):
+    token = bot_token(api, "ops")
+    task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    path = f"tasks/{task['id']}/comments"
+    queued = jobs_for(api, "ops")
+    update = post(api, path, {"text": "Testing it on staging for a day."})
+    assert update["woke"] is False and jobs_for(api, "ops") == queued
+    assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
+    assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
+
+
+def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api):
+    token = bot_token(api, "ops")
+    task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    queued = jobs_for(api, "ops")
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"})
+    assert said["comment"]["kind"] == "ask" and said["comment"]["to_actor"] == "human:ben"
+    assert jobs_for(api, "ops") == queued, "the bot that filed it is not woken"
+    with api.app.state.store.read() as c:
+        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
+        assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
+
+
 def test_the_author_edits_a_comment_and_nobody_wakes(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the Agust numbers."})

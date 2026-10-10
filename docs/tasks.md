@@ -123,6 +123,14 @@ with `bots` on the task-types routes or `hub task type update "Dev ticket" --bot
 Private overrides every type permission. Closing, ready or closed steps and labels keep their
 existing human controls. Changing type cannot publish a private task.
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
+
+A person's comment wakes the task's bot when the bot owns the task. On a task a bot filed and a
+person owns, it wakes the bot only when it @mentions the bot (`@ops`, or its name) or the task
+waits on that person; any other comment reaches the bot on its next turn. A person @mentioned in a
+comment (by id, the part of their email before the @, full name, or first name when no one else
+shares it) gets the comment as a question, which puts the task in their Needs you; when the
+comment also names the bot, or names several people, each person gets their own copy of the question.
+
 ## Numbers and the order within a step
 
 A mover can make a custom type **numbered**: a board of tickets, worked through on the board. Its
