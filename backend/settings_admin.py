@@ -461,8 +461,19 @@ class SettingsAdmin:
         if not branch and not repository_present(c, bot) and not self.computer_builds_repository(c, bot):
             raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
 
+    # What BotOps' own run changes in another bot's definition (docs/permissions.md): its contact. Who it reports to,
+    # its repository, its status and its template stay with the people who manage it: `reports_to` makes a person its
+    # manager, and `repo` decides what the bot's token writes.
+    BOTOPS_OWN_DEFINITION = {"bot_contact"}
+
     def update_bot(self, c, who, bot, body):
+        own_run = not (who.role == "owner" or self.auth.bot_manager(c, who, bot))
         self._manager(c, who, bot, botops=True)
+        changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
+        if own_run and changed - self.BOTOPS_OWN_DEFINITION:
+            raise Problem("forbidden", "BotOps' own run changes only another bot's contact; "
+                          + ", ".join(sorted(changed - self.BOTOPS_OWN_DEFINITION))
+                          + " is for the people who manage it", 403)
         source = shared_bots.source_of(shared_bots.declared(c, bot))
         if source and (H.bot(c, source) or {}).get("state") == "archived":
             raise Problem("original_archived", "Restore the original before changing its branch's status", 409)
@@ -483,7 +494,8 @@ class SettingsAdmin:
         if before.get("status") == "quarantined" and values.get("status") != "quarantined":
             raise Problem("quarantined", "This bot is quarantined; clear the quarantine first", 409)
         self._parent(c, bot, values.get("reports_to"))
-        if who.role != "owner" and values.get("reports_to") and not str(values["reports_to"]).startswith("human:"):
+        if (not own_run and who.role != "owner" and values.get("reports_to")
+                and not str(values["reports_to"]).startswith("human:")):
             parent = self._config(c, values["reports_to"])
             if parent["operator"] != H.actor_id(who.actor) and not self.auth.manages(c, who, "bot", values["reports_to"]):
                 raise Problem("forbidden", "The parent bot belongs to a different operator", 403)

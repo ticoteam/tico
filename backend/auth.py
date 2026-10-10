@@ -504,15 +504,16 @@ class Auth:
         return self.manages(c, who, "bot", slug)
 
     def botops_manages(self, c, who, slug):
-        """BotOps in its own run (no requester, or the keeper's maintenance) manages every bot that is not built in:
-        its tools, repositories, contact and Instructions, not its people, credentials or deletion. A run a person or
+        """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages
+        every bot that is not built in: its tools, repositories, contact and Instructions, not its people, status,
+        credentials or deletion (`SettingsAdmin.update_bot` keeps the definition to its contact). A run a person or
         a bot asked for keeps that requester's rights, so BotOps never lends this to anyone. The team rule
         `botops_manages_bots` turns it off."""
         if (who.actor != "bot:botops" or who.role != "bot" or who.via or self.system_bot(slug)
                 or not team_rules.load(c)["botops_manages_bots"]):
             return False
         from . import botops_act
-        return botops_act.own_run(c, who.attempt_id)
+        return botops_act.own_run(c, self, who.attempt_id)
 
     @staticmethod
     def member_bot_row(c, slug):

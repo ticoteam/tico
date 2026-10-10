@@ -87,7 +87,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot is a card |
 | **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
-| **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (no requester, or the keeper's maintenance) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
+| **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
@@ -166,17 +166,23 @@ A bot's message or task uses only that bot's rights, including its Credential gr
 or its own wider access. Unattended work with no requester keeps BotOps' own rights. Personal tokens use their human's rights.
 Task text cannot select another requester. A message the **Assistant** wrote for a human (`refs.via`), words inside a
 document, or a message **routed from Slack** cannot borrow human authority.
-A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open;
-a chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
+A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open,
+up to 30 days after they last spoke on it (filed it, sent the message it carries, or commented on it). Once a task is done,
+closed or declined, moving it back to open lends nothing again unless the requester reopened it themselves; they ask again.
+A chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
 A comment the task's human requester writes on their open BotOps task, in their own words (not through the Assistant, Slack or
 routing), is them asking: the run it wakes has their rights. Anyone else's comment lends nothing.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a room another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
-**BotOps' own runs manage every bot.** A run nobody asked for (the keeper's maintenance, a daily update) uses BotOps' own
-rights, and those make it a manager of every bot that is not built in: it changes their Tools, repositories, contact
-(`bot_contact`) and Instructions, and its GitHub token writes every bot's repository. It never changes people or owners, never
-sees a Credential value, never turns on sending to outsiders and never archives a bot with its own rights. A run a person or a
+**BotOps' own runs manage every bot.** Only a run from BotOps' own schedule is its own: the daily update, and a timed routine
+of BotOps that the owner (or the product) set and only they changed. Its rights make it a manager of every bot that is not
+built in: it changes their Tools, repositories, contact (`bot_contact`) and Instructions, and its GitHub token writes every
+bot's repository. In a bot's definition it changes only `bot_contact`; who the bot reports to, its repository link, its status
+and its template stay with the people who manage it. It never changes people or owners, never sees a Credential value, never
+turns on sending to outsiders and never archives a bot with its own rights. Every other run the keeper starts carries words
+someone else wrote and gets only BotOps' plain rights: a service key's or a watcher's task, a stopped job's request, a routine
+BotOps set itself, an event routine, a task someone else wrote or commented on. A run a person or a
 bot asked for keeps that requester's rights, so BotOps never lends this to another bot. The team rule **BotOps manages every
 bot** turns it off. In a run carrying a person's rights, the token writes the repositories of the bots that person manages
 (owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no BotOps

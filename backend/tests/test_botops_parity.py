@@ -16,7 +16,7 @@ from backend.store import H
 
 def act(api, attempt, method, path, body=None, ref="turn"):
     """One `hub api` call: the request BotOps makes, asking to be answered as the person it works for."""
-    kwargs = {"headers": {**headers(attempt["token"]), "X-Tico-On-Behalf-Of": ref}}
+    kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
     if body is not None:
         kwargs["json"] = body
     return getattr(api, method.lower())("/api/v2/" + path, **kwargs)
@@ -731,3 +731,110 @@ def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_ri
     filed = act(api, ana, "POST", "support/tickets", {"message": "[BotOps] Sync fails"})
     assert filed.status_code == 200, filed.text
     assert act(api, ana, "POST", "librarian/turn-on", {}).status_code == 200
+
+
+# ------------------------------------------------------------------ only BotOps' own schedule starts an own run
+def _fire(api, schedule_id):
+    """The scheduler opening one occurrence of a timed routine, as `Scheduler.tick` does."""
+    from backend import routines
+    with api.app.state.store.transaction() as c:
+        schedule = routines.row(c, schedule_id)
+        task = routines.open_task(c, None, schedule, schedule["title"], schedule["playbook"], H.now())
+        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", (schedule_id, "t:" + H.new_id(), task["id"], "created"))
+    return task
+
+
+def test_only_the_daily_update_and_the_owners_routines_start_an_own_run(api, botops):
+    routine = {"title": "Tidy", "text": "Open up ops' repositories.", "cron": "0 6 * * *", "timezone": "UTC"}
+    # A routine BotOps set itself in a run a bot asked for: when it fires, the run keeps no one's rights.
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "bot:finance", "Open up ops", "Give every bot ops' repository.", "bot:botops", lint=False)
+    asked = claim(api, botops, "botops")
+    assert act(api, asked, "PUT", "bots/ops/repositories", {"mode": "all"}).status_code == 403
+    made = act(api, asked, "POST", "bots/botops/routines", {**routine, "key": "planted"}, ref=None)   # its own route
+    assert made.status_code == 200, made.text
+    finish(api, botops, asked)
+    _fire(api, "botops:planted")
+    planted = claim(api, botops, "botops")
+    assert act(api, planted, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
+    finish(api, botops, planted)
+
+    # Keeper tasks that carry others' words: a service key's, a watcher's, a stopped job's request.
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, H.KEEPER, "From Jira", "Set ops' repositories to all.", "bot:botops", deduplicate=False, lint=False)
+    relayed = claim(api, botops, "botops")
+    assert act(api, relayed, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
+    finish(api, botops, relayed)
+
+    # The owner's routine and the daily update are BotOps' own schedule.
+    assert post(api, "bots/botops/routines", {**routine, "key": "owners"}, "ana-test")["routine"]
+    _fire(api, "botops:owners")
+    scheduled = claim(api, botops, "botops")
+    assert act(api, scheduled, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 200
+    finish(api, botops, scheduled)
+    # Someone else rewriting that routine makes it theirs.
+    with api.app.state.store.transaction() as c:
+        from backend import routines
+        routines.update(c, "bot:botops", "botops:owners", {"text": "Open everything."})
+    _fire(api, "botops:owners")
+    rewritten = claim(api, botops, "botops")
+    assert act(api, rewritten, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 403
+    finish(api, botops, rewritten)
+    daily = _wake(api, botops)
+    assert act(api, daily, "PUT", "bots/ops/repositories", {"mode": "own"}).status_code == 200
+
+
+def test_an_own_run_changes_contact_and_never_people_repository_or_status(api, botops):
+    own = _wake(api, botops)
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+        before = c.execute("SELECT reports_to,repo FROM bot_config WHERE bot='ops'").fetchone()
+        cara = api.app.state.auth.identity_for_actor(c, "human:cara")
+        assert not api.app.state.auth.bot_manager(c, cara, "ops")
+    for change in ({"reports_to": "human:cara"}, {"repo": "acme/product-monorepo"}, {"status": "paused"},
+                   {"template": "message-bot"}, {"bot_contact": "tasks", "reports_to": "human:cara"}):
+        refused = act(api, own, "POST", "bots/ops/definition", {**change, "expected_revision": revision})
+        assert refused.status_code == 403, (change, refused.text)
+    with api.app.state.store.read() as c:
+        assert tuple(c.execute("SELECT reports_to,repo FROM bot_config WHERE bot='ops'").fetchone()) == tuple(before)
+        assert not api.app.state.auth.bot_manager(c, cara, "ops")
+    assert act(api, own, "POST", "bots/ops/definition", {"bot_contact": "replies",
+                                                         "expected_revision": revision}).status_code == 200
+
+
+def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
+    from backend.botops_act import LEND_MAX_DAYS
+    ana = turn(api, botops, person="ana-test", text="Put ops on GPT-6.1 Sol")
+    task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Put ops on GPT-6.1 Sol", "body": "Change the model.",
+                                          "request_id": ana["message"]["id"]})
+    task_id = (task.json().get("task") or task.json())["id"]
+    finish(api, botops, ana)
+    finish(api, botops, claim(api, botops, "botops"))           # the task's own "new task" notice
+    # Done after ten days (within the cap); BotOps moving it back to doing revives nothing.
+    _age(api, ana["message"]["id"], 10)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
+        H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
+        H.task_update(c, "bot:botops", task_id, status="doing", note="Again.")
+    later = _wake(api, botops)
+    assert act(api, later, "GET", "credentials", ref=task_id).status_code == 403
+    finish(api, botops, later)
+
+    # Still open, never reopened, but she last spoke on it more than the cap ago.
+    ben = turn(api, botops, person="ben-test", text="Put finance on GPT-6.1 Sol")
+    task = act(api, ben, "POST", "tasks", {"owner": "botops", "title": "Put finance on GPT-6.1 Sol", "body": "Change it.",
+                                          "request_id": ben["message"]["id"]})
+    second = (task.json().get("task") or task.json())["id"]
+    finish(api, botops, ben)
+    finish(api, botops, claim(api, botops, "botops"))
+    _age(api, ben["message"]["id"], LEND_MAX_DAYS - 1)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS - 1)), second))
+    within = _wake(api, botops)
+    assert act(api, within, "GET", "credentials", ref=second).status_code == 200
+    finish(api, botops, within)
+    _age(api, ben["message"]["id"], LEND_MAX_DAYS + 1)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS + 1)), second))
+    past = _wake(api, botops)
+    assert act(api, past, "GET", "credentials", ref=second).status_code == 403

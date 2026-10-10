@@ -699,27 +699,28 @@ def install_github_app(app, settings, store):
         return who
 
     def run_scope(c, attempt_id):
-        """The other bots whose repositories one BotOps run writes: every bot but the built-in ones in its own run
-        (team rule `botops_manages_bots`), the bots the person manages in a run carrying their rights, none in a run a
-        bot asked for or one that lends nobody's rights."""
+        """The other bots whose repositories one BotOps run writes, and whose rights decided it (for the audit): every
+        bot but the built-in ones in its own run (team rule `botops_manages_bots`), the bots the person manages in a
+        run carrying their rights, none in a run a bot asked for or one that lends nobody's rights."""
         from . import botops_act, team_rules
         auth = app.state.auth
         acting = app.state.botops_run_identity(c, attempt_id)
+        run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
         if acting is None:
-            return set()
+            return set(), run
         bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                                         "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
         if acting.actor == "bot:" + BOTOPS:
-            if team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, attempt_id):
-                return {bot for bot in bots if not auth.system_bot(bot)}
-            return set()
+            run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
+            return ({bot for bot in bots if not auth.system_bot(bot)} if run["own_run"] else set()), run
         if H.is_human(acting.actor):
-            return {bot for bot in bots if auth.bot_manager(c, acting, bot)}
-        return set()
+            return {bot for bot in bots if auth.bot_manager(c, acting, bot)}, run
+        return set(), run
 
     def botops_extra_repos(c, who):
-        """The bots whose repositories BotOps' token also writes. A turn asks for its own run; the computer's git helper
-        gets only what every BotOps run in progress on it may have, and nothing extra when none is."""
+        """The bots whose repositories BotOps' token also writes, and the runs that decided it. A turn asks for its own
+        run; the computer's git helper gets only what every BotOps run in progress on it may have, and nothing extra
+        when none is."""
         if who.role == "bot":
             attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
         elif who.role == "runner":
@@ -727,8 +728,9 @@ def install_github_app(app, settings, store):
                                                    "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
         else:
             attempts = []
-        scopes = [run_scope(c, attempt) for attempt in attempts]
-        return set.intersection(*scopes) if scopes else set()
+        found = [run_scope(c, attempt) for attempt in attempts]
+        scopes = [scope for scope, _ in found]
+        return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
     @app.get("/api/v2/github/app")
     def status(request: Request):
@@ -835,7 +837,7 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
-            extra = botops_extra_repos(c, who) if body.bot == BOTOPS else set()
+            extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
             if extra:
                 # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
                 have = {g['full_name'].lower() for g in grants}
@@ -891,8 +893,10 @@ def install_github_app(app, settings, store):
             for item in newly_minted:
                 if service.should_audit_token(body.bot, item["token"]):
                     with store.transaction() as c:
+                        # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
                         H.event(c, who.actor, "github.token", body.bot,
-                                {"repository": repo, "repositories": item["repositories"]})
+                                {"repository": repo, "repositories": item["repositories"],
+                                 "attempt": who.attempt_id or None, **({"runs": runs} if body.bot == BOTOPS else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
                 "repositories": repos, "tokens": response_tokens}
