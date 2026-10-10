@@ -132,11 +132,19 @@ def test_a_held_token_is_reused_until_near_expiry_instead_of_asking_per_git_comm
         assert G.select_token(G.hub_token(hub, {"bot": "alpha", "purpose": "git"}), "Acme/docs") == "read-token"
     assert G.hub_token(hub, {"bot": "beta", "purpose": "git"}) is grants
     assert len(hub.calls) == 2
+    # A BotOps answer is shaped by the runs live when asked, so it is never held (hold=false, or by name).
+    G.hub_token(hub, {"bot": "botops", "purpose": "git"})
+    G.hub_token(hub, {"bot": "botops", "purpose": "git"})
+    grants["hold"] = False
+    G.hub_token(hub, {"bot": "epsilon", "purpose": "git"})
+    G.hub_token(hub, {"bot": "epsilon", "purpose": "git"})
+    assert len(hub.calls) == 6
+    del grants["hold"]
     # Under the turn's 45 minutes, a turn-start ask goes back to the hub; errors are never held.
     grants["expires_at"] = grants["tokens"][0]["expires_at"] = at(30)
     G.hub_token(hub, {"bot": "gamma"})
     G.hub_token(hub, {"bot": "gamma"})
-    assert len(hub.calls) == 4
+    assert len(hub.calls) == 8
     hub.error = OSError()
     with pytest.raises(OSError):
         G.hub_token(hub, {"bot": "delta", "purpose": "git"})

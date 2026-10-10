@@ -994,8 +994,10 @@ def install_github_app(app, settings, store):
                                 {"repository": repo, "repositories": item["repositories"],
                                  "attempt": who.attempt_id or None, **({"runs": runs} if body.bot == BOTOPS else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
+        # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
+        # to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
-                "repositories": repos, "tokens": response_tokens}
+                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS}
 
     def bot_repos(c, bot):
         if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone():

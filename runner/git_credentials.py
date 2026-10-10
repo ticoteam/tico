@@ -93,7 +93,9 @@ def hub_token(client, body):
     tokens = granted.get("tokens") if isinstance(granted, dict) else None
     until = _expiry(granted.get("expires_at"), *(group.get("expires_at") for group in tokens or ())) \
         if isinstance(granted, dict) and granted.get("token") else 0
-    if until - margin > time.time():
+    # BotOps' answer depends on the runs live when it was asked; the hub says so with hold=false (older hubs: by name).
+    holdable = isinstance(granted, dict) and granted.get("hold", body.get("bot") != "botops") is not False
+    if holdable and until - margin > time.time():
         with _flights_lock:
             held[key] = (min(until - margin, time.time() + HOLD_S), granted)
     return granted
