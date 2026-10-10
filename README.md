@@ -40,10 +40,8 @@ API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not 
    work and lets a run in progress finish ([Usage](docs/usage.md)).
 5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-6. On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
-   our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” The bot marks it Done with the draft file on the task. Read the draft, then close
-   the task yourself: the requester closes it, not the bot.
+6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+   it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
 with Project Coordinator), are in [Your first result](docs/install.md#your-first-result).

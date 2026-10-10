@@ -395,7 +395,7 @@ A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
 `enabled: false`); `hub bot create` seeds the new bot's routines from it once, and from then on
 Tico's rows are the routines. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Start setup**, go-live),
+it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Set up**, go-live),
 so nobody approves it separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 

@@ -126,7 +126,7 @@ second). It reaches no computer.
   templates it came from: `template_version`).
 - A **starter** template (a card with a `first_routine` and an `onboarding` conversation) is created whole and parked:
   - `onboarding_state: needs_setup`, exposed on `/api/v2/bots`, `/api/v2/bots/{bot}` and `/api/v2/org`;
-  - its first routine is seeded off (the template declares `enabled: false`) and goes on when its setup starts (**Start setup**, a first message from someone who manages it, or go-live), so nobody approves it separately;
+  - its first routine is seeded off (the template declares `enabled: false`) and goes on when its setup starts (**Set up**, a first message from someone who manages it, or go-live), so nobody approves it separately;
   - **no task is filed for BotOps**: the computer materializes its repository from its template as soon as the bot is placed on it
     (`materialize: true` in its config, which only the wizard writes), and the bot is activated as soon as it is placed;
   - the scheduler skips it, and only a human's chat message is claimed for it (a task message, a Slack route, a bot's request or a routine

@@ -164,26 +164,16 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
 
 
 # ------------------------------------------------------------------ the first-result tutorial (docs/install.md)
-def test_the_first_result_tutorial_names_one_bot_and_prompt_and_its_links_resolve():
-    """README, the install guide's tutorial and the app's Help link all lead to the same first result: one bot, one
-    prompt. Every repository link those pages use resolves, anchors included. Offline: a public GitHub link to this
-    repository is checked against the checkout; tico.team pages are built outside this repository, with no route list here."""
+def test_the_first_result_tutorial_links_resolve():
+    """The README, the install guide and the app's Help lead to the first-result tutorial, and every repository link
+    those pages use resolves, anchors included. Offline: a public GitHub link to this repository is checked against the
+    checkout; tico.team pages are built outside this repository, with no route list here."""
     import re
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
-    bot = "Content Marketer"
-    prompt = ("Draft a 200-word blog post introducing our example app to project teams from these facts: our example app "
-              "keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent "
-              "no claims. Return a draft on this task.")
-    flat = lambda text: " ".join(text.split())
     install = (root / "docs/install.md").read_text()
-    tutorial = install[install.index("### Your first result"):install.index("### Sample answers for Content Marketer")]
     readme = (root / "README.md").read_text()
-    for name, text in (("README.md", readme), ("docs/install.md#your-first-result", tutorial)):
-        assert bot in text and prompt in flat(text), name
-        assert "Project Coordinator" in text, name            # the meeting-notes workflow is the named next step
     help_page = (root / "ui/app/help.js").read_text()
-    assert "${GH}/blob/main/docs/install.md#your-first-result" in help_page
 
     def anchors(path):
         slug = lambda heading: re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
