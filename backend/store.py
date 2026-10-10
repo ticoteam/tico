@@ -122,6 +122,15 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used TEXT, expires_at TEXT, revoked_at TEXT);
+-- OAuth sign-in for the MCP server (backend/mcp_oauth.py): registered agents, and each person's approval of one,
+-- which ends in a human_tokens row whose secret a refresh rotates in place.
+CREATE TABLE IF NOT EXISTS oauth_clients(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris_json TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_grants(
+ id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES oauth_clients(id), human TEXT NOT NULL,
+ redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+ code_hash TEXT UNIQUE, code_expires TEXT, token_id TEXT REFERENCES human_tokens(id),
+ refresh_hash TEXT UNIQUE, refresh_expires TEXT, denied_at TEXT);
 -- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
