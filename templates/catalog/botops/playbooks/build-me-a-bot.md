@@ -20,7 +20,10 @@ not waiting on it. The human reads one message at the end.
    Check archived bots too. If the slug is taken, offer a fresh one; never restore the old bot for
    a new-bot request. Preserve this request's description, Instructions and limits throughout the build.
 2. **Build it.** Follow `playbooks/set-up-a-bot.md` from step 2: repository from the closest template,
-   real instructions, `hub bot check <slug>` clean, committed.
+   real instructions, `hub bot check <slug>` clean, committed. Read `hub bot create`'s exit status and the
+   repository state it reports before going on: a non-zero exit or a refusal is not a built bot. A
+   `retryable: false` refusal (`github_permission_missing`, `repository_missing`) stops the build: ask the
+   person once for the exact fix it names and end the run (AGENT.md rule 11).
 3. **What it needs.** If the bot talks to a tool (Jira, GitHub, a mailbox), find out what credential it
    takes and open the card for each: `playbooks/connect-a-tool.md`. Do not wait for the answer to
    finish everything else. When the human saves it you are woken.
@@ -30,13 +33,16 @@ not waiting on it. The human reads one message at the end.
    Apply the requested schedule, disable unrelated template Routines, and read back each title,
    timing, time zone and enabled state. A local `bot.yaml` edit does not prove the live schedule
    changed. For an explicit no-schedule request, disable all Routines and pass `routines: []` to
-   Go live (`--routines-file` containing `[]` with the CLI). If verification fails, leave the bot
-   paused and report one specific blocker.
+   Go live (`--routines-file` containing `[]` with the CLI). The file is a JSON array with one object per
+   Routine: `id`, `title`, `cron`, `timezone`, `enabled`, `on`. If Go live refuses that shape, do not guess
+   another: it is a Tico bug (AGENT.md rule 13). If verification fails, leave the bot paused and report one
+   specific blocker.
 6. **Take it live.** `hub bot go-live <slug>` (pass the verified requested Routines as `routines` with
    `hub_bot_go_live`, or `--routines-file` with the CLI): it puts the bot on a computer (the only one, or the
-   least busy), turns it on and starts its setup with them. If it answers `waiting_for_repository`, the bot is
-   placed and its computer is fetching the repository; Tico turns it on and starts the setup by itself once the
-   computer has it. Tell them that, do not call go-live again or wait for it, and skip step 7.
+   least busy), turns it on and starts its setup with them. On `waiting_for_repository`, remember that
+   waiting for a computer to get the repository is not a failure: the bot is placed and its computer is fetching the repository, and Tico turns it on and starts the
+   setup by itself once the computer has it. Say so, do not call go-live again or wait for it, do not copy the
+   repository there yourself (AGENT.md rule 12), and skip step 7. A refusal is read as in step 2.
 7. **Optionally, test it once.** Give the bot one small, read-only job that proves the connection, with
    `hub task create --owner <slug> --title "..." --body "..."`, and wait for the answer. If it fails,
    read why, fix what is yours to fix, and try once more. Skip it when they want it live now, and say
@@ -95,4 +101,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   raise the limit.
 - **No computer can take the bot.** Say so in one line: an admin has to add one or open one to
   members' bots. The bot starts by itself when one can.
+- **A refusal says `retryable: false`.** Stop: no retry loop, no `sleep`. If a person must act, one Needs you
+  item with the exact fix, then end the run. If the command should have worked, it is a Tico bug: file it and say
+  "Blocked on a Tico bug, reported as <ticket>" (AGENT.md rules 11 to 13).
 - **The product cannot do what they asked.** Say so in one line and `hub support file "..."`.
