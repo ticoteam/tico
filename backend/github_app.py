@@ -167,6 +167,8 @@ class GitHubApp:
         nonce = os.urandom(12)
         sealed = AESGCM(self._key(c)).encrypt(nonce, secrets_blob, b"tico-github-app:v1")
         c.execute("DELETE FROM github_app")
+        from .repo_waits import remember_owner
+        remember_owner(c, conversion)
         c.execute("INSERT INTO github_app VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?)",
                   (int(conversion["id"]), conversion["slug"], conversion["client_id"], org, int(administration),
                    str(conversion.get("html_url") or ""), sealed, nonce, H.now(), actor))
@@ -198,7 +200,9 @@ class GitHubApp:
                 return ""
 
     def forget(self, c):
+        from .repo_waits import forget
         c.execute("DELETE FROM github_app")
+        forget(c)
         c.execute("UPDATE repositories SET reachable=0 WHERE reachable<>0")
         c.execute("DELETE FROM github_app_states")
         c.execute("DELETE FROM registry_metadata WHERE key IN ('repositories-reachability-verified','repositories-confirmed-missing')")
@@ -485,12 +489,17 @@ class GitHubApp:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
         name = "bot-" + slug.removeprefix("emp-")
         if not self.can_create_repos(refresh=True):
+            from .repo_waits import fixes
+            with self.store.read() as c:
+                found = fixes(c, row, slug)
             how = ("as an empty private repository" if empty else
                    f"from the {template} template (https://github.com/{template} > Use this template)")
             raise Problem(
                 "github_permission_missing",
-                f"The GitHub App was set up without permission to create repositories. Create {row['org']}/{name} "
-                f"yourself {how}, or turn on Administration for the app in GitHub and accept it for the organisation.", 409)
+                f"A person must act: the GitHub App was set up without permission to create repositories, so "
+                f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let BotOps "
+                f"create repositories by turning on Administration for the app ({found['permissions_url']}) and "
+                "accepting it for the organisation.", 409, extra=found)
         token, _ = self.mint(None, CREATE_PERMISSIONS)
         if empty:
             # For a bot whose history already exists on a computer: nothing generated, the runner pushes into it.
@@ -732,20 +741,54 @@ def install_github_app(app, settings, store):
         scopes = [scope for scope, _ in found]
         return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
-    @app.get("/api/v2/github/app")
-    def status(request: Request):
-        owner(request)
+    def fixer(c):
+        """Who can change the app's permissions on GitHub: the owner, else an Admin; "" when neither is on the
+        roster (Health still shows the alert)."""
+        auth = app.state.auth
+        if auth.owner_id(c):
+            return auth.owner_id(c)
+        for row in c.execute("SELECT id,email FROM humans ORDER BY rowid"):
+            if str(row["email"] or "").lower() in auth.bot_admins:
+                return row["id"]
+        return ""
+
+    def status_view(refresh=False):
+        from .repo_waits import fixes, waits
         row = service.row()
         if not row:
             return {"connected": False}
+        administration = service.can_create_repos(refresh=refresh)
+        with store.read() as c:
+            fix = fixes(c, row)
+            waiting = [{"bot": bot, "repository": wait.get("repository") or "", "task_id": wait.get("task_id"),
+                        "create_url": fixes(c, row, bot)["create_url"]} for bot, wait in sorted(waits(c).items())]
         return {"connected": True, "slug": row["slug"], "org": row["org"], "app_id": row["app_id"],
-                "administration": service.can_create_repos(), "installed": bool(row["installation_id"]),
+                "administration": administration, "installed": bool(row["installation_id"]),
                 "install_url": f"https://github.com/apps/{row['slug']}/installations/new",
                 "settings_url": f"https://github.com/organizations/{row['org']}/settings/apps/{row['slug']}",
+                "permissions_url": fix["permissions_url"], "create_url": fix["create_url"], "waiting": waiting,
                 "uninstall_url": f"https://github.com/organizations/{row['org']}/settings/installations"}
 
+    @app.get("/api/v2/github/app")
+    def status(request: Request):
+        owner(request)
+        return status_view()
+
+    @app.post("/api/v2/github/app/check-permissions")
+    def check_permissions(request: Request):
+        """After the owner accepts Administration on GitHub: read the installation's permissions again and finish
+        any bot whose repository was waiting for them."""
+        owner(request)
+        from .repo_waits import resume
+        view = status_view(refresh=True)
+        if view.get("connected"):
+            view["resumed"] = resume(service)
+            if view["resumed"]:
+                view = {**status_view(), "resumed": view["resumed"]}
+        return view
+
     @app.get("/api/v2/github/app/manifest")
-    def manifest_form(request: Request, org: str, name: str = "", administration: bool = False, html: bool = False):
+    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
         who = owner(request)
         if not ORG.match(org):
             raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
@@ -956,9 +999,8 @@ def install_github_app(app, settings, store):
                                   "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
                                   "Create bot repositories in this bot's settings.", 403)
                 row, bot = service.row(c), H.bot(c, slug)
-            if not row or not service.can_create_repos(refresh=True):
-                raise Problem("forbidden", "GitHub was connected without permission to create repositories; "
-                              "the owner must turn on Administration for the app in GitHub and accept it for the organisation", 403)
+            if not row:
+                raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
             if not bot or bot.get("state") == "archived":
                 raise Problem("forbidden", f"{slug} is not a bot being set up or running, so no repository is created for it", 403)
             if body.slug != slug and body.slug != "emp-" + slug:
@@ -970,7 +1012,22 @@ def install_github_app(app, settings, store):
             raise Problem("github_repo", "An empty repository has no template; give one or the other", 422)
         if not SLUG.match(slug) or not re.match(r"^[\w.-]+/[\w.-]+$", template):
             raise Problem("github_repo", "Use a lowercase bot name (letters, digits, hyphens) and an owner/name template", 422)
-        result = service.create_repo(slug, template, empty=body.empty)
+        try:
+            result = service.create_repo(slug, template, empty=body.empty)
+        except Problem as problem:
+            if problem.code != "github_permission_missing":
+                raise
+            # A person must act. One Needs-you task per bot, however often this is retried; the bot keeps its
+            # local build and finishes on its own once the repository or the permission appears (repo_waits).
+            from .repo_waits import raise_item
+            with store.transaction() as c:
+                bot = H.bot(c, slug)
+                if bot and bot.get("state") != "archived" and service.row(c):
+                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
+                    problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
+                    problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
+                                       "build and finishes on its own once either is done.")
+            raise
         with store.transaction() as c:
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})

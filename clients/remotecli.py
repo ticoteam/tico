@@ -663,9 +663,33 @@ def bots(client, args):
                                record.get("answers") or {},
                                display_name=args.name or chosen.get("display_name"),
                                instructions=chosen.get("instructions"))
-    return {"path": str(path), "template": args.template, "slug": args.slug,
-            "committed": catalog.committed(path), "routines": seed_routines(client, args.slug, path),
-            **({"registered": registered} if registered else {})}
+    result = {"path": str(path), "template": args.template, "slug": args.slug,
+              "committed": catalog.committed(path), "routines": seed_routines(client, args.slug, path),
+              **({"registered": registered} if registered else {})}
+    result["github"] = github_repository(client, args.slug, path)
+    return result
+
+
+def github_repository(client, slug, path):
+    """Give the new bot its empty private `<org>/bot-<slug>` on GitHub; its runner publishes the local history into
+    it. No GitHub connected (or a rehearsal) leaves the bot on its computer, as before. When the GitHub App may not
+    create repositories, the build is not finished: the command fails (non-zero) and says a person must act. The
+    server has put one Needs-you task in front of the owner and finishes the repository on its own once they do; the
+    bot stays planned with its files here."""
+    try:
+        return client.post("github/repos", {"slug": slug, "empty": True})
+    except APIError as exc:
+        if exc.code in ("github_not_connected", "rehearsal"):
+            return {"skipped": exc.detail}
+        if exc.code in ("forbidden", "not_found"):
+            # A bot the server has not registered stays on this computer, as before.
+            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
+        if exc.code == "github_repo_exists":
+            return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
+        if exc.code == "github_permission_missing":
+            raise APIError(exc.code, f"Not finished: {exc.detail} The bot stays planned and its files are in {path}; "
+                           "finish and commit them there as usual.", exc.status, False, exc.operation_id) from None
+        raise
 
 
 def register_for_requester(client, args, chosen):

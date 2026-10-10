@@ -194,7 +194,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub template list                      the bot templates this company can pick from
     hub bot create <slug> --template T [--name "Display"]
                                            set a chosen bot up in the workspace (BotOps only); it also registers
-                                           the bot with Tico as the requester when a person's message started the run
+                                           the bot with Tico as the requester when a person's message started the run,
+                                           and asks for its empty <org>/bot-<slug> when GitHub is connected (exits
+                                           non-zero when a person must first let BotOps create repositories)
     hub bot create <slug> --record-only [--name N] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
     hub bot check <slug>                   what preflight would still refuse about that repository
