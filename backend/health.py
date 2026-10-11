@@ -575,12 +575,21 @@ def _sealed_secrets(c, settings, github):
 
     from . import credentials, directory, slack_app
 
-    def opens(key, row, aad):
-        try:
-            AESGCM(key).decrypt(row["nonce"], row["ciphertext"], aad)
+    still_needs = {}         # {key file: rows only it opens}, under KMS
+
+    def opens(key, row, aad, legacy=None):
+        # Under KMS a row sealed before TICO_CREDENTIAL_KMS_KEY was set still opens with its key file (`legacy`),
+        # and the next read re-seals it with the vault key (credentials.open_or_reseal). Health only looks, and counts
+        # such rows so nobody deletes the file while it is still needed.
+        for candidate in (key, credentials.legacy_key(legacy) if legacy else None):
+            try:
+                AESGCM(candidate).decrypt(row["nonce"], row["ciphertext"], aad)
+            except Exception:
+                continue
+            if candidate is not key:
+                still_needs[legacy.name] = still_needs.get(legacy.name, 0) + 1
             return True
-        except Exception:
-            return False
+        return False
 
     def table(name):
         return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
@@ -596,14 +605,16 @@ def _sealed_secrets(c, settings, github):
         if app or sources:
             key = github.secret_key(c, create=False)
             lost = []
-            if app and not (key and opens(key, app, b"tico-github-app:v1")):
+            legacy = github.key_file() if kms else None
+            if app and not (key and opens(key, app, b"tico-github-app:v1", legacy)):
                 lost.append("The GitHub App's private key and webhook secret")
-            if sources and not (key and all(opens(key, r, directory.AAD + r["source"].encode()) for r in sources)):
+            if sources and not (key and all([opens(key, r, directory.AAD + r["source"].encode(), legacy) for r in sources])):
                 lost.append("the directory sync credentials" if lost else "The directory sync credentials")
             if lost:
                 problems.append(" and ".join(lost) + " cannot be decrypted: " + (
                     "github-app.key is missing." if key is None else
-                    "they were sealed with another key (github-app.key, from before TICO_CREDENTIAL_KMS_KEY was set?)." if kms else
+                    "they were sealed with another key (github-app.key from before TICO_CREDENTIAL_KMS_KEY was set, "
+                    "which is no longer on the data volume?)." if kms else
                     "github-app.key does not open them."))
                 fixes.append(SEALED_FIX.format(file="github-app.key", redo="disconnect GitHub and connect it again, or save "
                                                "the directory sync credentials again, and confirm replacing the lost key: "
@@ -615,7 +626,7 @@ def _sealed_secrets(c, settings, github):
         if slack:
             # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
             key = slack_app._key(settings, github.vault if kms else None, c, create=False)
-            if not (key and opens(key, slack, slack_app.AAD)):
+            if not (key and opens(key, slack, slack_app.AAD, slack_app.key_file(settings) if kms else None)):
                 problems.append("The Slack tokens cannot be decrypted: " + (
                     "slack.key is missing." if key is None else "the key they were sealed with is not this server's."))
                 fixes.append(SEALED_FIX.format(file="slack.key", redo="paste the Slack tokens again (Settings > Slack)"))
@@ -629,10 +640,19 @@ def _sealed_secrets(c, settings, github):
                 fixes.append(SEALED_FIX.format(file="credential.key", redo="add each credential again (Credentials)"))
     except Problem:
         return None          # a KMS key that cannot be reached is the credential_kms check's to report
+    fix = [_fix("Restore the key files", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")]
+    needed = ""
+    if still_needs:
+        counts = []
+        for name, n in sorted(still_needs.items()):     # "2 secrets still need github-app.key and 1 still needs slack.key"
+            noun = ("secret " if n == 1 else "secrets ") if not counts else ""
+            counts.append(f"{n} {noun}still {'needs' if n == 1 else 'need'} {name}")
+        needed = (" and ".join(counts) + ": sealed before TICO_CREDENTIAL_KMS_KEY was set, each is re-sealed with the KMS "
+                  "key the first time it is used. Keep " + (" and ".join(sorted(still_needs))) + " (and the backup's copy) "
+                  "until this clears.")
     if not problems:
-        return None
-    return _check("sealed_secrets", "Stored secrets", "warn", " ".join(problems + fixes),
-                  [_fix("Restore the key files", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")])
+        return _check("sealed_secrets", "Stored secrets", "info", needed, fix) if needed else None
+    return _check("sealed_secrets", "Stored secrets", "warn", " ".join(problems + fixes + ([needed] if needed else [])), fix)
 
 
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."

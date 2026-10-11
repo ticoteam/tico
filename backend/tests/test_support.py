@@ -135,3 +135,52 @@ def test_a_person_sees_their_own_tickets_and_no_one_elses(environment, hq):
     hq.seen.clear()
     api.post("/api/v2/support/tickets/refresh", headers=signed_in())
     assert [r.url.path for r in hq.seen] == ["/v1/support/TK-00000001"]
+
+
+def stored_secret(api, ticket_id):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT hq_secret FROM support_tickets WHERE id=?", (ticket_id,)).fetchone()[0]
+
+
+def test_the_ticket_secret_is_sealed_with_the_credential_vault_and_every_use_still_works(environment, hq):
+    api = environment()
+    key = api.app.state.store.settings.db_path.parent / "credential.key"
+    assert not key.exists()                       # a fresh install: the vault has no key yet
+    ticket = file(api).json()
+    (tid, held), = hq.tickets.items()
+    stored = stored_secret(api, ticket["id"])
+    assert held["secret"] not in stored and stored.startswith("sealed:v1:")
+    assert key.exists() and oct(key.stat().st_mode & 0o777) == "0o600"   # the first ticket made the vault's key
+    # Writing, refreshing and deleting send HQ the real secret (FakeHQ answers 404 to any other).
+    hq.staff_replies(tid, "Try a reload")
+    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
+    assert api.post(f"/api/v2/support/tickets/{ticket['id']}/messages", json={"message": "Thanks"},
+                    headers=signed_in()).status_code == 200
+    assert api.delete(f"/api/v2/support/tickets/{ticket['id']}", headers=signed_in()).json() == {"deleted": True}
+    assert not hq.tickets
+
+
+def test_plaintext_ticket_secrets_from_before_are_sealed_once_on_start(environment, hq):
+    api = environment()
+    ticket = file(api).json()
+    (tid, held), = hq.tickets.items()
+    with api.app.state.store.transaction() as c:       # as the release before this one kept it
+        c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=?", (held["secret"], ticket["id"]))
+    vault = api.app.state.vault
+    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 1
+    sealed = stored_secret(api, ticket["id"])
+    assert sealed.startswith("sealed:v1:") and held["secret"] not in sealed
+    assert support.seal_plaintext_secrets(api.app.state.store, vault) == 0 and stored_secret(api, ticket["id"]) == sealed
+    hq.staff_replies(tid, "Fixed")
+    assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
+
+
+def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_hq(environment, hq):
+    api = environment()
+    file(api)
+    hq.seen.clear()
+    (api.app.state.store.settings.db_path.parent / "credential.key").unlink()
+    api.app.state.vault.cipher.cached = None
+    r = file(api, message="Another problem")
+    assert r.status_code == 503 and r.json()["error"]["code"] == "vault_unavailable"
+    assert hq.seen == [] and len(hq.tickets) == 1

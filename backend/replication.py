@@ -11,8 +11,8 @@ modification time, not the key or anything derived from it.
 
 Two more key files beside it seal secrets the vault does not hold, and get the same handling: /data/github-app.key (the
 GitHub App's private key, client secret and webhook secret, and the directory sync credentials; backend/github_app.py)
-and /data/slack.key (the Slack tokens; backend/slack_app.py). They are copied whenever they exist, KMS or not: the Slack
-gateway always opens the tokens with slack.key, and github-app.key may still seal an app saved before KMS was set.
+and /data/slack.key (the Slack tokens; backend/slack_app.py). They are copied whenever they exist, KMS or not: either may
+still seal secrets saved before KMS was set, which open with it until their first read re-seals them with the vault's key.
 /data/tico-session-secret (backend/oidc.py) is not copied: it signs only the few minutes of a sign-in round trip (the
 sessions themselves are in the database), so a new one costs nobody their session and one less secret leaves the server.
 """

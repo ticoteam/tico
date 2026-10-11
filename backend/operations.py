@@ -91,7 +91,10 @@ def backup(store, s3, cloudwatch, bucket):
     tier = retention_tier(store, bucket, now)
     key = "backups/" + tier + "/" + now.replace(":", "-") + "-" + uuid.uuid4().hex + ".sqlite"
     try:
-        report = upload_bundle(store.settings.db_path, bucket, key, s3, Blobs(store.settings, s3))
+        # The key files beside the database go with it, as with `manage.py backup`: a database restored without them
+        # cannot open the credentials, GitHub App, directory sync or Slack secrets (backend/backup.py).
+        report = upload_bundle(store.settings.db_path, bucket, key, s3, Blobs(store.settings, s3),
+                               key_dir=store.settings.db_path.parent)
     except Exception as error:
         report_health(store, "backup", error=type(error).__name__)
         try:
@@ -102,7 +105,8 @@ def backup(store, s3, cloudwatch, bucket):
     detail = {"bucket": bucket, "key": key, "sha256": report["sha256"], "tier": tier,
               "database_bytes": report["bytes"],
               "objects": report["objects"], "object_bytes": report["object_bytes"],
-              "objects_verified": report.get("objects_verified", 0), "manifest_sha256": report["manifest_sha256"]}
+              "objects_verified": report.get("objects_verified", 0), "manifest_sha256": report["manifest_sha256"],
+              "key_files": report.get("key_files", [])}
     report_health(store, "backup", success=H.now(), detail=detail)
     # The first successful point of a month also satisfies that day's point;
     # longer retention covers both without duplicating all source verification.

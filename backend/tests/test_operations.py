@@ -76,3 +76,25 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM service_health WHERE last_success=? AND last_error=?",
                          (old, "Old timer failed")).fetchone()[0] == 2
+
+
+def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_them(api, tmp_path):
+    import json
+
+    from backend.tests.test_backup_bundle import ObjectStore
+    store = api.app.state.store
+    data = store.settings.db_path.parent
+    (data / "credential.key").write_bytes(b"\x01" * 32)
+    (data / "github-app.key").write_bytes(b"\x02" * 32)
+    s3, cw = ObjectStore(), Mock()
+    report = backup(store, s3, cw, "bucket")
+    assert report["key_files"] == ["credential.key", "github-app.key"]
+    manifest = json.loads(s3.objects[("bucket", report["key"] + ".manifest.json")])
+    assert sorted(manifest["key_files"]) == ["credential.key", "github-app.key"]
+    assert s3.objects[("bucket", report["key"] + ".keys/github-app.key")] == b"\x02" * 32
+    with store.read() as c:
+        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='backup'").fetchone()[0])
+    assert detail["key_files"] == ["credential.key", "github-app.key"] and "\x02" not in json.dumps(detail)
+    with patch("backend.operations.RESTORE_ROOT", tmp_path / "checks"):
+        assert restore_check(store, s3, cw, "bucket")["verified"]
+    assert not list((tmp_path / "checks").iterdir())            # the drill's copy, keys included, is removed

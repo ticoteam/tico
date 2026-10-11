@@ -6,6 +6,7 @@ process (`backend/slack_gateway.py`) is the one that opens them. Tokens are neve
 endpoint and never written to a log. See docs/slack.md.
 """
 import json
+import logging
 import os
 import re
 import threading
@@ -16,6 +17,7 @@ from fastapi import Request
 from pydantic import BaseModel, ConfigDict
 
 from . import hubdb as H
+from .credentials import open_or_reseal
 from .store import Problem
 
 HEALTH = "slack:gateway"
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS slack_credentials(
  app_id TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, created_by TEXT NOT NULL);
 """
 _lock = threading.Lock()
+log = logging.getLogger("tico.slack_app")
 
 
 def key_file(settings):
@@ -77,7 +80,13 @@ def load(store, settings, vault=None):
         if not row:
             return None
         try:
-            data = json.loads(AESGCM(_key(settings, vault, c, create=False)).decrypt(row["nonce"], row["ciphertext"], AAD))
+            key = _key(settings, vault, c, create=False)
+            if key is None:
+                return None
+            # Under KMS, tokens saved before TICO_CREDENTIAL_KMS_KEY was set open with slack.key and are re-sealed once.
+            kms = settings.credential_kms_key and vault is not None
+            data = json.loads(open_or_reseal(c, key, key_file(settings) if kms else None, row["nonce"], row["ciphertext"],
+                                             AAD, "slack_credentials", "id", "app", log))
         except Exception:
             return None
     return {"bot_token": data["bot_token"], "app_token": data["app_token"], "team_id": row["team_id"],

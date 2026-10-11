@@ -1,4 +1,5 @@
 """Encrypted company credentials with explicit human and run-bound bot grants."""
+import base64
 import hashlib
 import hmac
 import json
@@ -151,7 +152,43 @@ class CredentialMigration(Contract):
 LOCAL = 'local'                                   # `credential_keys.kms_key` for a data key kept in a file
 KEY_CHECK = b'tico-credential-key-check:v1'       # what the row keeps of a local key: proof of it, never the key
 KEY_FILE = 'credential.key'
+SEALED = 'sealed:v1:'                             # the prefix of a value `CredentialCipher.seal` made
 _key_file_lock = threading.Lock()
+
+
+def legacy_key(path):
+    """A key file an install sealed secrets with before TICO_CREDENTIAL_KMS_KEY was set (github-app.key, slack.key):
+    its 32 bytes, or None when it is absent or not a key. Read only: a read never makes a key file."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    return data if len(data) == 32 else None
+
+
+def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, value, log):
+    """Open a row sealed with `key` (the vault's under KMS). One that `key` cannot open but the pre-KMS key file at
+    `legacy_path` can was sealed before TICO_CREDENTIAL_KMS_KEY was set: it is opened with that file and re-sealed
+    with `key` once, in place, so the next read needs only the vault. Raises what AESGCM raises when neither opens.
+    The re-seal is skipped (and tried again on the next read) when this connection cannot write now; it only replaces
+    the row it read, so a save in between is never overwritten. Logs the table and the row's name, never a secret."""
+    try:
+        return AESGCM(key).decrypt(nonce, ciphertext, aad)
+    except Exception:
+        old = legacy_key(legacy_path) if legacy_path else None
+        if old is None:
+            raise
+    plain = AESGCM(old).decrypt(nonce, ciphertext, aad)
+    fresh = os.urandom(12)
+    try:
+        c.execute(f"UPDATE {table} SET ciphertext=?,nonce=? WHERE {where}=? AND nonce=?",
+                  (AESGCM(key).encrypt(fresh, plain, aad), fresh, value, nonce))
+        log.info("Re-sealed %s %s with the credential vault key (it was sealed with %s before TICO_CREDENTIAL_KMS_KEY "
+                 "was set)", table, value, Path(legacy_path).name)
+    except Exception as exc:
+        log.warning("Could not re-seal %s %s with the credential vault key yet (%s); it opens with %s meanwhile",
+                    table, value, type(exc).__name__, Path(legacy_path).name)
+    return plain
 
 
 class CredentialCipher:
@@ -244,6 +281,25 @@ class CredentialCipher:
     def encrypt(self, c, cid, secret):
         nonce = os.urandom(12)
         return AESGCM(self.key(c)).encrypt(nonce, secret.encode(), ('tico-credential:v1:' + cid).encode()), nonce
+
+    def seal(self, c, context, value):
+        """`value` sealed with the vault's data key for one named use (`context`, e.g. "support_tickets:<id>"), as text
+        a column keeps: SEALED + base64(nonce + ciphertext). Makes the vault's key on first use, as a credential does."""
+        nonce = os.urandom(12)
+        sealed = AESGCM(self.key(c)).encrypt(nonce, value.encode(), b'tico-sealed:v1:' + context.encode())
+        return SEALED + base64.b64encode(nonce + sealed).decode()
+
+    def unseal(self, c, context, stored):
+        """What `seal` sealed. A value without the SEALED prefix is plaintext kept before sealing: returned as it is."""
+        if not stored or not stored.startswith(SEALED):
+            return stored
+        try:
+            blob = base64.b64decode(stored[len(SEALED):])
+            return AESGCM(self.key(c)).decrypt(blob[:12], blob[12:], b'tico-sealed:v1:' + context.encode()).decode()
+        except Problem:
+            raise
+        except Exception:
+            raise Problem('vault_unavailable', 'A stored secret could not be decrypted', 503) from None
 
     def decrypt(self, c, row):
         try:
