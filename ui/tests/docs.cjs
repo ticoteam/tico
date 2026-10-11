@@ -99,6 +99,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         chats.forEach(chat => { chat.closed_at = chat.id === reopen[1] ? null : chat.closed_at || ago(0); });
         return json({conversation_id: reopen[1]});
       }
+      if (p === '/api/v2/librarian/research') {
+        const body = req.postDataJSON(); requests.push({api: 'librarian/research', body});
+        return json({task_id: 'task-research', bot: 'librarian', kind: 'doc', target: body.target});
+      }
       if (p === '/api/v2/docs/ask') {
         const body = req.postDataJSON(); requests.push({api: 'docs/ask', body});
         const id = body.conversation_id || 'librarian-chat-' + (++chatSequence);
@@ -298,6 +302,20 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('.docs-reader-head h2', {hasText: 'Refund policy'}).waitFor();
     await shot(page, 'doc');
 
+    // Research: the Librarian adds what it finds on the web to the section chosen.
+    await page.locator('#doc-more').click();
+    await page.locator('#doc-research').click();
+    const research = page.locator('form[data-research-form]');
+    await research.locator('textarea[name=instructions]').fill('Add how other stores handle refunds');
+    await shot(page, 'research');
+    await research.locator('[type=submit]').click();
+    await research.locator('a', {hasText: 'View task'}).waitFor();
+    const asked = requests.findLast(r => r.api === 'librarian/research').body;
+    assert.equal(asked.instructions, 'Add how other stores handle refunds');
+    assert.equal(asked.section, '');
+    assert.equal(await research.locator('a', {hasText: 'View task'}).getAttribute('href'), '#/task/task-research');
+    await research.locator('button', {hasText: 'Close'}).click();
+
     // Market: the same rail, its own thread, answered from the market graph; what it drew on opens the note.
     const docsAsks = requests.filter(r => r.api === 'docs/ask').length;
     await page.evaluate(() => { location.hash = '#/market'; });
@@ -314,6 +332,12 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await page.locator('[data-docs-ask] [data-answer]').innerText(), 'Rival competes on price.');
     await page.locator('.dask-cites .dask-cite').click();
     await page.waitForFunction(() => location.hash === '#/market?note=company%2Frival');
+    await page.locator('#market-read [data-market-research="company/rival"]').click();
+    await page.locator('form[data-research-form] textarea').fill('Find their pricing');
+    await page.locator('form[data-research-form] [type=submit]').click();
+    await page.locator('form[data-research-form] a', {hasText: 'View task'}).waitFor();
+    assert.equal(requests.findLast(r => r.api === 'librarian/research').body.target, 'company/rival');
+    await page.locator('form[data-research-form] button', {hasText: 'Close'}).click();
     assert.equal(await page.locator('[data-docs-ask]').count(), 1, 'a citation opens the note beside the rail');
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();

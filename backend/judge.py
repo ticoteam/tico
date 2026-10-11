@@ -17,9 +17,12 @@ bodies and transcripts pass through here, and the audit is not the place for the
 (`questions/README.md`, a set's `id@version`) is how a month of calls is read back per decision.
 
 A budget per actor and day, so a loop cannot spend the key: the cap is on calls, counted from
-the events, and a call over it is a 429 that says when to try again.
+the events, and a call over it is a 429 that says when to try again. The caps per role are settings
+(`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
+sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 """
 
+import logging
 import os
 from typing import Any
 
@@ -27,27 +30,66 @@ from fastapi import Request
 from pydantic import Field
 
 from clients import judge as J
+from clients import openrouter
 from . import providers
+from .config import Settings
 from .models import Contract
 from .store import H, Problem
 
-DAILY_CALLS = {"owner": 20_000, "human": 5_000, "bot": 5_000}
+LOG = logging.getLogger("tico.judge")
+ROLES = ("owner", "human", "bot")
+# The defaults; a server's own caps are `daily_cap(settings, role)`.
+DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role in ROLES}
 # TypeSafe gets one short try from the server; when it is slow or down, the company's own model answers, so a
 # caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
 
 
+def daily_cap(settings, role):
+    """How many server model calls an actor of this role may make today."""
+    return int(getattr(settings, "decisions_daily_calls_" + role, DAILY_CALLS.get(role, DAILY_CALLS["bot"])))
+
+
+_skipped = set()
+
+
+def _skip(provider, why):
+    # Once per process and reason: this runs on every config read and every Slack message.
+    if (provider, why) not in _skipped:
+        _skipped.add((provider, why))
+        LOG.info("The decision model's fallback skips %s: %s", provider, why)
+
+
+def transport(provider):
+    """The API the server calls for a provider: its own, or OpenRouter for the models pi runs through OpenRouter.
+    None for a provider with no API the server can call (Cursor)."""
+    if provider in J.LLM_KEYS:
+        return provider
+    return "openrouter" if (providers.PROVIDER_BY_ID.get(provider) or {}).get("runtime") == "pi" else None
+
+
 def fallback_engine(record, env=None):
     """A decision model on the company's own provider, or None when no enabled provider has a server key.
 
-    The default model's provider goes first; the rest follow in the order the owner enabled them."""
+    The default model's provider goes first; the rest follow in the order the owner enabled them. A provider the
+    server cannot call, or whose key it does not hold, is skipped (and logged) for the next one. Models pi runs
+    through OpenRouter are asked through OpenRouter with OpenRouter's id, as the runner does."""
     env = os.environ if env is None else env
     default = providers.runtime_provider(record["runtime"])
     for provider in dict.fromkeys(([default] if default else []) + record["enabled"]):
-        key = (env.get(J.LLM_KEYS.get(provider, "")) or "").strip()
+        via = transport(provider)
+        if via is None:
+            _skip(provider, "the server has no API to call it with")
+            continue
+        key = (env.get(J.LLM_KEYS[via]) or "").strip()
         model = record["model"] if provider == default else (providers.recommended(provider) or {}).get("id")
-        if key and model:
-            return J.llm(provider, key, model)
+        if not key:
+            _skip(provider, J.LLM_KEYS[via] + " is not set on the server")
+            continue
+        if not model:
+            _skip(provider, "it has no model")
+            continue
+        return J.llm(via, key, openrouter.model_id(model) if via == "openrouter" else model)
     return None
 
 
@@ -57,10 +99,10 @@ class Ask(Contract):
     label: str | None = Field(default=None, max_length=J.MAX_LABEL)
 
 
-def used_today(c, actor, at=None):
+def used_today(c, actor, at=None, action="judge.call"):
     day = (at or H.now())[:10]
-    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND ts>=?",
-                     (actor, day + "T00:00:00")).fetchone()[0]
+    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action=? AND ts>=?",
+                     (actor, action, day + "T00:00:00")).fetchone()[0]
 
 
 def install_judge(app, store, auth):
@@ -75,7 +117,7 @@ def install_judge(app, store, auth):
             used = used_today(c, who.actor)
             engine = None if settings.rehearsal else app.state.judge or fallback_engine(providers.load(c, settings))
         return {"configured": engine is not None, "model": (J.MODEL if app.state.judge else getattr(engine, "model", "")) if engine else "",
-                "daily_calls": DAILY_CALLS[who.role], "used_today": used,
+                "daily_calls": daily_cap(settings, who.role), "used_today": used,
                 "max_questions": J.MAX_QUESTIONS, "max_state_chars": J.MAX_STATE_CHARS}
 
     @app.post("/api/v2/judge")
@@ -93,7 +135,7 @@ def install_judge(app, store, auth):
             J.validate(body.state, body.questions, body.label)
         except J.JudgeError as exc:
             raise Problem("invalid", exc.detail, 422)
-        cap = DAILY_CALLS[who.role]
+        cap = daily_cap(settings, who.role)
         with store.read() as c:
             used = used_today(c, who.actor)
         if used >= cap:

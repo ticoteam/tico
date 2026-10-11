@@ -211,3 +211,17 @@ def test_hot_read_helpers_do_not_write_to_their_snapshot(api, monkeypatch):
     assert reads == [0] * 15, "the rejected request exits through the exception path"
     assert all(not c.in_transaction for c in loans)
     assert all(not c.in_transaction for c in store.pool)
+
+
+def test_a_task_list_leaves_its_connection_to_the_pool(api, monkeypatch):
+    # A changed connection (a SQL function, an authorizer) is closed after its read: a list that did that
+    # made every list open a new connection and parse the whole schema again.
+    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    store = api.app.state.store
+    get(api, "tasks")
+    opened = []
+    connect = store.connect
+    monkeypatch.setattr(store, "connect", lambda *a, **k: opened.append(1) or connect(*a, **k))
+    for token in ("ana-test", "ben-test"):
+        get(api, "tasks", token=token)
+    assert opened == []

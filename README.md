@@ -26,21 +26,27 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 ```
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
-installer prints. Then get one bot working:
+installer prints. Then get one first result: **Content Marketer** drafts a short post about a made-up product, you review
+it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code, or an
+API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
-1. In **Finish setup**, choose an AI provider, name your team and choose **Content Marketer** (`content`) in the **Marketing** group.
-   It needs only Tico. Assistant, BotOps, Librarian and Goal Manager are the four built-in bots.
+1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
+   Assistant, BotOps, Librarian and Goal Manager are the four built-in bots.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
-4. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
+   [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
+   work and lets a run in progress finish ([Usage](docs/usage.md)).
+5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-5. On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
-   our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” Read its result on the task, then close it.
+6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+   it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
+
+Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
+with Project Coordinator), are in [Your first result](docs/install.md#your-first-result).
 
 You can choose providers later in **Settings > AI providers**; bots wait with “Add an AI provider” until you do.
-If the bot waits or sign-in fails, open **Settings > Health** and follow [first-result recovery](docs/install.md#first-result-recovery).
 Add a domain and sign-in later ([Install](docs/install.md#add-a-domain-and-sign-in-later)).
 
 For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the installer with no flags:
@@ -106,7 +112,7 @@ is one team; several can run side by side on one Mac.
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Starters are parked
-in **Needs setup** until you open one and press **Set up**; review its first draft, then assign a small task and read its result.
+in **Needs setup** until you open one and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
@@ -221,6 +227,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_SCHEDULER` | `1` runs the routine scheduler in this process | `1` |
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
+| `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
 | `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional key for the decisions provider (TypeSafe's Jev) behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Without it the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
 | `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The "New version" notice and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > Privacy) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |

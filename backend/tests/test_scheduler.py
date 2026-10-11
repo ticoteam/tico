@@ -247,3 +247,37 @@ def test_row_isolation_keeps_standalone_task_databases_working(tmp_path):
     c.commit()
     assert c.execute('SELECT x FROM data').fetchall() == [(2,)]
     c.close()
+
+
+def test_a_duplicate_refusal_is_done_not_a_health_error(tmp_path):
+    import sqlite3
+    from backend.batch_work import isolated
+    c = sqlite3.connect(tmp_path / 'dup.db', isolation_level=None)
+    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
+              "detail_json TEXT NOT NULL DEFAULT '{}')")
+    c.execute("INSERT INTO service_health VALUES('background:wake_stalled:t1',NULL,'wake_stalled: duplicate: x','{}')")
+    c.execute('BEGIN IMMEDIATE')
+    failures = []
+    with isolated(c, 'wake_stalled', 't1', failures):
+        raise H.Refused('duplicate', 'x already asks botops for this')
+    c.commit()
+    assert failures == [] and c.execute('SELECT * FROM service_health').fetchall() == []
+    c.close()
+
+
+def test_rows_from_retired_health_mechanisms_are_removed_on_start(tmp_path, monkeypatch):
+    import sqlite3
+    from backend.store import retire_health_rows
+    c = sqlite3.connect(tmp_path / 'h.db')
+    c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
+              "detail_json TEXT NOT NULL DEFAULT '{}')")
+    for service in ('backup', 'backup-daily', 'backup-monthly', 'restore-check', 'processing:r1', 'scheduler'):
+        c.execute("INSERT INTO service_health VALUES(?,'2026-09-30',NULL,'{}')", (service,))
+    monkeypatch.delenv('TICO_BACKUP_MODE', raising=False)
+    retire_health_rows(c)                      # no Litestream here: the snapshot timers may still run
+    assert {r[0] for r in c.execute('SELECT service FROM service_health')} == {
+        'backup', 'backup-daily', 'backup-monthly', 'restore-check', 'scheduler'}
+    monkeypatch.setenv('TICO_BACKUP_MODE', 'remote')
+    retire_health_rows(c)
+    assert [r[0] for r in c.execute('SELECT service FROM service_health')] == ['scheduler']
+    c.close()

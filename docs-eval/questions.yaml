@@ -68,6 +68,10 @@ questions:
     question: How do I pair my Hermes profile with Tico, and what command do I run in Hermes afterwards?
     manual: [hermes-agents]
     contains: ["hermes_agent.py pair", "/reload-mcp"]
+  - id: openclaw-connect
+    question: How do I connect my OpenClaw profile to Tico, and what does it need before it can answer?
+    manual: [openclaw-agents]
+    contains: ["hermes_agent.py pair --harness openclaw", "model"]
   - id: change-instructions
     question: How do I change a bot's Instructions in Tico, or edit its repository, and get the changes onto its Computer?
     manual: [using-tico]

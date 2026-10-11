@@ -825,11 +825,14 @@ def create_app(settings=None):
         from .task_review import task_covers
         covers = task_covers(c, ids)
 
+        # From the page's ids, with visibility checked per child: an `IN (SELECT id FROM tasks WHERE ...)`
+        # list made SQLite probe every visible task against the page (1.5 s at 30k tasks).
         parts = {row["parent_id"]: {"total": row["total"] or 0, "done": row["done"] or 0}
                  for row in c.execute(
                      f"SELECT r.to_task parent_id,COUNT(*) total,SUM(t.status IN ('done','closed')) done "
-                     f"FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' "
-                     f"AND r.to_task IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {visible_sql}) "
+                     f"FROM task_relations r INDEXED BY task_relations_to JOIN tasks t ON t.id=r.from_task "
+                     f"WHERE r.to_task IN ({marks}) AND r.kind='parent' "
+                     f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.from_task AND ({visible_sql})) "
                      f"GROUP BY r.to_task", ids)}
         relations = TR.grouped(c, ids, visible_sql)
         roles = TRo.grouped(c, ids)
@@ -849,22 +852,22 @@ def create_app(settings=None):
 
         from .privacy_index import ReadIndex
         provenance = ReadIndex(c, who)
-        c.create_function("task_ask_readable", 4, provenance.message)
         asks, open_counts = {}, {}
+        # Readability is checked here, not by a SQL function: installing one marks the pooled connection
+        # as changed, so it was closed after every task list and the next read paid for a new one.
         for message in c.execute(
-                "SELECT * FROM (SELECT m.*,t.id AS ask_task_id,"
-                "COUNT(*) OVER (PARTITION BY t.id) AS open_count,"
-                "ROW_NUMBER() OVER (PARTITION BY t.id ORDER BY m.rowid DESC) AS ask_rank "
-                "FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
+                "SELECT m.*,t.id AS ask_task_id FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
                 f"JOIN messages m ON m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
                 f"WHERE t.id IN ({marks}) AND m.kind='ask' AND m.deleted_at IS NULL "
-                "AND task_ask_readable(m.id,m.conversation_id,m.refs_json,m.in_reply_to) "
-                f"AND {H.OPEN_ASK_SQL}) "
-                "WHERE ask_rank=1", ids):
+                f"AND {H.OPEN_ASK_SQL} ORDER BY m.rowid DESC", ids).fetchall():
+            if not provenance.message(message["id"], message["conversation_id"], message["refs_json"],
+                                      message["in_reply_to"]):
+                continue
             message = dict(message)
             tid = message.pop("ask_task_id")
-            open_counts[tid] = message.pop("open_count")
-            message.pop("ask_rank")
+            open_counts[tid] = open_counts.get(tid, 0) + 1
+            if tid in asks:
+                continue            # the newest readable open ask is the one shown
             message["refs"] = H._json(message.get("refs_json"), {}) or {}
             message["older"] = H.ask_older(message)
             asks[tid] = message

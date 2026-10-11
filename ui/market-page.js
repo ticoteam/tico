@@ -35,6 +35,10 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-spin{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:marketspin .9s linear infinite}
 @keyframes marketspin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.market-spin{animation:none;border-color:var(--accent)}}
+.market-read-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.market-research{flex:none;padding:3px 10px;border-radius:6px;background:none;border:1px solid var(--line);color:var(--ink);font-size:12.5px;cursor:pointer}
+.market-research:hover{background:var(--surface2)}
+.market-research:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .market-none{margin:0;color:var(--muted);font-size:14px}
 .market-blank{margin:0;color:var(--muted)}
 .market-ask-open{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin:0 0 10px;padding:7px 10px;border-radius:7px;background:none;border:1px solid var(--line);color:var(--ink);font-size:13px;cursor:pointer}
@@ -139,6 +143,12 @@ async function mountMarket(shell) {
   }
   renderIndex('');
   filter.oninput = () => renderIndex(filter.value);
+  // Research with the Librarian on the page or entry being read (ui/docs-editor.js).
+  let shownBody = '';
+  $('#market-read').addEventListener('click', event => {
+    const button = event.target.closest('[data-market-research]');
+    if (button) DocsEditor.researchDialog({target: button.dataset.marketResearch, body: shownBody});
+  });
 
   async function open(id) {
     const overview = $('#market-overview');
@@ -153,7 +163,8 @@ async function mountMarket(shell) {
     const read = $('#market-read');
     const showDoc = async doc => {
       const full = await get('/company-docs/' + doc.id.split('/').map(encodeURIComponent).join('/'));
-      read.innerHTML = `<p class="market-kicker">Market</p><div class="md market-md">${safeMd(full.content || '')}</div>`;
+      shownBody = full.content || '';
+      read.innerHTML = `${marketHead('Market', doc.id === 'market/weekly-delta' ? '' : doc.id)}<div class="md market-md">${safeMd(shownBody)}</div>`;
       graph.focus(null);
     };
     if (onBrief) {
@@ -165,6 +176,7 @@ async function mountMarket(shell) {
     }
     if (byId.has(id)) {
       const shown = await get('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/'));
+      shownBody = '';
       read.innerHTML = renderEntity(shown, byId);
       graph.focus(id);
       const current = index.querySelector('a.cur');
@@ -274,6 +286,12 @@ function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
+// The note's kicker, and Research for a page or entry the Librarian can add to.
+function marketHead(kicker, target) {
+  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
+    ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
+}
+
 function renderEntity(shown, names) {
   const entity = shown.entity;
   const bits = [entity.type, entity.tier].filter(Boolean).join(' · ');
@@ -289,7 +307,7 @@ function renderEntity(shown, names) {
   const evidence = (shown.evidence || []).map(row =>
     `<blockquote class="market-quote">${row.our_read ? `<p>${esc(row.our_read)}</p>` : ''}${row.quote ? `<p>${esc(row.quote)}</p>` : ''}</blockquote>`
   ).join('');
-  return `<p class="market-kicker">${esc(bits || 'Entity')}</p><h1>${esc(entity.name)}</h1>
+  return `${marketHead(bits || 'Entity', entity.id)}<h1>${esc(entity.name)}</h1>
     ${entity.summary ? `<p class="market-summary">${esc(entity.summary)}</p>` : ''}
     ${aliases.length ? `<p class="market-aliases">Also called ${aliases.map(esc).join(', ')}</p>` : ''}
     ${lines.length ? `<h2>Relations</h2><ul class="market-rels">${lines.join('')}</ul>` : '<p class="market-empty">No current relations.</p>'}

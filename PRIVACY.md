@@ -1,7 +1,8 @@
 # Privacy
 
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
-suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch. Tico's source is available, so you can read the code that
+suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`) and the code that receives them (`hq/`).
 Tico HQ itself is described in [docs/tico-hq.md](docs/tico-hq.md).
 
@@ -152,6 +153,22 @@ With it off, the suggestions come from `backend/recruit_rank.py` on your own ser
 Your answers are saved in your own database with the rest of setup, so the bots you create can read them.
 
 `TICO_HQ_URL` points your server at another HQ, such as one you run yourself.
+
+## The server's own model calls
+
+Bots call their models from the computers they run on. The server itself calls a model for a few things, only with keys
+you set on the server, and never in rehearsal mode. Each provider keeps what it receives under its own terms.
+
+| What | What is sent | To whom |
+|---|---|---|
+| **Decisions** (`POST /api/v2/decisions`, `hub_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | TypeSafe (api.typesafe.ai, the Jev model) when `TYPESAFE_API_KEY` is set. Without it, or when TypeSafe is slow or down, the team's own provider from Settings > AI providers whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models) |
+| **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
+| **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > AI providers says. Without a key nothing is sent and the pulled excerpts are the answer |
+
+What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
+questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
+and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
+these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
 ## Support tickets
 

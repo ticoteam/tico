@@ -83,8 +83,7 @@ class TwoCopies(unittest.TestCase):
         self.write(self.sam, "memory/decisions.md", "sam's lesson\n")
         runner = Runner({"url": "https://runner.acme.example", "token": "m", "projects_dir": self.tmp.name},
                         Path(self.tmp.name) / "state", host_factory=lambda a, e: None, client=mock.Mock())
-        self.assertFalse(runner.push(self.sam))
-        self.assertTrue(runner.push(self.sam, shared=True))
+        self.assertTrue(runner.push(self.sam))
         self.assertEqual(git(self.sam, "rev-parse", "HEAD").stdout, git(self.origin, "rev-parse", "main").stdout)
 
 

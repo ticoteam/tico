@@ -20,7 +20,7 @@ from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution
 from pathlib import Path
 
 from . import read_cache
-from .store import H, P, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
+from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
 
 
@@ -401,7 +401,7 @@ def operation_issues(c, who, auth):
             if online:
                 checkout_issue(add, row, runner_busy(c, row["id"]))
         for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
-            if managed_backups and row["service"] in ("backup", "restore-check"):
+            if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
             detail = json.loads(row["detail_json"] or "{}")
             if row["service"] == "github:token":
@@ -759,7 +759,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     access = auth.bot_accesses(c, principal)
     bot_rows = H.bots(c)
     allowed = {row["slug"] for row in bot_rows if access.get(row["slug"], auth.FULL)["write"]}
-    task_rows = [dict(t) for t in c.execute("SELECT * FROM tasks")]
+    task_rows = [dict(t) for t in c.execute("SELECT * FROM tasks WHERE " + privacy.STATUS_TASKS_SQL)]
     bot_tasks = {}
     for task in task_rows:
         for actor in {task["owner"], task["requester"]}:
@@ -1082,7 +1082,9 @@ def install_views(app, store, auth, mutate, task_view):
     def status(request: Request):
         who = request.state.identity
         human_only(who)
-        with store.read() as c:
+        # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
+        # after the first privacy check opens a transaction.
+        with store.read_transaction() as c:
             health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
             tick = health["last_success"] if health else None
             age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
