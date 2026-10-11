@@ -96,14 +96,19 @@ function decideSync(st, items) {
   for (const c of fresh) st.cards.set(c.key, c);
   st.queue = st.queue.filter(k => keys.has(k));
   for (const k of [...st.handled]) if (!keys.has(k) && st.pending?.key !== k) st.handled.delete(k);
-  for (const c of fresh) if (!st.queue.includes(c.key) && !st.handled.has(c.key) && st.pending?.key !== c.key) st.queue.push(c.key);
+  const sending = new Set([...DEC_OUTBOX].map(p => p.key));     // on its way, perhaps from an earlier visit
+  st.queue = st.queue.filter(k => !sending.has(k));
+  for (const c of fresh) if (!st.queue.includes(c.key) && !st.handled.has(c.key) && st.pending?.key !== c.key && !sending.has(c.key)) st.queue.push(c.key);
 }
 function decideRefresh(st, items) {
   const before = st.queue[0], card = before && st.cards.get(before);
   decideSync(st, items);
   if (st.queue[0] !== before) decideRender(st, true);
-  else if (card && st.cards.get(before) !== card) decideRedraw(st);
-  else decidePaintHead(st);
+  else if (card && JSON.stringify([st.cards.get(before).type, st.cards.get(before).it]) !== JSON.stringify([card.type, card.it])) {
+    decideRedraw(st);
+    // A new version: read its comments and files again. Until they land, the card shows (and Done sends) the old one.
+    if (st.cards.get(before).it.version !== card.it.version) void decideLoad(st, st.cards.get(before), true);
+  } else decidePaintHead(st);
 }
 // The current card changed under it (a live refresh): draw it again, buttons included, keeping what was typed.
 function decideRedraw(st) {
@@ -234,13 +239,13 @@ function decideTaskHTML(st, c) {
   return `<p class="dc-q dc-title">${esc(plainActors(it.title || ''))}</p>
     ${text ? `<div class="dc-msg md">${safeMd(plainActors(text))}</div>` : ''}${shown ? `<div class="dc-files">${shown}</div>` : ''}`;
 }
-async function decideLoad(st, c) {
-  if (c.type === 'approve' || st.data.has(c.it.id)) return;
-  const id = c.it.id;
-  st.data.set(id, null);
+async function decideLoad(st, c, again = false) {
+  if (c.type === 'approve' || st.data.has(c.it.id) && !again) return;
+  const id = c.it.id, version = c.it.version;
+  if (!st.data.has(id)) st.data.set(id, null);
   const [files, comments] = await Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`),
     c.type === 'task' ? v2Get(`/v2/tasks/${encodeURIComponent(id)}/comments`) : null]);
-  st.data.set(id, {files: Array.isArray(files?.files) ? files.files.map(tfNorm) : [], comments: comments?.comments || []});
+  st.data.set(id, {version, files: Array.isArray(files?.files) ? files.files.map(tfNorm) : [], comments: comments?.comments || []});
   if (DEC === st && st.queue[0] === c.key) decidePaintBody(st);
 }
 
@@ -257,6 +262,7 @@ function decideWrite(c, what, i, note) {
   return out;
 }
 function decideWriteBody(c, what, i, note) {
+  const shown = DEC?.data.get(c.it.id)?.version;
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
   if (what === 'pick') {
     const ask = c.it.ask, q = c.q, o = q.options[i], t = ask.refs?.target;
@@ -270,13 +276,14 @@ function decideWriteBody(c, what, i, note) {
     return {writes: [{path: `/v2/approvals/${id}`, body: {decision: what === 'yes' ? 'approved' : 'declined', ...(note ? {note} : {})}}],
       label: `${what === 'yes' ? 'Approved' : 'Declined'} · sent to ${to}`};
   // Done goes with the version the card showed: a task that changed meanwhile is refused, not finished unseen.
-  if (what === 'done') return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
+  if (what === 'done') return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
 function decideAct(st, what, i, shown = st.shown) {
   const key = st.queue[0], c = st.cards.get(key), root = $('.decide');
   // A second tap while the card leaves, or a button from a card no longer current, does nothing.
-  if (!c || !root || st.busy || key !== shown) return;
+  if (!c || !root || st.busy || key !== shown || performance.now() < (st.lockUntil || 0)) return;
+  st.lockUntil = performance.now() + 350;
   const box = $('.dc-note textarea', root), note = box?.value.trim() || '';
   const card = $('.dc-card', root);
   if (what === 'skip') {
@@ -326,13 +333,26 @@ async function decideCommit(st) {
   decideToastHide(st, p);
   p.sent = 0;
   DEC_OUTBOX.add(p);
+  await decideSend(st, p);
+}
+// The requests not yet confirmed, in order, each under the key it got when the action was taken.
+async function decideSend(st, p) {
   try {
-    for (const w of p.write.writes) {
+    for (const w of p.write.writes.slice(p.sent)) {
       await post(w.path, w.body, w.key);
       p.sent++;
     }
+    DEC_OUTBOX.delete(p);
     if (!liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); }), 300);
   } catch (e) {
+    if (e.unconfirmed) {
+      // It may have landed: never act again under new keys. It stays out of the queue and is sent again as it was.
+      if (!p.retries) toast('Not confirmed yet; trying again', true);
+      p.retries = (p.retries || 0) + 1;
+      setTimeout(() => { if (DEC_OUTBOX.has(p)) void decideSend(st, p); }, Math.min(60000, 5000 * 2 ** Math.min(p.retries - 1, 4)));
+      return;
+    }
+    DEC_OUTBOX.delete(p);
     const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
     toast(changed ? 'That task changed. Look again.' : e.message, true);
     st.handled.delete(p.key);
@@ -343,8 +363,6 @@ async function decideCommit(st) {
       decideRender(st, true);
       if (changed) void v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); });
     }
-  } finally {
-    DEC_OUTBOX.delete(p);
   }
 }
 // Leaving the page: what waits on its toast and what is still on its way go out with keepalive, under the same keys.
@@ -382,7 +400,7 @@ function decideClick(st, ev) {
   decideAct(st, what, Number(b.dataset.i));
 }
 function decideKey(st, ev) {
-  if (DEC !== st || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
+  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
   if (ev.target.matches?.('textarea, input, select, [contenteditable]')) {
     if (ev.key === 'Escape') { ev.preventDefault(); ev.target.blur(); }
     return;
