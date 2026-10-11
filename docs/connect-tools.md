@@ -206,23 +206,46 @@ approves it, and write that rule in the bot's instructions and the tool's `note:
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
 
-### Companies you hire for a role
+## Hire an external AI specialist
 
-Some companies sell an AI worker that fills one business role. A bot can send work to one and follow it on a task,
-as with TIDY. Where the vendor documents an interface, add it as a Tool. Otherwise, people use the vendor's own app,
-and the bot works alongside it. These are examples, not integrations Tico has built or tested.
+You can hire a company to fill a defined role for your team. You give it the job, the business context and what it may
+do, and the provider runs the specialist. Its service may combine AI and people. Your team reviews what comes back and
+makes the decisions that need a person.
 
-| Role | Example | How a bot could reach it |
-|---|---|---|
-| Customer support | [Fin](https://fin.ai) | Documents an API: the [Fin Agent API](https://developers.intercom.com/docs/guides/fin-agent-api) |
-| Reception and intake | [Smith.ai](https://smith.ai) | Its help docs cover an [API key](https://docs.smith.ai/category/ydtshfm8im-api), and Zapier and Make connections |
-| Sales development | 11x's [Alice](https://www.11x.ai/worker/alice) | Its site describes an [API and webhooks](https://www.11x.ai/platform/integrations/api) |
-| Sales development | Artisan's [Ava](https://www.artisan.co/ai-sales-agent) | No public API; the bot works alongside Artisan's app and your CRM |
-| Engineering | [Devin](https://devin.ai), the cloud product | Documents a [REST API](https://docs.devin.ai/api-reference/overview) and an [MCP server](https://docs.devin.ai/work-with-devin/devin-mcp) |
-| Logistics workflows | [HappyRobot](https://www.happyrobot.ai) | Its site describes a [REST API and an MCP server](https://www.happyrobot.ai/product/developer-tools); the reference needs an access code |
+Tico keeps the owner, the requests, the returned work and the follow-ups together. For example, an operations bot can
+coordinate cleaning with TIDY while a sales provider runs prospecting and a support provider answers customers in its
+own service.
 
-This is a bot in Tico using an outside service. For the reverse, an agent you run elsewhere working in Tico, see
-[Connect an external agent](connect-an-agent.md).
+| Role you need | Example provider | Work the provider offers | How a bot could reach it |
+|---|---|---|---|
+| Property operations | [TIDY](https://www.tidy.com/developers/mcp) | Cleaning, maintenance and turnovers | Documents an MCP server and an API; see [above](#work-with-a-specialist-outside-tico) |
+| Customer support | [Fin](https://fin.ai/) | Answers customer questions and hands off to your team when it can't resolve one | Documents an API: the [Fin Agent API](https://developers.intercom.com/docs/guides/fin-agent-api) |
+| Reception and intake | [Smith.ai AI Receptionist](https://smith.ai/ai-receptionist) | Answers calls, screens and qualifies callers, routes them and books appointments; live agents are available | Its help docs cover an [API key](https://docs.smith.ai/category/ydtshfm8im-api), and Zapier and Make connections |
+| Sales development | [11x Alice](https://www.11x.ai/worker/alice) | Engages prospects, handles replies and books qualified meetings | Its site describes an [API and webhooks](https://www.11x.ai/platform/integrations/api) |
+| Business development | [Artisan Ava](https://www.artisan.co/) | Finds and researches leads, sends outreach and follow-ups, books meetings | No public API; the bot works alongside Artisan's app and your CRM |
+| Software engineering | [Devin](https://devin.ai/), the cloud product | Takes delegated coding tasks and returns changes for review | Documents a [REST API](https://docs.devin.ai/api-reference/overview) and an [MCP server](https://docs.devin.ai/work-with-devin/devin-mcp) |
+| Logistics operations | [HappyRobot](https://www.happyrobot.ai/solutions/industries/logistics-providers) | Carrier calls, appointment scheduling, and shipment tracking and tracing | Its site describes a [REST API and an MCP server](https://www.happyrobot.ai/product/developer-tools); the reference needs an access code |
+
+These are examples, not integrations Tico has built or tested. What you hire is set by each vendor's actual scope,
+setup, human involvement and terms. A sales-development provider does not close your sales, and a coding provider's
+changes still need your normal review.
+
+To bring one into your work:
+
+1. Define the role and the result you expect, and name the person or bot that owns the relationship.
+2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
+   or a payment waits for a person's approval, as [with TIDY](#work-with-a-specialist-outside-tico).
+3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
+   the account, the access and how requests and results travel before you count on automation.
+4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico
+   keeps the work accountable.
+
+Tico has no built-in connector for these providers. Its permissions and usage reporting do not control what a provider
+does on its own or what it bills you.
+
+An agent you run yourself is a different case. For an agent such as [OpenClaw](openclaw-agents.md) working in Tico,
+see [Connect an external agent](connect-an-agent.md). This section answers another question: who can you hire to fill
+this role?
 
 ## Other services
 
