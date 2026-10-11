@@ -197,6 +197,29 @@ class QuestionOption(Contract):
     file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
 
 
+class QuestionFile(Contract):
+    """A picture or file shown with one option, sent with the question (backend/media.py task_question)."""
+    name: Annotated[StrictStr, Field(min_length=1, max_length=200)]
+    content_base64: Annotated[StrictStr, Field(min_length=1, max_length=14_000_000)]
+
+
+class QuestionChoice(Contract):
+    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
+    description: Annotated[StrictStr, Field(max_length=200)] = ""
+    file: QuestionFile | None = None
+
+
+class TaskQuestion(Contract):
+    """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
+    question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
+    on: ID
+    options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
+    title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
+    body: Text | None = None
+    parent: ID | None = None
+    private: StrictBool | None = None
+
+
 class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
     header: Annotated[StrictStr, Field(max_length=30)]

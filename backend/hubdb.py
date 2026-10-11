@@ -2806,6 +2806,17 @@ def task_links(conn, task_id):
 
 
 
+def bot_reads_task(conn, bot, row):
+    """Whether this bot may read the task by every rule a read of it checks (privacy, bot activity access, an
+    assignment's scope): a notice or an answer it is sent carries the task's words."""
+    if not task_private_readable(conn, bot, row):
+        return False
+    if not _has_table(conn, "bot_config"):
+        return True                         # no bot has an access list: every bot is open
+    from .auth import bot_reads_task as reads
+    return reads(conn, bot, row)
+
+
 def task_ask_recipient(conn, actor, row, ask):
     target = ask.get("who") or (row["owner"] if actor == row["requester"] else row["requester"])
     target = resolve_actor(conn, target)
@@ -2843,7 +2854,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if answer_to:
         # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
         asker = (message(conn, answer_to) or {}).get("from_actor")
-        if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and task_private_readable(conn, asker, row):
+        if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and bot_reads_task(conn, asker, row):
             target = asker
         msg = answer(conn, actor, answer_to, text, comment_refs=refs, comment_target=target or actor, classify_text=answer_text)
     elif ask:
@@ -3467,7 +3478,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         parent = task(conn, TR.parent_of(conn, task_id) or "")
         told = {actor, KEEPER} | ({after["requester"]} if notify_requester else set())
         for who in dict.fromkeys([after["requester"], after["owner"], *askers, (parent or {}).get("owner")]):
-            if not who or who in told or not is_bot(who):
+            if not who or who in told or not is_bot(who) or not bot_reads_task(conn, who, after):
                 continue
             told.add(who)
             _wake(conn, after, who, f"Finished: {after['title']}" + (f"\n{note}" if note and not quiet else "")

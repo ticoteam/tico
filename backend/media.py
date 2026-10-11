@@ -448,6 +448,69 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             return result
         return await asyncio.to_thread(write, request, body, uploads, work)
 
+    @app.post("/api/v2/task-questions")
+    def task_question(request: Request, body: M.TaskQuestion):
+        """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
+        question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
+        leaves half a question behind. Option files come in the request and are attached to the new task."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
+        options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+        if not 2 <= len(options) <= 6:
+            raise Problem("validation", "A question has 2 to 6 options, or none for Yes / No", 422)
+        stored, total = [], 0
+        for option in options:
+            if not option.file:
+                stored.append(None)
+                continue
+            try:
+                BF.check_name(option.file.name)
+                data = base64.b64decode(option.file.content_base64, validate=True)
+            except BF.Refused as exc:
+                raise Problem("file_refused", str(exc), 422) from exc
+            except (ValueError, binascii.Error) as exc:
+                raise Problem("validation", "content_base64 is not valid base64", 422) from exc
+            total += len(data)
+            if not data or total > 10_000_000:
+                raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
+            kind = mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"
+            stored.append((blobs.put(data, kind), len(data), option.file.name, kind))
+        question = body.question.strip()
+
+        def work(c):
+            person = H.resolve_actor(c, body.on)
+            if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
+                raise Problem("validation", f"{body.on} is not a person on the team", 422)
+            made = task_create(c, who, M.TaskCreate(
+                title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
+                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []))
+            tid = made["task"]["id"]
+            if not H.task_private_readable(c, person, H.task(c, tid)):
+                raise Problem("privacy", f"This task would be private and {H.actor_id(person)} could not read it: "
+                              "ask on the private task you are working on (hub task comment --ask), or without --private", 403)
+            choices = []
+            for option, item in zip(options, stored):
+                choice = {"label": option.label, **({"description": option.description} if option.description else {})}
+                if item:
+                    blob = register(c, who, item[0], item[1], item[2], item[3])
+                    fid, number = files.attach_task(c, who, tid, blob, item[0], H.actor_id(who.actor))
+                    c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
+                    c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
+                    H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
+                    choice["file"] = f"{fid}@{number}"
+                choices.append(choice)
+            from .task_review import check_ask
+            ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
+                id="decision", header="", question=question, options=choices)], who=person), auth, who)
+            said = H.task_comment(c, who.actor, tid, question, ask=ask)
+            H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
+            return {"task": H.task(c, tid),
+                    "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
+        result = mutate(request, body, work)
+        app.state.file_metadata.wake.set()
+        return result
+
     @app.get("/api/v2/tasks/{tid}/files")
     def task_files(request: Request, tid: str):
         with store.read() as c:

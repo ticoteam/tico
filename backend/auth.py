@@ -1010,3 +1010,14 @@ class Auth:
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row
+
+
+def bot_reads_task(c, bot, row):
+    """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
+    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built."""
+    policy = Auth.__new__(Auth)
+    try:
+        policy.task_row(c, Identity(bot, "bot"), row)
+    except Problem:
+        return False
+    return True

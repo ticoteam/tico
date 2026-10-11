@@ -631,28 +631,21 @@ def task_question(api, args):
     for item in args.get("option") or []:            # the CLI's --option LABEL[=FILE], repeatable
         label, _, path = str(item).partition("=")
         options.append({"label": label.strip(), **({"path": path.strip()} if path.strip() else {})})
-    if not options:
-        options = [{"label": "Yes"}, {"label": "No"}]
-    if not 2 <= len(options) <= 6:
+    if options and not 2 <= len(options) <= 6:
         raise ValueError("A question has 2 to 6 options, or none for Yes / No")
-    question = str(args["question"]).strip()
-    made = task_create(api, {"owner": "me", "title": args.get("title") or question, "body": args.get("body") or question,
-                             "parent": args.get("parent"), "private": args.get("private"),
-                             "operation_id": _key(args, ":task")})
-    tid = made["task"]["id"]
-    for index, option in enumerate(options):
+    if any(o.get("path") for o in options) and not hasattr(api, "post_multipart"):
+        raise ValueError("Option files are read on the computer that runs you: use hub task question there")
+    for option in options:
         path = option.pop("path", None)
-        if path:
-            attached = task_attach(api, {"id": tid, "name": Path(path).name, "path": path,
-                                         "operation_id": _key(args, f":option:{index}")})
-            option["file"] = f"{attached['file_id']}@{attached['version']}"
-    ask = {"questions": [{"id": "decision", "header": "", "question": question, "options": options,
-                          "multi": False, "other": True}], "who": args["on"]}
-    asked = api.post(f"tasks/{tid}/comments", {"text": question, "ask": ask}, key=_key(args, ":ask"))
-    current = api.get("tasks/" + tid)["task"]
-    waiting = api.post("tasks/" + tid, {"version": current["version"], "status": "waiting", "waiting_on": args["on"],
-                                         "note": question}, key=_key(args, ":wait"))
-    return {"task": waiting["task"], "question": asked["comment"]}
+        if path:                                     # read before anything is sent: one write or none
+            from . import bot_files as BF
+            local, _ = BF.local_file(BF.checkout_root(), path)
+            option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
+    body = {"question": args["question"], "on": args["on"], "options": options}
+    for field in ("title", "body", "parent", "private"):
+        if args.get(field) is not None:
+            body[field] = args[field]
+    return api.post("task-questions", body, key=_key(args))
 
 
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "

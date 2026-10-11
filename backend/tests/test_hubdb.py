@@ -235,6 +235,7 @@ class Rule5Tasks(HubCase):
     def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
         from backend.store import SCHEMA
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
         self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
                           (json.dumps({"bot_contact": "tasks"}),))
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)

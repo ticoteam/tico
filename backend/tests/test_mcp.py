@@ -171,9 +171,17 @@ def test_malformed_mcp_params_are_json_rpc_errors(api, method, params):
 
 def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     _, _, attempt = setup_attempt(api)
-    err, out = call(api, "hub_task_question", {"question": "Ship the September brief today?", "on": "ana"},
-                    token=attempt["token"])
+    ask = {"question": "Ship the September brief today?", "on": "ana", "operation_id": "q-1"}
+    err, out = call(api, "hub_task_question", ask, token=attempt["token"])
     assert not err, out
+    err, again = call(api, "hub_task_question", ask, token=attempt["token"])
+    assert not err and again["task"]["id"] == out["task"]["id"], "a retry is the same question"
+    # A question the person could not read is refused whole: no task is left behind.
+    err, refused = call(api, "hub_task_question", {"question": "Sign the settlement today?", "on": "ben", "private": True},
+                        token=attempt["token"])
+    assert err and refused["error"] == "privacy"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%'").fetchone()[0] == 0
     made = out["task"]
     assert (made["owner"], made["requester"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
     assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]

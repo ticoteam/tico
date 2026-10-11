@@ -267,3 +267,15 @@ def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
     assert answer["woke"] and answer["comment"]["to_actor"] == "bot:ops"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()
+
+
+def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
+    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
+    child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
+                                "relations": [{"task": parent, "kind": "parent"}]})["id"]
+    version = get(api, f"tasks/{child}")["task"]["version"]
+    post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})
+    with api.app.state.store.read() as c:
+        told = {r[0] for r in c.execute("SELECT to_actor FROM messages WHERE body LIKE 'Finished:%' "
+                                        "AND json_extract(refs_json,'$.task')=?", (child,))}
+    assert "bot:inbox" in told and "bot:ops" not in told, told

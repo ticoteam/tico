@@ -400,7 +400,7 @@ def create_app(settings=None):
                              and request.state.identity.role in ("bot", "runner"))
                 streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) else 27_000_000 if published else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else 27_000_000 if published else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
