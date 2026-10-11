@@ -125,12 +125,13 @@ as the thing to protect: the data key is then wrapped by KMS in the database.
 Two more key files sit beside it and are copied and restored the same way: `github-app.key` (the GitHub App's private key,
 client secret and webhook secret, and the directory sync credentials) and `slack.key` (the Slack tokens). They are not the
 vault's key, so a restore needs all three ([Backups and restore](install.md#backups-and-restore)). Health's **Stored
-secrets** check names any secret this server cannot open and the file to put back. Hand-run bundles (`python -m
-backend.manage backup`) carry all three as well.
+secrets** check names any secret this server cannot open and the file to put back. Hand-run (`python -m
+backend.manage backup`) and scheduled bundle backups carry all three as well.
 
 With `TICO_CREDENTIAL_KMS_KEY` set, new GitHub App, directory sync and Slack secrets are sealed with the vault's
 KMS-wrapped key. One sealed with `github-app.key` or `slack.key` before KMS was set still opens with that file, and is
-re-sealed with the vault's key the first time it is read. Reading never makes a key file.
+re-sealed with the vault's key the first time it is read; until then Health's **Stored secrets** says how many still
+need each file. Reading never makes a key file.
 
 ## Other secrets the vault seals
 

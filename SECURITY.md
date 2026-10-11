@@ -183,7 +183,9 @@ be snapshotted. A backup contains everything the server holds, including the enc
 and sign-in credentials, so give the bucket a private policy, encrypt it and restrict who can read it.
 In local-key mode, protect the copied keys too: automatic backups include `credential-key/credential.key`,
 `credential-key/github-app.key` (GitHub App and directory sync secrets) and `credential-key/slack.key` (Slack tokens) in the
-same destination as the database, and a hand-run `manage.py backup` bundle carries them beside its database copy.
+same destination as the database, and hand-run and scheduled bundle backups carry them beside their database copy, so
+read access to the backup bucket opens those secrets unless KMS is on: keep backups in a separate bucket or prefix with
+its own access.
 Anyone who reads both can decrypt those secrets. A restore without the keys cannot decrypt them.
 Separate key storage requires a custom backup/restore process; with `TICO_CREDENTIAL_KMS_KEY`, protect access to the KMS key instead
 ([Shared credentials](docs/credential-vault.md)). Bot repositories and computer workspaces are not part of the

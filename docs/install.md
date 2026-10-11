@@ -735,18 +735,35 @@ credentials sealed with it (recorded as `github.lost_key_replaced`), and you ent
 **Setting `TICO_CREDENTIAL_KMS_KEY` after GitHub, directory sync or Slack were connected** needs nothing else: a secret
 sealed with `github-app.key` or `slack.key` before then still opens with that file, and the first time the server reads
 it (a GitHub token, a webhook, a directory sync, the Slack gateway starting) it is re-sealed with the KMS-wrapped key, once,
-and the server log says which (`Re-sealed github_app app ...`, never a secret). Keep both files on the volume and in the
-backup: a backup from before KMS still needs them, and reading never makes a new one. If a file is gone, Health's
-**Stored secrets** names what it sealed; enter those again.
+and the server log says which (`Re-sealed github_app app ...`, never a secret). Until every one has been re-sealed,
+Health's **Stored secrets** says how many still need each file ("2 secrets still need github-app.key and 1 still needs
+slack.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
+before KMS still needs them. Reading never makes a new one. If a file is gone, **Stored secrets** warns and names what
+it sealed; enter those again.
 
-**Hand-run backups (`python -m backend.manage backup`) carry the key files too.** The bundle the command uploads (the
-database at `--key`, its manifest, and the attachments) also holds each of `credential.key`, `github-app.key` and
+**Hand-run and scheduled bundle backups carry the key files too.** The bundle that `python -m backend.manage backup`
+uploads, and the scheduled AWS backup (`backups/<tier>/...`, the same bundle code), holds the database at its key, its
+manifest and the attachments, and also each of `credential.key`, `github-app.key` and
 `slack.key` present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
 bytes stops the backup before its manifest is published. `python -m backend.backup --bucket ... --key ... --database
 <new path> ...` restores them beside the new database (mode 0600) after checking each against the manifest, and refuses,
 before restoring anything, when a different key of that name is already in the target directory. A bundle made before
-this release has no key files: copy them from `credential-key/` in the automatic backup, or from the old volume. Keep the
-bundle's bucket as private as the automatic one: the database and its keys are in it together.
+this release has no key files: copy them from `credential-key/` in the automatic backup, or from the old volume. The
+scheduled restore check reads them too, into its temporary copy, which it removes.
+
+**Anyone who can read the backup bucket can open the stored secrets, unless `TICO_CREDENTIAL_KMS_KEY` is set.** Every
+backup above (Litestream's `credential-key/`, hand-run and scheduled bundles) puts the database and the key files that
+decrypt it in the same bucket, so read access to the bucket is read access to every credential, the GitHub App's private
+key, the directory sync credentials and the Slack tokens. With KMS, the credentials and anything sealed after KMS was set
+also need `kms:Decrypt` on the key, which the bucket does not grant. To harden a local-key install, keep the backups in a
+separate bucket (or at least a separate prefix) whose access key or role is used only by the backup and the restore, with
+no other reader; turn on versioning, and never share it with the attachment bucket's or an application's credentials.
+
+**`manage.py restore` is in place, on the same machine.** `python -m backend.manage restore <snapshot> <new database>`
+restores a local snapshot file next to the key files already on this computer; it does not read or move key files. To
+restore on another machine, use the bundle restore (`python -m backend.backup`, which brings the key files back) or
+`docker compose run --rm server restore`, or copy `credential.key`, `github-app.key` and `slack.key` across yourself
+(32 bytes each, mode 0600, owned by the server's user).
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
 to restore the database, attachments and key files together:
