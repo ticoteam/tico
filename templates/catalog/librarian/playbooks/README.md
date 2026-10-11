@@ -7,3 +7,4 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `market-setup.md`: the first market map, from a website, a description or links the owner gave. Research, then the market pages and graph.
 - `curate-the-market.md`: the daily routine that turns reported insights into the market graph and pages.
 - `urgent-market-insight.md`: one urgent insight, curated now.
+- `research-a-section.md`: a person's research request on a doc, a market page or a market entry: research the web, add what was found to that one place, cited.

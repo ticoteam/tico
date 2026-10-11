@@ -10,6 +10,12 @@ import pytest
 from runner import credential_socket as C, git_credentials as G, isolation
 
 
+@pytest.fixture(autouse=True)
+def no_turn_tokens(monkeypatch):
+    """Inside a bot's turn TICO_GITHUB_TOKENS is set, and the helper would answer from it instead of the socket."""
+    monkeypatch.delenv("TICO_GITHUB_TOKENS", raising=False)
+
+
 @pytest.fixture
 def channel():
     directory = tempfile.mkdtemp(dir="/tmp")     # short: a Unix socket path has a length limit

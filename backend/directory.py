@@ -242,6 +242,8 @@ class DirectoryUpdate(Contract):
     mass_leave_limit: int = Field(default=DEFAULT_LIMIT, ge=0, le=10000)
     expected_revision: int = 0
     credentials: DirectoryCredentials | None = None
+    # Confirmed by the owner when github-app.key is lost with no copy: drop what it sealed, then save (backend/github_app.py).
+    replace_lost_key: bool = False
 
 
 class SyncRequest(Contract):
@@ -282,7 +284,7 @@ class Directory:
     # -- credentials, encrypted like the GitHub App key (same key, its own context string)
     def put_credentials(self, c, actor, source, blob, hint):
         nonce = os.urandom(12)
-        sealed = AESGCM(self.github_app.secret_key(c)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
+        sealed = AESGCM(self.github_app.secret_key(c, replacing="directory:" + source)).encrypt(nonce, json.dumps(blob).encode(), AAD + source.encode())
         c.execute("INSERT INTO directory_credentials VALUES(?,?,?,?,?,?) ON CONFLICT(source) DO UPDATE SET "
                   "ciphertext=excluded.ciphertext, nonce=excluded.nonce, hint=excluded.hint, created=excluded.created, "
                   "created_by=excluded.created_by", (source, sealed, nonce, hint, H.now(), actor))
@@ -291,8 +293,12 @@ class Directory:
         row = c.execute("SELECT * FROM directory_credentials WHERE source=?", (source,)).fetchone()
         if not row:
             raise Problem("credentials", "Save this source's credentials first", 409)
+        key = self.github_app.secret_key(c, create=False)
+        if key is None:
+            raise Problem("directory_unavailable", "The directory sync credentials need github-app.key, which is missing "
+                          "from the data volume: restore it from the backup made with this database", 503)
         try:
-            return json.loads(AESGCM(self.github_app.secret_key(c)).decrypt(row["nonce"], row["ciphertext"], AAD + source.encode()))
+            return json.loads(AESGCM(key).decrypt(row["nonce"], row["ciphertext"], AAD + source.encode()))
         except Exception:
             raise Problem("directory_unavailable", "The stored directory credentials could not be decrypted", 503) from None
 
@@ -319,6 +325,8 @@ class Directory:
             raise Problem("source", "Choose Google Workspace, Microsoft Entra ID, SCIM, or none", 422)
         if body.credentials is not None and body.source in ("google", "entra"):
             blob, hint = _credential_blob(body.source, body.credentials)
+            if body.replace_lost_key:
+                self.github_app.replace_lost_key(c, actor)
             self.put_credentials(c, actor, body.source, blob, hint)
         elif body.source in ("google", "entra") and not self.hint(c, body.source):
             raise Problem("credentials", "Add this source's credentials first", 422)

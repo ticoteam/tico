@@ -25,8 +25,14 @@ STOP_GRACE = 30
 
 
 def importers_wanted(client, config):
+    from clients.tico import APIError
     from .importers import REGISTRY
-    rows = (client.get("runners/importers") or {}).get("importers") or []
+    try:
+        rows = (client.get("runners/importers") or {}).get("importers") or []
+    except APIError as exc:
+        if exc.status == 403:               # this computer is not an import operator: not wanted
+            return []
+        raise
     return [r["source"] for r in rows if isinstance(r, dict) and r.get("source") in REGISTRY]
 
 

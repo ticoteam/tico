@@ -222,7 +222,7 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
 2. **A first result in the same session.** It produces a real draft of its `first_routine` output from
    the team's own data, labelled "First draft, not yet reviewed". A human reacts to something real.
 3. **A routine that starts with setup.** It checks the first routine and tells the human what it does. The routine is declared in
-   `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Start setup**, go-live) switches it on,
+   `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Set up**, go-live) switches it on,
    so nobody approves it separately, and the bot logs it.
 4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
    (Settings → Bots → Mail sending). Once it is on, the bot sends within the requested work and granted Tools.

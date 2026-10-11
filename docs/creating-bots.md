@@ -395,7 +395,7 @@ A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
 `enabled: false`); `hub bot create` seeds the new bot's routines from it once, and from then on
 Tico's rows are the routines. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Start setup**, go-live),
+it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Set up**, go-live),
 so nobody approves it separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 
@@ -560,7 +560,7 @@ Levers set in **Settings → Bots**, not in the repository:
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in
   Settings and never dispatched to. Model, effort, fallback and computer do not apply to it.
-  [Hermes agents](hermes-agents.md) connects one in 2 minutes and covers the rest.
+  [Hermes agents](hermes-agents.md) and [OpenClaw agents](openclaw-agents.md) connect one in 2 minutes and cover the rest.
 
 Effort is where the budget goes. A useful split:
 
@@ -627,6 +627,12 @@ Drawn from real bot reviews, stated generically.
   window every bot shares.
 - **A dirty or unpushed checkout on the runner's computer.** The bot's commits and a human's edits
   collide, and what runs is not what you pushed. Keep the tree clean and do not edit it mid-run.
+
+After each turn the runner pushes the bot's commits to the branch its checkout tracks, by name: a bot
+that works on a branch of its own that still tracks `main` lands its commits on `main`. When the remote
+moved ahead, the runner rebases the unpushed commits onto it (merges when they include a merge) and
+pushes again. It never forces and never drops a commit; a conflict is undone and reported with the
+files and what to run. A branch that tracks another local branch is not pushed and is reported.
 
 ## 9. More than one environment
 

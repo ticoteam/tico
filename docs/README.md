@@ -14,7 +14,8 @@ Try locally with Docker on a Mac with Docker Desktop running, or on Linux:
 curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
-[Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in, **Set up**, a first draft and a completed task.
+[Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in to
+[Your first result](install.md#your-first-result): Content Marketer drafts a post from a fictional brief, you review it and close the task.
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [Humans](people.md).

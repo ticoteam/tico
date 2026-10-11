@@ -16,7 +16,7 @@ What it does:
            Linux) that posts one every minute. The bot shows offline after three misses.
         5. installs the `tico-sync` skill in the profile and one scheduled job, named `tico-sync`,
            that makes the agent look at what is waiting (`--sync 15m|1h|daily|'<cron>'|off`, default 1h).
-           OpenClaw has no MCP client, so there the skill calls Tico through this file (`call`).
+           For OpenClaw no MCP entry is added: the skill calls Tico through this file (`call`).
     python3 hermes_agent.py pair --profile scout --url https://tico.example.com
         the same steps with no token to copy: it prints a code and what to tell BotOps,
         waits for a person (or BotOps) to approve it for a bot, and receives the credential itself.
@@ -756,8 +756,8 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url})
         mcp = upsert_mcp(directory, url)
     else:
-        # OpenClaw (2026.3) has no MCP client: the skill calls Tico through this file, which reads the credential
-        # from here (and from the saved configuration) and nowhere else.
+        # OpenClaw gets no MCP entry (2026.3 had no MCP client; later releases do, docs/openclaw-agents.md): the skill
+        # calls Tico through this file, which reads the credential from here (and the saved configuration) only.
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url}, ENV_FILE)
         mcp = "none"
     python = sys.executable
@@ -789,7 +789,7 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
     if harness == "hermes":
         print(f"  MCP server `{MCP_SERVER_NAME}` in {directory / 'config.yaml'}: {mcp}; token in {directory / '.env'}")
     else:
-        print(f"  OpenClaw has no MCP client: the skill calls Tico through this connector; token in {directory / ENV_FILE}")
+        print(f"  no MCP entry in OpenClaw: the skill calls Tico through this connector; token in {directory / ENV_FILE}")
     print(f"  credential saved in {path}")
     print(f"  heartbeat: {timer or 'none (run `heartbeat` yourself every minute)'}")
     for name in removed:
@@ -1190,6 +1190,13 @@ def doctor_sync(say, harness, profile, directory, config):
         f"skill {SKILL_NAME} is in {skill}" if skill.is_file() else f"skill {SKILL_NAME} is missing from {skill}; run update")
     if config.get("sync_error"):
         say("problem", "the sync job was not created: " + str(config["sync_error"]))
+    # Listing OpenClaw's jobs needs its Gateway, so a stopped Gateway is said first, as what to fix: with it down
+    # no sync runs, and messages wait however healthy the heartbeat looks.
+    if harness == "openclaw" and openclaw_gateway(directory) == "gateway not running":
+        command = "openclaw" + ("" if profile in ("", "default") else f" --profile {profile}")
+        say("problem", f"the OpenClaw Gateway is not running, so the {JOB_NAME} job cannot run: start it "
+                       f"(`{command} gateway start`, or `{command} gateway run` in a terminal); the job is kept")
+        return
     try:
         jobs = sync_jobs(harness, profile, directory)
     except Failure as exc:
@@ -1205,8 +1212,6 @@ def doctor_sync(say, harness, profile, directory, config):
             f"sync job {JOB_NAME} ({job['schedule'] or wanted}) is " + ("scheduled" if job["enabled"] else "paused") + f"; {ran}")
         if job["status"] and job["status"].lower() in ("error", "failed", "fail"):
             say("warn", f"the last sync run ended in {job['status']}; see the job's output in {harness_name(harness)}")
-    if harness == "openclaw" and openclaw_gateway(directory) == "gateway not running":
-        say("warn", "the OpenClaw Gateway is not running, and its cron jobs run inside it")
     age = time.time() - float(config.get("updated_at") or time.time())
     if age > UPDATE_EVERY_SECONDS:
         say("warn", f"the connector was last updated {int(age // 86400)} days ago; the sync skill updates it weekly, "
@@ -1250,7 +1255,7 @@ def cmd_doctor(args):
         else:
             say("ok", f"mcp_servers.{MCP_SERVER_NAME} is in config.yaml ({found})")
     else:
-        say("ok", "OpenClaw has no MCP client here: the tico-sync skill calls Tico through this connector")
+        say("ok", "no MCP entry in OpenClaw: the tico-sync skill calls Tico through this connector")
 
     token = env_value(directory, ENV_TOKEN, env_name)
     if not token:

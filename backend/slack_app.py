@@ -23,6 +23,7 @@ MANIFEST = Path(__file__).resolve().parent.parent / "connectors" / "slack-app-ma
 BOT_TOKEN = re.compile(r"^xoxb-[A-Za-z0-9-]{10,}$")
 APP_TOKEN = re.compile(r"^xapp-[A-Za-z0-9-]{10,}$")
 AAD = b"tico-slack-app:v1"
+KEY_FILE = "slack.key"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS slack_credentials(
@@ -32,14 +33,23 @@ CREATE TABLE IF NOT EXISTS slack_credentials(
 _lock = threading.Lock()
 
 
-def _key(settings, vault=None, c=None):
+def key_file(settings):
+    """The local key file: backed up beside credential.key (backend/replication.py)."""
+    return Path(settings.db_path).parent / KEY_FILE
+
+
+def _key(settings, vault=None, c=None, create=True):
     """The vault's KMS-wrapped key when the deployment has one; otherwise a key file beside the
-    database, so a copy of the database alone does not carry the tokens."""
+    database, so a copy of the database alone does not carry the tokens. Only a save makes the file:
+    a read with it missing returns None rather than a new key that opens nothing. A save may make one: it replaces
+    the only row sealed with slack.key, and the backup keeps the old key's copy aside (backend/replication.py)."""
     if settings.credential_kms_key and vault is not None and c is not None:
         return vault.cipher.key(c)
-    path = Path(settings.db_path).parent / "slack.key"
+    path = key_file(settings)
     with _lock:
         if not path.exists():
+            if not create:
+                return None
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
@@ -67,7 +77,7 @@ def load(store, settings, vault=None):
         if not row:
             return None
         try:
-            data = json.loads(AESGCM(_key(settings, vault, c)).decrypt(row["nonce"], row["ciphertext"], AAD))
+            data = json.loads(AESGCM(_key(settings, vault, c, create=False)).decrypt(row["nonce"], row["ciphertext"], AAD))
         except Exception:
             return None
     return {"bot_token": data["bot_token"], "app_token": data["app_token"], "team_id": row["team_id"],

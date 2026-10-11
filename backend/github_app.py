@@ -16,6 +16,7 @@ import secrets
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,8 @@ log = logging.getLogger("tico.github_app")
 API = "https://api.github.com"
 STATE_TTL = 3600
 LIVE_TTL = 60                 # how long the installation's live permissions are trusted
+# Token requests sit on the request thread pool, so GitHub failing to answer must fail fast, not hold a thread.
+TIMEOUT = httpx.Timeout(10, connect=3)
 # Start-of-turn tokens seed `GH_TOKEN` and may be used throughout a turn, so keep at least 45 minutes
 # remaining. The git credential helper can ask again per call, so its explicit purpose needs only ten.
 TURN_START_REFRESH_MARGIN = 45 * 60
@@ -87,7 +90,7 @@ CREATE TABLE IF NOT EXISTS github_product_repo_operations(
 
 
 def _client():
-    return httpx.Client(base_url=API, timeout=15, transport=TRANSPORT,
+    return httpx.Client(base_url=API, timeout=TIMEOUT, transport=TRANSPORT,
                         headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                                  "User-Agent": "Tico-GitHub-App"})
 
@@ -120,6 +123,15 @@ def validate_product_repo_name(name):
     return name
 
 
+KEY_FILE = "github-app.key"
+MISSING_KEY = ("The GitHub App key file (github-app.key) is missing from the data volume: restore it from the backup "
+               "made with this database (docs/install.md, Backups and restore)")
+LOST_KEY = ("The key for the saved GitHub App and directory sync secrets (github-app.key) is missing from the data volume, "
+            "so they cannot be opened. Restore it from the backup (credential-key/github-app.key) and restart; or, if no "
+            "backup has it, confirm replacing it (POST /api/v2/github/app/replace-lost-key, or replace_lost_key on the "
+            "directory save) to drop those secrets and enter them again.")
+
+
 class GitHubApp:
     """The stored app, its at-rest encryption, and installation-token minting."""
 
@@ -129,6 +141,7 @@ class GitHubApp:
         self.audited_tokens = {}
         self.live = {}
         self.lock = threading.Lock()
+        self.minting = {}             # (cache key, diagnose) -> Future of the one mint in flight for it
         # Serialize confirmed product creates in this process so same-process retries see the
         # completed receipt. The committed operation row is the cross-process/crash fence.
         self.product_repo_create_lock = threading.Lock()
@@ -145,21 +158,66 @@ class GitHubApp:
             c.executescript(SCHEMA)
 
     # -- secret storage ---------------------------------------------------------------------
-    def _key(self, c):
+    def key_file(self):
+        """The local key file: backed up beside credential.key (backend/replication.py), since a restored database
+        without it cannot open the app's secrets or the directory sync credentials."""
+        return Path(self.settings.db_path).parent / KEY_FILE
+
+    def _sealed_elsewhere(self, c, replacing):
+        """Whether anything but what this save replaces is sealed with the local key: a GitHub App row, or directory sync
+        credentials of another source. `replacing` is "app" or "directory:<source>"."""
+        if replacing != "app" and c.execute("SELECT 1 FROM github_app WHERE id='app'").fetchone():
+            return True
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone():
+            return False
+        source = replacing.split(":", 1)[1] if replacing.startswith("directory:") else None
+        return bool(c.execute("SELECT 1 FROM directory_credentials WHERE source IS NOT ?", (source,)).fetchone())
+
+    def _key(self, c, create=True, replacing="app"):
         """The vault's KMS-wrapped key when the deployment has one; otherwise a local key file kept
-        beside the database, so a copy of the database alone does not carry the app's private key."""
+        beside the database, so a copy of the database alone does not carry the app's private key.
+        Only a save makes the file: a read with it missing returns None, so a restore that lost it is not
+        papered over by a new key that opens nothing. A save makes one only when nothing else is sealed with the
+        missing key: a new key would leave that unreadable, and the backup copy of the old key is what opens it."""
         if self.settings.credential_kms_key and self.vault is not None:
             return self.vault.cipher.key(c)
-        path = Path(self.settings.db_path).parent / "github-app.key"
+        path = self.key_file()
         if not path.exists():
+            if not create:
+                return None
+            if self._sealed_elsewhere(c, replacing):
+                raise Problem("github_key_missing", LOST_KEY, 409)
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
         return path.read_bytes()
 
-    def secret_key(self, c):
+    def key_lost(self, c):
+        """No local key file, and secrets sealed with the one that was there: nothing here can open them again."""
+        if self.settings.credential_kms_key and self.vault is not None:
+            return False
+        return not self.key_file().exists() and self._sealed_elsewhere(c, "")
+
+    def replace_lost_key(self, c, actor):
+        """The owner's confirmed way out when no copy of github-app.key exists anywhere: drop what only that key opens
+        (the GitHub App row and every directory source's credentials), so the next save makes a new key. Does nothing
+        while the key is there. A copy the backup held is kept there as credential-key/github-app.key.replaced-<time>."""
+        if not self.key_lost(c):
+            return False
+        app = self.row(c)
+        sources = [r["source"] for r in c.execute("SELECT source FROM directory_credentials")] if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone() else []
+        if app:
+            self.forget(c)
+        if sources:
+            c.execute("DELETE FROM directory_credentials")
+        H.event(c, actor, "github.lost_key_replaced", app["slug"] if app else "",
+                {"github_app": bool(app), "directory_sources": sources})
+        return True
+
+    def secret_key(self, c, create=True, replacing=""):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
-        return self._key(c)
+        return self._key(c, create, replacing)
 
     def save(self, c, actor, org, administration, conversion):
         secrets_blob = json.dumps({"pem": conversion["pem"], "webhook_secret": conversion.get("webhook_secret") or "",
@@ -182,8 +240,11 @@ class GitHubApp:
             return self.row(c)
 
     def private_key(self, c, row):
+        key = self._key(c, create=False)
+        if key is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
         try:
-            blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
+            blob = AESGCM(key).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
             return json.loads(blob)["pem"]
         except Exception:
             raise Problem("github_unavailable", "The stored GitHub App key could not be decrypted", 503) from None
@@ -194,7 +255,7 @@ class GitHubApp:
             if not row:
                 return ""
             try:
-                blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
+                blob = AESGCM(self._key(c, create=False)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
                 return json.loads(blob).get("webhook_secret") or ""
             except Exception:
                 return ""
@@ -213,9 +274,25 @@ class GitHubApp:
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
         now = int(time.time())
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
+                return hit[2]
         # GitHub rejects an exp more than ten minutes out; iat is backdated for clock drift.
-        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
-                          self.private_key(c, row), algorithm="RS256")
+        token = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
+                           self.private_key(c, row), algorithm="RS256")
+        with self.lock:
+            self.live["jwt"] = (row["app_id"], now + 540, token)
+        return token
+
+    def _jwt(self):
+        """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[1] - 60 > time.time():
+                return hit[2]
+        with self.store.transaction() as c:    # the at-rest key may be written the first time it is read
+            return self.app_jwt(c, self.row(c))
 
     def _call(self, method, path, **kw):
         if self.settings.rehearsal:
@@ -237,13 +314,12 @@ class GitHubApp:
 
     def installation(self, refresh=False):
         """The org's installation id, discovered through the app and remembered."""
-        with self.store.transaction() as c:
-            row = self.row(c)
-            if not row:
-                return None
-            if row["installation_id"] and not refresh:
-                return int(row["installation_id"])
-            token = self.app_jwt(c, row)
+        row = self.row()
+        if not row:
+            return None
+        if row["installation_id"] and not refresh:
+            return int(row["installation_id"])
+        token = self._jwt()
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
@@ -262,9 +338,7 @@ class GitHubApp:
                 return hit[1]
         try:
             installation = self.installation()
-            with self.store.transaction() as c:
-                row = self.row(c)
-                token = self.app_jwt(c, row) if row else None
+            token = self._jwt() if installation else None
             if not installation or not token:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
@@ -319,16 +393,38 @@ class GitHubApp:
         Cached until it has less than `refresh_margin` seconds left."""
         repos = sorted(set(repos or ()))
         key = (tuple(repos), tuple(sorted(permissions.items())))
-        with self.lock:
-            hit = self.cache.get(key)
-            if hit and hit["exp"] - refresh_margin > time.time():
-                result = (hit["token"], hit["expires_at"])
-                return (*result, True) if include_cache_status else result
+        while True:
+            with self.lock:
+                hit = self.cache.get(key)
+                if hit and hit["exp"] - refresh_margin > time.time():
+                    result = (hit["token"], hit["expires_at"])
+                    return (*result, True) if include_cache_status else result
+                flight = self.minting.get((key, diagnose))
+                if flight is None:
+                    flight = self.minting[(key, diagnose)] = Future()
+                    break
+            # Another request is minting this exact scope: share its token (or its refusal), not a second mint.
+            try:
+                flight.result()
+            except Problem as problem:
+                raise Problem(problem.code, problem.detail, problem.status, problem.retryable, problem.extra) from None
+        try:
+            entry = self._mint(key, repos, permissions, diagnose)
+            flight.set_result(None)
+        except BaseException as exc:
+            flight.set_exception(exc)
+            raise
+        finally:
+            with self.lock:
+                self.minting.pop((key, diagnose), None)
+        result = (entry["token"], entry["expires_at"])
+        return (*result, False) if include_cache_status else result
+
+    def _mint(self, key, repos, permissions, diagnose):
         installation = self.installation()
         if not installation:
             raise Problem("github_not_installed", "The GitHub App is not installed on the organization yet", 409)
-        with self.store.transaction() as c:
-            token = self.app_jwt(c, self.row(c))
+        token = self._jwt()
         body = {"permissions": permissions}
         if repos:
             body["repositories"] = [r.split("/", 1)[1] for r in repos]
@@ -355,8 +451,7 @@ class GitHubApp:
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry
-        result = (entry["token"], entry["expires_at"])
-        return (*result, False) if include_cache_status else result
+        return entry
 
     def should_audit_token(self, bot, token):
         """Keep token values out of durable state and audit each bot/token pair at most once."""
@@ -457,8 +552,7 @@ class GitHubApp:
         if status == 403:
             return problem
         try:
-            with self.store.transaction() as c:
-                token = self.app_jwt(c, self.row(c))
+            token = self._jwt()
             info = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             selection = info.json().get("repository_selection") if info.status_code < 300 else ""
             absent = known_absent
@@ -810,6 +904,11 @@ def install_github_app(app, settings, store):
             raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
         if service.row():
             raise Problem("github_connected", "GitHub is already connected; disconnect it first to start over", 409)
+        # Before GitHub makes an app: one it could never be saved for (the key that seals other secrets is lost) is refused
+        # here. This GET never drops anything; the owner's confirmed POST replace-lost-key does.
+        with store.read() as c:
+            if service.key_lost(c):
+                raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
@@ -823,6 +922,14 @@ def install_github_app(app, settings, store):
                     "<script>document.getElementById('f').submit()</script>")
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
         return {"action": action, "manifest": body, "state": nonce}
+
+    @app.post("/api/v2/github/app/replace-lost-key")
+    def replace_lost_key(request: Request):
+        """The owner confirmed it: github-app.key is lost with no copy, so drop the GitHub App and directory sync
+        secrets only it opened. Not proposable: a person clicks it themselves."""
+        who = owner(request)
+        with store.transaction() as c:
+            return {"replaced": service.replace_lost_key(c, who.actor)}
 
     @app.get("/api/v2/github/app/callback")
     def callback(request: Request, code: str = "", state: str = ""):
@@ -957,8 +1064,10 @@ def install_github_app(app, settings, store):
                                 {"repository": repo, "repositories": item["repositories"],
                                  "attempt": who.attempt_id or None, **({"runs": runs} if body.bot == BOTOPS else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
+        # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
+        # to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
-                "repositories": repos, "tokens": response_tokens}
+                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS}
 
     def bot_repos(c, bot):
         if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone():

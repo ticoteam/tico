@@ -519,6 +519,10 @@ def _backups(config, settings):
     key = backup.get("credential_key") if isinstance(backup.get("credential_key"), dict) else {}
     key_here = bool(key.get("present"))                  # a local credential key (/data/credential.key) is in use
     key_copied = bool(key.get("current"))
+    files = backup.get("key_files") if isinstance(backup.get("key_files"), dict) else {}
+    # github-app.key and slack.key (backend/replication.py): present ones that the backup does not hold as they are now
+    uncopied = sorted(name for name, state in files.items() if isinstance(state, dict) and state.get("present")
+                      and not state.get("current"))
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
@@ -527,8 +531,10 @@ def _backups(config, settings):
                 if key_here else "")
         if key_here and not key_copied:
             note += " It has not been copied to the backup volume yet."
+        if uncopied:
+            note += " " + _key_files_words(uncopied) + " not been copied to the backup volume yet."
         if settings.loopback:
-            return _check("backups", "Backups", "warn" if key_here and not key_copied else "info",
+            return _check("backups", "Backups", "warn" if (key_here and not key_copied) or uncopied else "info",
                           "Copies stay on this computer. Set a backup bucket in .env to keep copies elsewhere." + note,
                           [fix])
         return _check("backups", "Backups", "warn",
@@ -541,7 +547,92 @@ def _backups(config, settings):
         return _check("backups", "Backups", "warn",
                       f"The database is copied to {target or 'a remote'}, but the credential key has not been. A database restored "
                       "without it cannot open any saved credential. Check the server log for the backup warning.", [fix])
+    if uncopied:
+        return _check("backups", "Backups", "warn",
+                      f"The database is copied to {target or 'a remote'}, but {_key_files_words(uncopied)} not been. A "
+                      "database restored without them cannot open the GitHub App, directory sync or Slack secrets. Check "
+                      "the server log for the backup warning.", [fix])
     return _check("backups", "Backups", "ok", f"Copied to {target or 'a remote'}.")
+
+
+def _key_files_words(names):
+    return " and ".join(names) + (" has" if len(names) == 1 else " have")
+
+
+SEALED_FIX = ("Copy {file} from the backup location (credential-key/{file}) into the data volume beside hub.sqlite, mode "
+              "0600, and restart the server: `docker compose run --rm server restore --force` does it with the database. "
+              "If no backup has it, {redo}.")
+
+
+def _sealed_secrets(c, settings, github):
+    """Secrets sealed with a key file beside the database (the GitHub App and directory sync credentials with
+    github-app.key, the Slack tokens with slack.key, every credential with credential.key) that this server cannot
+    open: a restore or a move that left a key file behind. Read only: nothing here creates a key."""
+    import hashlib
+    import hmac
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from . import credentials, directory, slack_app
+
+    def opens(key, row, aad):
+        try:
+            AESGCM(key).decrypt(row["nonce"], row["ciphertext"], aad)
+            return True
+        except Exception:
+            return False
+
+    def table(name):
+        return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+
+    problems, fixes = [], []
+    try:
+        app = github.row(c) if github else None
+        sources = list(c.execute("SELECT * FROM directory_credentials")) if github and table("directory_credentials") else []
+        kms = bool(settings.credential_kms_key and github and github.vault is not None)
+        vault = c.execute("SELECT kms_key,wrapped_key FROM credential_keys WHERE id='v1'").fetchone()
+        if kms and not vault:
+            return None      # the first save makes the vault's key; a Health read must not ask KMS for one
+        if app or sources:
+            key = github.secret_key(c, create=False)
+            lost = []
+            if app and not (key and opens(key, app, b"tico-github-app:v1")):
+                lost.append("The GitHub App's private key and webhook secret")
+            if sources and not (key and all(opens(key, r, directory.AAD + r["source"].encode()) for r in sources)):
+                lost.append("the directory sync credentials" if lost else "The directory sync credentials")
+            if lost:
+                problems.append(" and ".join(lost) + " cannot be decrypted: " + (
+                    "github-app.key is missing." if key is None else
+                    "they were sealed with another key (github-app.key, from before TICO_CREDENTIAL_KMS_KEY was set?)." if kms else
+                    "github-app.key does not open them."))
+                fixes.append(SEALED_FIX.format(file="github-app.key", redo="disconnect GitHub and connect it again, or save "
+                                               "the directory sync credentials again, and confirm replacing the lost key: "
+                                               "Tico drops the GitHub App and every directory source's credentials sealed "
+                                               "with it, and you enter them again" if key is None else
+                                               "disconnect GitHub and connect it again, and save the directory sync "
+                                               "credentials again"))
+        slack = c.execute("SELECT * FROM slack_credentials WHERE id='app'").fetchone() if table("slack_credentials") else None
+        if slack:
+            # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
+            key = slack_app._key(settings, github.vault if kms else None, c, create=False)
+            if not (key and opens(key, slack, slack_app.AAD)):
+                problems.append("The Slack tokens cannot be decrypted: " + (
+                    "slack.key is missing." if key is None else "the key they were sealed with is not this server's."))
+                fixes.append(SEALED_FIX.format(file="slack.key", redo="paste the Slack tokens again (Settings > Slack)"))
+        if vault and vault["kms_key"] == credentials.LOCAL and not settings.credential_kms_key:
+            path = settings.db_path.parent / credentials.KEY_FILE
+            data = path.read_bytes() if path.is_file() else None
+            if data is None or not hmac.compare_digest(hmac.new(data, credentials.KEY_CHECK, hashlib.sha256).digest(),
+                                                       bytes(vault["wrapped_key"])):
+                problems.append("Saved credentials cannot be decrypted: credential.key "
+                                + ("is missing." if data is None else "does not belong to this database."))
+                fixes.append(SEALED_FIX.format(file="credential.key", redo="add each credential again (Credentials)"))
+    except Problem:
+        return None          # a KMS key that cannot be reached is the credential_kms check's to report
+    if not problems:
+        return None
+    return _check("sealed_secrets", "Stored secrets", "warn", " ".join(problems + fixes),
+                  [_fix("Restore the key files", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")])
 
 
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."
@@ -966,6 +1057,8 @@ def view(c, who, settings, auth, github, config):
         slack = _slack(c)
         if slack:
             checks.append(slack)
+        if sealed := _sealed_secrets(c, settings, github):
+            checks.append(sealed)
         checks.append(_check("backups", "Backups", "ok", "Demo data: there is nothing to back up.")
                       if settings.demo else
                       _check("backups", "Backups", "ok", "Rehearsal: backups are off on purpose.")
@@ -994,7 +1087,7 @@ def note_github_token(store, error=None, action=""):
         if error:
             if current and current["last_error"] == error and current["detail_json"] == detail:
                 return
-        elif not current or not current["last_error"]:
+        elif not current or not current["last_error"] and (current["detail_json"] or "{}") in ("{}", ""):
             return
     with store.transaction() as c:
         if error:
@@ -1002,8 +1095,9 @@ def note_github_token(store, error=None, action=""):
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (GITHUB_HEALTH, error, detail))
         else:   # only a recovery is written, so a healthy turn costs no extra write
-            c.execute("UPDATE service_health SET last_success=?,last_error=NULL WHERE service=? AND last_error IS NOT NULL",
-                      (now, GITHUB_HEALTH))
+            # The failure's message goes too, so nothing reads an old failure after a recovery.
+            c.execute("UPDATE service_health SET last_success=?,last_error=NULL,detail_json='{}' WHERE service=? "
+                      "AND (last_error IS NOT NULL OR detail_json<>'{}')", (now, GITHUB_HEALTH))
 
 
 def install(app, store, auth, settings):

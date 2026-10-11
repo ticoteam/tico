@@ -26,7 +26,7 @@ Words are defined in the [Glossary](glossary.md).
 
 - **Bot** — an AI teammate (teammates are humans or bots) with its own `bot-<slug>` repository, run on one registered computer,
   or run by an external agent such as a Hermes profile that reaches Tico with its own
-  credential and is never dispatched to ([Hermes agents](hermes-agents.md)).
+  credential and is never dispatched to ([Hermes agents](hermes-agents.md), [OpenClaw agents](openclaw-agents.md)).
   Record states: `active`, `paused`, `planned`, `quarantined`. Live status while it works:
   `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`,
   `quarantined`.

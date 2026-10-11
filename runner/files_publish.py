@@ -29,6 +29,7 @@ DRAIN_BATCH = 20
 GIVE_UP_AFTER = 20                     # retryable failures in a row before the file is marked not synced
 UPLOAD_TIMEOUT = 120
 _drain_lock = threading.Lock()
+_refusals_logged = set()               # (bot, path, reason): a refused file is logged once, not every turn
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS file_outbox(
@@ -103,7 +104,11 @@ def prepare(state, bot, attempt_id, root, config, pushed=False, skip=()):
                 digest = hashlib.file_digest(source, "sha256").hexdigest()
         except (BF.Refused, OSError) as exc:
             refused += 1
-            log(f"Tico runner: {bot}: not publishing {rel}: {exc}")
+            if (bot, rel, str(exc)) not in _refusals_logged:
+                if len(_refusals_logged) > 10000:
+                    _refusals_logged.clear()
+                _refusals_logged.add((bot, rel, str(exc)))
+                log(f"Tico runner: {bot}: not publishing {rel}: {exc}")
             continue
         key = f"file:{bot}:{BF.sha256(rel.encode())[:16]}:{digest[:32]}"
         commit = BF.pushed_commit(root, rel) if pushed else ""

@@ -249,6 +249,10 @@ def describe(c, method, path, body):
     return f"{method} {path}", diff
 
 
+# Body fields a proposal may never carry: each has its own explicit confirm that a card's click does not replace.
+PERSON_ONLY_FIELDS = ("replace_lost_key",)
+
+
 def create_proposal(c, settings, who, room, proposer, summary, method, path, body):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
@@ -259,6 +263,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if not valid_operation(method, path, settings, proposer):
         raise Problem("operation", "That is not something that can be proposed: it is not on the list of routes "
                       "a person confirms", 422)
+    if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
+        raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
     if path == "/api/v2/support/tickets":
         # The person approves the exact text, so it must be one the ticket will take: no card for a message that
         # would fail (too long, control characters) only after the click.
@@ -919,8 +925,10 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("operation", "This proposal is not on the list of routes a person confirms", 422)
             api = Internal(request)
             api.headers["x-tico-assistant-action"] = aid + "." + secret
-            response = await api.call(row["method"], path,
-                                      body=json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None,
+            sent = json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None
+            if isinstance(sent, dict):
+                sent = {k: v for k, v in sent.items() if k not in PERSON_ONLY_FIELDS}   # a card stored before the check
+            response = await api.call(row["method"], path, body=sent,
                                       key="assistant-" + aid)
             ok = response.status_code < 400
             detail = None

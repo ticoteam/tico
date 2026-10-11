@@ -31,6 +31,11 @@ def isolated(c, kind, row_id, failures=None):
             fatal = True
             raise
         c.execute("ROLLBACK TO background_row")
+        if getattr(exc, "rule", None) == "duplicate":
+            # An existing ask already covers this row: the work is done, not failed.
+            if health_available:
+                c.execute("DELETE FROM service_health WHERE service=?", (service,))
+            return
         if failures is not None:
             failures.append({kind: row_id, "error": type(exc).__name__})
         key, now = (kind, str(row_id)), _clock()

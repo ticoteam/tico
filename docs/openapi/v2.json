@@ -6778,6 +6778,68 @@
         ]
       }
     },
+    "/api/v2/librarian/research": {
+      "post": {
+        "summary": "Ask the Librarian to research the web and add what it finds, cited, to one doc, market page or market entity (`target`), optionally one `section` of it; it files one task to the Librarian",
+        "operationId": "requestLibrarianResearch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibrarianResearch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibrarianResearchFiled"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/librarian/turn-on": {
       "post": {
         "summary": "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it",
@@ -18605,6 +18667,60 @@
           "can_turn_on",
           "name",
           "state"
+        ],
+        "additionalProperties": true
+      },
+      "LibrarianResearch": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Target"
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Section",
+            "default": ""
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Instructions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target",
+          "instructions"
+        ],
+        "title": "LibrarianResearch",
+        "description": "A person asks the Librarian to research and add to one page (docs/librarian.md#research)."
+      },
+      "LibrarianResearchFiled": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "bot": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bot",
+          "kind",
+          "target",
+          "task_id"
         ],
         "additionalProperties": true
       },

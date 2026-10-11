@@ -100,6 +100,8 @@ POST_CHARS = 3_800              # a mirrored reply, before the footer
 TICK_SECONDS = 2                # how often the loop looks for replies to mirror
 RETRY_SECONDS = 60              # an event the decision model could not answer waits this long before the next try
 ROUTE_GIVE_UP_SECONDS = 600     # unanswered this long, a message is failed and the human told, never retried again
+# One HTTP attempt per try (`judge`), so a message costs at most ROUTE_GIVE_UP_SECONDS / RETRY_SECONDS + 1 attempts
+# per question batch, and one `judge.call` against the sender's daily cap however many tries it took.
 RATE_LIMIT_DEFAULT = 30         # seconds, when Slack's Retry-After is unreadable
 MAX_POST_ATTEMPTS = 10          # rate-limit retries before a post is given up as failed
 MAX_BOTS = 60
@@ -452,12 +454,16 @@ class Gateway:
         self.pin_workspace = False          # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None               # called every loop turn; the process uses it for health
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
+        self.last_model, self.last_usage = "", []   # the last `ask`'s model and usage per call, for the audit
 
     # ------------------------------------------------------------------ start-up
     @property
     def judge(self):
         if self._judge is None and self.settings.typesafe_api_key:
-            self._judge = J.direct(self.settings.typesafe_api_key)
+            # One short try per pass: the gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the
+            # only retry, so an outage costs one HTTP attempt a minute, not three, and never blocks the loop long.
+            from .judge import JEV_TIMEOUT
+            self._judge = J.direct(self.settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0)
         if self._judge is not None:
             return self._judge
         # No TypeSafe key: the company's own provider answers, when the server holds its API key.
@@ -716,11 +722,30 @@ class Gateway:
         map. A call that fails fails the whole ask; nothing is routed from half the answers."""
         questions = self.questions(fleet)
         ids = list(questions)
-        answers = {}
+        answers, self.last_model, self.last_usage = {}, "", []
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
-            answers.update(self.judge(state, batch, JUDGE_LABEL)["answers"])
+            result = self.judge(state, batch, JUDGE_LABEL)
+            answers.update(result["answers"])
+            self.last_model = str(result.get("model") or "")
+            self.last_usage.append(result.get("usage") or {})
         return answers
+
+    # ------------------------------------------------------------------ budget and audit
+    def over_budget(self, actor, person):
+        """Whether the sender has used their daily decision cap (backend/judge.py): routing their message is a
+        decision call on the server's key, counted like one they made themselves."""
+        from .judge import daily_cap, used_today
+        role = "owner" if person.get("email") and person["email"] == self.settings.owner_email else "human"
+        with self.store.read() as c:
+            return used_today(c, actor, at=self.clock()) >= daily_cap(self.settings, role)
+
+    def audit(self, c, actor, event, fleet, outcome):
+        """One `judge.call` per message, the way `/api/v2/decisions` audits: never the message text. A try that
+        will be retried is not one; the message counts once, when it is routed or finally fails."""
+        asked = len(fleet) + len(JUDGE_SET["questions"])
+        H.event(c, actor, "judge.call", JUDGE_LABEL, {"via": "slack", "event_id": event["event_id"], "questions": asked,
+                                                      "calls": -(-asked // J.MAX_QUESTIONS), **outcome})
 
     def state(self, c, event, person, channel):
         return {"message": {"text": event["text"], "from": {"id": person["id"], "name": person["name"],
@@ -774,13 +799,15 @@ class Gateway:
             return self.settings.assistant_bot
         return "botops" if "botops" in active else None
 
-    def default_decision(self, fleet):
-        """No decision model: everything goes to the fallback bot and says so."""
+    def default_decision(self, fleet, budget=False):
+        """No decision model, or the sender's daily cap is used: everything goes to the fallback bot and says so."""
         asker = self.fallback_bot([bot["slug"] for bot in fleet])
-        return {"routed_by": "default", "model": None, "scores": {}, "asks": None, "reply_to_last": None,
-                "names_bot": None, "recipients": [{"bot": asker, "confidence": None}] if asker else [],
+        why = "the sender's daily decision budget is used" if budget else "no decisions key configured"
+        return {"routed_by": "budget" if budget else "default", "model": None, "scores": {}, "asks": None,
+                "reply_to_last": None, "names_bot": None,
+                "recipients": [{"bot": asker, "confidence": None}] if asker else [],
                 "candidates": [], "fallback": True, "dropped": [],
-                "reason": "no decisions key configured; routed to " + (asker or "nobody (no assistant or BotOps is running)")}
+                "reason": why + "; routed to " + (asker or "nobody (no assistant or BotOps is running)")}
 
     # ------------------------------------------------------------------ writing into the hub
     def conversation_for(self, c, actor, bot, event):
@@ -882,7 +909,7 @@ class Gateway:
                 {"state": state, "channel": event["channel"], "thread_ts": event["thread_ts"], "reason": reason,
                  "recipients": [r["bot"] for r in (decision or {}).get("recipients") or []]})
 
-    def routing_error(self, event, person, exc):
+    def routing_error(self, event, person, exc, fleet=()):
         """The decision model could not answer. A refusal, or an outage that outlasted
         `ROUTE_GIVE_UP_SECONDS`, ends the message as `failed` and tells the human; a short outage
         leaves it `received` for the next try. Never an endless loop."""
@@ -896,6 +923,7 @@ class Gateway:
         reason = f"decisions: {exc}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
         with self.store.transaction() as c:
             self.finish(c, event, "failed", actor=actor, reason=reason)
+            self.audit(c, actor, event, fleet, {"error": exc.code, "detail": str(exc.detail)[:300]})
         LOG.error("Event %s failed: %s", event["event_id"], reason)
         try:
             self.slack.post_message(event["channel"], event["reply_ts"] or None,
@@ -919,15 +947,23 @@ class Gateway:
         with self.store.read() as c:
             state = self.state(c, event, person, channel)
         fleet, thread = state["roster"], state["thread"]
+        actor = "human:" + person["id"]
+        called = None
         if self.judge is None:
             decision = self.default_decision(fleet)
+        elif self.over_budget(actor, person):
+            decision = self.default_decision(fleet, budget=True)
         else:
+            started = time.monotonic()
             try:
                 answers = self.ask(state, fleet)
             except J.JudgeError as exc:
-                return self.routing_error(event, person, exc)
+                return self.routing_error(event, person, exc, fleet)
             decision = self.decide(answers, fleet)
+            called = {"model": self.last_model, "usage": self.last_usage, "ms": round((time.monotonic() - started) * 1000)}
         with self.store.transaction() as c:
+            if called:
+                self.audit(c, actor, event, fleet, called)
             if not decision["recipients"]:
                 decision = self.record_only(c, event, person, decision)
                 self.finish(c, event, "recorded", actor="human:" + person["id"], reason=decision["reason"], decision=decision)
@@ -940,6 +976,15 @@ class Gateway:
                             decision=decision)
         LOG.info("Event %s %s -> %s", event["event_id"], state_out,
                  ",".join(r["bot"] for r in decision["recipients"]) or "nobody")
+        if decision["routed_by"] == "budget" and state_out != "routed":
+            # Over the cap with no assistant or BotOps to take it: the message is kept, and the human is told.
+            try:
+                self.slack.post_message(event["channel"], event["reply_ts"] or None,
+                                        "You have used today's message routing in Tico, so no bot has this message yet. "
+                                        "Send it again after midnight UTC, or message the bot in Tico.")
+            except Exception as post_exc:
+                LOG.warning("Could not tell the human in %s that the routing budget is used: %s", event["channel"],
+                            type(post_exc).__name__)
         return {"event_id": event["event_id"], "state": state_out, "decision": decision}
 
     # ------------------------------------------------------------------ egress
@@ -1570,7 +1615,9 @@ def main(argv=None, make_slack=None):
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
             store.initialize()
-            stored = slack_app.load(store, settings)
+            # Under KMS the API sealed the tokens with the vault's key (backend/slack_app.py); open them with the same.
+            from .credentials import Vault
+            stored = slack_app.load(store, settings, Vault(store) if settings.credential_kms_key else None)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:

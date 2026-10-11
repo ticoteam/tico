@@ -102,3 +102,22 @@ class FakeClient:
     def close(self):
         self.up, self.closed = False, True
 
+
+
+def test_the_gateway_opens_tokens_the_api_sealed_under_a_kms_key(tmp_path, monkeypatch, capsys):
+    from backend.credentials import CredentialCipher, Vault
+    from backend.store import Store
+    from backend.tests.test_credentials import FakeKMS
+    kms = FakeKMS()
+    monkeypatch.setattr("boto3.client", lambda name, *a, **k: kms if name == "kms" else pytest.fail(name))
+    monkeypatch.delenv("TICO_AUTH_PROXY", raising=False)
+    for name, value in {"TICO_COMPANY_NAME": "Acme", "TICO_OWNER_EMAIL": "ana@acme.example", "TICO_DB": str(tmp_path / "hub.db"), "TICO_CREDENTIAL_KMS_KEY": "test-key",
+                        "TICO_ENVIRONMENT_ID": "acme-test"}.items():
+        monkeypatch.setenv(name, value)
+    settings = Settings.from_env()
+    store = Store(settings)
+    store.initialize()
+    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN, Vault(store, CredentialCipher("test-key", kms)))
+    assert not (tmp_path / "slack.key").exists()
+    assert G.main(["--check"], make_slack=FakeClient) == 0
+    assert FakeClient.instances[-1].bot == BOT and '"team_id": "T0FAKE1"' in capsys.readouterr().out

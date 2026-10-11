@@ -41,7 +41,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > AI providers adds it.
-2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group.
+2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
+   below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
@@ -51,14 +52,39 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
    profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
-6. **Set up one starter.** Select **Content Marketer** (`content`) in the **Marketing** group, open its page and press **Set up**.
-   It needs only Tico; no GitHub or outside Tool is required. Tell it the readers, publishing plans, voice, topics and privacy rules
-   using the sample answers below. Answer any remaining questions and review its first draft in the same chat. Outbound
-   sending stays off until you turn it on for that bot.
-7. **Finish one task.** On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+
+### Your first result
+
+One bot, one fictional input, one reviewed draft: **Content Marketer** writes a short blog post about a made-up product, a
+person reviews it, and the person who asked closes the task. [Demo mode](demo.md) does not run bots, so do this on an install
+like the one above.
+
+**You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
+a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
+
+1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
+   in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
+   [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
+   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
+   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
+   and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
+   Outbound sending stays off until you turn it on for that bot.
+3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” Open the task to read its result, then close it. Success is a reviewed draft and a
-   completed task, with the computer online and no blocking Health issue.
+   no claims. Return a draft on this task.”
+4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
+   `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
+5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
+   press **Close** on the task (or **Close task** in its menu).
+
+Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
+Health issue.
+
+**Next: meeting notes.** Once this works, add **Project Coordinator** (`meeting-notes`, in **Operations**, or **Settings > Bots >
+Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
+summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Marketer
 
@@ -681,15 +707,26 @@ limited to it, on Cloudflare an R2 bucket (with an API token that has Workers R2
 already have. Turn on bucket versioning yourself if you make one by hand; a deleted or overwritten backup is then
 still recoverable. With `TICO_BLOB_BUCKET` set, attachments already live in S3 and are not copied again.
 
-**The credential key is copied too.** When no `TICO_CREDENTIAL_KMS_KEY` is set, the stored credentials are encrypted with
-a local key in `/data/credential.key` ([Credentials](credential-vault.md)); Litestream carries the database, not that file, and a
-database restored without it cannot decrypt a credential. The backup loop copies the key to the same place as the rest
-(the bucket and prefix in `TICO_BACKUP_URL`, else the `tico-backups` volume), as `credential-key/credential.key`, when it
-first appears and whenever it changes. It is stored as the bucket stores everything: encrypted at rest by the bucket (S3
-and R2 encrypt every object by default), which also means anyone who can read the bucket can read the key and the database
-together, so keep the bucket private and its access key to that bucket alone. The key is never logged or sent anywhere else,
-and Health warns while a local key exists and has not been copied yet. `GET /api/v2/config` carries
-`backup.credential_key: {present, copied_at, current}`.
+**The key files are copied too.** Litestream carries the database, not the files beside it that decrypt what the
+database stores. A database restored without them cannot open those secrets:
+
+| File in `/data` | Opens | When it exists |
+|---|---|---|
+| `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
+| `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or a GitHub App connected before it was set) |
+| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` |
+
+The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
+`tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
+opens a restored database, when a new key was made after the file was lost) is kept as `credential-key/<file>.replaced-<time>`,
+never overwritten. They are stored as the
+bucket stores everything: encrypted at rest by the bucket (S3 and R2 encrypt every object by default), which also means
+anyone who can read the bucket can read the keys and the database together, so keep the bucket private and its access
+key to that bucket alone. The keys are never logged or sent anywhere else, and Health warns while one exists and has not
+been copied yet. `GET /api/v2/config` carries `backup.credential_key: {present, copied_at, current}` and
+`backup.key_files: {<file>: {present, copied_at, current}}`. `tico-session-secret`, which only signs the few minutes of an
+OpenID Connect sign-in, is not copied: a new one is made on the new volume and nobody's session ends (sessions are in the
+database).
 
 **A lost volume never becomes a blank team.** The server records that it is an existing team outside the
 database: a `.tico-environment` file in the data volume and an `environment.json` object beside the backup. When it
@@ -704,20 +741,26 @@ team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `
 
 ```
 docker compose stop server
-docker compose run --rm --no-deps server restore    # database, attachments and the credential key
+docker compose run --rm --no-deps server restore    # database, attachments and the key files
 docker compose up -d
 ```
 
-**The credential key is backed up with the database.** Credentials are encrypted with a key in `/data/credential.key`
-(docs/credential-vault.md). The backup copies it beside the database whenever it changes, and Health warns if it has not been
-copied. `restore` puts the key back at `/data/credential.key` (mode 0600) when the backup has one. A key already on the
-volume is left alone (with `--force` it is kept beside the restored one as `credential.key.before-restore.<time>`). If
-the database was restored by itself on first start, or from a bucket that has no key, run `restore` again or copy the
-object `credential-key/credential.key` from the backup location to `/data/credential.key` by hand, then restart. With
-`TICO_CREDENTIAL_KMS_KEY` set there is no file to keep.
+**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` and `slack.key` back
+in `/data` (mode 0600) when the backup has them, and says which it does not have. A key already on the volume is left
+alone (with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
+by itself on first start, or from a backup made before a file was copied, run `restore` again or copy the object
+`credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
+user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
+file to put back. A backup made before a key was copied cannot bring it back: copy it from the old server's volume if it
+still exists. Else paste the Slack tokens again, and disconnect and reconnect GitHub or save the directory sync
+credentials again: Tico asks you to confirm replacing the lost key, then drops the GitHub App and every directory source's
+credentials sealed with it (recorded as `github.lost_key_replaced`), and you enter them again (in the API: `POST
+/api/v2/github/app/replace-lost-key`, or `replace_lost_key` on `PUT /api/v2/directory`; never through a proposal card). With
+`TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
+`github-app.key` or `slack.key` from before KMS was set needs keeping.
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
-to restore the database, attachments and Credential key together:
+to restore the database, attachments and key files together:
 
 ```
 docker compose stop server
@@ -725,8 +768,8 @@ docker compose run --rm --no-deps server restore --force
 docker compose up -d
 ```
 
-Tico keeps the current database as `hub.sqlite.before-restore.<time>` and the current key as
-`credential.key.before-restore.<time>` beside the restored files. The install's permanent id
+Tico keeps the current database as `hub.sqlite.before-restore.<time>` and each different key file as
+`<file>.before-restore.<time>` beside the restored files. The install's permanent id
 (`TICO_ENVIRONMENT_ID`) is stored in the database, so it comes back with the restore and the Macs and runners
 already enrolled keep working.
 
@@ -740,9 +783,10 @@ docker compose up -d
 
 and point the domain at the new computer (Cloudflare tunnel: run the same tunnel token there). Stop the old server
 first; two servers writing to one bucket corrupt the replica. A fresh volume that finds a backup also restores the
-database by itself on first start, but run `restore` so attachments and any error are visible. This needs the
-bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason to set
-`TICO_BACKUP_URL`.
+database by itself on first start, but run `restore` so attachments, the key files and any error are visible. This
+needs the bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason
+to set `TICO_BACKUP_URL`. Moving the volume by hand instead (a `docker cp` or a disk copy) needs every file in `/data`,
+not only `hub.sqlite`: `credential.key`, `github-app.key` and `slack.key` with it, or the secrets they seal are lost.
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
 
@@ -823,7 +867,7 @@ docker compose -f compose.yaml -f rehearsal.yaml exec server cat /data/local-own
 ```
 
 Open `http://127.0.0.1:8877/api/v2/local-signin?token=<token>` with that token. The backup is mounted read-only:
-restore reads the database, attachments and credential key; rehearsal does not write backups or call a decision provider.
+restore reads the database, attachments and key files; rehearsal does not write backups or call a decision provider.
 Restart the source from its original directory with `docker compose start server`. Remove the rehearsal when finished with
 `docker compose -f compose.yaml -f rehearsal.yaml down -v`; its external source backup volume is kept.
 

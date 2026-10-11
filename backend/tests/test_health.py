@@ -127,6 +127,40 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     assert quiet["status"] == "info" and "credential key" in quiet["summary"] and quiet["fixes"][0]["href"].endswith("#backups-and-restore")
     assert check({**only, "credential_key": {**held, "copied_at": None, "current": False}}, local)["status"] == "warn"
     assert "credential key" in check({"mode": "off", "credential_key": held})["summary"]
+    # github-app.key and slack.key, when present, must be in the backup as they are now too.
+    files = {"github-app.key": {"present": True, "copied_at": None, "current": False}}
+    behind = check({**remote, "credential_key": held, "key_files": files})
+    assert behind["status"] == "warn" and "github-app.key" in behind["summary"]
+    assert check({**only, "credential_key": held, "key_files": files}, local)["status"] == "warn"
+    files["github-app.key"].update(copied_at="2026-01-01T00:00:00Z", current=True)
+    assert check({**remote, "credential_key": held, "key_files": files})["status"] == "ok"
+
+
+def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environment):
+    from backend import slack_app
+    api = environment()
+    state = api.app.state
+    settings, store, github = state.store.settings, state.store, state.github_app
+    with store.transaction() as c:
+        github.save(c, "human:ana", "Acme", True, {"id": 7, "slug": "acme-tico", "client_id": "Iv1.synthetic",
+                                                   "pem": "synthetic-pem", "webhook_secret": "whsec-synthetic"})
+        state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "s"}, "app c in t")
+    slack_app.save(store, settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000")
+    assert "sealed_secrets" not in health_of(api)[1]
+    data = settings.db_path.parent
+    for name in ("github-app.key", "slack.key"):
+        (data / name).rename(data / (name + ".elsewhere"))
+    check = health_of(api)[1]["sealed_secrets"]
+    assert check["status"] == "warn" and check["fixes"]
+    for words in ("GitHub App", "directory sync", "Slack tokens", "github-app.key is missing", "slack.key is missing",
+                  "credential-key/github-app.key"):
+        assert words in check["summary"]
+    assert not (data / "github-app.key").exists()           # Health and the reads behind it make no new key
+    (data / "slack.key").write_bytes(b"\x01" * 32)          # the wrong key is named too
+    assert "the key they were sealed with" in health_of(api)[1]["sealed_secrets"]["summary"]
+    for name in ("github-app.key", "slack.key"):
+        (data / (name + ".elsewhere")).replace(data / name)
+    assert "sealed_secrets" not in health_of(api)[1]
 
 
 def test_listening_health_checks_custom_categories_without_question_text(environment, monkeypatch):

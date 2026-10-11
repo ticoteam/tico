@@ -1,4 +1,4 @@
-"""Off-volume copies of what Litestream does not carry: the attachments in /data/blobs and the local credential key.
+"""Off-volume copies of what Litestream does not carry: the attachments in /data/blobs and the local key files.
 
 It also reports how the install is backed up. The container entrypoint decides the mode and exports it;
 a loop next to the server keeps the blobs mirrored and writes the time the copies last moved to a status
@@ -8,6 +8,13 @@ The credential key (/data/credential.key, backend/credentials.py) is what decryp
 key is set, and a restored database without it cannot. It is copied to the same place as everything else, and only there:
 never logged, never in the status file, never in a message. The status keeps when it was copied and the file's size and
 modification time, not the key or anything derived from it.
+
+Two more key files beside it seal secrets the vault does not hold, and get the same handling: /data/github-app.key (the
+GitHub App's private key, client secret and webhook secret, and the directory sync credentials; backend/github_app.py)
+and /data/slack.key (the Slack tokens; backend/slack_app.py). They are copied whenever they exist, KMS or not: the Slack
+gateway always opens the tokens with slack.key, and github-app.key may still seal an app saved before KMS was set.
+/data/tico-session-secret (backend/oidc.py) is not copied: it signs only the few minutes of a sign-in round trip (the
+sessions themselves are in the database), so a new one costs nobody their session and one less secret leaves the server.
 """
 
 import hashlib
@@ -38,6 +45,12 @@ LOCAL_MARKER = ".tico-environment"
 CREDENTIAL_KEY = "credential.key"
 CREDENTIAL_KEY_COPY = "credential-key/" + CREDENTIAL_KEY
 CREDENTIAL_KEY_BYTES = 32
+# The other key files, copied to the same place: credential-key/<name>.
+KEY_FILES = ("github-app.key", "slack.key")
+
+
+def key_copy(name):
+    return "credential-key/" + name
 
 
 def rehearsal_on(env=None):
@@ -89,6 +102,24 @@ def local_key_in_use(env, path=None):
     return not (env.get("TICO_CREDENTIAL_KMS_KEY") or "").strip() and bool(credential_key_stamp(path or credential_key_path(env)))
 
 
+def key_file_path(env, name):
+    return Path(env.get("TICO_DB") or "/data/hub.sqlite").parent / name
+
+
+def key_files_state(env, recorded):
+    """{name: {present, copied_at, current}} for the key files that exist, like credential_key_state."""
+    recorded = recorded if isinstance(recorded, dict) else {}
+    found = {}
+    for name in KEY_FILES:
+        stamp = credential_key_stamp(key_file_path(env, name))
+        if not stamp:
+            continue
+        saved = recorded.get(name) if isinstance(recorded.get(name), dict) else {}
+        copied = str(saved.get("copied_at") or "") or None
+        found[name] = {"present": True, "copied_at": copied, "current": bool(copied and saved.get("stamp") == stamp)}
+    return found
+
+
 def credential_key_state(env, recorded):
     """{present, copied_at, current}: whether a local key exists, when it was last copied, and whether that copy is of
     the file as it is now. `recorded` is what the loop wrote to the status file."""
@@ -116,16 +147,17 @@ def status(env=None, path=None):
         # their own service config, so absence of TICO_BACKUP_URL says nothing: report unknown, not off.
         if not env.get("TICO_BACKUP_URL"):
             return {"mode": None, "last_replicated_at": None, "warning": "", "target_kind": "none",
-                    "credential_key": credential_key_state(env, None)}
+                    "credential_key": credential_key_state(env, None), "key_files": key_files_state(env, None)}
         return {"mode": "remote", "last_replicated_at": None, "warning": "",
                 "target_kind": target_kind(env.get("TICO_BACKUP_URL", ""), env.get("TICO_BACKUP_ENDPOINT", "")),
-                "credential_key": credential_key_state(env, None)}
+                "credential_key": credential_key_state(env, None), "key_files": key_files_state(env, None)}
     mode = env["TICO_BACKUP_MODE"]
     kind = "none" if mode == "off" else target_kind(env.get("TICO_BACKUP_URL", ""), env.get("TICO_BACKUP_ENDPOINT", ""))
     saved = _status_file(env, path)
     warning = {"local-only": LOCAL_WARNING, "off": OFF_WARNING}.get(mode, "")
     return {"mode": mode, "last_replicated_at": saved.get("last_replicated_at"), "target_kind": kind, "warning": warning,
-            "credential_key": credential_key_state(env, None if mode == "off" else saved.get("credential_key"))}
+            "credential_key": credential_key_state(env, None if mode == "off" else saved.get("credential_key")),
+            "key_files": key_files_state(env, None if mode == "off" else saved.get("key_files"))}
 
 
 class LocalMirror:
@@ -251,7 +283,7 @@ def restore_blobs(mirror, blob_dir):
     return count
 
 
-def sync_credential_key(path, mirror, state):
+def sync_credential_key(path, mirror, state, copy=CREDENTIAL_KEY_COPY):
     """Copies the local credential key to the backup location when it is new or changed; returns what the status file
     keeps ({copied_at, stamp}), or None when there is no key to copy. `state` holds the last digest copied, in memory
     only, so an unchanged key is not sent again. Nothing here prints or returns the key."""
@@ -268,7 +300,8 @@ def sync_credential_key(path, mirror, state):
         try:
             with os.fdopen(fd, "wb") as out:
                 out.write(data)
-            mirror.put(CREDENTIAL_KEY_COPY, temporary)
+            _keep_replaced_copy(mirror, copy, digest)
+            mirror.put(copy, temporary)
         finally:
             os.unlink(temporary)
         state["digest"] = digest
@@ -277,12 +310,28 @@ def sync_credential_key(path, mirror, state):
     return {"copied_at": state["copied_at"], "stamp": stamp}
 
 
-def restore_credential_key(mirror, path, replace=False):
+def _keep_replaced_copy(mirror, copy, digest):
+    """A different key already in the backup may be the only one that opens what the database holds (a key file that did
+    not come back with a restore, and a new one made since). It is kept as <copy>.replaced-<UTC time>, never overwritten.
+    A key is never rotated in place, so this happens only after such a loss."""
+    if not mirror.exists(copy):
+        return
+    fd, previous = tempfile.mkstemp(prefix=".key-")    # mode 0600
+    os.close(fd)
+    try:
+        mirror.get(copy, previous)
+        if hashlib.sha256(Path(previous).read_bytes()).digest() != digest:
+            mirror.put(copy + ".replaced-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"), previous)
+    finally:
+        os.unlink(previous)
+
+
+def restore_credential_key(mirror, path, replace=False, copy=CREDENTIAL_KEY_COPY):
     """Puts the backed-up credential key back at `path`. Returns "restored", "kept" (a key is already there and
     `replace` is not set, or it is the same key) or "missing" (the backup holds none). A different key already in
     place is moved aside, never overwritten. The copy must be 32 bytes, and is written with mode 0600."""
     path = Path(path)
-    if not mirror.exists(CREDENTIAL_KEY_COPY):
+    if not mirror.exists(copy):
         return "missing"
     if path.exists() and not replace:
         return "kept"
@@ -290,10 +339,10 @@ def restore_credential_key(mirror, path, replace=False):
     fd, temporary = tempfile.mkstemp(prefix=".restore-key-", dir=path.parent)
     os.close(fd)
     try:
-        mirror.get(CREDENTIAL_KEY_COPY, temporary)
+        mirror.get(copy, temporary)
         data = Path(temporary).read_bytes()
         if len(data) != CREDENTIAL_KEY_BYTES:
-            raise SystemExit("tico: error: the credential key in the backup is not a valid key")
+            raise SystemExit("tico: error: " + copy + " in the backup is not a valid key")
         if path.exists():
             if path.read_bytes() == data:
                 return "kept"
@@ -304,6 +353,28 @@ def restore_credential_key(mirror, path, replace=False):
         if os.path.exists(temporary):
             os.unlink(temporary)
     return "restored"
+
+
+def restore_key_files(env, replace=False, mirror=None):
+    """credential.key, github-app.key and slack.key back beside the restored database. A backup made before the last two
+    were copied has neither: that is said, not an error (Health then names what cannot be opened). Each file is tried
+    even when another fails; the exit status says whether any did."""
+    mirror = mirror or mirror_from_env(env)
+    failed = 0
+    said = {CREDENTIAL_KEY: ("the credential key", "none was ever made, or AWS KMS holds the data key")}
+    for name, path, copy in [(CREDENTIAL_KEY, credential_key_path(env), CREDENTIAL_KEY_COPY)] + \
+            [(name, key_file_path(env, name), key_copy(name)) for name in KEY_FILES]:
+        what, why = said.get(name, (name, "nothing used it, or the backup predates copying it"))
+        try:
+            result = restore_credential_key(mirror, path, replace, copy)
+        except SystemExit as exc:
+            print(str(exc), file=sys.stderr)
+            failed += 1
+            continue
+        print({"restored": "tico: restored " + what,
+               "kept": "tico: " + what + " is already on the data volume; left as it is",
+               "missing": "tico: the backup holds no " + what + " (" + why + ")"}[result])
+    return 1 if failed else 0
 
 
 def is_empty(data_dir):
@@ -366,18 +437,21 @@ def check_new_company(data_dir, mirror, restore_failed=False, initialize_empty=F
     return None
 
 
-def write_status(mirror, path, credential_key=None):
-    """The time the database copy last moved, and when the credential key was last copied. The two are kept apart: a
-    round where one fails must not wipe what the other last did."""
+def write_status(mirror, path, credential_key=None, key_files=None):
+    """The time the database copy last moved, and when the key files were last copied. They are kept apart: a
+    round where one fails must not wipe what the others last did."""
     saved = _status_file({}, path)
     newest = mirror.newest(DB_LEVELS) if mirror is not None else None
-    if newest is None and credential_key is None:
+    if newest is None and credential_key is None and not key_files:
         return
     text = datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if newest is not None \
         else saved.get("last_replicated_at")
     data = {"last_replicated_at": text, "checked_at": _now()}
     if credential_key is not None or saved.get("credential_key"):
         data["credential_key"] = credential_key if credential_key is not None else saved["credential_key"]
+    kept = {**(saved.get("key_files") if isinstance(saved.get("key_files"), dict) else {}), **(key_files or {})}
+    if kept:
+        data["key_files"] = kept
     fd, temporary = tempfile.mkstemp(dir=Path(path).parent)
     with os.fdopen(fd, "w") as out:
         json.dump(data, out)
@@ -395,6 +469,7 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None):
     warning = status(env, path)["warning"]
     last_warned, done = 0.0, 0
     key_path, key_state, copied = credential_key_path(env), {}, None
+    file_states, files_copied = {name: {} for name in KEY_FILES}, {}
     while rounds is None or done < rounds:
         if warning and time.monotonic() - last_warned >= warn_every:
             print("tico: WARNING: " + warning, flush=True)
@@ -410,8 +485,15 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None):
         except Exception as exc:
             # The type only: nothing about the key, or what an error might quote of it, goes in a log.
             print("tico: warning: could not copy the credential key to the backup location: " + type(exc).__name__, flush=True)
+        for name in KEY_FILES:
+            try:
+                done_copy = sync_credential_key(key_file_path(env, name), mirror, file_states[name], key_copy(name))
+                if done_copy is not None:
+                    files_copied[name] = done_copy
+            except Exception as exc:
+                print("tico: warning: could not copy " + name + " to the backup location: " + type(exc).__name__, flush=True)
         try:
-            write_status(mirror, path, copied)
+            write_status(mirror, path, copied, files_copied)
         except Exception as exc:
             print("tico: warning: backup status failed: " + type(exc).__name__ + ": " + str(exc)[:200], flush=True)
         done += 1
@@ -427,11 +509,8 @@ def main(argv=None):
     elif command == "restore-blobs":
         n = restore_blobs(mirror_from_env(env), env.get("TICO_BLOB_DIR", "/data/blobs"))
         print("tico: restored %d attachment file(s)" % n)
-    elif command == "restore-credential-key":   # [--replace]: the key is put back beside the restored database
-        result = restore_credential_key(mirror_from_env(env), credential_key_path(env), "--replace" in argv)
-        print({"restored": "tico: restored the credential key",
-               "kept": "tico: the credential key is already on the data volume; left as it is",
-               "missing": "tico: the backup holds no credential key (none was ever made, or AWS KMS holds the data key)"}[result])
+    elif command == "restore-credential-key":   # [--replace]: every key file is put back beside the restored database
+        return restore_key_files(env, "--replace" in argv)
     elif command == "is-empty":
         return 0 if is_empty(argv[1]) else 1
     elif command == "check-new-company":   # DIR [--restore-failed] [--initialize-empty]; backups off: no mirror

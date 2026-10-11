@@ -379,6 +379,11 @@ APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JO
                  "WHERE a.requested_by{match} AND a.decision IS NULL")
 
 
+# The only tasks `status` looks at: a live one (its counts) or a private one (whether its focus may be shown).
+# A long-lived bot's finished company tasks are most of its rows and change nothing.
+STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
+
+
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
     {slug: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
@@ -387,7 +392,8 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(f"SELECT * FROM tasks WHERE owner{marks} OR requester{marks}", actors * 2):
+        for t in c.execute(f"SELECT * FROM tasks WHERE (owner{marks} OR requester{marks}) AND {STATUS_TASKS_SQL}",
+                           actors * 2):
             t = dict(t)
             for party in {t["owner"], t["requester"]}:
                 if party in actors:
@@ -408,7 +414,8 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
     row = dict(row)
     tid = row.get("task_id")
     tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        "SELECT * FROM tasks WHERE owner=? OR requester=?", ("bot:" + row["bot"], "bot:" + row["bot"]))]
+        f"SELECT * FROM tasks WHERE (owner=? OR requester=?) AND {STATUS_TASKS_SQL}",
+        ("bot:" + row["bot"], "bot:" + row["bot"]))]
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = H.task(c, tid)

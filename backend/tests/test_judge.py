@@ -103,3 +103,52 @@ def test_the_server_asks_typesafe_once_and_briefly():
     except J.JudgeError as exc:
         assert exc.retryable
     assert seen == [B.JEV_TIMEOUT] and B.JEV_TIMEOUT <= 10
+
+
+def test_the_daily_cap_is_a_setting_per_role(api):
+    engine = fake(api)
+    api.app.state.store.settings.decisions_daily_calls_owner = 1
+    assert get(api, "judge")["daily_calls"] == 1
+    post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})
+    result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
+    assert result.status_code == 429 and result.json()["error"]["code"] == "budget" and len(engine.calls) == 1
+
+
+def test_from_env_reads_the_daily_caps(monkeypatch, tmp_path):
+    from backend.config import Settings
+    monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
+    monkeypatch.setenv("TICO_DECISIONS_DAILY_CALLS_BOT", "250")
+    settings = Settings.from_env()
+    assert (settings.decisions_daily_calls_bot, settings.decisions_daily_calls_human) == (250, B.DAILY_CALLS["human"])
+    assert B.daily_cap(settings, "bot") == 250
+
+
+class Captured:
+    """A provider's HTTP API as the fallback sees it: remembers each request, answers with probabilities."""
+
+    def __init__(self):
+        self.requests = []
+
+    def __call__(self, request, timeout=None):
+        import io
+        self.requests.append({"url": request.full_url, "body": json.loads(request.data)})
+        text = json.dumps({"bucket": {"probabilities": {"archive": 0.2, "reply": 0.8}}, "is_ask": {"noul": 0.9}})
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": text}}]}).encode())
+
+
+def test_the_openrouter_fallback_sends_the_openrouter_model_id_and_skips_providers_without_a_key(monkeypatch, caplog):
+    opener = Captured()
+    monkeypatch.setattr("urllib.request.urlopen", opener)
+    pi = {"runtime": "pi", "model": "deepseek-v4.1-flash", "enabled": ["openrouter"]}
+    engine = B.fallback_engine(pi, env={"OPENROUTER_API_KEY": "synthetic"})
+    engine({"team": "Acme"}, QUESTIONS)
+    assert opener.requests[-1]["url"].startswith("https://openrouter.ai/")
+    assert opener.requests[-1]["body"]["model"] == "deepseek/deepseek-v4.1-flash"
+    # Cursor has no API the server can call: the next enabled provider with a key answers, and the log says why.
+    cursor = {"runtime": "cursor", "model": "cursor-auto", "enabled": ["cursor", "moonshot"]}
+    with caplog.at_level("INFO", logger="tico.judge"):
+        engine = B.fallback_engine(cursor, env={"OPENROUTER_API_KEY": "synthetic"})
+    assert engine is not None and "cursor" in caplog.text
+    engine({"team": "Acme"}, QUESTIONS)
+    assert opener.requests[-1]["body"]["model"] == "moonshotai/kimi-k3"
+    assert B.fallback_engine(cursor, env={}) is None

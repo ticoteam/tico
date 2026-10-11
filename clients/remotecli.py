@@ -468,6 +468,8 @@ def run(args, who=None):
         if sub == "refresh":
             return post("market/delta/refresh", {"today": args.today})
         if sub == "page":
+            if not args.body_file:
+                return client.get("market/pages/" + args.name)
             text = sys.stdin.read() if args.body_file == "-" else open(args.body_file).read()
             return post("market/pages/" + args.name, {"body": text})
         unverified = []

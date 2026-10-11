@@ -8,6 +8,7 @@ import json
 import os
 import plistlib
 import re
+import socket
 import stat
 import subprocess
 import sys
@@ -550,7 +551,7 @@ class Sync(Base):
         self.assertNotIn("update due", out)
 
 class OpenClaw(Base):
-    """The same connector for an OpenClaw profile: no MCP client, so the credential goes in tico.env and the
+    """The same connector for an OpenClaw profile: no MCP entry, so the credential goes in tico.env and the
     skill calls Tico through `call`; the job is `openclaw cron`."""
 
     def setUp(self):
@@ -581,7 +582,7 @@ class OpenClaw(Base):
         self.assertIn("TICO_AGENT_TOKEN=" + TOKEN, env.read_text())
         self.assertEqual(stat.S_IMODE(env.stat().st_mode), 0o600)
         self.assertFalse((self.state / "config.yaml").exists())
-        self.assertIn("no MCP client", out)
+        self.assertIn("no MCP entry in OpenClaw", out)
         saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
         self.assertEqual((saved["bot"], saved["harness"], saved["sync"]), ("claw", "openclaw", "1h"))
         self.assertEqual(stat.S_IMODE((self.config_dir / "openclaw-claw.json").stat().st_mode), 0o600)
@@ -614,6 +615,18 @@ class OpenClaw(Base):
         self.assertEqual(job["schedule"], {"kind": "every", "everyMs": 900000})
         self.assertEqual(self.run_cli("reinstall", "--harness", "openclaw", "--profile", "claw", "--sync", "off")[0], 0)
         self.assertEqual(self.jobs(), [])
+
+    def test_doctor_names_a_stopped_gateway_as_the_problem(self):
+        """With the Gateway down no sync runs, though the heartbeat keeps the bot online: doctor must not say all is well."""
+        self.pair()
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        (self.state / "openclaw.json").write_text(json.dumps({"gateway": {"mode": "local", "port": port}}))
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 1, out)
+        self.assertIn("the OpenClaw Gateway is not running", out)
+        self.assertNotIn("Everything needed is working", out)
 
     def test_uninstall_removes_the_job_the_skill_and_tico_env(self):
         self.pair()
@@ -653,6 +666,20 @@ class SkillFile(unittest.TestCase):
         self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)), {"connector", "profile"})
         rendered = H.render_skill(text, "openclaw", "claw", "/usr/bin/python3")
         self.assertNotIn("{{", rendered)
+
+    def test_every_argument_example_fits_its_tool(self):
+        """An agent without MCP sees no tool schema, only these examples: a wrong key is a refused call, and a
+        message never marked read is answered again on the next run."""
+        from clients import hubtools
+        text = " ".join(self.PATH.read_text().split())
+        examples = re.findall(r"`(hub_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
+        self.assertGreaterEqual({name for name, _ in examples},
+                                {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_update"})
+        for name, example in examples:
+            schema = hubtools.BY_NAME[name]["inputSchema"]
+            keys = set(json.loads(example))
+            self.assertLessEqual(set(schema.get("required", [])), keys, (name, example))
+            self.assertLessEqual(keys, set(schema["properties"]), (name, example))
 
 
 class Interval(unittest.TestCase):

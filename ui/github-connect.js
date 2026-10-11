@@ -1,6 +1,8 @@
 /* Tools > GitHub: connect the team's GitHub organization through a GitHub App the
    owner creates there (docs/github-app.md). The private key never reaches the browser. */
 'use strict';
+const LOST_KEY_CONFIRM = 'The key for the saved GitHub App and directory sync secrets is lost, so they cannot be opened. Replace them? Any saved GitHub App and all directory sync credentials are removed, and you enter them again.';
+
 window.mountGithubConnect = async function (host) {
   if (!host) return;
   const text = value => { const s = document.createElement('span'); s.textContent = value ?? ''; return s.innerHTML; };
@@ -60,7 +62,14 @@ window.mountGithubConnect = async function (host) {
     const query = new URLSearchParams({org: form.org.value.trim(), administration: String(form.administration.checked)});
     if (form.name.value.trim()) query.set('name', form.name.value.trim());
     try {
-      const setup = await get('/v2/github/app/manifest?' + query);
+      let setup;
+      try { setup = await get('/v2/github/app/manifest?' + query); }
+      catch (error) {
+        // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
+        if (error.body?.error?.code !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
+        await post('/v2/github/app/replace-lost-key', {});
+        setup = await get('/v2/github/app/manifest?' + query);
+      }
       const post_form = document.createElement('form');
       post_form.method = 'post'; post_form.action = setup.action;
       const field = document.createElement('input');
