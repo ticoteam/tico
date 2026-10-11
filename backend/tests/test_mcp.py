@@ -1,5 +1,7 @@
 """The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
 
+import base64
+import hashlib
 import json
 
 import pytest
@@ -186,6 +188,14 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     err, hidden = call(api, "hub_task_question", {"question": "Renew the vendor contract today?", "on": "cara"},
                        token=attempt["token"])
     assert err and hidden["error"] == "privacy"
+    # With a file, the same refusal comes before any bytes are stored.
+    png = base64.b64encode(b"\x89PNG never stored").decode()
+    picture = {"question": "Which banner?", "on": "cara", "options": [
+        {"label": "A", "file": {"name": "a.png", "content_base64": png}}, {"label": "B"}]}
+    r = api.post("/api/v2/task-questions", json=picture, headers=headers(attempt["token"]))
+    assert r.status_code == 403 and not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG never stored").hexdigest()))
+    r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"]))
+    assert r.status_code == 200 and r.json()["question"]["ask"]["questions"][0]["options"][0]["file"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0

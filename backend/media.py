@@ -401,6 +401,7 @@ def write_upload(store, request, body, uploads, fn):
 
 
 def install_media(app, store, auth, mutate, send_message, task_create):
+    from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
     from .file_metadata import Metadata
@@ -452,8 +453,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
     def task_question(request: Request, body: M.TaskQuestion):
         """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
         question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
-        leaves half a question behind. Option files come in the request and are attached to the new task; their
-        bytes are stored only once every check has passed, and removed again if the write is still refused."""
+        leaves half a question behind. Option files come in the request and are attached to the new task. Every
+        check runs first in a read, the bytes are stored with no transaction open (an upload never holds the write
+        lock), then the write runs the cheap checks again; bytes this request added are removed if it is refused."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -475,20 +477,50 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
             decoded.append((data, option.file.name, mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"))
         question = body.question.strip()
-        added = []                  # digests this request stored that were not there before
 
-        def store_bytes(data, kind):
-            digest = hashlib.sha256(data).hexdigest()
-            fresh = not blobs.has(digest)
-            stored = blobs.put(data, kind)
-            if fresh and stored not in added:
-                added.append(stored)
-            return stored
-
-        def work(c):
+        def checked(c):
+            """The cheap checks, run in the read before any upload and again in the write: who decides, and the
+            parent the bot may file under."""
             person = H.resolve_actor(c, body.on)
             if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
                 raise Problem("validation", f"{body.on} is not a person on the team", 422)
+            parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
+            return person, parent
+
+        def unreadable(person):
+            return Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
+                           "ask someone who can read your work, or file it without --private", 403)
+
+        if any(decoded):
+            replay = replay_upload(store, request, body.model_dump())
+            if replay is not None:
+                return replay
+            with store.read_transaction() as c:
+                person, parent = checked(c)
+                # A company-visible task: the person reads it by the bot's activity access, checked here before
+                # anything is stored. A private one names its parties as it is made; the write checks that.
+                private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
+                               or parent and H.task_private(c, parent))
+                if not private:
+                    try:
+                        auth.task_row(c, auth.identity_for_actor(c, person),
+                                      {"id": "", "owner": who.actor, "requester": who.actor, "private": 0})
+                    except Problem as exc:
+                        raise unreadable(person) from exc
+        stored, added = [], []      # each option's stored digest; those this request added
+        for item in decoded:
+            if not item:
+                stored.append(None)
+                continue
+            digest = hashlib.sha256(item[0]).hexdigest()
+            fresh = not blobs.has(digest)
+            digest = blobs.put(item[0], item[2])
+            if fresh and digest not in added:
+                added.append(digest)
+            stored.append(digest)
+
+        def work(c):
+            person, _ = checked(c)
             made = task_create(c, who, M.TaskCreate(
                 title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
                 relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []))
@@ -498,14 +530,12 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             try:
                 auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
             except Problem as exc:
-                raise Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
-                              "ask someone who can read your work, or file it without --private", 403) from exc
+                raise unreadable(person) from exc
             choices = []
-            for option, item in zip(options, decoded):
+            for option, item, digest in zip(options, decoded, stored):
                 choice = {"label": option.label, **({"description": option.description} if option.description else {})}
                 if item:
                     data, name, kind = item
-                    digest = store_bytes(data, kind)
                     blob = register(c, who, digest, len(data), name, kind)
                     fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
                     c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
