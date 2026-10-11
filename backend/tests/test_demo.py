@@ -100,3 +100,31 @@ def test_nothing_leaves_the_machine(built):
     assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
     with pytest.raises(OSError):                                                   # and the block is gone outside
         socket.create_connection(("192.0.2.1", 9), timeout=0.2)
+
+
+def test_the_tidy_sample_is_a_reviewed_check_and_a_decision_left_to_ana(built):
+    """The outside-specialist example: the check is done and closed by Ana, the booking waits on her, nothing is live."""
+    from backend.demo_content import SAMPLE_LABEL
+    with sqlite3.connect(built[1].db_path) as db:
+        db.row_factory = sqlite3.Row
+        task = lambda title: db.execute("SELECT * FROM tasks WHERE title=?", (title,)).fetchone()
+        check = task("Check the office is ready for next week's customer workshop")
+        follow_up = task("Decide whether to request an extra cleaning before the workshop")
+        moves = db.execute("SELECT actor,field,new FROM task_events WHERE task_id=? AND field IN ('status','note') "
+                           "ORDER BY ts", (check["id"],)).fetchall()
+        relation = db.execute("SELECT kind FROM task_relations WHERE from_task=? AND to_task=?",
+                              (follow_up["id"], check["id"])).fetchone()
+    assert (check["owner"], check["requester"], check["status"]) == ("bot:coo", "human:ana", "closed")
+    assert [tuple(m)[:2] for m in moves][-3:] == [("bot:coo", "note"), ("bot:coo", "status"), ("human:ana", "status")]
+    assert moves[-3]["new"].startswith(SAMPLE_LABEL) and "no booking has been made" in moves[-3]["new"]
+    assert [m["new"] for m in moves[-2:]] == ["done", "closed"] and check["closed_by"] == "human:ana"
+    assert (follow_up["owner"], follow_up["requester"], follow_up["status"]) == ("human:ana", "bot:coo", "open")
+    assert relation["kind"] == "follow_up"
+    demo.ATTEMPTS.clear()
+    with demo.network_blocked(), signed_in(built[1]) as api:                    # reading it reaches no one
+        comments = api.get(f"/api/v2/tasks/{check['id']}/comments").json()["comments"]
+        assert any(SAMPLE_LABEL in c["body"] and "TIDY" in c["body"] for c in comments)
+        tidy = [t for t in api.get("/api/v2/bots/coo/tools").json()["tools"] if t["service"] == "tidy"]
+        assert len(tidy) == 1 and tidy[0]["status"] == "unknown" and SAMPLE_LABEL in tidy[0]["note"]   # never shown healthy
+        assert not any(t["service"] == "tidy" for t in api.get("/api/v2/bots/support/tools").json()["tools"])
+    assert demo.ATTEMPTS == []

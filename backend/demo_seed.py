@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from . import demo_content as D
 from . import docs, goals as G, hubdb, market, onboarding, providers, routines, updates
+from . import task_relations as TR
 from .auth import Identity
 from .scheduler import next_due, stamp
 from .store import H, encode
@@ -182,6 +183,7 @@ class Builder:
             bots = {slug: {"ready": True, "runtime": "claude", "model": self.settings.default_model, "repository_present": True,
                            "repository_revision": SEED_SHA[:7], "configuration_valid": True, "problems": []}
                     for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "goal-manager"]}
+            bots[D.SPECIALIST["bot"]]["tools"] = [D.SPECIALIST["tool"]]
             readiness = {"schema_version": 1, "bots": bots,
                          "runtimes": {name: {"installed": True, "authenticated": "ready",
                                              "version": "2.4.1" if name == "claude" else "0.9.3",
@@ -319,6 +321,14 @@ class Builder:
                 task = hubdb.task_create(c, owner, title, body, target, allow_planned=True)
                 self.tasks[key] = task["id"]
         self.write(work)
+
+        def specialist(c):
+            """The Assistant's question to TIDY and the sample reply, on the check task; the decision is a follow-up."""
+            bot, (days, text) = "bot:" + D.SPECIALIST["bot"], D.SPECIALIST["reply"]
+            self.at(days=days)
+            hubdb.task_comment(c, bot, self.tasks[D.SPECIALIST["check"]], text, wake=False)
+            TR.relate(c, bot, self.tasks[D.SPECIALIST["follow_up"]], self.tasks[D.SPECIALIST["check"]], kind="follow_up")
+        self.write(specialist)
 
         def move(c):
             for key, title, body, owner, requester, status, created, changed, note in D.TASKS:

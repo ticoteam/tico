@@ -99,6 +99,23 @@ UPDATES = {
         ]},
 }
 
+# A specialist operated outside Tico (docs/connect-tools.md, "Work with a specialist outside Tico"): the Assistant checks
+# the office before a customer workshop with TIDY, a cleaning and maintenance company, through a Tool. TIDY's reply is
+# written here; nothing is connected, requested or booked, and there is no real price, address, account or job number.
+SAMPLE_LABEL = "Sample external-service interaction — no live connection."
+SPECIALIST = {
+    "bot": "coo", "check": "workshop-check", "follow_up": "workshop-cleaning",
+    # The `tools:` entry its computer reports: no credential and no server, so the Tools card says "Not checked".
+    "tool": {"service": "tidy", "can": ["read"],
+             "note": SAMPLE_LABEL + " TIDY, a cleaning and maintenance company. Ask about the office's cleaning plan; "
+                                    "a person approves any booking or spending first."},
+    # (days ago, the Assistant's comment on the check task)
+    "reply": (1.2, SAMPLE_LABEL + "\n\nAsked TIDY: \"What cleanings are scheduled for our office over the next two "
+                                 "weeks?\"\n\nTIDY's sample reply:\n\n> One regular cleaning is scheduled, the Monday after "
+                                 "the workshop. Nothing is scheduled before it.\n\nThis was a question only. Nothing was "
+                                 "requested or booked."),
+}
+
 # (slug, title, body, owner, requester, final status, days ago created, days ago last change, note)
 # Human-owned titles start with a verb because that is the rule for anything a person has to read.
 TASKS = [
@@ -120,6 +137,12 @@ TASKS = [
     ("harborly", "Route the Harborly partner enquiry", "A partner enquiry came in by email. Send it to whoever should answer.",
      "bot:coo", "human:ana", "done", 2.2, 1.9,
      "Sent to Sales. Sales replied to Harborly with one question about their volume."),
+    ("workshop-check", "Check the office is ready for next week's customer workshop",
+     "Check whether our office is ready for next week's customer workshop. Show the cleaning plan and anything needing "
+     "my decision.", "bot:coo", "human:ana", "closed", 1.3, 1.1,
+     SAMPLE_LABEL + " I checked the office's cleaning plan with TIDY. The sample schedule has no cleaning before the "
+     "workshop. I recommend requesting an additional visit; no booking has been made. Whether to request it is on its "
+     "own task for you."),
     ("release-post", "Draft the spring release announcement",
      "Write a 400-word post about the spring release for the blog. Use two customer quotes.",
      "bot:content", "human:ana", "review", 3.1, 0.6,
@@ -155,6 +178,10 @@ ASKS = [
      "Nine refund requests came in last week and two were over $200. Both are waiting on this.", 1.5, "open"),
     ("pricing-copy", "Review the pricing page copy before it goes live", "bot:content", "human:ben",
      "The revised copy is on the task. Please check that the plan names match what Support tells customers.", 0.7, "open"),
+    ("workshop-cleaning", "Decide whether to request an extra cleaning before the workshop", "bot:coo", "human:ana",
+     SAMPLE_LABEL + "\nThe office has no cleaning scheduled before next week's customer workshop. I recommend asking TIDY "
+     "for one extra visit. If you say yes, I will ask TIDY for times and terms and bring them to you before anything is "
+     "booked. No booking has been made and nothing has been spent.", 1.1, "open"),
     ("approve-followup", "Approve the follow-up email to Dana Reyes", "bot:sales", "human:ana",
      "This is the one email in the batch that needs you. It goes from sales@acme.example only if you approve.\n\n"
      "> Hi Dana,\n>\n> Thanks for trying Acme this week. You added four projects, and I noticed you have not tried "
@@ -221,6 +248,7 @@ TURNS = [
     ("inbox", 51, "routine", "Sorted the inbox: 26 filed, 6 flagged.", 37900, 2200),
     ("botops", 100, "task", "Added Content from the catalog.", 91000, 8800),
     ("coo", 78, "task", "Routed four requests.", 21400, 1400),
+    ("coo", 26.5, "task", "Checked the workshop cleaning plan with TIDY (sample); nothing booked.", 24600, 1900),
     ("librarian", 125, "task", "Summarised two competitor pages.", 58300, 4700),
     ("support", 1.5, "message", "Drafted replies for three tickets.", 41200, 3100),
     ("support", 5, "routine", "Morning triage: 11 drafts ready.", 88400, 7200),
