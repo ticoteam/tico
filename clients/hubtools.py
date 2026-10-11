@@ -610,6 +610,51 @@ def task_ask(api, args):
     return api.post(f"tasks/{args['id']}/ask", {"text": args["text"]}, key=_key(args))
 
 
+@tool("hub_task_question", "Put one decision to a person as its own task, in one call: a pick between 2 to 6 "
+      "options (an option may carry an image or file) or, with no options, Yes / No. The task is yours and waits on "
+      "them; their answer wakes you and you mark it done. One decision per task; write the question so it makes "
+      "sense on its own.",
+      {"question": _s("The question, readable with no other context", maxLength=300),
+       "on": _s("The person who decides: their id"),
+       "options": {"type": "array", "minItems": 2, "maxItems": 6, "description": "The choices; omit for Yes / No",
+                   "items": {"type": "object", "additionalProperties": False, "required": ["label"], "properties": {
+                       "label": _s("A short label", maxLength=60),
+                       "description": _s("One line more about it", maxLength=200),
+                       "path": _s("A local image or file shown with this option (on the computer that runs you)")}}},
+       "title": _s("Task title; defaults to the question"),
+       "body": _s("What the decision is for; defaults to the question"),
+       "parent": _s("Parent task id, when this decision is part of a bigger task"),
+       "private": {"type": "boolean", "description": "Only you and the person may read it"}},
+      required=("question", "on"), writes=True)
+def task_question(api, args):
+    options = [dict(o) for o in args.get("options") or []]
+    for item in args.get("option") or []:            # the CLI's --option LABEL[=FILE], repeatable
+        label, _, path = str(item).partition("=")
+        options.append({"label": label.strip(), **({"path": path.strip()} if path.strip() else {})})
+    if not options:
+        options = [{"label": "Yes"}, {"label": "No"}]
+    if not 2 <= len(options) <= 6:
+        raise ValueError("A question has 2 to 6 options, or none for Yes / No")
+    question = str(args["question"]).strip()
+    made = task_create(api, {"owner": "me", "title": args.get("title") or question, "body": args.get("body") or question,
+                             "parent": args.get("parent"), "private": args.get("private"),
+                             "operation_id": _key(args, ":task")})
+    tid = made["task"]["id"]
+    for index, option in enumerate(options):
+        path = option.pop("path", None)
+        if path:
+            attached = task_attach(api, {"id": tid, "name": Path(path).name, "path": path,
+                                         "operation_id": _key(args, f":option:{index}")})
+            option["file"] = f"{attached['file_id']}@{attached['version']}"
+    ask = {"questions": [{"id": "decision", "header": "", "question": question, "options": options,
+                          "multi": False, "other": True}], "who": args["on"]}
+    asked = api.post(f"tasks/{tid}/comments", {"text": question, "ask": ask}, key=_key(args, ":ask"))
+    current = api.get("tasks/" + tid)["task"]
+    waiting = api.post("tasks/" + tid, {"version": current["version"], "status": "waiting", "waiting_on": args["on"],
+                                         "note": question}, key=_key(args, ":wait"))
+    return {"task": waiting["task"], "question": asked["comment"]}
+
+
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
       "Done stays Done, including tasks you requested for yourself; closing is a separate decision.",

@@ -324,6 +324,8 @@ def run(args, who=None):
             return via_tool(client, args)
         if sub == "ask":
             return post(f"tasks/{args.id}/ask", {"text": args.text})
+        if sub == "question":
+            return via_tool(client, args)
         if sub == "comment":
             from clients.task_review import ask_from_args, attachment
             ask = ask_from_args(args)

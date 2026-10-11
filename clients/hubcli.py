@@ -25,6 +25,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--goal ID] [--dry-run] the checks a create would fail, nothing written
                     [--next-run]           for a bot: no wake; its next run carries the task
     hub task ask <id> "<question>"
+    hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]
+                                           one decision as its own task, waiting on them; none for Yes / No
     hub task comment <id> "<text>"         on the record with your name
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
@@ -740,6 +742,15 @@ def parser():
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")
+    s = task.add_parser("question", help="put one decision to a person as its own task: a pick or Yes / No")
+    s.add_argument("question")
+    s.add_argument("--on", required=True, help="the person who decides")
+    s.add_argument("--option", action="append", help="LABEL or LABEL=FILE (an image shows with it); repeat, 2 to 6; none for Yes / No")
+    s.add_argument("--title")
+    s.add_argument("--body")
+    s.add_argument("--parent")
+    s.add_argument("--private", action="store_true", default=None)
+    s.set_defaults(fn="task question")
     s = task.add_parser("update")
     visibility = s.add_mutually_exclusive_group()
     visibility.add_argument("--private", dest="private", action="store_true", default=None)

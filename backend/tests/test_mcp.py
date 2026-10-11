@@ -167,3 +167,15 @@ def test_malformed_mcp_params_are_json_rpc_errors(api, method, params):
     response = api.post("/api/v2/mcp", json={"jsonrpc": "2.0", "id": 7, "method": method, "params": params},
                         headers=headers())
     assert response.status_code == 200 and response.json()["error"]["code"] == -32602
+
+
+def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
+    _, _, attempt = setup_attempt(api)
+    err, out = call(api, "hub_task_question", {"question": "Ship the September brief today?", "on": "ana"},
+                    token=attempt["token"])
+    assert not err, out
+    made = out["task"]
+    assert (made["owner"], made["requester"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
+    assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]
+    item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
+    assert item["kind"] == "question" and item["ask"]["from_actor"] == "bot:ops"
