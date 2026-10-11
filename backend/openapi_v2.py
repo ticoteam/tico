@@ -298,6 +298,9 @@ STABLE = [
     ("/api/v2/librarian/conversations/{cid}/reopen", "post", "Docs", "reopenDocsConversation",
      "Make the caller's own Docs conversation current, archiving their current one; 409 busy while it is answering",
      "DocsReopened"),
+    ("/api/v2/librarian/research", "post", "Docs", "requestLibrarianResearch",
+     "Ask the Librarian to research the web and add what it finds, cited, to one doc, market page or market entity "
+     "(`target`), optionally one `section` of it; it files one task to the Librarian", "LibrarianResearchFiled"),
     ("/api/v2/librarian/turn-on", "post", "Docs", "turnOnLibrarian",
      "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it", None),
     ("/api/v2/assistant", "get", "Assistant", "getAssistant",
@@ -730,6 +733,7 @@ SCHEMAS = {
                                                          "last_message_at": "n", "closed_at": "n"})),
                               "next_offset": {"type": ["integer", "null"]}}),
     "DocsReopened": obj({"conversation_id": "s"}),
+    "LibrarianResearchFiled": obj({"task_id": "s", "bot": "s", "kind": "s", "target": "s"}),
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "

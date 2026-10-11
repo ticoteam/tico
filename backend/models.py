@@ -1531,6 +1531,13 @@ class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
+class LibrarianResearch(Contract):
+    """A person asks the Librarian to research and add to one page (docs/librarian.md#research)."""
+    target: Annotated[str, Field(min_length=1, max_length=300)]     # a doc id, market/<page> or a market entity id
+    section: Annotated[str, Field(max_length=300)] = ""             # a heading on it; empty is the whole page
+    instructions: Annotated[str, Field(min_length=1, max_length=4000)]
+
+
 class DocsAsk(Contract):
     question: Annotated[str, Field(min_length=1, max_length=4000)]
     conversation_id: Annotated[str | None, Field(max_length=100)] = None

@@ -1759,6 +1759,19 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
+    @app.get("/api/v2/market/pages/{name}")
+    def page_read(request: Request, name: str):
+        """One market page as it reads now, for a curator about to add to it (`hub market page <name>`)."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            row = c.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'",
+                            ("market/" + name,)).fetchone()
+        if not row:
+            raise Problem("not_found", f"There is no market page {name}", 404)
+        page = json.loads(row["payload_json"])
+        return {"name": name, "title": page.get("title") or name, "body": page.get("content") or ""}
+
     @app.post("/api/v2/market/pages/{name}")
     def page_write(request: Request, name: str, body: M.MarketPage):
         """The curator rewrites one of the eight narrative pages from the graph (#488). The weekly
