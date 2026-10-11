@@ -74,9 +74,7 @@ function pageDecide() {
   });
   const keys = ev => decideKey(st, ev);
   document.addEventListener('keydown', keys);
-  const hide = () => decideCommit(st, true);
-  window.addEventListener('pagehide', hide);
-  st.off.push(() => document.removeEventListener('keydown', keys), () => window.removeEventListener('pagehide', hide));
+  st.off.push(() => document.removeEventListener('keydown', keys));
   if (typeof liveOn === 'function') st.off.push(liveOn('needs', d => { if (DEC === st) decideRefresh(st, d.items || []); }));
   decideSync(st, S.v2?.needs || []);
   decideRender(st);
@@ -104,8 +102,16 @@ function decideRefresh(st, items) {
   const before = st.queue[0], card = before && st.cards.get(before);
   decideSync(st, items);
   if (st.queue[0] !== before) decideRender(st, true);
-  else if (card && st.cards.get(before) !== card) { decidePaintHead(st); decidePaintBody(st); }
+  else if (card && st.cards.get(before) !== card) decideRedraw(st);
   else decidePaintHead(st);
+}
+// The current card changed under it (a live refresh): draw it again, buttons included, keeping what was typed.
+function decideRedraw(st) {
+  const box = $('.decide .dc-note textarea'), draft = box?.value || '', typing = box && document.activeElement === box;
+  decideRender(st);
+  const again = $('.decide .dc-note textarea');
+  if (again && draft) { again.value = draft; again.dispatchEvent(new Event('input', {bubbles: true})); }
+  if (again && typing) again.focus({preventScroll: true});
 }
 
 // ---- drawing
@@ -125,6 +131,8 @@ function decideRender(st, enter = false) {
   if (!root) return;
   decidePaintHead(st);
   const c = decideCurrent(st), stage = $('.dc-stage', root), actions = $('.dc-actions', root);
+  st.shown = c?.key || null;                // every button and key acts on this card, and only once
+  st.busy = false;
   root.classList.toggle('dc-empty', !c);
   if (!c) {
     stage.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="back">Back to tasks</button></div>';
@@ -161,15 +169,16 @@ function decidePaintBody(st) {
 }
 const decideTwo = c => c.type === 'pick' && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
+const decideYesNo = c => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
 function decideOrder(c) {
-  const labels = c.q.options.map(o => String(o.label).toLowerCase());
-  return labels.join() === 'yes,no' ? [1, 0] : [0, 1];
+  return decideYesNo(c) ? [1, 0] : [0, 1];
 }
 function decideActionsHTML(c) {
   const k = key => `<kbd>${key}</kbd>`;
   if (decideTwo(c)) return decideOrder(c).map((i, n) => {
     const o = c.q.options[i];
-    return `<button type="button" class="${n && String(o.label).toLowerCase() === 'yes' ? 'primary' : ''}" data-dc="pick" data-i="${i}">${esc(o.label)}${k(i + 1)}</button>`;
+    const yn = decideYesNo(c) ? String(o.label)[0].toUpperCase() : i + 1;
+    return `<button type="button" class="${n && String(o.label).toLowerCase() === 'yes' ? 'primary' : ''}" data-dc="pick" data-i="${i}">${esc(o.label)}${k(yn)}</button>`;
   }).join('');
   if (c.type === 'pick') return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" disabled>Pick one</button>`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
@@ -240,8 +249,14 @@ async function decideLoad(st, c) {
 const decideNeedsNote = c => c.type === 'task' && String(c.it.owner || '').startsWith('human:') && String(c.it.requester || '').startsWith('bot:');
 const decideBot = c => actorLabel(c.type === 'pick' ? c.it.ask.from_actor : c.type === 'approve' ? c.it.requester
   : [c.it.owner, c.it.requester].find(a => String(a || '').startsWith('bot:')) || c.it.requester) || 'Tico';
-// What an action sends, as requests run in order when it commits, and what the toast says.
+// What an action sends, as requests run in order when it commits, and what the toast says. Each request has its own
+// idempotency key from the start, so sending it again (pagehide while it is in flight) lands once.
 function decideWrite(c, what, i, note) {
+  const out = decideWriteBody(c, what, i, note);
+  out.writes = out.writes.map(w => ({...w, key: newRequestId()}));
+  return out;
+}
+function decideWriteBody(c, what, i, note) {
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
   if (what === 'pick') {
     const ask = c.it.ask, q = c.q, o = q.options[i], t = ask.refs?.target;
@@ -254,12 +269,14 @@ function decideWrite(c, what, i, note) {
   if (what === 'yes' || what === 'no')
     return {writes: [{path: `/v2/approvals/${id}`, body: {decision: what === 'yes' ? 'approved' : 'declined', ...(note ? {note} : {})}}],
       label: `${what === 'yes' ? 'Approved' : 'Declined'} · sent to ${to}`};
-  if (what === 'done') return {writes: [{path: `/v2/tasks/${id}`, version: c.it.version || 1, body: {status: 'done', ...(note ? {note} : {})}}], label: 'Done'};
+  // Done goes with the version the card showed: a task that changed meanwhile is refused, not finished unseen.
+  if (what === 'done') return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
-function decideAct(st, what, i) {
+function decideAct(st, what, i, shown = st.shown) {
   const key = st.queue[0], c = st.cards.get(key), root = $('.decide');
-  if (!c || !root) return;
+  // A second tap while the card leaves, or a button from a card no longer current, does nothing.
+  if (!c || !root || st.busy || key !== shown) return;
   const box = $('.dc-note textarea', root), note = box?.value.trim() || '';
   const card = $('.dc-card', root);
   if (what === 'skip') {
@@ -293,37 +310,53 @@ function decideAct(st, what, i) {
 function decideLeaveCard(st, card, side) {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!card || reduce) { decideRender(st, false); return; }
+  st.busy = true;
   card.classList.add('out-' + side);
   card.style.pointerEvents = 'none';
   setTimeout(() => { if (DEC === st) decideRender(st, true); }, 170);
 }
-// Sends the waiting action. A Done reads the task's version first; on leaving the page (pagehide) the requests go with
-// keepalive, without waiting, a Done with the version the card was drawn with.
-async function decideCommit(st, leaving = false) {
+// Writes on their way: in the outbox until the server confirms each request, whether or not Decide is still open.
+const DEC_OUTBOX = new Set();
+// Sends the waiting action, its requests in order.
+async function decideCommit(st) {
   const p = st.pending;
   if (!p) return;
   st.pending = null;
   clearTimeout(p.timer);
   decideToastHide(st, p);
-  if (leaving) {
-    for (const w of p.write.writes) {
-      fetch(API + w.path, {method: 'POST', keepalive: true, body: JSON.stringify(w.version ? {...w.body, version: w.version} : w.body),
-        headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}}).catch(() => {});
-    }
-    return;
-  }
+  p.sent = 0;
+  DEC_OUTBOX.add(p);
   try {
     for (const w of p.write.writes) {
-      const body = w.version ? {...w.body, version: (await get(w.path)).task.version} : w.body;
-      await post(w.path, body);
+      await post(w.path, w.body, w.key);
+      p.sent++;
     }
     if (!liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); }), 300);
   } catch (e) {
-    toast(e.message, true);
+    const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
+    toast(changed ? 'That task changed. Look again.' : e.message, true);
     st.handled.delete(p.key);
-    if (DEC === st && !st.queue.includes(p.key)) { st.queue.unshift(p.key); decideRender(st, true); }
+    st.data.delete(String(p.key).replace(/^task:/, ''));
+    if (DEC === st) {
+      if (!st.queue.includes(p.key)) st.queue.unshift(p.key);
+      else st.queue = [p.key, ...st.queue.filter(k => k !== p.key)];
+      decideRender(st, true);
+      if (changed) void v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); });
+    }
+  } finally {
+    DEC_OUTBOX.delete(p);
   }
 }
+// Leaving the page: what waits on its toast and what is still on its way go out with keepalive, under the same keys.
+function decideFlush() {
+  const all = [...DEC_OUTBOX];
+  if (DEC?.pending) { all.push(DEC.pending); clearTimeout(DEC.pending.timer); DEC.pending = null; }
+  for (const p of all) for (const w of p.write.writes.slice(p.sent || 0)) {
+    fetch(API + w.path, {method: 'POST', keepalive: true, body: JSON.stringify(w.body),
+      headers: {'Content-Type': 'application/json', 'Idempotency-Key': w.key}}).catch(() => {});
+  }
+}
+window.addEventListener('pagehide', decideFlush);
 function decideToast(st, text, undo) {
   const t = $('.decide .dc-toast');
   if (!t) return;
@@ -360,6 +393,7 @@ function decideKey(st, ev) {
   if (k === 's') what = 'skip';
   else if (k === 'c') { ev.preventDefault(); $('.decide .dc-note textarea')?.focus(); return; }
   else if (c.type === 'approve' && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
+  else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }
   else if (c.type === 'task' && k === 'd') what = 'done';
   else if (c.type === 'pick' && /^[1-6]$/.test(k) && Number(k) <= c.q.options.length) { what = 'pick'; i = Number(k) - 1; }
   if (!what) return;
