@@ -686,8 +686,8 @@ database stores. A database restored without them cannot open those secrets:
 | File in `/data` | Opens | When it exists |
 |---|---|---|
 | `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
-| `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or a GitHub App connected before it was set) |
-| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` |
+| `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or GitHub connected, or directory sync saved, before it was set) |
+| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` (or Slack tokens saved before it was set) |
 
 The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
 `tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
@@ -731,6 +731,22 @@ credentials sealed with it (recorded as `github.lost_key_replaced`), and you ent
 /api/v2/github/app/replace-lost-key`, or `replace_lost_key` on `PUT /api/v2/directory`; never through a proposal card). With
 `TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
 `github-app.key` or `slack.key` from before KMS was set needs keeping.
+
+**Setting `TICO_CREDENTIAL_KMS_KEY` after GitHub, directory sync or Slack were connected** needs nothing else: a secret
+sealed with `github-app.key` or `slack.key` before then still opens with that file, and the first time the server reads
+it (a GitHub token, a webhook, a directory sync, the Slack gateway starting) it is re-sealed with the KMS-wrapped key, once,
+and the server log says which (`Re-sealed github_app app ...`, never a secret). Keep both files on the volume and in the
+backup: a backup from before KMS still needs them, and reading never makes a new one. If a file is gone, Health's
+**Stored secrets** names what it sealed; enter those again.
+
+**Hand-run backups (`python -m backend.manage backup`) carry the key files too.** The bundle the command uploads (the
+database at `--key`, its manifest, and the attachments) also holds each of `credential.key`, `github-app.key` and
+`slack.key` present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
+bytes stops the backup before its manifest is published. `python -m backend.backup --bucket ... --key ... --database
+<new path> ...` restores them beside the new database (mode 0600) after checking each against the manifest, and refuses,
+before restoring anything, when a different key of that name is already in the target directory. A bundle made before
+this release has no key files: copy them from `credential-key/` in the automatic backup, or from the old volume. Keep the
+bundle's bucket as private as the automatic one: the database and its keys are in it together.
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
 to restore the database, attachments and key files together:

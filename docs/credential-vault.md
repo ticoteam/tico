@@ -125,7 +125,28 @@ as the thing to protect: the data key is then wrapped by KMS in the database.
 Two more key files sit beside it and are copied and restored the same way: `github-app.key` (the GitHub App's private key,
 client secret and webhook secret, and the directory sync credentials) and `slack.key` (the Slack tokens). They are not the
 vault's key, so a restore needs all three ([Backups and restore](install.md#backups-and-restore)). Health's **Stored
-secrets** check names any secret this server cannot open and the file to put back.
+secrets** check names any secret this server cannot open and the file to put back. Hand-run bundles (`python -m
+backend.manage backup`) carry all three as well.
+
+With `TICO_CREDENTIAL_KMS_KEY` set, new GitHub App, directory sync and Slack secrets are sealed with the vault's
+KMS-wrapped key. One sealed with `github-app.key` or `slack.key` before KMS was set still opens with that file, and is
+re-sealed with the vault's key the first time it is read. Reading never makes a key file.
+
+## Other secrets the vault seals
+
+**Support ticket secrets.** Tico HQ answers a support request with a secret for that ticket alone; the server keeps it
+sealed with the vault's data key (`support_tickets.hq_secret`, AES-256-GCM, bound to the ticket), never in plaintext.
+On a fresh install the first ticket makes the vault's key, as the first credential would (`credential.key`, or the KMS
+data key): it is then backed up like any key. When the vault cannot be opened (`credential.key` missing, KMS
+unreachable), filing a ticket is refused with `vault_unavailable` before anything is sent to HQ, so no ticket is made
+that this server could not keep. Secrets an older release kept in plaintext are sealed when the server starts; that is
+idempotent, and when the vault cannot be opened at start they are sealed on the next start or the next use.
+
+**A pairing's agent credential is not in the vault.** From approval until the Hermes or OpenClaw profile collects it, the
+minted credential waits in `agent_pairings.token` sealed to a public key derived from the pairing secret, which only the
+profile holds (X25519, HKDF-SHA256, AES-256-GCM). The server keeps the secret's hash and that public key, so neither the
+database nor the server can open it without the profile's next poll. It is wiped at the first heartbeat, or when the
+pairing expires.
 
 ## Credentials asked for in the chat
 
