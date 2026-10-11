@@ -63,7 +63,7 @@ Every file in `app/` and every feature file starts with `'use strict'`, as the o
 | avatars, sidebar, heartbeat, tooltip | bot avatars and blobs, the team tree, heartbeat and account menu, hover status |
 | issues, hub-v2, needs-you, bot-tasks | shared request rows and tables, hub v2 helpers, Needs you, a bot's tasks |
 | chat, pill, bot-page, bot-conversation, person-page, assistant-page | bot chat and its live reply, the composer, the bot and human pages, your Assistant |
-| tasks, task-modal, task-code, tasks-page, recurring | Tasks: rows and cards, the modal and its comments, the modal's Code and Subtasks rail and the PR badge, the page, routines |
+| tasks, task-modal, task-code, tasks-page, decide, recurring | Tasks: rows and cards, the modal and its comments, the modal's Code and Subtasks rail and the PR badge, the page, Decide (one card at a time), routines |
 | meetings, mail, messaging, credentials, sql, integrations, help | one page each |
 | settings, settings-*, subscriptions, vault, catalog | Settings: shell, one file per tab, the bot editor, access editor, subscriptions (computers, groups, a bot's), credential vault, template cards |
 | welcome, updates, goals, overview | setup, Updates, Goals, and the optional building overview |

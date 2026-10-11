@@ -13,6 +13,7 @@ const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
+const DECIDE = '#/decide';            // what is on my plate, one card at a time (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)
 const BOARD = '#/board';              // the old links still work, each opening its view
