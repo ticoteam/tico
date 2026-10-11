@@ -119,6 +119,47 @@ def test_fresh_groups_and_outage_fallback_keep_repository_selection(tmp_path, mo
     assert G.credential(config, "alpha", repository="Acme/docs") == "old-token"
 
 
+def test_a_held_token_is_reused_until_near_expiry_instead_of_asking_per_git_command(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    def at(minutes):
+        return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    grants = {"configured": True, "token": "write-token", "expires_at": at(60), "tokens": [
+        {"token": "write-token", "repositories": ["Acme/product"], "expires_at": at(60)},
+        {"token": "read-token", "repositories": ["Acme/docs"], "expires_at": at(60)}]}
+    hub = Hub(grants)
+    # The supervisor holds the hub's answer: one request for many git commands, per purpose.
+    for _ in range(5):
+        assert G.select_token(G.hub_token(hub, {"bot": "alpha", "purpose": "git"}), "Acme/docs") == "read-token"
+    assert G.hub_token(hub, {"bot": "beta", "purpose": "git"}) is grants
+    assert len(hub.calls) == 2
+    # A BotOps answer is shaped by the runs live when asked, so it is never held (hold=false, or by name).
+    G.hub_token(hub, {"bot": "botops", "purpose": "git"})
+    G.hub_token(hub, {"bot": "botops", "purpose": "git"})
+    grants["hold"] = False
+    G.hub_token(hub, {"bot": "epsilon", "purpose": "git"})
+    G.hub_token(hub, {"bot": "epsilon", "purpose": "git"})
+    assert len(hub.calls) == 6
+    del grants["hold"]
+    # Under the turn's 45 minutes, a turn-start ask goes back to the hub; errors are never held.
+    grants["expires_at"] = grants["tokens"][0]["expires_at"] = at(30)
+    G.hub_token(hub, {"bot": "gamma"})
+    G.hub_token(hub, {"bot": "gamma"})
+    assert len(hub.calls) == 8
+    hub.error = OSError()
+    with pytest.raises(OSError):
+        G.hub_token(hub, {"bot": "delta", "purpose": "git"})
+    # The credential helper reuses the turn's own token while it has ten minutes left, and asks once it has not.
+    config = tmp_path / "runner.json"
+    config.write_text(json.dumps({"url": "https://example.com", "token": "registration"}))
+    fresh = Hub({"configured": True, "token": "new-token"})
+    monkeypatch.setattr("clients.tico.Client", lambda *a, **kw: fresh)
+    monkeypatch.setenv(G.TOKENS_KEY, json.dumps([{**grants["tokens"][1], "expires_at": at(30)}]))
+    assert G.credential(config, "alpha", repository="Acme/docs") == "read-token" and not fresh.calls
+    assert G.credential(config, "alpha", repository="Acme/other") == "new-token" and len(fresh.calls) == 1
+    monkeypatch.setenv(G.TOKENS_KEY, json.dumps([{**grants["tokens"][1], "expires_at": at(9)}]))
+    assert G.credential(config, "alpha", repository="Acme/docs") == "new-token" and len(fresh.calls) == 2
+
+
 def test_gh_wrapper_uses_the_read_token_for_explicit_and_local_repositories(tmp_path, monkeypatch):
     import os
     import shutil

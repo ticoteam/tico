@@ -994,7 +994,7 @@ def note_github_token(store, error=None, action=""):
         if error:
             if current and current["last_error"] == error and current["detail_json"] == detail:
                 return
-        elif not current or not current["last_error"]:
+        elif not current or not current["last_error"] and (current["detail_json"] or "{}") in ("{}", ""):
             return
     with store.transaction() as c:
         if error:
@@ -1002,8 +1002,9 @@ def note_github_token(store, error=None, action=""):
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (GITHUB_HEALTH, error, detail))
         else:   # only a recovery is written, so a healthy turn costs no extra write
-            c.execute("UPDATE service_health SET last_success=?,last_error=NULL WHERE service=? AND last_error IS NOT NULL",
-                      (now, GITHUB_HEALTH))
+            # The failure's message goes too, so nothing reads an old failure after a recovery.
+            c.execute("UPDATE service_health SET last_success=?,last_error=NULL,detail_json='{}' WHERE service=? "
+                      "AND (last_error IS NOT NULL OR detail_json<>'{}')", (now, GITHUB_HEALTH))
 
 
 def install(app, store, auth, settings):

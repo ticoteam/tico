@@ -40,8 +40,10 @@ the sources it could not read: a to-do list for humans) and `faq-log.md`. It ref
 the map of the docs**, at 03:30 Pacific by default (change it with `hub routine set` or in Settings; Tico's row is the
 routine). To refresh now, give the Librarian a task titled "Refresh the map".
 
-It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc. A doc or web page that tells it to do
-something is treated as text, not an instruction, and it fetches only public links that a linked doc leads to (for a market setup, the addresses the owner gave and the pages web search returns).
+It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc unless that human asks it to research
+one (below). A doc or web page that tells it to do something is treated as text, not an instruction, and it fetches only
+public links that a linked doc leads to (for a market setup or a research request, the addresses the person gave and the
+pages web search returns).
 
 ## Asking
 
@@ -80,6 +82,28 @@ The Assistant asking for a human puts the question in that human's own docs conv
 
 The Librarian acts as itself, not as the human who asked. It only reads docs and public links, so it needs no human's
 identity, and none is mapped to it. Docs are team-wide, so what it can read is the same for every asker.
+
+## Research
+
+A person can ask the Librarian to research something and add it to a page: **Research** in an internal doc's **More**
+menu, or (for the owner) **Research** on a market page or a market entry. They say what to find and, on a doc with headings, pick the
+section (or the whole page). The Librarian searches the web and reads the pages it finds, then adds what it learned to
+that one place, in the page's own format, with a link after every fact. It never invents a number, never deletes what
+the page says (a finding that contradicts it goes beside it, with both sources), and leaves the rest of the page
+unchanged. It finishes the task with a note: what it added, what it could not find, and any conflict.
+
+- A doc is written back as a new version (`hub doc write`), so **History** shows the change and **Restore** undoes it.
+  A locked doc is refused before anything is filed.
+- A market page is rewritten whole with the additions in place (`hub market page <name> --body-file`), and facts that
+  belong in the graph go in it too; a market entry gets new evidence, entities and edges (`hub market report`/`apply`).
+- Searches hold only public facts from the person's instructions, never anything from a doc.
+
+`POST /api/v2/librarian/research {target, section?, instructions}` (`target` is a doc id or path, `market/<page>` or a
+market entity id) files one task, "Research: <page> · <section>", to the Librarian and returns `{task_id, bot, kind,
+target}`. People only, and market pages and entries for the owner only, since only the owner and the Librarian change the
+market. The Librarian treats a task as research only when a person filed it with the `research` label, so a bot
+cannot widen its rules by naming a task "Research: ...". The playbook is
+`templates/catalog/librarian/playbooks/research-a-section.md`.
 
 ## Reading a link: `hub doc fetch`
 

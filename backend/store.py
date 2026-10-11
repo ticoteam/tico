@@ -408,6 +408,20 @@ def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+# Health rows nothing writes any more. The old snapshot backup timers (backend/operations.py) are
+# replaced by Litestream wherever the container entrypoint sets TICO_BACKUP_MODE, and Health reads
+# that from backend/replication.py; `processing:<runner>` has no writer at all.
+SNAPSHOT_BACKUP_ROWS = ("backup", "backup-daily", "backup-monthly", "restore-check")
+
+
+def retire_health_rows(c):
+    """Delete health rows from retired mechanisms so they are neither shown nor alerted on. Idempotent."""
+    c.execute("DELETE FROM service_health WHERE service LIKE 'processing:%'")
+    if os.environ.get("TICO_BACKUP_MODE"):
+        c.execute(f"DELETE FROM service_health WHERE service IN ({','.join('?' * len(SNAPSHOT_BACKUP_ROWS))})",
+                  SNAPSHOT_BACKUP_ROWS)
+
+
 def sweep_idempotency(store, now=None, batch=5000):
     """Delete idempotency rows past the retry window in short transactions; returns the count.
 
@@ -1159,6 +1173,7 @@ class Store:
                 # finished with what it has (backend/meetings.py). Idempotent, no migration number.
                 from .meetings import retire_capture
                 retire_capture(c)
+                retire_health_rows(c)
                 # The queue trigger names the external harnesses it skips. When one is added
                 # the stored trigger is rebuilt; no migration number, so no
                 # collision with another branch's.

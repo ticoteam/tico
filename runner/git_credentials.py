@@ -14,7 +14,9 @@ so a stale personal token can never shadow the App. A login shell resets PATH (D
 path_helper), which can hide the wrapper; the runner image's profile hook and Mac turn startup hooks restore the
 turn's PATH from `TURN_PATH_KEY`. A bare `gh` that bypasses the wrapper uses the start-of-turn `GH_TOKEN`, kept
 with at least 45 minutes remaining; the credential helper's explicit git-purpose request can reuse a cached token
-with at least 10 minutes remaining.
+with at least 10 minutes remaining. The helper first reuses the turn's own start-of-turn token for the repository
+while it has that long left, and the supervisor holds each hub answer for a few minutes (`hub_token`), so a busy
+turn asks the hub a few times an hour, not once per git command.
 """
 import json
 import os
@@ -23,6 +25,10 @@ import shutil
 import re
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import Future
+from datetime import datetime
 from pathlib import Path
 
 from . import credential_socket, isolation, safe_git
@@ -42,6 +48,73 @@ TURN_PATH_KEY = "TICO_TURN_PATH"
 REPOSITORY_KEY = "TICO_GITHUB_REPOSITORY"
 FAILED_HELPER = '!f() { echo "Tico: GitHub App token unavailable; check Settings > Tools > GitHub" >&2; echo quit=true; }; f'
 STATIC_HELPER = "!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f"
+# The hub's own margins (backend/github_app.py): a held token is reused while it has this long left.
+GIT_MARGIN, TURN_MARGIN = 10 * 60, 45 * 60
+# A held hub answer is asked for again after this long, so a changed grant or placement applies within minutes.
+HOLD_S = 300
+_flights_lock = threading.Lock()
+
+
+def _expiry(*values):
+    """The earliest of `expires_at` values as epoch seconds; 0 when any is missing (an older server)."""
+    try:
+        return min(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() for value in values)
+    except (TypeError, ValueError):
+        return 0
+
+
+def hub_token(client, body):
+    """POST github/token, reusing the answer this process already holds while every token in it has the
+    purpose's margin left (at most HOLD_S). Concurrent asks for the same body share one request."""
+    try:
+        held, flights = client.__dict__.setdefault("github_tokens", ({}, {}))
+    except AttributeError:
+        return client.post("github/token", body)
+    key = json.dumps(body, sort_keys=True)
+    margin = GIT_MARGIN if body.get("purpose") == "git" else TURN_MARGIN
+    with _flights_lock:
+        hit = held.get(key)
+        if hit and hit[0] > time.time():
+            return hit[1]
+        flight, leader = flights.get(key), False
+        if flight is None:
+            flight, leader = flights.setdefault(key, Future()), True
+    if not leader:
+        return flight.result()
+    try:
+        granted = client.post("github/token", body)
+        flight.set_result(granted)
+    except BaseException as exc:
+        flight.set_exception(exc)
+        raise
+    finally:
+        with _flights_lock:
+            flights.pop(key, None)
+    tokens = granted.get("tokens") if isinstance(granted, dict) else None
+    until = _expiry(granted.get("expires_at"), *(group.get("expires_at") for group in tokens or ())) \
+        if isinstance(granted, dict) and granted.get("token") else 0
+    # BotOps' answer depends on the runs live when it was asked; the hub says so with hold=false (older hubs: by name).
+    holdable = isinstance(granted, dict) and granted.get("hold", body.get("bot") != "botops") is not False
+    if holdable and until - margin > time.time():
+        with _flights_lock:
+            held[key] = (min(until - margin, time.time() + HOLD_S), granted)
+    return granted
+
+
+def held_token(repository, env=None):
+    """The turn's start-of-turn token for `repository` while it still has GIT_MARGIN left; '' otherwise."""
+    env = os.environ if env is None else env
+    try:
+        groups = json.loads(env.get(TOKENS_KEY) or "[]")
+    except ValueError:
+        return ""
+    for group in groups if isinstance(groups, list) else ():
+        if not isinstance(group, dict):
+            continue
+        if repository is None or any(str(name).lower() == repository.lower() for name in group.get("repositories", [])):
+            fresh = _expiry(group.get("expires_at")) - GIT_MARGIN > time.time()
+            return str(group.get("token") or "") if fresh else ""
+    return ""
 
 
 def fresh_helper(config_path, bot, socket_path=None):
@@ -67,7 +140,7 @@ def apply(env, client, bot, config_path=None, socket_path=None):
     """Add the bot's repository-scoped GitHub credentials to `env`. True when applied.
     Never raises: a turn must not fail because GitHub access could not be arranged."""
     try:
-        granted = client.post("github/token", {"bot": bot})
+        granted = hub_token(client, {"bot": bot})
     except Exception as exc:
         log(f"Tico runner: {bot}: GitHub App token unavailable ({type(exc).__name__}); check Settings > Tools > GitHub")
         granted = {"configured": True}
@@ -308,9 +381,10 @@ def outside_token(repository, env=None):
 
 
 def credential(config_path, bot, socket_path=None, repository=None):
-    """Fresh repository credentials, falling back to the turn's matching token in memory. A repository
-    outside the App's organization gets the bot's own GitHub credential, if it was granted one."""
-    other = outside_token(repository)
+    """The turn's matching token while it has GIT_MARGIN left, else fresh repository credentials, falling back to
+    the turn's matching token in memory. A repository outside the App's organization gets the bot's own GitHub
+    credential, if it was granted one."""
+    other = outside_token(repository) or held_token(repository)
     if other:
         return other
     from clients.tico import Client

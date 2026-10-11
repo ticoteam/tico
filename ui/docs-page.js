@@ -224,7 +224,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
       <p class="docs-meta" title="${esc(fmt(doc.updated))}">${meta}</p></div>
       <div class="docs-tools"><a class="docs-tool" id="doc-edit" role="button" href="${docsHref(doc.id, {edit: 1})}"${canChange ? ' title="Edit (e)"' : ' aria-disabled="true" tabindex="-1" title="Locked: only an owner or bot administrator can change this doc"'}>Edit</a>
         <button class="docs-tool docs-tool-icon" id="doc-more" type="button" popovertarget="doc-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></header>
-    <div id="doc-menu" class="docs-pop" popover aria-label="Doc actions"><button id="doc-history" type="button">History</button>
+    <div id="doc-menu" class="docs-pop" popover aria-label="Doc actions">${canChange ? '<button id="doc-research" type="button">Research…</button>' : ''}<button id="doc-history" type="button">History</button>
       ${admin ? `<button id="doc-lock" type="button" aria-pressed="${doc.locked}">${doc.locked ? 'Unlock' : 'Lock'}</button>` : ''}
       ${canChange ? `<button class="docs-danger" id="doc-archive" type="button">${doc.archived ? 'Restore' : 'Archive'}</button>` : ''}</div>
     ${doc.locked ? `<p class="hint docs-locked-note">${canChange ? 'Locked: only owners and bot administrators can change it.' : 'Locked. Only an owner or bot administrator can change it.'}</p>` : ''}
@@ -233,6 +233,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   docsMenu($('#doc-menu'), $('#doc-more'));
   const editLink = $('#doc-edit');
   if (!canChange) editLink.onclick = event => event.preventDefault();
+  $('#doc-research')?.addEventListener('click', () => DocsEditor.researchDialog({target: doc.id, body: doc.body}));
   $('#doc-history').onclick = () => DocsEditor.history(doc, {canRestore: canChange, onRestored: saved => { location.hash === docsHref(saved.id) ? reload() : location.hash = docsHref(saved.id); }});
   $('#doc-lock')?.addEventListener('click', async event => {
     event.target.disabled = true;

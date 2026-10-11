@@ -136,3 +136,28 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     assert len([m for m in snapshot["messages"] if m["from_actor"] == "human:ana"]) == 1
 
 
+
+
+def test_a_research_request_is_one_task_to_the_librarian_for_that_page_and_section(desk):
+    doc = post(desk, "docs", {"title": "Competitors", "body": "# Competitors\n\n## Pricing\n\nTBD.", "path": "sales/competitors.md"})["doc"]
+    asked = post(desk, "librarian/research", {"target": doc["id"], "section": "Pricing",
+                                              "instructions": "Add Acme's and Northwind's public list prices."})
+    assert asked["kind"] == "doc" and asked["target"] == doc["id"]
+    task = get(desk, f"tasks/{asked['task_id']}")
+    task = task.get("task", task)
+    assert task["owner"] == "bot:librarian" and task["title"] == "Research: Competitors · Pricing"
+    assert "Add Acme's and Northwind's public list prices." in task["body"]
+    assert "Target: " + doc["id"] in task["body"] and "playbooks/research-a-section.md" in task["body"]
+    again = post(desk, "librarian/research", {"target": "sales/competitors.md", "section": "Pricing", "instructions": "And Initech."})
+    assert again["task_id"] != asked["task_id"]                                     # asking again is a second task
+    page = post(desk, "librarian/research", {"target": "market/overview", "instructions": "Add the EU market."})
+    assert page["kind"] == "market page"
+    post(desk, "librarian/research", {"target": "market/overview", "instructions": "x"}, token="ben-test", expected=403)
+    assert "research" in str(task["labels"])                                        # the playbook checks it
+    # Nothing to add to, a locked doc, and a bot asking are refused before anything is filed.
+    post(desk, "librarian/research", {"target": "market/weekly-delta", "instructions": "x"}, expected=404)
+    post(desk, "librarian/research", {"target": "nope", "instructions": "x"}, expected=404)
+    with desk.app.state.store.transaction() as c:
+        c.execute("UPDATE docs SET locked=1 WHERE id=?", (doc["id"],))
+    post(desk, "librarian/research", {"target": doc["id"], "instructions": "x"}, expected=409)
+    post(desk, "librarian/research", {"target": "market/overview", "instructions": "x"}, token=desk.runner["token"], expected=403)

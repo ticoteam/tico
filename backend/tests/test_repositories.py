@@ -220,3 +220,13 @@ def test_built_in_repository_grants_are_owner_only_and_hidden_bots_stay_hidden(a
         restrict(c, 'cpo', people=[])
     assert api.get('/api/v2/bots/cpo/repositories', headers=auth('person-test')).status_code == 403
     assert api.get('/api/v2/bots/cpo/repositories', headers=auth()).status_code == 200
+
+
+def test_a_github_token_recovery_clears_the_old_failure_message(api):
+    from backend.health import note_github_token
+    store = api.app_state.store
+    note_github_token(store, 'GitHub would not issue an installation token (HTTP 500)', 'Check the App.')
+    note_github_token(store)
+    with store.read() as c:
+        row = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service='github:token'").fetchone()
+    assert row['last_success'] and row['last_error'] is None and row['detail_json'] == '{}'

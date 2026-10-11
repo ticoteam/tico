@@ -709,9 +709,12 @@ class Execution:
         if (awake_since != runner["awake_since"] or not runner["last_seen"]
                 or runner["last_seen"] <= H.shift(now, seconds=-CONTACT_EVERY)):
             return None
-        if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN assignments x ON x.bot=j.bot "
-                     "WHERE x.runner_id=? AND j.state='queued' AND m.from_actor=? AND m.kind='notice' "
-                     "AND m.body LIKE 'New task from %' LIMIT 1", (who.runner_id, H.KEEPER)).fetchone():
+        # From this computer's bots to their queued jobs (jobs_queue): left to itself SQLite starts from
+        # every keeper notice ever sent, tens of milliseconds on each of a runner's frequent claims.
+        if c.execute("SELECT 1 FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
+                     "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
+                     "AND m.from_actor=? AND m.kind='notice' AND m.body LIKE 'New task from %' LIMIT 1",
+                     (who.runner_id, H.KEEPER)).fetchone():
             return None
         why = runner_versions.paused(c, who.runner_id)
         if why:
@@ -767,10 +770,11 @@ class Execution:
         awake_since = self.stamp(c, who, runner, now)
         # An initial task notice can sit in the queue while another turn finishes
         # that task. Suppress only this obsolete wake, never a later human follow-up.
-        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM jobs j "
-            "JOIN assignments x ON x.bot=j.bot JOIN messages m ON m.id=j.message_id "
+        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "
+            "CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
-            "WHERE x.runner_id=? AND j.state='queued' AND m.from_actor=? AND m.kind='notice' "
+            "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
+            "AND m.from_actor=? AND m.kind='notice' "
             "AND m.body LIKE 'New task from %' AND t.status IN ('done','closed') "
             "AND m.to_actor=t.owner AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
             "AND r.attempt_id=j.attempt_id AND r.decision='resume')", (who.runner_id,H.KEEPER)).fetchall()
@@ -1238,10 +1242,22 @@ class Execution:
                 if target not in (H.KEEPER, actor) and replyable:
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
-                    privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
-                    reply = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
-                        c, actor, target, text, conversation_id=conv["id"],
-                        in_reply_to=msg["id"], refs=refs)
+                    try:
+                        privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
+                    except Problem as refused:
+                        if refused.code != "privacy":
+                            raise
+                        # The run is done; only its reply may not go here. The result stays on the
+                        # run, which only the private task's own parties can read, and the person
+                        # who expected the reply is told, with nothing from the task named.
+                        if H.is_human(target):
+                            H._write_message(c, H.KEEPER, target, f"{row['bot']} finished, but its reply drew on "
+                                             "a private task you can't read, so it was not posted here.",
+                                             conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
+                    else:
+                        reply = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
+                            c, actor, target, text, conversation_id=conv["id"],
+                            in_reply_to=msg["id"], refs=refs)
         if reply:
             # Which run wrote this and which messages it took in (the one it was started for and
             # what was folded into it), kept in the reply's refs for the frontends to show.
@@ -1500,9 +1516,10 @@ class Execution:
         """
         newest, held = {}, []
         for row in c.execute(
-                "SELECT j.id,j.bot,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.state='queued' AND m.kind='notice' "
-                "AND NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=j.bot) "
+                # From the unassigned bots to their queued jobs (jobs_queue), not from every message.
+                "SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j CROSS JOIN messages m "
+                "WHERE NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=b.slug) "
+                "AND j.bot=b.slug AND j.state='queued' AND m.id=j.message_id AND m.kind='notice' "
                 "ORDER BY j.created DESC, j.id DESC").fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 # A chat room carries notices for many tasks: one kept per task, not per room.

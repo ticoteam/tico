@@ -130,3 +130,18 @@ def test_runner_upload_is_retried_after_a_restart_and_lands_once(api, live, tmp_
     assert page["total"] == 1 and page["files"][0]["version"] == 1 and page["files"][0]["synced"]
     log = api.get(f"/api/v2/files/{page['files'][0]['id']}/activity", headers=headers("ben-test")).json()["activity"]
     assert len(log) == 1
+
+
+def test_a_refused_file_is_logged_once_not_every_turn(tmp_path, monkeypatch):
+    import sqlite3
+    logged = []
+    monkeypatch.setattr(files_publish, "log", logged.append)
+
+    class State:
+        def connect(self):
+            return sqlite3.connect(tmp_path / "state.db")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "create-ads.js").write_text("x")
+    for _ in range(3):
+        assert files_publish.prepare(State(), "designer", "a1", tmp_path, {}) == (0, 1)
+    assert len(logged) == 1 and ".js files are not published" in logged[0]
