@@ -74,6 +74,28 @@ class Blobs:
                 raise Problem("blob_storage", "File storage is unavailable; free disk space and check permissions", 503, True) from exc
         return digest
 
+    def has(self, digest):
+        """Whether these bytes are already stored, so a write that is then refused knows what it added."""
+        if self.bucket and not self.rehearsal:
+            try:
+                self.read_s3("head_object", Bucket=self.bucket, Key=self.s3_key(digest))
+            except Exception as exc:
+                # Only a clear "not there" counts as absent; anything else is treated as stored and kept.
+                return getattr(exc, "response", {}).get("Error", {}).get("Code") not in ("404", "NoSuchKey", "NotFound")
+            return True
+        return (self.directory / self.key(digest)).is_file()
+
+    def discard(self, digest):
+        """Remove bytes this process just stored for a write that was then refused; the caller has checked that no
+        blob row names them."""
+        try:
+            if self.bucket and not self.rehearsal:
+                self.s3.delete_object(Bucket=self.bucket, Key=self.s3_key(digest))
+            else:
+                (self.directory / self.key(digest)).unlink(missing_ok=True)
+        except Exception:
+            pass                            # an orphan left behind is harmless; the refusal is what matters
+
     def put(self, data, content_type="application/octet-stream"):
         if self.bucket and not self.rehearsal:
             digest = hashlib.sha256(data).hexdigest()

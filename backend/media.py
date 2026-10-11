@@ -452,17 +452,16 @@ def install_media(app, store, auth, mutate, send_message, task_create):
     def task_question(request: Request, body: M.TaskQuestion):
         """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
         question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
-        leaves half a question behind. Option files come in the request and are attached to the new task."""
+        leaves half a question behind. Option files come in the request and are attached to the new task; their
+        bytes are stored only once every check has passed, and removed again if the write is still refused."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
         options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
-        if not 2 <= len(options) <= 6:
-            raise Problem("validation", "A question has 2 to 6 options, or none for Yes / No", 422)
-        stored, total = [], 0
+        decoded, total = [], 0
         for option in options:
             if not option.file:
-                stored.append(None)
+                decoded.append(None)
                 continue
             try:
                 BF.check_name(option.file.name)
@@ -474,9 +473,17 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             total += len(data)
             if not data or total > 10_000_000:
                 raise Problem("validation", "Option files are at least one byte and at most 10 MB together", 422)
-            kind = mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"
-            stored.append((blobs.put(data, kind), len(data), option.file.name, kind))
+            decoded.append((data, option.file.name, mimetypes.guess_type(option.file.name)[0] or "application/octet-stream"))
         question = body.question.strip()
+        added = []                  # digests this request stored that were not there before
+
+        def store_bytes(data, kind):
+            digest = hashlib.sha256(data).hexdigest()
+            fresh = not blobs.has(digest)
+            stored = blobs.put(data, kind)
+            if fresh and stored not in added:
+                added.append(stored)
+            return stored
 
         def work(c):
             person = H.resolve_actor(c, body.on)
@@ -486,15 +493,21 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
                 relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []))
             tid = made["task"]["id"]
-            if not H.task_private_readable(c, person, H.task(c, tid)):
-                raise Problem("privacy", f"This task would be private and {H.actor_id(person)} could not read it: "
-                              "ask on the private task you are working on (hub task comment --ask), or without --private", 403)
+            # The person must be able to read the task by every rule a read checks, or the question would reach
+            # them (Slack, mail) while the task stays hidden from them.
+            try:
+                auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
+            except Problem as exc:
+                raise Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
+                              "ask someone who can read your work, or file it without --private", 403) from exc
             choices = []
-            for option, item in zip(options, stored):
+            for option, item in zip(options, decoded):
                 choice = {"label": option.label, **({"description": option.description} if option.description else {})}
                 if item:
-                    blob = register(c, who, item[0], item[1], item[2], item[3])
-                    fid, number = files.attach_task(c, who, tid, blob, item[0], H.actor_id(who.actor))
+                    data, name, kind = item
+                    digest = store_bytes(data, kind)
+                    blob = register(c, who, digest, len(data), name, kind)
+                    fid, number = files.attach_task(c, who, tid, blob, digest, H.actor_id(who.actor))
                     c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, blob["id"]))
                     c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,NULL)", (blob["id"],))
                     H._task_event(c, tid, who.actor, "file", None, blob["name"], "")
@@ -507,7 +520,16 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
             return {"task": H.task(c, tid),
                     "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
-        result = mutate(request, body, work)
+        try:
+            result = mutate(request, body, work)
+        except Exception:
+            if added:
+                with store.read() as c:
+                    named = {r[0] for r in c.execute(f"SELECT digest FROM blobs WHERE digest IN ({','.join('?' * len(added))})", added)}
+                for digest in added:
+                    if digest not in named:
+                        blobs.discard(digest)
+            raise
         app.state.file_metadata.wake.set()
         return result
 

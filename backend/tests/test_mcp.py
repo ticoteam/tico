@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
 from clients import hubcli, hubtools
 
 
@@ -180,8 +180,15 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     err, refused = call(api, "hub_task_question", {"question": "Sign the settlement today?", "on": "ben", "private": True},
                         token=attempt["token"])
     assert err and refused["error"] == "privacy"
+    # Nor to a person who may not read this bot's work: the question would reach them, the task would not.
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", people=["ana"])
+    err, hidden = call(api, "hub_task_question", {"question": "Renew the vendor contract today?", "on": "cara"},
+                       token=attempt["token"])
+    assert err and hidden["error"] == "privacy"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
+                         "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
     made = out["task"]
     assert (made["owner"], made["requester"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
     assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]

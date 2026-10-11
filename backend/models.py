@@ -219,6 +219,15 @@ class TaskQuestion(Contract):
     parent: ID | None = None
     private: StrictBool | None = None
 
+    @model_validator(mode="after")
+    def unique_labels(self):
+        labels = [o.label for o in self.options]
+        if len(set(labels)) != len(labels):
+            raise ValueError("Option labels must be unique")
+        if self.options and not 2 <= len(self.options) <= 6:
+            raise ValueError("A question has 2 to 6 options, or none for Yes / No")
+        return self
+
 
 class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
