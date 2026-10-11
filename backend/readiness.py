@@ -1,6 +1,7 @@
 """Can this bot run this runtime on this computer: the one check behind a model change, a move and Health.
 
     can_run(c, bot, runtime, runner=None, harness="", model="") -> dict
+    own_harness(c, bot, runtime) -> str       the bot's own harness for `runtime`, to pass as `harness`
 
 `runner` is a computer id (default: the computer the bot is on). The answer is judged from that computer's last
 heartbeat **for this bot**: its own subscription profile's sign-in when it has one, its own API-key Credential for the
@@ -20,7 +21,7 @@ Callers refuse only on can_run False; None never blocks.
 """
 import json
 
-from .harnesses import EXTERNAL_HARNESSES, resolve_harness
+from .harnesses import EXTERNAL_HARNESSES, resolve_harness, runtime_of
 from .store import H, readiness_document
 
 ONLINE_SECONDS = 60
@@ -32,6 +33,14 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 def _config(c, bot):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return H._json(row["config_json"], {}) or {} if row else {}
+
+
+def own_harness(c, bot, runtime):
+    """The bot's own harness when it runs `runtime`, else '': what a check of the runtime the bot already runs passes
+    as `harness`, the way the model picker passes the harness it offers. Without it an Antigravity bot is judged as
+    Gemini CLI and gets a Gemini sign-in hint that is not its own."""
+    harness = resolve_harness(_config(c, bot), runtime)
+    return harness if runtime and runtime_of(harness) == runtime else ""
 
 
 def _held(c, bot):

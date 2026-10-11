@@ -459,10 +459,10 @@ def operation_issues(c, who, auth):
 def own_sign_in(c, bot, settings=None):
     """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
     check and the model picker use), or '' when its computer is signed in or it waits on something else."""
-    from .readiness import can_run
+    from .readiness import can_run, own_harness
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
-    verdict = can_run(c, bot, runtime) if runtime else {}
+    verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
     return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
 
 

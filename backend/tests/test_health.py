@@ -269,6 +269,42 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
     assert "readiness_reason" not in snapshot("writer") and health_of(api)[1]["models"]["status"] == "ok"
 
 
+def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
+    """The sign-in hint and Health's stuck check judge the bot's own harness, not its provider's default: an Antigravity
+    bot on Gemini, on a computer where the Gemini sign-in is missing, keeps its own reason and gets no Gemini sign-in fix."""
+    import json
+    api = environment()
+    revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+    assert api.put("/api/v2/providers", headers=signed_in(), json={
+        "enabled": ["google"], "runtime": "gemini", "expected_revision": revision}).status_code == 200
+    runner = enrolled(api)
+    add_bot(api, "scout")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+            "schema_version": 1, "runtimes": {
+                "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
+            "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
+            runner))
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('scout',?,'ana')",
+                  (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
+        c.execute("UPDATE bots SET runtime='gemini' WHERE slug='scout'")
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('scout',?,1,?,'t')",
+                  (runner, H.now()))
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        chat = H.open_conversation(c, owner, [owner, "bot:scout"], kind="chat")
+        H._write_message(c, owner, "bot:scout", "start setup", chat, "say", {}, None, None)
+    execution = api.get("/api/v2/conversations/" + chat["id"] + "/snapshot", headers=signed_in()).json()["execution"]
+    assert execution["state"] == "queued" and "readiness_reason" not in execution
+    assert execution["label"] == "Saved — Missing bot repository or AGENT.md"
+    [row] = health_of(api)[0]["stuck"]
+    assert row["bot"] == "scout" and row["why"] == "Missing bot repository or AGENT.md on Team box"
+    assert "Gemini" not in json.dumps(row) and "login" not in row["fix"] and "move" not in row["fix"]
+    # Judged as Gemini CLI, the same computer's answer is a sign-in: the hint the bot must not get.
+    from backend.readiness import can_run
+    with api.app.state.store.transaction() as c:
+        assert can_run(c, "scout", "gemini")["sign_in"] is True
+        assert "sign_in" not in can_run(c, "scout", "gemini", harness="antigravity")
+
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     """The company default is Codex but the bots here run on Claude: no Codex warning, still a Sign in button."""
     import json

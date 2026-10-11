@@ -351,6 +351,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
 def _stuck(c, rows, online_ids, who, full):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers."""
+    from .readiness import own_harness
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
@@ -359,6 +360,7 @@ def _stuck(c, rows, online_ids, who, full):
     for row in rows:
         label, reason = row["computer"], row["reason"]
         runtime = row["runtime"] or configured.get(row["bot"], "")
+        harness = own_harness(c, row["bot"], runtime)     # an Antigravity bot is not judged as Gemini CLI
         fix, move = None, None
         if reason == "no_computer":
             text = "No computer"
@@ -368,9 +370,9 @@ def _stuck(c, rows, online_ids, who, full):
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
                 move = next(({"id": rid, "label": name} for rid, name in computers if rid != row["runner_id"] and
-                                     _can(c, row["bot"], runtime, rid)), None)
+                                     _can(c, row["bot"], runtime, rid, harness)), None)
         elif reason == "not_ready":
-            choice = runtime_choice(c, row["bot"], runtime, who, computers) if runtime else {}
+            choice = runtime_choice(c, row["bot"], runtime, who, computers, harness=harness) if runtime else {}
             problem = str(choice.get("problem") or row["problem"]) if choice.get("can_run") is False else row["problem"]
             text = problem if label and label in problem else f"{problem} on {label}"
             if choice.get("can_run") is False:
@@ -397,9 +399,9 @@ def _stuck(c, rows, online_ids, who, full):
     return out
 
 
-def _can(c, bot, runtime, runner):
+def _can(c, bot, runtime, runner, harness=""):
     from .readiness import can_run
-    return can_run(c, bot, runtime, runner=runner)["can_run"] is True
+    return can_run(c, bot, runtime, runner=runner, harness=harness)["can_run"] is True
 
 
 TOKEN_CACHE_SECONDS = 300
