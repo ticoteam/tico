@@ -194,8 +194,10 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
         {"label": "A", "file": {"name": "a.png", "content_base64": png}}, {"label": "B"}]}
     r = api.post("/api/v2/task-questions", json=picture, headers=headers(attempt["token"]))
     assert r.status_code == 403 and not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG never stored").hexdigest()))
-    r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"]))
+    r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
     assert r.status_code == 200 and r.json()["question"]["ask"]["questions"][0]["options"][0]["file"]
+    again = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
+    assert again.status_code == 200 and again.json()["task"]["id"] == r.json()["task"]["id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0

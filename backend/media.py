@@ -455,7 +455,8 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
         leaves half a question behind. Option files come in the request and are attached to the new task. Every
         check runs first in a read, the bytes are stored with no transaction open (an upload never holds the write
-        lock), then the write runs the cheap checks again; bytes this request added are removed if it is refused."""
+        lock), then the write runs the cheap checks again. Bytes stored for a write then refused stay: the same
+        bytes may already back another file, so they are never deleted here."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -494,6 +495,11 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         if any(decoded):
             replay = replay_upload(store, request, body.model_dump())
             if replay is not None:
+                # A replay before any upload, with access as it is now, as store.mutate's replay checks it.
+                with store.read_transaction() as c:
+                    if (replay.get("task") or {}).get("id"):
+                        auth.task(c, who, replay["task"]["id"])
+                    privacy.require_payload(c, who, replay)
                 return replay
             with store.read_transaction() as c:
                 person, parent = checked(c)
@@ -507,17 +513,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                                       {"id": "", "owner": who.actor, "requester": who.actor, "private": 0})
                     except Problem as exc:
                         raise unreadable(person) from exc
-        stored, added = [], []      # each option's stored digest; those this request added
-        for item in decoded:
-            if not item:
-                stored.append(None)
-                continue
-            digest = hashlib.sha256(item[0]).hexdigest()
-            fresh = not blobs.has(digest)
-            digest = blobs.put(item[0], item[2])
-            if fresh and digest not in added:
-                added.append(digest)
-            stored.append(digest)
+        stored = [blobs.put(item[0], item[2]) if item else None for item in decoded]
 
         def work(c):
             person, _ = checked(c)
@@ -550,16 +546,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             H.task_update(c, who.actor, tid, status="waiting", waiting_on=person, note=question)
             return {"task": H.task(c, tid),
                     "question": next(m for m in H.task_comments(c, tid, actor=who.actor) if m["id"] == said["id"])}
-        try:
-            result = mutate(request, body, work)
-        except Exception:
-            if added:
-                with store.read() as c:
-                    named = {r[0] for r in c.execute(f"SELECT digest FROM blobs WHERE digest IN ({','.join('?' * len(added))})", added)}
-                for digest in added:
-                    if digest not in named:
-                        blobs.discard(digest)
-            raise
+        result = mutate(request, body, work)
         app.state.file_metadata.wake.set()
         return result
 

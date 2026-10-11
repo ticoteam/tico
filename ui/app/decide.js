@@ -245,6 +245,9 @@ async function decideLoad(st, c, again = false) {
   if (!st.data.has(id)) st.data.set(id, null);
   const [files, comments] = await Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`),
     c.type === 'task' ? v2Get(`/v2/tasks/${encodeURIComponent(id)}/comments`) : null]);
+  // A read that failed records nothing: a refreshed card keeps what it shows (and Done its version); a first one
+  // shows the card's own text, at the version it was drawn with.
+  if (!files || c.type === 'task' && !comments) { if (!st.data.get(id)) st.data.set(id, {version, files: [], comments: []}); return; }
   st.data.set(id, {version, files: Array.isArray(files?.files) ? files.files.map(tfNorm) : [], comments: comments?.comments || []});
   if (DEC === st && st.queue[0] === c.key) decidePaintBody(st);
 }
@@ -324,6 +327,23 @@ function decideLeaveCard(st, card, side) {
 }
 // Writes on their way: in the outbox until the server confirms each request, whether or not Decide is still open.
 const DEC_OUTBOX = new Set();
+// The outbox is kept in this browser too, so a write the page could not confirm before it closed goes out on the
+// next load, under the same keys.
+const DEC_SAVED = 'tico.decide.outbox';
+function decideSave() {
+  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
+}
+function decideResume() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(DEC_SAVED) || '[]'); } catch {}
+  for (const item of Array.isArray(saved) ? saved : []) {
+    if (!item?.writes?.length || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
+    const p = {key: item.key, write: {writes: item.writes}, sent: 0};
+    DEC_OUTBOX.add(p);
+    void decideSend(null, p);
+  }
+}
+setTimeout(decideResume, 3000);
 // Sends the waiting action, its requests in order.
 async function decideCommit(st) {
   const p = st.pending;
@@ -333,6 +353,7 @@ async function decideCommit(st) {
   decideToastHide(st, p);
   p.sent = 0;
   DEC_OUTBOX.add(p);
+  decideSave();
   await decideSend(st, p);
 }
 // The requests not yet confirmed, in order, each under the key it got when the action was taken.
@@ -341,18 +362,22 @@ async function decideSend(st, p) {
     for (const w of p.write.writes.slice(p.sent)) {
       await post(w.path, w.body, w.key);
       p.sent++;
+      decideSave();
     }
     DEC_OUTBOX.delete(p);
-    if (!liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); }), 300);
+    decideSave();
+    if (st && !liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); }), 300);
   } catch (e) {
     if (e.unconfirmed) {
       // It may have landed: never act again under new keys. It stays out of the queue and is sent again as it was.
-      if (!p.retries) toast('Not confirmed yet; trying again', true);
+      if (!p.retries && st) toast('Not confirmed yet; trying again', true);
       p.retries = (p.retries || 0) + 1;
       setTimeout(() => { if (DEC_OUTBOX.has(p)) void decideSend(st, p); }, Math.min(60000, 5000 * 2 ** Math.min(p.retries - 1, 4)));
       return;
     }
     DEC_OUTBOX.delete(p);
+    decideSave();
+    if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
     const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
     toast(changed ? 'That task changed. Look again.' : e.message, true);
     st.handled.delete(p.key);
@@ -368,7 +393,10 @@ async function decideSend(st, p) {
 // Leaving the page: what waits on its toast and what is still on its way go out with keepalive, under the same keys.
 function decideFlush() {
   const all = [...DEC_OUTBOX];
-  if (DEC?.pending) { all.push(DEC.pending); clearTimeout(DEC.pending.timer); DEC.pending = null; }
+  if (DEC?.pending) {
+    const p = DEC.pending; clearTimeout(p.timer); DEC.pending = null;
+    p.sent = 0; all.push(p); DEC_OUTBOX.add(p); decideSave();
+  }
   for (const p of all) for (const w of p.write.writes.slice(p.sent || 0)) {
     fetch(API + w.path, {method: 'POST', keepalive: true, body: JSON.stringify(w.body),
       headers: {'Content-Type': 'application/json', 'Idempotency-Key': w.key}}).catch(() => {});
