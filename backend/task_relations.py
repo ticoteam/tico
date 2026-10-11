@@ -171,8 +171,10 @@ def grouped(conn, task_ids, visible_sql="1"):
             "UNION ALL SELECT r.to_task, CASE WHEN r.kind='related' THEN 'both' ELSE 'in' END, r.kind, r.created, "
             "r.rowid, t.id, t.title, t.status, t.owner "
             "FROM task_relations r INDEXED BY task_relations_to CROSS JOIN tasks t ON t.id=r.from_task "
-            f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') "
-            f"WHERE id IN (SELECT id FROM tasks WHERE {visible_sql}) ORDER BY at, rid", (*part, *part))
+            f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') x "
+            # The other end's visibility by primary key, not a list of every visible task.
+            f"WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.id=x.id AND ({visible_sql})) ORDER BY at, rid",
+            (*part, *part))
         for row in rows:
             entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner": row["owner"],
                      "direction": row["direction"]}

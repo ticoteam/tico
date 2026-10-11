@@ -437,6 +437,37 @@ def test_per_call_token_reuses_cache_without_writes_but_turn_start_keeps_45_minu
     assert token_health(api)
 
 
+def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypatch):
+    import threading
+    connect(api)
+    service = api.app_state.github_app
+    service.mint(None, {"metadata": "read"})          # learns the installation and the app's JWT
+    store, writes = api.app_state.store, []
+    original_transaction = store.transaction
+    monkeypatch.setattr(store, "transaction", lambda: writes.append(True) or original_transaction())
+    release, answer = threading.Event(), gh.__call__
+    def slow(request):
+        if request.url.path.endswith("/access_tokens"):
+            release.wait(5)
+        return answer(request)
+    monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(slow))
+    mints_before, tokens = len(gh.of("/access_tokens")), []
+    threads = [threading.Thread(target=lambda: tokens.append(service.mint(["Acme/emp-cpo"], G.TURN_PERMISSIONS)[0]))
+               for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    deadline = time.time() + 5
+    while len(gh.of("/access_tokens")) == mints_before and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(tokens) == 6 and len(set(tokens)) == 1
+    assert len(gh.of("/access_tokens")) == mints_before + 1
+    assert not writes, "a mint reads the installation and reuses the JWT without taking the write lock"
+
+
 def test_extra_repositories_join_the_turn_token_with_the_same_permissions(api, gh):
     connect(api)
     assert api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': []}, headers=auth()).status_code == 200

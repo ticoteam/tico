@@ -52,6 +52,65 @@ async def _search(request, question):
     return list((data or {}).get("results") or [])[:RESULT_LIMIT]
 
 
+RESEARCH_PLAYBOOK = "playbooks/research-a-section.md"
+
+
+def research_target(c, target):
+    """What a research request adds to: an internal doc, a market page or a market entity, as
+    (kind, id, title). Locked docs are refused here: the Librarian could not save its edit."""
+    from . import market
+    doc = c.execute("SELECT id,title,path,locked FROM docs WHERE (id=? OR path=?) AND archived=0",
+                    (target, target)).fetchone()
+    if doc:
+        if doc["locked"]:
+            raise Problem("locked", "This doc is locked: unlock it first so the " + NAME + " can add to it", 409)
+        return "doc", doc["id"], doc["title"] or doc["path"]
+    page = next((p for p in market.PAGES if p[0] == target and p[0] != "market/weekly-delta"), None)
+    if page:
+        return "market page", page[0], page[1]
+    row = c.execute("SELECT id,name FROM market_entities WHERE id=? AND status NOT IN ('retired','merged')",
+                    (target,)).fetchone()
+    if row:
+        return "market entity", row["id"], row["name"] or row["id"]
+    raise Problem("not_found", "That is not a doc, a market page or a market entry the " + NAME + " can add to", 404)
+
+
+def free_title(c, actor, want):
+    """A title this request can still open: the hub refuses a second live task with the same one."""
+    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    for n in range(1, 20):
+        title = want if n == 1 else f"{want} ({n})"
+        if not c.execute(f"SELECT 1 FROM tasks WHERE requester=? AND owner=? AND title=? AND status IN ({marks})",
+                         (actor, "bot:" + LIBRARIAN, title, *H.LIVE_STATUSES)).fetchone():
+            return title
+    raise Problem("busy", "The " + NAME + " already has many research requests from you for this page", 409)
+
+
+def research(c, auth, who, body):
+    """A person's research request is one task to the Librarian, as the market setup is
+    (backend/getting_started.py): it searches the web, then writes what it found, cited, into
+    that page. The task is where its note and the changed version land."""
+    from . import rooms
+    if not availability(c, who)["available"]:
+        raise Problem("librarian_off", "The " + NAME + " is off", 409)
+    kind, target, title = research_target(c, body.target.strip())
+    if kind != "doc":
+        from . import market
+        market.require_writer(who)        # the market is the owner's and the Librarian's to change
+    section = body.section.strip()
+    where = f'the section "{section}" of the {kind} "{title}"' if section else f'the {kind} "{title}"'
+    text = "\n".join([
+        f"Research this and add what you find to {where}. Follow {RESEARCH_PLAYBOOK}.", "",
+        f"Kind: {kind}", f"Target: {target}", f"Section: {section or 'the whole page'}", "",
+        "Their instructions:", "", body.instructions.strip()])
+    name = f"Research: {title}" + (f" · {section}" if section else "")
+    task = H.task_create(c, who.actor, free_title(c, who.actor, name[:180]), text, "bot:" + LIBRARIAN,
+                         allow_planned=True, labels=["research"],
+                         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + LIBRARIAN, who.actor))
+    H.event(c, who.actor, "librarian.research_requested", task["id"], {"target": target, "kind": kind})
+    return {"task_id": task["id"], "bot": LIBRARIAN, "kind": kind, "target": target}
+
+
 def install(app, store, auth, mutate, onboarding):
     def person(request):
         """A person, or BotOps acting with one's delegated rights (it then has their role)."""
@@ -76,6 +135,12 @@ def install(app, store, auth, mutate, onboarding):
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + NAME + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_librarian(c, who))
+
+    @app.post("/api/v2/librarian/research")
+    def research_request(request: Request, body: M.LibrarianResearch):
+        who = person(request)
+        auth.domain(who)
+        return mutate(request, body, lambda c: research(c, auth, who, body))
 
     @app.get("/api/v2/librarian/conversations")
     def conversations(request: Request, limit: int = 20, offset: int = 0):

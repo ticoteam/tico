@@ -210,6 +210,40 @@
     return box;
   }
 
+  // ------------------------------------------------------------------ research
+  // The Librarian researches the web and adds what it finds to one section (backend/librarian.py,
+  // playbooks/research-a-section.md). `body` is the page's Markdown, for its headings.
+  function researchDialog({target, body = ''}) {
+    const heads = [...new Set(String(body).split('\n').map(line => /^#{1,4}\s+(.+?)\s*#*\s*$/.exec(line)?.[1]).filter(Boolean))];
+    const box = dialog(`<form data-research-form novalidate><header><h2>Research</h2>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+      ${heads.length ? `<label class="gs-field"><span>Section</span><select name="section"><option value="">Whole page</option>${heads.map(h => `<option>${esc(h)}</option>`).join('')}</select></label>` : ''}
+      <label class="gs-field"><span>What to find</span><textarea name="instructions" rows="5" maxlength="4000" required placeholder="Add each competitor's public pricing, with sources"></textarea></label>
+      <p class="err" data-error role="alert" hidden></p>
+      <div class="gs-card-actions"><button class="primary" type="submit">Start research</button>
+        <button class="ghost" type="button" data-close>Cancel</button></div></form>`, {label: 'Research with the Librarian'});
+    const form = box.querySelector('form'), line = box.querySelector('[data-error]');
+    form.elements.instructions.focus();
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const instructions = form.elements.instructions.value.trim();
+      if (!instructions) { line.textContent = 'Say what to find.'; line.hidden = false; return; }
+      form.querySelector('[type=submit]').disabled = true; line.hidden = true;
+      try {
+        const sent = await post('/v2/librarian/research', {target, section: form.elements.section?.value || '', instructions});
+        form.innerHTML = `<header><h2>Research</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+          <p class="docs-dialog-lead">The Librarian is on it. Its changes show in this page's history.</p>
+          <div class="gs-card-actions"><a class="primary" role="button" href="#/task/${esc(sent.task_id)}" data-close>View task</a>
+            <button class="ghost" type="button" data-close>Close</button></div>`;
+      } catch (error) {
+        form.querySelector('[type=submit]').disabled = false;
+        line.textContent = errorCode(error) === 'librarian_off' ? 'The Librarian is off.' : error.message || 'That did not go through.';
+        line.hidden = false;
+      }
+    };
+    return box;
+  }
+
   // ------------------------------------------------------------------ import
   function importDialog({onDone}) {
     const box = dialog(`<form data-import-form><header><h2>Import a file</h2>
@@ -248,5 +282,5 @@
     return box;
   }
 
-  window.DocsEditor = {editor, history, linkDialog, importDialog};
+  window.DocsEditor = {editor, history, linkDialog, importDialog, researchDialog};
 })();

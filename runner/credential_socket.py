@@ -179,22 +179,22 @@ def serve(client, path=None, mail=None, refresh=None):
     path = path or os.environ.get("TICO_RUNNER_CRED_SOCKET") or DEFAULT_PATH
 
     def mint(bot, repository=None):
-        from .git_credentials import select_token
-        granted = client.post("github/token", {"bot": bot})
+        from .git_credentials import hub_token, select_token
+        granted = hub_token(client, {"bot": bot})
         return select_token(granted, repository)
     legacy_purpose_servers = set()
     purpose_lock = threading.Lock()
     server_key = str(getattr(client, "url", None) or id(client))
 
     def mint_git(bot, repository=None):
-        from .git_credentials import select_token
+        from .git_credentials import hub_token, select_token
         with purpose_lock:
             legacy_server = server_key in legacy_purpose_servers
         if legacy_server:
-            granted = client.post("github/token", {"bot": bot})
+            granted = hub_token(client, {"bot": bot})
         else:
             try:
-                granted = client.post("github/token", {"bot": bot, "purpose": "git"})
+                granted = hub_token(client, {"bot": bot, "purpose": "git"})
             except Exception as exc:
                 if not _server_rejects_token_purpose(exc):
                     raise
@@ -202,7 +202,7 @@ def serve(client, path=None, mail=None, refresh=None):
                     legacy_purpose_servers.add(server_key)
                 # Older servers default an omitted purpose to turn. Retry once, then remember
                 # that schema for this server so every later git request uses its supported body.
-                granted = client.post("github/token", {"bot": bot})
+                granted = hub_token(client, {"bot": bot})
         return select_token(granted, repository)
     try:
         server = Server(path, mint, mail, refresh, mint_git=mint_git).start()
