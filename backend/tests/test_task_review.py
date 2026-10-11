@@ -253,3 +253,17 @@ def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api
     assert readable_text(choice["questions"][0]["question"]) in saved["comment"]["body"]
     assert "&#64;ops" in saved["comment"]["body"] and r"\[Open\]\(https&#58;//example.com\)" in saved["comment"]["body"]
     assert saved["answer"]["answers"] == {"verdict": [label]}
+
+
+def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
+    tid = task(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = claim(api, machine, "ops")["token"]
+    question = post(api, f"tasks/{tid}/comments", {"text": "Which draft?", "ask": ask("ben")}, token)["comment"]
+    body = {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}, "other": "Ship it."}
+    answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
+    assert answer["woke"] and answer["comment"]["to_actor"] == "bot:ops"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()

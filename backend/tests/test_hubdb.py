@@ -4,6 +4,7 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -226,6 +227,47 @@ class Rule5Tasks(HubCase):
                 if m["to_actor"] == CMO and m["body"].startswith("Ready for review:")]
         self.assertEqual(len(told), 1)
         self.assertIn("all changed scripts pass", told[0]["body"])
+
+    def finished(self, row, to):
+        return [m for m in H.messages(self.conn, row["conversation_id"])
+                if m["to_actor"] == to and m["body"].startswith("Finished:")]
+
+    def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
+        from backend.store import SCHEMA
+        self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
+                          (json.dumps({"bot_contact": "tasks"}),))
+        parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
+        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
+        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
+        H.task_comment(self.conn, COO, row["id"], "Which image?", ask={"questions": [
+            {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
+             "multi": False, "other": True}], "who": ANA})
+        H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
+        for bot in (CMO, SEO, COO, ANALYTICS):
+            told = self.finished(row, bot)
+            self.assertEqual(len(told), 1, bot)
+            self.assertIn("Use B.", told[0]["body"])
+        self.assertFalse(self.finished(row, ANA))
+        quiet = {m["to_actor"]: bool(json.loads(m["refs_json"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
+                 if m["body"].startswith("Finished:")}
+        self.assertEqual(quiet, {CMO: True, SEO: False, COO: False, ANALYTICS: False}, "tasks-only bots hear it quietly")
+        # A private task tells only its parties: the parent's owner cannot read it.
+        secret = H.task_create(self.conn, ANA, "Review the settlement", "Read it.", SEO, parent_id=parent["id"], private=True)
+        H.task_update(self.conn, ANA, secret["id"], status="done", note="Signed.")
+        self.assertEqual(len(self.finished(secret, SEO)), 1)
+        self.assertFalse(self.finished(secret, ANALYTICS))
+
+    def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
+        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)
+        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
+        asked = H.task_comment(self.conn, CMO, row["id"], "Which image?", ask={"questions": [
+            {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
+             "multi": False, "other": True}], "who": ANA})
+        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"])
+        self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
+        self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
+        self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")
 
 # ----------------------------------------------------------------------------- rule 6
 class Rule6Approvals(HubCase):

@@ -2841,6 +2841,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         refs.update(ask)
         refs["who"] = ask.get("who")
     if answer_to:
+        # The answer goes back to the bot that asked, which may be neither the owner nor the requester.
+        asker = (message(conn, answer_to) or {}).get("from_actor")
+        if is_bot(asker) and asker != actor and _actor_exists(conn, asker) and task_private_readable(conn, asker, row):
+            target = asker
         msg = answer(conn, actor, answer_to, text, comment_refs=refs, comment_target=target or actor, classify_text=answer_text)
     elif ask:
         msg = say(conn, actor, target, text, kind="ask", conversation_id=conv["id"], refs=refs)
@@ -3377,6 +3381,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             sets.append(field + "=NULL")
     if not sets and not state_change and not roles:
         return row
+    # A person finishing it is news for every bot on it; the bots that asked it open questions are read
+    # before the status write supersedes those questions.
+    finishing = status == "done" and row["status"] != "done" and is_human(actor)
+    askers = [m["from_actor"] for m in open_task_asks(conn, row)] if finishing else []
     if closing_step:
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step)
     elif state_change:
@@ -3452,6 +3460,18 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}"
               + (f"\n{note}" if note and not quiet else "")
               + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), refs=refs, quiet_bots=True)
+    if finishing:
+        # Not only the requester: the owner that parked it waiting on this person, a bot that asked them a
+        # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
+        # and only bots that may read the task (_wake).
+        parent = task(conn, TR.parent_of(conn, task_id) or "")
+        told = {actor, KEEPER} | ({after["requester"]} if notify_requester else set())
+        for who in dict.fromkeys([after["requester"], after["owner"], *askers, (parent or {}).get("owner")]):
+            if not who or who in told or not is_bot(who):
+                continue
+            told.add(who)
+            _wake(conn, after, who, f"Finished: {after['title']}" + (f"\n{note}" if note and not quiet else "")
+                  + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), quiet_bots=True)
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
