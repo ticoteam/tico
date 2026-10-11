@@ -24,15 +24,11 @@ All notable changes to Tico are recorded here. The format follows
   says what it added and what it could not find, and the doc's **History** shows the change and can restore the earlier version.
   `POST /api/v2/librarian/research {target, section?, instructions}` files the task; `hub market page <name>` with no
   `--body-file` now reads a market page (`GET /api/v2/market/pages/{name}`). Playbook: `playbooks/research-a-section.md`.
-- **Docs and the demo show a bot working with a specialist outside Tico.** [Connect tools](docs/connect-tools.md#work-with-a-specialist-outside-tico)
+- **Docs show a bot working with a specialist outside Tico.** [Connect tools](docs/connect-tools.md#work-with-a-specialist-outside-tico)
   has a new section with TIDY, a cleaning and maintenance company, as the example. A bot uses TIDY through a Tool (its MCP server or
   an API skill), and a person approves any booking or spending. Tico doesn't run TIDY's workers, has no TIDY connector and doesn't
   track vendor spend. Exact setup is left to TIDY's own reference, because its public pages disagree. [Connect an external agent](docs/connect-an-agent.md)
-  now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico. In demo mode, Ana asks
-  the Assistant to check the office before a customer workshop. The check task carries a written TIDY sample reply and a recommendation
-  ("no booking has been made") and Ana has closed it. A separate task asks Ana whether to request an extra cleaning. TIDY appears on
-  the Assistant's Tools as not checked. Each TIDY line says "Sample external-service interaction — no live connection."; nothing is
-  connected and the demo still makes no outside calls.
+  now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico.
 - **The daily cap on the server's model calls is a setting.** `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN` and `TICO_DECISIONS_DAILY_CALLS_BOT` (defaults 20000, 5000, 5000) set how many decision calls one actor may make in a UTC day; `GET /api/v2/decisions` reports the cap that applies. PRIVACY.md now lists what the server itself sends to a model provider, and to whom.
 
 ### Changed

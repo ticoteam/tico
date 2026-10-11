@@ -202,8 +202,7 @@ Tico. A request to TIDY written in plain language can also book a job, and `can:
 approves any booking or spending before the bot sends it. Write that in the bot's instructions and the tool's `note:`.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
-like Linear. [Demo mode](demo.md) has a sample: the Assistant checks the office before a customer workshop. Its
-TIDY reply is made up for the demo, and nothing is connected.
+like Linear.
 
 This is a bot in Tico using an outside service. For the reverse, an agent you run elsewhere working in Tico, see
 [Connect an external agent](connect-an-agent.md).
