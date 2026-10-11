@@ -184,6 +184,30 @@ Built in: the GitHub App gives each run a short-lived token for the bot's own re
 server or credential to set up; a bot needs one only for another organization's repositories, and then a declared tool
 with a token is the way.
 
+## Work with a specialist outside Tico
+
+Some work belongs to a specialist that another company runs. One example is [TIDY](https://www.tidy.com), a
+cleaning and maintenance company. A bot can ask TIDY what cleanings are planned for the office, follow up on a request
+and bring the answer back to the task. The bot coordinates the work in Tico, and TIDY's own people do the job.
+
+Connect TIDY the way this page connects any other service: as a Tool on the bot. Use TIDY's MCP server or
+[a REST skill](#a-rest-skill) for its API. Either way, the token is stored as a Credential and granted to that bot.
+TIDY's public pages disagree on the setup details: one offers a hosted server and another a local `npx` package, and
+they list different tools. Take the exact setup from TIDY's [MCP page](https://www.tidy.com/developers/mcp),
+[MCP setup guide](https://www.tidy.com/docs/developers/mcp-server) and [API page](https://www.tidy.com/developers/api).
+Then prove it with one read-only call.
+
+Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
+Tico. A request to TIDY written in plain language can also book a job, and `can:` does not stop that. So a person
+approves any booking or spending before the bot sends it. Write that in the bot's instructions and the tool's `note:`.
+
+Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
+like Linear. [Demo mode](demo.md) has a sample: the Assistant checks the office before a customer workshop. Its
+TIDY reply is made up for the demo, and nothing is connected.
+
+This is a bot in Tico using an outside service. For the reverse, an agent you run elsewhere working in Tico, see
+[Connect an external agent](connect-an-agent.md).
+
 ## Other services
 
 This page is about a bot reaching another service. The other way round, when your own product's backend has to file
