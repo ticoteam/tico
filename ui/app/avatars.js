@@ -214,7 +214,7 @@ const userChips = e => (e?.users || []).map(u =>
 const TEMP_RE = /^Temp\s+/;
 const isTempBot = e => !!e?.temp || TEMP_RE.test(e?.display_name || '');
 const shownName = e => isTempBot(e)
-  ? `<span class="proj" title="temporary: expected to end">\u2691</span>${esc(e.display_name.replace(TEMP_RE, ''))}`
+  ? `<span class="proj" title="temporary: expected to end">\u2691</span>${esc((e.display_name || '').replace(TEMP_RE, ''))}`
   : esc(e.display_name || '');
 // The harness a bot runs on, as a small muted mark beside its name (ui/tool-icons.js). One rule: the
 // harness (runtime), never the provider or model; the model rides in the tooltip. No runtime, nothing shown.
