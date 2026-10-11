@@ -206,6 +206,21 @@ approves it, and write that rule in the bot's instructions and the tool's `note:
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
 
+### Companies you hire for a role
+
+Some companies sell an AI worker that fills one business role. A bot can send work to one and follow it on a task,
+as with TIDY. Where the vendor documents an interface, add it as a Tool. Otherwise, people use the vendor's own app,
+and the bot works alongside it. These are examples, not integrations Tico has built or tested.
+
+| Role | Example | How a bot could reach it |
+|---|---|---|
+| Customer support | [Fin](https://fin.ai) | Documents an API: the [Fin Agent API](https://developers.intercom.com/docs/guides/fin-agent-api) |
+| Reception and intake | [Smith.ai](https://smith.ai) | Its help docs cover an [API key](https://docs.smith.ai/category/ydtshfm8im-api), and Zapier and Make connections |
+| Sales development | 11x's [Alice](https://www.11x.ai/worker/alice) | Its site describes an [API and webhooks](https://www.11x.ai/platform/integrations/api) |
+| Sales development | Artisan's [Ava](https://www.artisan.co/ai-sales-agent) | No public API; the bot works alongside Artisan's app and your CRM |
+| Engineering | [Devin](https://devin.ai), the cloud product | Documents a [REST API](https://docs.devin.ai/api-reference/overview) and an [MCP server](https://docs.devin.ai/work-with-devin/devin-mcp) |
+| Logistics workflows | [HappyRobot](https://www.happyrobot.ai) | Its site describes a [REST API and an MCP server](https://www.happyrobot.ai/product/developer-tools); the reference needs an access code |
+
 This is a bot in Tico using an outside service. For the reverse, an agent you run elsewhere working in Tico, see
 [Connect an external agent](connect-an-agent.md).
 

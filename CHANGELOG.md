@@ -29,6 +29,9 @@ All notable changes to Tico are recorded here. The format follows
   an API skill), and a person approves any booking or spending. Tico doesn't run TIDY's workers, has no TIDY connector and doesn't
   track vendor spend. Exact setup is left to TIDY's own reference, because its public pages disagree. [Connect an external agent](docs/connect-an-agent.md)
   now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico.
+  A short table lists companies you hire for a role: Fin (support), Smith.ai (reception and intake), 11x's Alice and Artisan's Ava
+  (sales development), Devin (engineering) and HappyRobot (logistics workflows). It says how a bot could reach each one where the
+  vendor documents it. These are examples, not integrations Tico has built or tested.
 - **The daily cap on the server's model calls is a setting.** `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN` and `TICO_DECISIONS_DAILY_CALLS_BOT` (defaults 20000, 5000, 5000) set how many decision calls one actor may make in a UTC day; `GET /api/v2/decisions` reports the cap that applies. PRIVACY.md now lists what the server itself sends to a model provider, and to whom.
 
 ### Changed
