@@ -198,8 +198,10 @@ they list different tools. Take the exact setup from TIDY's [MCP page](https://w
 Then prove it with one read-only call.
 
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
-Tico. A request to TIDY written in plain language can also book a job, and `can:` does not stop that. So a person
-approves any booking or spending before the bot sends it. Write that in the bot's instructions and the tool's `note:`.
+Tico. Any TIDY tool can book a job, including one that takes a request in plain language, and `can:` does not stop it:
+Tico does not filter a vendor's tools by `can:`. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
+bot ask with an approval (`hub approval request`) and send a booking or anything that costs money only after a person
+approves it, and write that rule in the bot's instructions and the tool's `note:`.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
