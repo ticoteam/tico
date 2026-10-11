@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
 from clients import hubcli, hubtools
 
 
@@ -179,8 +179,9 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     err, again = call(api, "hub_task_question", ask, token=attempt["token"])
     assert not err and again["task"]["id"] == out["task"]["id"], "a retry is the same question"
     # A question the person could not read is refused whole: no task is left behind.
-    err, refused = call(api, "hub_task_question", {"question": "Sign the settlement today?", "on": "ben", "private": True},
-                        token=attempt["token"])
+    secret = post(api, "tasks", {"owner": "ops", "title": "Draft the settlement terms", "body": "Only us.", "private": True})
+    err, refused = call(api, "hub_task_question", {"question": "Sign the settlement today?", "on": "ben", "private": True,
+                                                   "parent": secret["id"]}, token=attempt["token"])
     assert err and refused["error"] == "privacy"
     # Nor to a person who may not read this bot's work: the question would reach them, the task would not.
     with api.app.state.store.transaction() as c:
@@ -198,6 +199,16 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     assert r.status_code == 200 and r.json()["question"]["ask"]["questions"][0]["options"][0]["file"]
     again = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
     assert again.status_code == 200 and again.json()["task"]["id"] == r.json()["task"]["id"]
+    # A private question refused in the write's checks stores no bytes either.
+    secret_png = base64.b64encode(b"\x89PNG private, never stored").decode()
+    hidden_pick = {"question": "Which settlement banner?", "on": "cara", "private": True, "parent": secret["id"],
+                   "options": [{"label": "A", "file": {"name": "a.png", "content_base64": secret_png}}, {"label": "B"}]}
+    r = api.post("/api/v2/task-questions", json=hidden_pick, headers=headers(attempt["token"]))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
+    assert not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG private, never stored").hexdigest()))
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Which settlement banner%' "
+                         "OR title LIKE 'Sign the settlement%' OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
@@ -206,3 +217,34 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]
     item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
     assert item["kind"] == "question" and item["ask"]["from_actor"] == "bot:ops"
+
+
+def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
+    """`private: true` is a private task whose two parties are the bot and the person asked, whoever started the run."""
+    _, _, attempt = setup_attempt(api)          # Ana started this run; the question goes to Ben
+    png = base64.b64encode(b"\x89PNG for ben").decode()
+    ask = {"question": "Approve the Q3 bonus pool?", "on": "ben", "private": True,
+           "options": [{"label": "Yes", "file": {"name": "pool.png", "content_base64": png}}, {"label": "No"}]}
+    r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
+    assert r.status_code == 200, r.text
+    made = r.json()["task"]
+    assert made["private"] and (made["owner"], made["requester"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
+    assert get(api, f"tasks/{made['id']}", token="ben-test")["task"]["id"] == made["id"]
+    get(api, f"tasks/{made['id']}", token="cara-test", expected=404)
+    get(api, f"tasks/{made['id']}", token="ana-test", expected=404)    # who started the run is not a party
+    item = next(i for i in get(api, "needs-you", "ben-test")["items"] if i["id"] == made["id"])
+    assert item["kind"] == "question"
+
+
+def test_a_private_run_cannot_put_its_work_to_someone_outside_it(api):
+    """A run on Ana's private task cannot put a question to Ben: it would carry what only Ana may read."""
+    r = runner(api, "ana")
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Only us.", "private": True})
+    attempt = claim(api, r)
+    err, refused = call(api, "hub_task_question", {"question": "Move the design team under product?", "on": "ben",
+                                                   "private": True}, token=attempt["token"])
+    assert err and refused["error"] == "privacy", refused
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Move the design team%'").fetchone()[0] == 0

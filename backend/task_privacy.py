@@ -298,6 +298,15 @@ def private_execution(c, who):
                                      for tid in attempt_tasks(c, who.attempt_id)))
 
 
+def question_party(c, who, person, parent=None):
+    """Whether `person` may be the other party of a private task a bot's run files to put a question to them
+    (backend/media.py task_question): they must already read every private task the run carries, and the parent.
+    Being a party gives them nothing they could not read before."""
+    if parent and not H.task_private_readable(c, person, parent):
+        return False
+    return not who.attempt_id or readable(c, person, attempt_tasks(c, who.attempt_id))
+
+
 def public_message(c, message):
     """External channel audiences have no task participant authority."""
     if not message or dict(message).get("deleted_at") or dict(message).get("deleted"):

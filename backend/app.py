@@ -2429,7 +2429,9 @@ def create_app(settings=None):
                     "mover": mover(c, request.state.identity),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
-    def task_create(c, who, body, lint=True):
+    def task_create(c, who, body, lint=True, asked=None):
+        """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
+        private they are its requester, so its two parties are the bot and them."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if privacy.private_execution(c, who):
@@ -2481,7 +2483,14 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
+        if asked and private:
+            if who.role != "bot" or owner != who.actor:
+                raise Problem("identity", "Only a bot's own question names the person asked", 403)
+            if not privacy.question_party(c, who, asked, parent):
+                raise Problem("privacy", f"{H.actor_id(asked)} cannot read this run's private work or the parent task, "
+                              "so a private question cannot go to them", 403)
+            requester_actor = asked
+        elif (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
                 and private):
             origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot=?",
