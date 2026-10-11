@@ -331,14 +331,16 @@ const DEC_OUTBOX = new Set();
 // next load, under the same keys.
 const DEC_SAVED = 'tico.decide.outbox';
 function decideSave() {
-  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
+  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
 }
 function decideResume() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(DEC_SAVED) || '[]'); } catch {}
+  // Only the person who took them: another person signed in to this browser never sends them.
+  if (!S.me?.id) return;
   for (const item of Array.isArray(saved) ? saved : []) {
-    if (!item?.writes?.length || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
-    const p = {key: item.key, write: {writes: item.writes}, sent: 0};
+    if (!item?.writes?.length || item.me !== S.me.id || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
+    const p = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0};
     DEC_OUTBOX.add(p);
     void decideSend(null, p);
   }
