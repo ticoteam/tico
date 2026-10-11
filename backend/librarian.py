@@ -94,6 +94,9 @@ def research(c, auth, who, body):
     if not availability(c, who)["available"]:
         raise Problem("librarian_off", "The " + NAME + " is off", 409)
     kind, target, title = research_target(c, body.target.strip())
+    if kind != "doc":
+        from . import market
+        market.require_writer(who)        # the market is the owner's and the Librarian's to change
     section = body.section.strip()
     where = f'the section "{section}" of the {kind} "{title}"' if section else f'the {kind} "{title}"'
     text = "\n".join([

@@ -288,7 +288,7 @@ function mountBlank(shell) {
 
 // The note's kicker, and Research for a page or entry the Librarian can add to.
 function marketHead(kicker, target) {
-  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target
+  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
     ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
 }
 

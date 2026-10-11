@@ -9,7 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - **The Librarian researches for you and adds what it finds to a doc or the market.** **Research** in a doc's **More** menu, and
-  on any market page or entry, asks for what to find and, on a doc with headings, which section. The Librarian searches the web,
+  (for the owner) on any market page or entry, asks for what to find and, on a doc with headings, which section. The Librarian searches the web,
   adds the findings to that one place with a link after every fact, and leaves the rest of the page as it was. Its note on the task
   says what it added and what it could not find, and the doc's **History** shows the change and can restore the earlier version.
   `POST /api/v2/librarian/research {target, section?, instructions}` files the task; `hub market page <name>` with no

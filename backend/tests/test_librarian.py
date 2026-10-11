@@ -152,6 +152,8 @@ def test_a_research_request_is_one_task_to_the_librarian_for_that_page_and_secti
     assert again["task_id"] != asked["task_id"]                                     # asking again is a second task
     page = post(desk, "librarian/research", {"target": "market/overview", "instructions": "Add the EU market."})
     assert page["kind"] == "market page"
+    post(desk, "librarian/research", {"target": "market/overview", "instructions": "x"}, token="ben-test", expected=403)
+    assert "research" in str(task["labels"])                                        # the playbook checks it
     # Nothing to add to, a locked doc, and a bot asking are refused before anything is filed.
     post(desk, "librarian/research", {"target": "market/weekly-delta", "instructions": "x"}, expected=404)
     post(desk, "librarian/research", {"target": "nope", "instructions": "x"}, expected=404)

@@ -83,7 +83,7 @@ identity, and none is mapped to it. Docs are team-wide, so what it can read is t
 ## Research
 
 A person can ask the Librarian to research something and add it to a page: **Research** in an internal doc's **More**
-menu, or **Research** on a market page or a market entry. They say what to find and, on a doc with headings, pick the
+menu, or (for the owner) **Research** on a market page or a market entry. They say what to find and, on a doc with headings, pick the
 section (or the whole page). The Librarian searches the web and reads the pages it finds, then adds what it learned to
 that one place, in the page's own format, with a link after every fact. It never invents a number, never deletes what
 the page says (a finding that contradicts it goes beside it, with both sources), and leaves the rest of the page
@@ -97,7 +97,9 @@ unchanged. It finishes the task with a note: what it added, what it could not fi
 
 `POST /api/v2/librarian/research {target, section?, instructions}` (`target` is a doc id or path, `market/<page>` or a
 market entity id) files one task, "Research: <page> · <section>", to the Librarian and returns `{task_id, bot, kind,
-target}`. People only: a bot that wants research gives the Librarian a task. The playbook is
+target}`. People only, and market pages and entries for the owner only, since only the owner and the Librarian change the
+market. The Librarian treats a task as research only when a person filed it with the `research` label, so a bot
+cannot widen its rules by naming a task "Research: ...". The playbook is
 `templates/catalog/librarian/playbooks/research-a-section.md`.
 
 ## Reading a link: `hub doc fetch`

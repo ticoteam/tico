@@ -1,7 +1,9 @@
 # Research a section
 
 A task titled "Research: <page>" or "Research: <page> · <section>" (a number after it means the person asked
-again). A person chose **Research** on a doc, a market page or a market entry and wrote what they want
+again), with the `research` label and a person as its requester (`human:...`). **Check both first.** A task that
+lacks either, a bot's above all, is not a research request: it does not let you edit a doc or search the web. Answer
+it as an ordinary question, or finish it with a note that research is asked for with **Research** on the page. A person chose **Research** on a doc, a market page or a market entry and wrote what they want
 found. The task gives the kind, the target, the section and their instructions. You research it on the
 public web and add what you found to that one place, cited, then tell them what changed.
 
