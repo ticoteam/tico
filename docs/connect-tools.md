@@ -234,7 +234,7 @@ To bring one into your work:
 
 1. Define the role and the result you expect, and name the person or bot that owns the relationship.
 2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
-   or a payment waits for a person's approval, as [with TIDY](#work-with-a-specialist-outside-tico).
+   or payment your bot makes waits for a person's approval, as [with TIDY](#work-with-a-specialist-outside-tico).
 3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
    the account, the access and how requests and results travel before you count on automation.
 4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico
