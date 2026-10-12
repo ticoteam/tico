@@ -67,14 +67,30 @@ function approvalWhere(url) {
   }
   return u;
 }
-// The readable rows for a publish, spend or merge (the fields APPROVAL_FIELDS requires); null for any other kind.
+// The readable rows for a publish, spend or merge: the fields APPROVAL_FIELDS requires by name, then one row per other
+// key (labelled with the key; the content hash stays in the exact payload). A string or number shows as is, anything
+// else as its JSON. A row is [label, value, class, keep]; a named row with no value is left out, a `keep` row never is.
+// Null for any other kind.
 function approvalFacts(what, p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  const str = v => v == null || typeof v === 'object' ? '' : String(v);
-  if (what === 'publish') return [['Where', p.url == null ? '' : approvalWhere(p.url)], ['Text', str(p.text), 'approval-text']];
-  if (what === 'spend') return [['Amount', str(p.amount)], ['Account', str(p.account)], ['For', str(p.what)]];
-  if (what === 'merge') return [['Repository', str(p.repo)], ['Pull request', p.pr == null || p.pr === '' ? '' : '#' + str(p.pr).replace(/^#/, '')]];
-  return null;
+  const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
+  const plain = v => typeof v === 'string' || typeof v === 'number';
+  let rows, named;
+  if (what === 'publish') {
+    const text = p.text == null || p.text === '' ? null : p.text;
+    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
+      text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
+                   : ['Text', shown(text), 'approval-text']];
+    named = ['url', 'text', 'content_sha256'];
+  } else if (what === 'spend') {
+    rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
+    named = ['amount', 'account', 'what'];
+  } else if (what === 'merge') {
+    rows = [['Repository', shown(p.repo)], ['Pull request', plain(p.pr) && p.pr !== '' ? '#' + String(p.pr).replace(/^#/, '') : shown(p.pr)]];
+    named = ['repo', 'pr'];
+  } else return null;
+  for (const key of Object.keys(p)) if (!named.includes(key) && key !== 'content_sha256') rows.push([key, plain(p[key]) ? String(p[key]) : JSON.stringify(p[key]), '', true]);
+  return rows;
 }
 function approvalPayloadNode(it) {
   const p = it.payload, el = (tag, cls, text) => {
@@ -90,8 +106,8 @@ function approvalPayloadNode(it) {
     const rows = approvalFacts(it.what, p);
     if (!rows) { main.append(raw); return box; }
     const facts = el('dl', 'approval-facts');
-    for (const [label, value, cls] of rows) {
-      if (value == null || value === '') continue;
+    for (const [label, value, cls, keep] of rows) {
+      if (!keep && (value == null || value === '')) continue;
       const dd = el('dd', cls || '');
       if (value instanceof Node) dd.append(value); else dd.textContent = String(value);
       facts.append(el('dt', '', label), dd);

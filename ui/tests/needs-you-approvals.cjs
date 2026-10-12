@@ -3,7 +3,8 @@
 // server verified (`attachment_files`), pinned with ?v=, and opens that version in the viewer; a payload file_id the
 // server did not verify is no link and says so. A Support reply to publish, on a 390px phone, says which ticket and
 // shows its whole text wrapped (in Needs you and in Decide), its HTML-looking text stays text, and the exact payload
-// (with the content hash) folds under Exact payload.
+// (with the content hash) folds under Exact payload. A field the facts list does not name gets its own row, and a
+// publish without its text says so.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -58,23 +59,34 @@ async function phonePublish(browser) {
   assert.equal(await dc.locator('.dc-q').textContent(), 'Publish this?');
   await check(dc.locator('.approval-payload'), 'Decide');
   if (process.env.APPROVAL_SHOT) await dc.screenshot({path: process.env.APPROVAL_SHOT.replace(/(\.png)?$/, '-publish.png')});
-  // A web address is a link only when it is http(s); a spend and a merge show their fields; any other kind its JSON.
+  // A web address is a link only when it is http(s); a spend and a merge show their fields; a field the list does not
+  // name gets a row of its own (an object or array as its JSON); a publish without its text says only its hash came;
+  // any other kind shows its JSON. Each is drawn on Decide's card at 390px and stays inside it.
+  const NO_TEXT = 'not included; only a hash of it is in the payload';
   const shown = await page.evaluate(() => [
     {what: 'publish', payload: {url: 'https://acme.example/blog/launch', content_sha256: 'f'.repeat(64)}},
-    {what: 'publish', payload: {url: 'javascript:alert(1)', content_sha256: 'f'.repeat(64)}},
+    {what: 'publish', payload: {url: 'javascript:alert(1)', content_sha256: 'f'.repeat(64), text: ''}},
     {what: 'spend', payload: {amount: '$120', account: 'Ads', what: 'Launch week boost'}},
+    {what: 'spend', payload: {amount: {value: 120, currency: 'USD'}, account: 'Ads', what: 'Boost', currency: 'USD',
+      vendor: '<img src=x onerror="window.pwned=1">', seats: 3, tags: ['launch', 'q4'], note: null}},
     {what: 'merge', payload: {repo: 'acme/site', pr: 42}},
     {what: 'other', payload: {x: 1}}].map(it => {
-    const node = approvalPayloadNode(it);
-    return {facts: [...node.querySelectorAll('.approval-facts > *')].map(x => x.textContent),
-      links: [...node.querySelectorAll('a')].map(a => a.getAttribute('href')), folded: !!node.querySelector('details.approval-raw pre')};
+    const node = approvalPayloadNode(it), body = document.querySelector('.decide .dc-body');
+    body.replaceChildren(node);
+    const fits = [...node.querySelectorAll('.approval-facts dd')].every(dd => dd.getBoundingClientRect().right <= innerWidth && dd.scrollWidth <= dd.clientWidth);
+    return {facts: [...node.querySelectorAll('.approval-facts > *')].map(x => x.textContent), fits,
+      links: [...node.querySelectorAll('a')].map(a => a.getAttribute('href')), folded: !!node.querySelector('details.approval-raw pre'),
+      markup: node.querySelectorAll('img').length};
   }));
+  const ok = {links: [], folded: true, fits: true, markup: 0};
   assert.deepEqual(shown, [
-    {facts: ['Where', 'https://acme.example/blog/launch'], links: ['https://acme.example/blog/launch'], folded: true},
-    {facts: ['Where', 'javascript:alert(1)'], links: [], folded: true},
-    {facts: ['Amount', '$120', 'Account', 'Ads', 'For', 'Launch week boost'], links: [], folded: true},
-    {facts: ['Repository', 'acme/site', 'Pull request', '#42'], links: [], folded: true},
-    {facts: [], links: [], folded: false}]);
+    {...ok, facts: ['Where', 'https://acme.example/blog/launch', 'Text', NO_TEXT], links: ['https://acme.example/blog/launch']},
+    {...ok, facts: ['Where', 'javascript:alert(1)', 'Text', NO_TEXT]},
+    {...ok, facts: ['Amount', '$120', 'Account', 'Ads', 'For', 'Launch week boost']},
+    {...ok, facts: ['Amount', '{"value":120,"currency":"USD"}', 'Account', 'Ads', 'For', 'Boost', 'currency', 'USD',
+      'vendor', '<img src=x onerror="window.pwned=1">', 'seats', '3', 'tags', '["launch","q4"]', 'note', 'null']},
+    {...ok, facts: ['Repository', 'acme/site', 'Pull request', '#42']},
+    {...ok, facts: [], folded: false}]);
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
