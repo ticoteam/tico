@@ -12,7 +12,7 @@ an approval step to work the owner already requested.
 
 A `publish` payload names the `url` and the `content_sha256` of what will be published. If it also
 carries the `text` the person reads, that text must be exactly what will be published:
-`content_sha256` must be the SHA-256 of the text's UTF-8 bytes, or the request is refused.
+`content_sha256` must be the lower-case hex SHA-256 of the text's UTF-8 bytes, or the request is refused.
 
 ## Outbound sends
 

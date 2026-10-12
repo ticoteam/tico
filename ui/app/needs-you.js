@@ -77,7 +77,7 @@ function approvalFacts(what, p) {
   const plain = v => typeof v === 'string' || typeof v === 'number';
   let rows, named;
   if (what === 'publish') {
-    const text = p.text == null || p.text === '' ? null : p.text;
+    const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
     rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
                    : ['Text', shown(text), 'approval-text']];

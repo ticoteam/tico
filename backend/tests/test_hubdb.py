@@ -307,10 +307,22 @@ class Rule6Approvals(HubCase):
     def test_a_publish_text_that_matches_its_hash_is_requested(self):
         body = self.publish("Thanks, the fix is in 0.3.41.")
         self.assertEqual(H.approval_request(self.conn, CMO, "publish", body)["kind"], "publish")
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+
+    def test_an_upper_case_publish_hash_is_refused_because_the_publisher_compares_it_exactly(self):
         upper = self.publish("Upgrade to 0.3.41 and it works.")
         upper["content_sha256"] = upper["content_sha256"].upper()
-        H.approval_request(self.conn, CMO, "publish", upper)
-        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish", upper)
+        self.assertEqual("content_sha256 must be the lower-case hex SHA-256 of the text's UTF-8 bytes", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_text_that_is_not_a_string_is_refused_as_such(self):
+        digest = hashlib.sha256(b"Thanks, the fix is in 0.3.41.").hexdigest()
+        for text in (None, 42, ["Thanks"]):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest, "text": text})
+            self.assertEqual("text must be a string", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
 
     def test_a_publish_text_that_does_not_match_its_hash_is_refused(self):
         other = hashlib.sha256(b"A different reply that would really be posted.").hexdigest()
@@ -318,8 +330,6 @@ class Rule6Approvals(HubCase):
                          self.publish("Thanks, the fix is in 0.3.41.", other))
         self.assertIn("the text doesn't match content_sha256; send the exact text that will be published", e.detail)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-        self.refused("lint", H.approval_request, self.conn, CMO, "publish",
-                     {"url": "hq-ticket:TK-0000AAAA", "content_sha256": other, "text": 42})
 
     def test_a_publish_with_no_text_is_not_checked(self):
         appr = H.approval_request(self.conn, CMO, "publish", {"url": "https://acme.example/notes",

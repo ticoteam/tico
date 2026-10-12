@@ -60,12 +60,13 @@ async function phonePublish(browser) {
   await check(dc.locator('.approval-payload'), 'Decide');
   if (process.env.APPROVAL_SHOT) await dc.screenshot({path: process.env.APPROVAL_SHOT.replace(/(\.png)?$/, '-publish.png')});
   // A web address is a link only when it is http(s); a spend and a merge show their fields; a field the list does not
-  // name gets a row of its own (an object or array as its JSON); a publish without its text says only its hash came;
-  // any other kind shows its JSON. Each is drawn on Decide's card at 390px and stays inside it.
+  // name gets a row of its own (an object or array as its JSON); a publish without its text (or with only whitespace)
+  // says only its hash came; any other kind shows its JSON. Each is drawn on Decide's card at 390px and stays inside it.
   const NO_TEXT = 'not included; only a hash of it is in the payload';
   const shown = await page.evaluate(() => [
     {what: 'publish', payload: {url: 'https://acme.example/blog/launch', content_sha256: 'f'.repeat(64)}},
     {what: 'publish', payload: {url: 'javascript:alert(1)', content_sha256: 'f'.repeat(64), text: ''}},
+    {what: 'publish', payload: {url: 'hq-ticket:TK-0000AAAA', content_sha256: 'f'.repeat(64), text: ' \n\t '}},
     {what: 'spend', payload: {amount: '$120', account: 'Ads', what: 'Launch week boost'}},
     {what: 'spend', payload: {amount: {value: 120, currency: 'USD'}, account: 'Ads', what: 'Boost', currency: 'USD',
       vendor: '<img src=x onerror="window.pwned=1">', seats: 3, tags: ['launch', 'q4'], note: null}},
@@ -82,6 +83,7 @@ async function phonePublish(browser) {
   assert.deepEqual(shown, [
     {...ok, facts: ['Where', 'https://acme.example/blog/launch', 'Text', NO_TEXT], links: ['https://acme.example/blog/launch']},
     {...ok, facts: ['Where', 'javascript:alert(1)', 'Text', NO_TEXT]},
+    {...ok, facts: ['Where', 'Support ticket TK-0000AAAA', 'Text', NO_TEXT]},
     {...ok, facts: ['Amount', '$120', 'Account', 'Ads', 'For', 'Launch week boost']},
     {...ok, facts: ['Amount', '{"value":120,"currency":"USD"}', 'Account', 'Ads', 'For', 'Boost', 'currency', 'USD',
       'vendor', '<img src=x onerror="window.pwned=1">', 'seats', '3', 'tags', '["launch","q4"]', 'note', 'null']},
