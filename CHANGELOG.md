@@ -11,6 +11,16 @@ All notable changes to Tico are recorded here. The format follows
 - **Compact at, per bot.** The bot editor's Compact at (150k, 250k the default, 400k, 600k or 1M tokens) sets how full a bot's conversation
   gets before it is compacted, instead of the model's whole window: Claude Code gets `--autocompact` on every turn (when its `--help` lists it)
   and Codex `model_auto_compact_token_limit`. Changing it keeps the bot's session.
+- **Docs show a bot working with a specialist outside Tico.** [Connect tools](docs/connect-tools.md#work-with-a-specialist-outside-tico)
+  has a new section with TIDY, a cleaning and maintenance company, as the example. A bot uses TIDY through a Tool (its MCP server or
+  an API skill), and a person approves any booking or spending. Tico doesn't run TIDY's workers, has no TIDY connector and doesn't
+  track vendor spend. Exact setup is left to TIDY's own reference, because its public pages disagree. [Connect an external agent](docs/connect-an-agent.md)
+  now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico.
+  A new section, [Hire an external AI specialist](docs/connect-tools.md#hire-an-external-ai-specialist), lists providers you
+  can hire for a role: TIDY (property operations), Fin (support), Smith.ai (reception and intake), 11x's Alice and Artisan's Ava
+  (sales and business development), Devin (engineering) and HappyRobot (logistics). For each it gives the work offered and how a bot
+  could reach it, where the vendor documents that, then four steps for bringing one into your work. These are examples, not
+  integrations Tico has built or tested.
 
 ### Fixed
 - **Chat goals no longer loop on waiting or on goals that can't be met.** The harness's goal now also counts "the only work left is waiting on someone or something else" as done for now: the bot says "Waiting on: <what>" and stops, and the goal shows Paused. A goal sent back to work 30 times (100 Codex continuation turns) with no person writing in between is paused and cleared in the harness, and the bot's reply says so with the last reason. This also stops a Claude Code goal that outlived its chat from looping in the bot's other runs. Codex's `blocked` shows as Paused.
@@ -40,16 +50,6 @@ All notable changes to Tico are recorded here. The format follows
   says what it added and what it could not find, and the doc's **History** shows the change and can restore the earlier version.
   `POST /api/v2/librarian/research {target, section?, instructions}` files the task; `hub market page <name>` with no
   `--body-file` now reads a market page (`GET /api/v2/market/pages/{name}`). Playbook: `playbooks/research-a-section.md`.
-- **Docs show a bot working with a specialist outside Tico.** [Connect tools](docs/connect-tools.md#work-with-a-specialist-outside-tico)
-  has a new section with TIDY, a cleaning and maintenance company, as the example. A bot uses TIDY through a Tool (its MCP server or
-  an API skill), and a person approves any booking or spending. Tico doesn't run TIDY's workers, has no TIDY connector and doesn't
-  track vendor spend. Exact setup is left to TIDY's own reference, because its public pages disagree. [Connect an external agent](docs/connect-an-agent.md)
-  now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico.
-  A new section, [Hire an external AI specialist](docs/connect-tools.md#hire-an-external-ai-specialist), lists providers you
-  can hire for a role: TIDY (property operations), Fin (support), Smith.ai (reception and intake), 11x's Alice and Artisan's Ava
-  (sales and business development), Devin (engineering) and HappyRobot (logistics). For each it gives the work offered and how a bot
-  could reach it, where the vendor documents that, then four steps for bringing one into your work. These are examples, not
-  integrations Tico has built or tested.
 - **The daily cap on the server's model calls is a setting.** `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN` and `TICO_DECISIONS_DAILY_CALLS_BOT` (defaults 20000, 5000, 5000) set how many decision calls one actor may make in a UTC day; `GET /api/v2/decisions` reports the cap that applies. PRIVACY.md now lists what the server itself sends to a model provider, and to whom.
 
 ### Changed
