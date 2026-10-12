@@ -78,7 +78,7 @@ the credential.
 - **The Gateway announces itself on the local network** (Bonjour) by default on macOS. On shared office Wi-Fi,
   turn that off with `openclaw --profile <name> config set discovery.mdns.mode off` (or
   `openclaw --profile <name> plugins disable bonjour`, or `OPENCLAW_DISABLE_BONJOUR=1` in the Gateway's
-  environment). The Gateway itself listens on loopback unless you bind it elsewhere.
+  environment). Keep the Gateway on loopback too: the tested setup ran `openclaw --profile <name> gateway run --bind loopback`.
 
 ## Keep it in sync
 
@@ -138,7 +138,7 @@ openclaw --profile <name> mcp probe tico
 
 The Gateway reads `.env` when it starts, so restart it after adding the line (`mcp reload` is not enough). In a
 cron turn the tools are found through OpenClaw's `tool_search` and called with `tool_call`.
-`openclaw mcp show tico` prints the header with the token filled in, so don't paste its output anywhere.
+`openclaw --profile <name> mcp show tico` prints the header with the token filled in, so don't paste its output anywhere.
 `uninstall` does not remove an MCP entry or `.env` line you added.
 
 ## In Tico
