@@ -3,6 +3,7 @@
 Every test runs against a fresh database in a temp directory with a small fake registry, so
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
+import hashlib
 import json
 import re
 import tempfile
@@ -297,6 +298,44 @@ class Rule6Approvals(HubCase):
         self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
         H.approval_decide(self.conn, ANA, appr["id"], "declined")
         self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
+
+    @staticmethod
+    def publish(text, digest=None):
+        return {"url": "hq-ticket:TK-0000AAAA", "text": text,
+                "content_sha256": digest or hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+    def test_a_publish_text_that_matches_its_hash_is_requested(self):
+        body = self.publish("Thanks, the fix is in 0.3.41.")
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish", body)["kind"], "publish")
+        upper = self.publish("Upgrade to 0.3.41 and it works.")
+        upper["content_sha256"] = upper["content_sha256"].upper()
+        H.approval_request(self.conn, CMO, "publish", upper)
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+
+    def test_a_publish_text_that_does_not_match_its_hash_is_refused(self):
+        other = hashlib.sha256(b"A different reply that would really be posted.").hexdigest()
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                         self.publish("Thanks, the fix is in 0.3.41.", other))
+        self.assertIn("the text doesn't match content_sha256; send the exact text that will be published", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+        self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                     {"url": "hq-ticket:TK-0000AAAA", "content_sha256": other, "text": 42})
+
+    def test_a_publish_with_no_text_is_not_checked(self):
+        appr = H.approval_request(self.conn, CMO, "publish", {"url": "https://acme.example/notes",
+                                                               "content_sha256": "b" * 64})
+        self.assertIsNone(appr["decision"])
+
+    def test_a_unicode_reply_with_a_trailing_newline_matches_the_file_bytes_hq_tickets_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reply.md"
+            path.write_bytes("Merci, Zoë: café ✓ fixed in 0.3.41 \u2014 see you.\r\nLine two.\n".encode("utf-8"))
+            data = path.read_bytes()                    # what hq-tickets hashes
+            sent = json.loads(json.dumps({"url": "hq-ticket:TK-0000AAAA", "text": data.decode("utf-8"),
+                                          "content_sha256": hashlib.sha256(data).hexdigest()}))
+        self.assertTrue(sent["text"].endswith("\n"))
+        H.approval_request(self.conn, CMO, "publish", sent)
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
 
 # ----------------------------------------------------------------------------- rule 7

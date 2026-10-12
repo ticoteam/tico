@@ -39,7 +39,8 @@ withdrawn text in the audit trail.
 4. **Approval lint is the payload's fields.** An approval has no title or body, so rule 7 on
    an approval means "the payload is the exact thing": `send` needs to/cc/subject/
    body_sha256/mailbox, `spend` amount/account/what, `publish` url/content_sha256, `merge`
-   repo/pr. A missing field is `Refused("lint", "send needs cc")`.
+   repo/pr. A missing field is `Refused("lint", "send needs cc")`. A `publish` payload's
+   optional `text` must hash (SHA-256 of its UTF-8) to content_sha256, or it is refused.
 5. **`status_set(..., state="active")`** is accepted although `active` is not a `bot_status`
    state: it is how §4 rule 8 says a human clears a quarantine. It sets `bots.state=active`
    and `bot_status.state=idle`.
@@ -1194,6 +1195,20 @@ def lint_approval(kind, payload):
         problems[problems.index("merge needs pr")] = ("merge needs pr (the pull request number); for a change "
                                                       "with no pull request, file a decision task for the person instead")
     return problems
+
+
+def publish_text_matches(payload):
+    """A publish payload's `text` is what the person approves; `content_sha256` is what the publisher
+    checks. They agree only when the hash is SHA-256 of the text's UTF-8 bytes (hq-tickets hashes the
+    reply file's bytes and sends them decoded, so a UTF-8 file round-trips exactly)."""
+    text, digest = payload.get("text"), payload.get("content_sha256")
+    if not isinstance(text, str) or not isinstance(digest, str):
+        return False
+    try:
+        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:              # a lone surrogate is no text anyone could publish
+        return False
+    return actual == digest.lower()
 
 
 def style_problems(conn, actor, problems, severity="normal"):
@@ -4108,6 +4123,10 @@ def approval_request(conn, actor, kind, payload, task_id=None):
     problems = lint_approval(kind, payload)
     if problems:
         refuse(conn, actor, "lint", "; ".join(problems), severity)
+    if kind == "publish" and "text" in payload and not publish_text_matches(payload):
+        # The person reads `text`, the publisher checks `content_sha256`: they must be the same reply.
+        refuse(conn, actor, "lint", "the text doesn't match content_sha256; send the exact text that will be published",
+               severity)
     digest = payload_hash(payload)
     dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
     if dup:
