@@ -198,7 +198,7 @@ they list different tools. Take the exact setup from TIDY's [MCP page](https://w
 Then prove it with one read-only call.
 
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
-Tico. Any TIDY tool can book a job, including one that takes a request in plain language, and `can:` does not stop it:
+Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and `can:` does not stop it:
 Tico does not filter a vendor's tools by `can:`. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
 bot ask with an approval (`hub approval request --kind spend`) and send a booking or anything that costs money only after a person
 approves it, and write that rule in the bot's instructions and the tool's `note:`.
@@ -222,7 +222,7 @@ own service.
 | Customer support | [Fin](https://fin.ai/) | Answers customer questions and hands off to your team when it can't resolve one | Documents an API: the [Fin Agent API](https://developers.intercom.com/docs/guides/fin-agent-api) |
 | Reception and intake | [Smith.ai AI Receptionist](https://smith.ai/ai-receptionist) | Answers calls, screens and qualifies callers, routes them and books appointments; live agents are available | Its help docs cover an [API key](https://docs.smith.ai/category/ydtshfm8im-api), and Zapier and Make connections |
 | Sales development | [11x Alice](https://www.11x.ai/worker/alice) | Engages prospects, handles replies and books qualified meetings | Its site describes an [API and webhooks](https://www.11x.ai/platform/integrations/api) |
-| Business development | [Artisan Ava](https://www.artisan.co/) | Finds and researches leads, sends outreach and follow-ups, books meetings | No public API; the bot works alongside Artisan's app and your CRM |
+| Business development | [Artisan Ava](https://www.artisan.co/) | Finds and researches leads, sends outreach and follow-ups, books meetings | No public API reference was found in the pages checked on October 11, 2026; the bot works alongside Artisan's app and your CRM |
 | Software engineering | [Devin](https://devin.ai/), the cloud product | Takes delegated coding tasks and returns changes for review | Documents a [REST API](https://docs.devin.ai/api-reference/overview) and an [MCP server](https://docs.devin.ai/work-with-devin/devin-mcp) |
 | Logistics operations | [HappyRobot](https://www.happyrobot.ai/solutions/industries/logistics-providers) | Carrier calls, appointment scheduling, and shipment tracking and tracing | Its site describes a [REST API and an MCP server](https://www.happyrobot.ai/product/developer-tools); the reference needs an access code |
 
