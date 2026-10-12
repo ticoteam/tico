@@ -303,6 +303,7 @@ def create_app(settings=None):
 
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import describe as describe_action
+    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
     from . import botops_act
 
     def assistant_owns(task_id, actor, shared=False):
@@ -431,9 +432,19 @@ def create_app(settings=None):
                                                  request.state.identity.actor,
                                                  lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                                                  assistant_direct(), assistant_to_bot)):
-                    raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                  "own. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions); "
-                                  "the person confirms it in " + settings.app_name, 403)
+                    # A task change, comment or link the person asked for in their own Assistant chat: the turn cites
+                    # their message and it runs as them, recorded via assistant for that message (backend/assistant.py).
+                    asked = request.headers.get(botops_act.HEADER)
+                    if not (asked and request.state.identity.via == "assistant" and assistant_direct()
+                            and assistant_instructed(request.method, request.url.path)):
+                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
+                                      "own. A task change, comment or link the person clearly asked for in this chat runs "
+                                      "when you cite their message (`--on-behalf-of turn`). Otherwise propose it with "
+                                      "`hub assistant propose` (or POST /api/v2/assistant/actions), several task actions on "
+                                      "one card (path /api/v2/assistant/batch); the person confirms it in "
+                                      + settings.app_name, 403)
+                    with store.read() as c:
+                        delegation_reset = H.DELEGATION.set(assistant_instruction(c, request.state.identity, asked))
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -441,7 +452,8 @@ def create_app(settings=None):
             if caller and request.method not in ("GET", "HEAD", "OPTIONS"):
                 with store.read() as c:
                     privacy.guard_write(c, caller, request.url.path, auth)
-            on_behalf = request.headers.get(botops_act.HEADER)
+            # The Assistant's citation was checked above; only BotOps borrows a requester's identity here.
+            on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(botops_act.HEADER)
             if (not on_behalf and getattr(request.state, "identity", None) is not None
                     and request.state.identity.actor == "bot:" + BOTOPS
                     and request.url.path.startswith("/api/v2/")

@@ -71,7 +71,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
                                            Assistant only: ask the person to confirm a side effect (an
                                            approval, anything outside the company, spend, settings,
-                                           archive/delete, activating a bot); it runs only on their click
+                                           archive/delete, activating a bot); it runs only on their click.
+                                           Several task actions: ONE card, --path /api/v2/assistant/batch
+                                           --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -304,6 +306,9 @@ if __package__ in (None, ""):                          # run as a script: python
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
+# The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
+ASKED = ("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
+         "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
 
 
 class CliError(Exception):
@@ -772,6 +777,7 @@ def parser():
     s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
     s.add_argument("--number", type=int, help="movers: the number of a task that has none")
     s.add_argument("--role", action="append", help="who is on it by role, NAME=person,person (repeat for more roles; NAME= clears one)")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("id")
@@ -780,6 +786,7 @@ def parser():
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task comment")
     s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
     s.add_argument("id")
@@ -802,6 +809,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("url")
     s.add_argument("--title")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task link")
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
@@ -815,10 +823,12 @@ def parser():
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
     s = task.add_parser("close")
     s.add_argument("id")
     s.add_argument("--note")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task close")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
     s.add_argument("id")

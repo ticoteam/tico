@@ -21,6 +21,7 @@ All notable changes to Tico are recorded here. The format follows
   (sales and business development), Devin (engineering) and HappyRobot (logistics). For each it gives the work offered and how a bot
   could reach it, where the vendor documents that, then four steps for bringing one into your work. These are examples, not
   integrations Tico has built or tested.
+- **The Assistant does the task actions you ask it for, and many at once are one card.** Tell it in your Assistant chat to close, finish, reopen, reassign, comment on or link tasks and it does them as you, with no Confirm card: the write cites your message, and the server checks it's yours, in your own Assistant chat and under 30 minutes old, and applies your own rights. Anything you didn't clearly ask for is a card, and a group of task actions is now one card listing every task, with one Confirm that runs them all and says which didn't go through, instead of a card each (which stopped at 20). Confirming a card to close a task no longer fails with "body.version: Field required; body.status: Input should be ...": a card that says status closed closes the task with its current version, including cards already waiting. Approvals (send, spend, publish, merge) and everything else still need your own click. See [Assistant](docs/assistant.md).
 - **A Decide card's bot opens the bot.** Tapping the bot's name or face at the top of a card opens that bot, as its entry in the side rail does. The card's own buttons aren't touched. A card from a person has no link.
 
 ### Fixed

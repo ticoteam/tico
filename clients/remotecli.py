@@ -192,8 +192,10 @@ def run(args, who=None):
     actor = identity["actor"]
     key = os.environ.get("HUB_OPERATION_ID")
 
-    def post(path, body, suffix=""):
-        result = client.post(path, body, key=(key + suffix) if key else None)
+    def post(path, body, suffix="", delegate=False):
+        # `delegate`: the person's message the Assistant cites for a task action they asked for (`--on-behalf-of`).
+        result = (client.call("POST", path, body, (key + suffix) if key else None, delegate=delegate) if delegate
+                  else client.post(path, body, key=(key + suffix) if key else None))
         return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
 
     def target(value):
@@ -263,6 +265,7 @@ def run(args, who=None):
     if fn == "note delete":
         return post(f"notes/{args.id}/cancel", {})["note"]
     if cmd == "task":
+        asked = getattr(args, "on_behalf_of", None) or False
         if sub == "type":
             if args.type_sub == "delete":
                 return post("task-types/" + args.id + "/delete", {})
@@ -339,7 +342,7 @@ def run(args, who=None):
             if ask is not None:
                 body["ask"] = ask
             links = s3links.apply(client, body, ("text",))
-            return s3links.annotate(post(f"tasks/{args.id}/comments", body), links)
+            return s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
         if sub == "answers":
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
@@ -355,7 +358,7 @@ def run(args, who=None):
         if sub == "restore":
             return post(f"tasks/{args.id}/restore", {})
         if sub == "link":
-            return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title})
+            return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title}, delegate=asked)
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "label":
@@ -368,7 +371,7 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels})
+            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args
@@ -412,7 +415,7 @@ def run(args, who=None):
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
             links = s3links.apply(client, body, ("note",))
-            return s3links.annotate(post("tasks/" + args.id, body), links)
+            return s3links.annotate(post("tasks/" + args.id, body, delegate=asked), links)
     if cmd == "goal":
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
