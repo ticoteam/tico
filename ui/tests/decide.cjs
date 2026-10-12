@@ -20,6 +20,9 @@ const items = [
   wait('t-botbody', 'Sort out the release checklist', {created: at(475),
     body: 'Sort out the release checklist\n\nRefs db14c907, 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f; see run 03QEZT3C.'}),
   wait('t-blank', 'Check the newsletter list', {created: at(470)}),
+  // a person asked: their name stays plain text, no link
+  {id: 't-person', kind: 'task', title: 'Read the Q4 board notes', body: 'Read the Q4 board notes\n\nBefore Thursday, please.', owner: 'human:ana',
+    requester: 'human:sam', status: 'open', version: 1, created: at(460), updated: at(460), ask: null, open_asks: 0},
 ];
 const comments = {
   // the status note's mirror in chat, then a message to me: the message leads
@@ -106,8 +109,35 @@ const comments = {
     // the note is only ever text
     assert.equal(await page.locator('.decide .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);
+
+    // A bot's face and name open its chat (Chat tab); the face is not a second tab stop.
+    const who = () => page.locator('.decide .dc-who').evaluate(el => ({name: el.querySelector('.dc-who-name').textContent,
+      links: [...el.querySelectorAll('a')].map(a => ({cls: a.className, href: a.getAttribute('href'), tab: a.tabIndex, text: a.textContent.trim()})),
+      height: el.getBoundingClientRect().height}));
+    const bot = await who();
+    assert.deepEqual(bot.links.map(({cls, href, tab}) => ({cls, href, tab})), [
+      {cls: 'dc-who-face', href: '#/bot/writer/chat', tab: -1}, {cls: 'dc-who-link', href: '#/bot/writer/chat', tab: 0}]);
+    assert.equal(bot.links[1].text, 'Writer');
     await shot('blank');
+    await next('blank');
+
+    // A person's card: the name is plain, with no link, and the header is no taller or shorter
+    await page.locator('.decide .dc-card[data-key="task:t-person"]').waitFor();
+    const person = await who();
+    assert.equal(person.name, 'Sam');
+    assert.deepEqual(person.links, []);
+    assert.equal(person.height, bot.height, 'the header keeps its height');
     assert.deepEqual(errors, []);
-    console.log('Decide: a waiting card leads with the ask, what the bot said to me or the request; the note folds away');
+
+    // Tapping the name goes to the chat and does nothing to the card
+    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+    await page.locator('.decide .dc-actions [data-dc="skip"]').click();
+    await page.locator('.decide .dc-card[data-key="task:t-ask"]').waitFor();
+    const writes = [];
+    page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+    await page.locator('.decide .dc-who-link').click();
+    await page.waitForFunction(() => location.hash === '#/bot/writer/chat');
+    assert.deepEqual(writes, [], 'no card action was sent');
+    console.log("Decide: a waiting card leads with the ask, what the bot said to me or the request; the note folds away; a bot's name opens its chat");
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});
