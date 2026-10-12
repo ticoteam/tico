@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 
 from clients import mcp_servers
 from .. import isolation
-from .base import Host, HostError, hub_mcp_server, is_limit
+from .base import Host, HostError, compact_at, hub_mcp_server, is_limit
 
 CLIENT_INFO = {"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"}
 REQUEST_TIMEOUT_S = 120
@@ -370,6 +370,8 @@ class CodexHost(Host):
             if hub:
                 servers["hub"] = hub
             cfg["mcp_servers"] = servers
+        # The bot's "Compact at": Codex compacts once the conversation holds this many tokens.
+        cfg["model_auto_compact_token_limit"] = compact_at(settings.get("compact_at"))
         params = {"cwd": settings["cwd"], "approvalPolicy": "never",
                   "sandbox": "danger-full-access"}
         if settings.get("model"):

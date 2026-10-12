@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from clients.tico import APIError
-from runner import service
+from runner import goals, service
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -251,6 +251,56 @@ class Execution(unittest.TestCase):
         self.assertEqual(client.completion()["outcome"], "failed")
         self.assertEqual(client.completion()["undelivered"], ["msg-2"])
         self.assertNotIn(("attempts/att-1/inputs/msg-2/ack", {}), client.posts)
+
+    def test_a_goal_sent_back_too_often_is_paused_and_cleared(self):
+        goal = {"id": "goal-1", "status": "active", "updated_at": "r1", "objective": "Ship it"}
+        host = self.host
+
+        def looping_goal(thread_id, action, objective, effort=None):
+            if action == "pause":
+                return FakeHost.start_goal(host, thread_id, action, objective, effort)
+            host.prompts.append((thread_id, "/goal " + objective))
+            host.turn_of[thread_id] = "goal-turn"
+            host.emit("message", thread_id, "goal-turn", text="PR 888 is still open.", final=False)
+            for n in range(goals.MAX_GOAL_TRIES):
+                host.emit("goal", thread_id, None, status="active", objective=objective,
+                          note=f"Not live: PR 888 is open ({n})", tried=True, record=f"r{n}")
+            return "goal-turn"
+
+        def interrupt(thread_id, turn_id):
+            FakeHost.interrupt(host, thread_id, turn_id)
+            host.emit("turn_completed", thread_id, turn_id, status="interrupted")
+
+        client = FakeClient()
+        client.get = lambda path, **query: {"goal": goal}
+        run = {**attempt(), "chat_goal": goal,
+               "message": {"id": "msg-1", "body": "/goal Ship it", "from_actor": "human:ana",
+                           "refs": {"goal_action": "set", "goal_id": "goal-1", "goal_revision": "r1",
+                                    "goal_objective": "Ship it"}}}
+        with mock.patch.object(host, "start_goal", side_effect=looping_goal), \
+                mock.patch.object(host, "interrupt", side_effect=interrupt):
+            self.runner(client).execute(run)
+        self.assertEqual(host.prompts[0][1], "/goal Ship it " + goals.WAITING_CLAUSE)
+        self.assertEqual(host.prompts[-1][1], "/goal clear")
+        sent = [e["payload"] for path, body in client.posts if path.endswith("/events")
+                for e in body["events"] if e["kind"] == "goal"]
+        self.assertEqual({e.get("objective") for e in sent if e.get("objective")}, {"Ship it"})
+        paused = next(e for e in sent if e["status"] == "paused")
+        self.assertEqual((paused["goal_id"], paused["revision"]), ("goal-1", "r1"))
+        note = f"Goal paused after {goals.MAX_GOAL_TRIES} tries without progress: Not live: PR 888 is open ({goals.MAX_GOAL_TRIES - 1})"
+        self.assertEqual(paused["note"], note)
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertTrue(client.completion()["text"].endswith(note))
+
+    def test_only_a_persons_message_resets_the_goal_tries(self):
+        client = FakeClient()
+        runner = self.runner(client)
+        runner.goal_tries["coo"] = [goals.MAX_GOAL_TRIES - 1, "PR 888 is open"]
+        bot_wake = {**attempt("att-1"), "message": {"id": "msg-1", "body": "hourly check", "from_actor": "bot:ops"}}
+        runner.execute(bot_wake)
+        self.assertEqual(runner.goal_tries["coo"][0], goals.MAX_GOAL_TRIES - 1)
+        runner.execute(attempt("att-2"))
+        self.assertNotIn("coo", runner.goal_tries)
 
     def test_a_follow_up_refused_before_a_goal_control_is_handed_back_undelivered(self):
         goal = {"id": "goal-1", "status": "active", "updated_at": "r1", "objective": "ship it"}

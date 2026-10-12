@@ -68,7 +68,7 @@ New tasks and chats addressed to the original go to your active branch while bra
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, session mode and fallback. Its editor changes only its status;
+A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status;
 change the original to change its definition. `session: task` gives each task its own provider session, and chat keeps its own session.
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -556,6 +556,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
   the runtime refused). **None (fail)** is the default. The hop starts a fresh session. OpenRouter
   is not a bot harness.
+- **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
+  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in

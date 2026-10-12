@@ -25,7 +25,7 @@ from . import redact as redact_mod
 from . import goals, memory_history, repositories, runner_events, worktrees, safe_git, subscription_usage
 from .release_update import Follower
 from .login import POLL_S as LOGIN_POLL_S, Logins
-from .hosts.base import SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
+from .hosts.base import HostError, SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
 from .hosts.cursor import MODELS as CURSOR_HOST_MODELS
 from .hosts.pi import MODELS as PI_HOST_MODELS
 from .outage import RECENT, Outage, describe, log
@@ -49,6 +49,7 @@ CLAUDE_MODELS = ["claude-fable-5-1", "claude-opus-5", "claude-opus-4-8", "claude
 # token is cold the runner lets one turn go first and holds the rest until the renewal lands,
 # rather than having all four race it and three lose. Nobody waits longer than this.
 CLAUDE_COLD_START_HOLD_S = 45
+GOAL_PAUSE_WAIT_S = 30      # how long a goal's interrupted turn may take to end before the runner clears the goal anyway
 GEMINI_MODELS = ["gemini-3.8-flash"]
 CLAUDE_AUTH_TIMEOUT_SECONDS = 30
 # Environment variables that sign a CLI in without a browser, checked in this order.
@@ -151,6 +152,10 @@ def uses_gemini_cli(config):
 def own_interrupt(exc):
     text = str(exc)
     return any(part in text for part in OWN_INTERRUPT)
+
+
+def from_person(message):
+    return str((message or {}).get("from_actor") or "").startswith("human:")
 
 
 CHECKOUT_EVERY_S = 600
@@ -637,6 +642,7 @@ class Runner:
         self.active = {}
         self.attempt_bots = {}
         self.product_refreshed = set()       # the built-in bots whose product files were checked since this runner started
+        self.goal_tries = {}                 # bot -> [goal continuations since a person last wrote, the last reason given]
         self._weekly_usage = subscription_usage.Reports()
         self.last_heartbeat = 0
         self.vault_files = {}
@@ -2869,7 +2875,7 @@ class Runner:
         so a re-poll does not add it twice) for `carry_inputs` to give a turn of its own.
         """
         if not host.supports_steer:
-            return
+            return []
         result = self.client.post(f"attempts/{aid}/inputs", {})
         for message in result["messages"]:
             mid = message["id"]
@@ -2888,6 +2894,14 @@ class Runner:
                     continue
                 self.state.input_phase(aid, mid, "applied")
             self.ack_input(aid, mid)
+        return result["messages"]
+
+    def goal_tried(self, bot, note, cap=goals.MAX_GOAL_TRIES):
+        """Count one goal continuation; True once the bot has tried `cap` times with no person in between."""
+        tries = self.goal_tries.setdefault(bot, [0, ""])
+        tries[0] += 1
+        tries[1] = (note or "").strip() or tries[1]
+        return tries[0] >= cap
 
     def carry_inputs(self, aid, host, thread, carried, effort=None):
         """Start the turn that answers inputs a finished turn refused. Returns its turn id."""
@@ -2942,6 +2956,8 @@ class Runner:
     def execute(self, attempt):
         aid, bot = attempt["id"], attempt["bot"]
         self.state.record(attempt)
+        if from_person(attempt.get("message")):
+            self.goal_tries.pop(bot, None)
         # Keep the binding out of the persisted request and the caller's shared dictionary.
         attempt = dict(attempt)
         attempt.pop("_subscription_profile", None)
@@ -2960,6 +2976,7 @@ class Runner:
         selected_profile = None
         goal_controlled = [False]
         goal_failure = [None]
+        goal_paused = [None]             # the note left when the runner pauses a goal that is not getting anywhere
         # Inputs a turn refused as it ended (message id -> message). A completed turn gets a turn of its
         # own for them; on any other ending the completion names them `undelivered`, so the server queues
         # them again instead of settling them with a run that never showed them to the bot.
@@ -3035,6 +3052,24 @@ class Runner:
                     goal = attempt.get("chat_goal")
                     goal_running = bool(goal and goal["status"] == "active")
                     revision = goal["updated_at"] if goal else None
+                    tried = set()                # Claude goal records already counted (read from the stream and the transcript)
+                    pausing, pause_ready, pause_at, clearing = None, False, 0.0, False
+
+                    def stuck(note, cap=goals.MAX_GOAL_TRIES):
+                        """Count a continuation; past the cap, interrupt the turn so its goal can be cleared."""
+                        nonlocal goal_running, pausing, pause_at
+                        if pausing or clearing or not self.goal_tried(bot, note, cap):
+                            return
+                        count, last = self.goal_tries.pop(bot)
+                        last = " ".join(last.split())
+                        goal_paused[0] = (f"Goal paused after {count} tries without progress"
+                                          + (": " + (last if len(last) <= 300 else last[:299] + "…") if last else ""))
+                        if goal_running:
+                            self.state.append(aid, "goal", {"goal_id": goal["id"], "revision": revision,
+                                                            "status": "paused", "note": goal_paused[0]})
+                        goal_running, pausing, pause_at = False, turn, time.monotonic()
+                        host.interrupt(thread, turn)
+
                     while not complete:
                         if stopped.is_set():
                             goal_failure[0] = "Stopped by a person"
@@ -3049,19 +3084,41 @@ class Runner:
                             if event.get("thread_id") and event["thread_id"] != thread:
                                 continue
                             if goal_running and event["kind"] == "status" and event.get("turn_id"):
-                                turn = event["turn_id"]
+                                fresh, turn = event["turn_id"] != turn, event["turn_id"]
+                                if fresh:
+                                    # Codex starts a new turn for each continuation of an unmet goal.
+                                    stuck(redact(reply.strip().split("\n\n")[-1]) if reply else "", goals.MAX_CODEX_GOAL_TRIES)
                             if event.get("turn_id") and event["turn_id"] != turn and not goal_running:
                                 continue
                             kind = event["kind"]
                             if kind == "rate_limits":
                                 if metered and metered[-1][2] and metered[-1][3] == "subscription":
                                     self.weekly_usage.remember(metered[-1][2], metered[-1][1].get("runtime"), event)
-                            if kind == "goal" and goal:
-                                # Only while the goal still runs: a clear after "met" is not checked into a second "met".
-                                if runtime == "codex" and goal_running:
-                                    event = goals.reconcile_codex_clear(host, thread, event, goal["objective"])
-                                self.state.append(aid, "goal", {**redact(event), "goal_id": goal["id"], "revision": revision})
-                                goal_running = event.get("status") == "active"
+                            if kind == "goal":
+                                continued, record = event.get("tried"), event.get("record")
+                                event = {key: value for key, value in event.items() if key not in ("tried", "record")}
+                                if goal:
+                                    # Only while the goal still runs: a clear after "met" is not checked into a second "met".
+                                    if runtime == "codex" and goal_running:
+                                        event = goals.reconcile_codex_clear(host, thread, event, goal["objective"])
+                                    if event.get("objective"):
+                                        event["objective"] = goals.tico_objective(event["objective"])
+                                    if event.get("status") in ("met", "paused") and not clearing:
+                                        # Waiting on others is done for now: paused, so a person can resume it.
+                                        waiting = goals.waiting_on(event.get("note"), reply)
+                                        if waiting:
+                                            event.update(status="paused", note=waiting)
+                                    self.state.append(aid, "goal", {**redact(event), "goal_id": goal["id"], "revision": revision})
+                                    goal_running = event.get("status") == "active" and not pausing
+                                if continued and (record is None or record not in tried):
+                                    # Counted with or without a Tico goal: a native goal outlives the chat that set it.
+                                    tried.add(record)
+                                    stuck(redact(event.get("note") or ""))
+                            if pausing and kind in ("turn_completed", "turn_failed"):
+                                pause_ready = True       # the interrupted turn is over; its goal is cleared next
+                                continue
+                            if clearing and kind in ("delta", "message"):
+                                continue                 # the clear's own echo is not the bot's answer
                             if kind in ("message", "tool"):
                                 # Proof the turn reached the model and may have changed something
                                 # outside this Mac. A retry is only safe before this is true.
@@ -3091,6 +3148,14 @@ class Runner:
                                     auth_rejected.update(runtime=current[0], reason=redact(rejected))
                                 retryable = bool(event.get("auth_retry")) and not acted and not rejected
                                 complete = True
+                        if pausing and (pause_ready or time.monotonic() - pause_at >= GOAL_PAUSE_WAIT_S
+                                        or getattr(host, "active_turn", lambda _: None)(thread) != pausing):
+                            pausing, clearing = None, True
+                            try:
+                                turn, outcome = host.start_goal(thread, "pause", "", effort=config.get("reasoning_effort")), "interrupted"
+                            except HostError as exc:
+                                diagnose(f"The goal could not be cleared: {exc}")
+                                outcome, complete = "completed", True
                         if complete and outcome == "completed" and carried and not goal_controlled[0]:
                             # Not on a failed or stopped turn: those settle the attempt, inputs included.
                             turn = self.carry_inputs(aid, host, thread, carried, config.get("reasoning_effort"))
@@ -3108,17 +3173,21 @@ class Runner:
                                         # An explicit goal control settles this run so its queued successor can claim.
                                         goal_running, complete, outcome = False, True, "completed"
                                 if not complete and host.supports_steer:
-                                    self.receive_inputs(aid, host, thread, turn, carried)
+                                    if any(from_person(m) for m in self.receive_inputs(aid, host, thread, turn, carried)):
+                                        self.goal_tries.pop(bot, None)
                             except APIError as exc:
                                 if not exc.retryable:
                                     raise
                             last_flush = time.monotonic()
-                        if not goal_running and outcome == "completed":
+                        if not goal_running and not pausing and outcome == "completed":
                             complete = True
                         if not host.alive() and not complete:
                             raise RuntimeError("Local runtime exited unexpectedly")
                         done.wait(0.1)
-                    return outcome, answer(), spent(), limited, retryable
+                    text = answer()
+                    if goal_paused[0]:
+                        text = (text + "\n\n" if text else "") + goal_paused[0]
+                    return outcome, text, spent(), limited, retryable
                 if persistent:
                     host, env = self.warm.acquire(attempt, env, self.host_factory)
                 else:
@@ -3126,7 +3195,7 @@ class Runner:
                 host.start()
                 settings = host_settings(execution_path, model=config.get("model"),
                                          effort=config.get("reasoning_effort"), env=env, slug=bot,
-                                         shared=is_shared(config),
+                                         shared=is_shared(config), compact_at=config.get("compact_at"),
                                          mcp_servers=self.mcp_for_run(attempt, execution_path, env, config.get("runtime"),
                                                                       config.get("harness"), diagnose))
                 resumed = False
@@ -3158,7 +3227,7 @@ class Runner:
                             turn_id = "goal-control-" + aid
                             host.emit("turn_completed", thread, turn_id, status="completed")
                             return turn_id
-                        return host.start_goal(thread, refs["goal_action"], refs["goal_objective"],
+                        return host.start_goal(thread, refs["goal_action"], goals.native_objective(refs["goal_objective"]),
                                                effort=config.get("reasoning_effort"))
                     if refs.get("command"):
                         return host.start_command(thread, prompt, effort=config.get("reasoning_effort"))
@@ -3234,6 +3303,7 @@ class Runner:
                     host.start()
                     settings = host_settings(execution_path, model=hop["model"], shared=is_shared(config),
                                              effort=hop["reasoning_effort"], env=hop_env, slug=bot,
+                                             compact_at=config.get("compact_at"),
                                              mcp_servers=self.mcp_for_run(attempt, execution_path, hop_env, hop["runtime"],
                                                                           hop["harness"], diagnose))
                     thread = host.start_thread(bot, settings)

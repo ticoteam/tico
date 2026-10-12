@@ -215,6 +215,19 @@ def hub_mcp_server(env):
             "env": {k: env[k] for k in HUB_MCP_ENV if env.get(k)}}
 
 
+# Where a bot's conversation compacts when its "Compact at" is unset (backend/settings_admin.py COMPACT_AT).
+DEFAULT_COMPACT_AT = 250_000
+
+
+def compact_at(value):
+    """A bot's "Compact at" in tokens: its own whole number, else DEFAULT_COMPACT_AT."""
+    try:
+        tokens = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_COMPACT_AT
+    return tokens if tokens > 0 else DEFAULT_COMPACT_AT
+
+
 def settings(cwd, model=None, effort=None, env=None, slug=None, **extra):
     """A settings dict, so callers do not have to remember the key names."""
     s = {"cwd": str(cwd), "model": model, "effort": effort, "env": dict(env or {}), "slug": slug}

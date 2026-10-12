@@ -462,6 +462,8 @@ fieldset.brepo[hidden]{display:none}
 .subs-add-msg{font-size:var(--t-sm)}
 .sb-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:-4px 0 0 104px;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .sb-sub[hidden]{display:none}
+/* Compact at sits under Model: space it off Model's subscription line, and size it like Model's own selects. */
+.sb-compact{margin-top:8px}.sb-row.sb-compact .settings-inline-select{font-size:16px}
 .sb-sub .pill{font-size:var(--t-xs)}
 @media (max-width:760px){
   .subs-name{flex-basis:100%}
