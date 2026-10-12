@@ -63,7 +63,10 @@ makes sense on its own: `hub task question "<question>" --on <person> [--option 
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
 When a task waits on a person to act (a decision, access, a fix only they can make), name them:
 `hub task update <id> --status waiting --on <person> --note "<exactly what they need to do>"`. It
-shows in their Needs you; a task left waiting with only a note in chat reaches nobody.
+shows in their Needs you; a task left waiting with only a note in chat reaches nobody. That note is
+what they read as your request, so write it to them: one plain sentence saying what you need them to
+do ("Add our tax number in Settings so I can send the invoices"), with no task or message
+ids, no shorthand and no status. Your working notes go in a comment, not in the waiting note.
 
 ## Deciding with the decision model (`hub decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

@@ -571,6 +571,33 @@ class WaitingWithDependency(HubCase):
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')
 
+    def test_a_waiting_note_for_a_person_is_linted_as_their_ask(self):
+        lints = lambda tid: [e[0] for e in self.conn.execute(
+            "SELECT new FROM task_events WHERE task_id=? AND field='lint' ORDER BY ts", (tid,))]
+        task = H.task_create(self.conn, CMO, 'Coordinate the external agent scenario', '', CMO, private=False)
+        # The bot's working notes as the ask: ids, a page of status. Saved, waiting on Ana, with warnings.
+        notes = ('Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static '
+                 'Larkspur. Docs task Doing; no sample edit/deploy or duplicate human question. Waiting on a call.')
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=notes)
+        self.assertEqual((after['waiting_on'], after['note']), (ANA, notes))
+        self.assertTrue(any('"db14c907"' in w for w in after['warnings']), after['warnings'])
+        self.assertTrue(any('working notes' in w for w in after['warnings']), after['warnings'])
+        self.assertEqual(len(lints(task['id'])), 1)
+        # One plain sentence to the person passes.
+        plain = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                              note='Tell me whether the public example should show the agent demo.')
+        self.assertNotIn('warnings', plain)
+        # No note at all says nothing to them, unless a question to them on the task already asks.
+        bare = H.task_create(self.conn, CMO, 'Renew the domain', '', CMO, private=False)
+        self.assertIn('say in one plain sentence', H.task_update(
+            self.conn, CMO, bare['id'], status='waiting', waiting_on='ana')['warnings'][0])
+        asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
+        H.task_ask(self.conn, CMO, asked['id'], 'Which date should it go out?')
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana'))
+        # A note on a task that waits on nobody is not an ask.
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, bare['id'], status='doing', note=notes))
+        self.assertEqual(H.lint_waiting_note('Restart the build host; it refuses SSH', ANA), [])
+
     def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
         H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
         H.status_set(self.conn, H.KEEPER, "seo", state="idle")

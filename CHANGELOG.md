@@ -30,6 +30,13 @@ All notable changes to Tico are recorded here. The format follows
 - **A refused question stores no option files.** Whether the person asked could read a private question was checked only after its option files were stored; it is now checked before, as it was for a company-visible one.
 - **Signing out leaves no unsent Decide actions in the browser.** Actions Decide had not yet confirmed, a note's words included, stayed in the browser's storage after Sign out. Signing out now sends what still waits, as leaving the page does, and removes the saved copy.
 - **A bot's read check no longer leaves a transaction open.** The check that a bot may read a task before it is told about it opened a transaction it never closed when called with none open; it now reads in a savepoint it releases.
+- **Decide leads a waiting card with what you're asked to do, not the bot's working note.** A task a bot set waiting on you showed
+  the bot's status note as the card's message, often a blob of task ids and shorthand. The card now leads with, in order, an open
+  question to you on the task, the last thing a bot said to you on it, or the task's request; the status note folds under a muted
+  "Latest note". When there is none of these, the card says "<Bot> set this waiting on you without saying what it needs" with a
+  Comment to ask button. Setting a task waiting on a person (`hub task update --status waiting --on <person>`) now warns the bot,
+  as the title lint does, when the note has no ask, carries ids, or reads as working notes rather than one plain sentence to that
+  person (`TICO_STYLE_LINT=refuse` refuses it instead); the bot template says the same.
 
 ## [0.3.40] - 2026-10-11
 

@@ -37,6 +37,12 @@
 .dc-ctx{margin:0;color:var(--muted);font-size:var(--t-md)}
 .dc-msg{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-size:var(--t-md);line-height:var(--lh-read);overflow-wrap:anywhere}
 .dc-msg>:first-child{margin-top:0}.dc-msg>:last-child{margin-bottom:0}
+/* nothing said to the person: say so, and the way to ask; the owner's own status note folds away, muted */
+.dc-blank{margin:0;color:var(--muted);font-size:var(--t-md);line-height:var(--lh-read)}
+.dc-ask{align-self:flex-start}
+.dc-latest{color:var(--muted);font-size:var(--t-sm)}
+.dc-latest summary{width:max-content;cursor:pointer;font-weight:500}
+.dc-latest p{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:var(--lh-read)}
 
 /* options: two pictures side by side, else numbered tiles */
 .dc-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}

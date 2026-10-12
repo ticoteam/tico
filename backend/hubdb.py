@@ -1178,6 +1178,34 @@ def lint_title(title):
     return problems
 
 
+# A waiting note is put in front of the person as the ask: a task or message id (`db14c907`, a uuid) is the
+# bot's own shorthand, and so is a page of status.
+LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])[0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}(?:[0-9a-f]{8})?(?![\w/.-])", re.I)
+LINT_WAIT_WORDS = 40
+
+
+def lint_waiting_note(note, person, asked=False):
+    """The note on a task a bot sets waiting on a person (`--status waiting --on <person> --note`): the person reads
+    it as what they are asked to do, so it is one plain request to them, not the bot's working notes. The problems,
+    empty when it passes. No note passes only when an open question to them on the task already asks."""
+    text, name = str(note or "").strip(), actor_id(person)
+    if not text:
+        return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
+    problems = []
+    m = LINT_HEX_ID.search(text) or LINT_IDENT.search(text)
+    if m:
+        problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
+    n = len(text.split())
+    sentences = len([s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()])
+    if n > LINT_WAIT_WORDS or sentences > 2:
+        problems.append(f"the note for {name} reads as working notes ({n} words): write one plain sentence "
+                        f"asking them for what you need, and keep your notes in a comment")
+    m = LINT_CODES.search(text) or LINT_JARGON.search(text)
+    if m:
+        problems.append(f'internal jargon in the note for {name}: "{m.group(0)}"')
+    return problems
+
+
 def lint_approval(kind, payload):
     """Rule 7 for an approval: the payload is the exact thing, so every field must be there."""
     problems = []
@@ -3345,6 +3373,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     person = (waiting_on or None) if waiting_on is not None else (None if changed else row.get("waiting_on"))
     # A note that waits on a person is put in front of them, so it is checked like a title or body.
     checked = ("title", "body", "note") if person else ("title", "body")
+    # ...and it is read as the ask: one plain request to them, not the bot's working notes (warned, as titles are).
+    if person and is_bot(actor) and is_human(person) and (person != row.get("waiting_on") or note is not None):
+        asked = any(a["to_actor"] == person for a in open_task_asks(conn, row))
+        plain = plain + style_problems(conn, actor, lint_waiting_note(
+            note if note is not None else row.get("note"), person, asked))
     for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
         if value is None:
             continue
