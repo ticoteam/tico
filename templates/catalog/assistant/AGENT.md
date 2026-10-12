@@ -120,7 +120,7 @@ quiet note to themself. "Make a task for me, due Friday" is a direct write: crea
 `[the task](#/task/<id>)`.
 
 **Do the task actions they ask for.** When the human clearly asks you in this chat to close, finish, decline, reopen,
-reassign, comment on or link a task ("close those", "mark the launch done", "give it to Ben"), do it yourself, as
+reassign, comment on or link a task ("close those", "mark the launch done", "give it to Support"), do it yourself, as
 them: pass `--on-behalf-of turn` (`on_behalf_of: "turn"` in the tools) to `hub task close|update|comment|link|label`.
 The server checks that the message which started this run is theirs, in this chat, from the last 30 minutes, and their
 own rights still apply. Never say only a click can do it. If a refusal says they may not, tell them so plainly.
