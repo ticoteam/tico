@@ -40,8 +40,8 @@ withdrawn text in the audit trail.
    an approval means "the payload is the exact thing": `send` needs to/cc/subject/
    body_sha256/mailbox, `spend` amount/account/what, `publish` url/content_sha256, `merge`
    repo/pr. A missing field is `Refused("lint", "send needs cc")`. A `publish` payload's
-   optional `text` must be a string whose SHA-256 (of its UTF-8, as lower-case hex) is exactly
-   content_sha256, or it is refused.
+   content_sha256 must be 64 lower-case hex characters, and its optional `text` must be a string
+   whose SHA-256 (of its UTF-8, as lower-case hex) is exactly content_sha256, or it is refused.
 5. **`status_set(..., state="active")`** is accepted although `active` is not a `bot_status`
    state: it is how §4 rule 8 says a human clears a quarantine. It sets `bots.state=active`
    and `bot_status.state=idle`.
@@ -1225,6 +1225,10 @@ def lint_approval(kind, payload):
             if f == "cc" and "cc" in payload:
                 continue                    # an empty Cc is a real answer
             problems.append(f"{kind} needs {f}")
+    digest = payload.get("content_sha256")
+    if kind == "publish" and digest not in (None, "") and not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+        # Every publisher compares against hashlib's hexdigest(), so any other shape could never publish.
+        problems.append("content_sha256 must be 64 lower-case hex characters")
     if kind == "merge" and "merge needs pr" in problems:
         # A merge approval is for one pull request; a change with none is a decision for a person.
         problems[problems.index("merge needs pr")] = ("merge needs pr (the pull request number); for a change "
@@ -4165,12 +4169,8 @@ def approval_request(conn, actor, kind, payload, task_id=None):
         refuse(conn, actor, "lint", "; ".join(problems), severity)
     if kind == "publish" and "text" in payload and not publish_text_matches(payload):
         # The person reads `text`, the publisher checks `content_sha256`: they must be the same reply.
-        text, given = payload["text"], payload.get("content_sha256")
-        if not isinstance(text, str):
+        if not isinstance(payload["text"], str):
             refuse(conn, actor, "lint", "text must be a string", severity)
-        if isinstance(given, str) and given != given.lower() and publish_text_matches({**payload, "content_sha256": given.lower()}):
-            refuse(conn, actor, "lint", "content_sha256 must be the lower-case hex SHA-256 of the text's UTF-8 bytes",
-                   severity)
         refuse(conn, actor, "lint", "the text doesn't match content_sha256; send the exact text that will be published",
                severity)
     digest = payload_hash(payload)

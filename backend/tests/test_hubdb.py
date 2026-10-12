@@ -313,8 +313,18 @@ class Rule6Approvals(HubCase):
         upper = self.publish("Upgrade to 0.3.41 and it works.")
         upper["content_sha256"] = upper["content_sha256"].upper()
         e = self.refused("lint", H.approval_request, self.conn, CMO, "publish", upper)
-        self.assertEqual("content_sha256 must be the lower-case hex SHA-256 of the text's UTF-8 bytes", e.detail)
+        self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_hash_that_is_not_lower_case_hex_is_refused_without_text_too(self):
+        digest = hashlib.sha256(b"Upgrade to 0.3.41 and it works.").hexdigest()
+        for given in (digest.upper(), digest[:63], " " + digest, "z" * 64, 42):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": given})
+            self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish",
+                                            {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest})["kind"], "publish")
 
     def test_a_publish_text_that_is_not_a_string_is_refused_as_such(self):
         digest = hashlib.sha256(b"Thanks, the fix is in 0.3.41.").hexdigest()
