@@ -30,6 +30,12 @@ All notable changes to Tico are recorded here. The format follows
 - **A refused question stores no option files.** Whether the person asked could read a private question was checked only after its option files were stored; it is now checked before, as it was for a company-visible one.
 - **Signing out leaves no unsent Decide actions in the browser.** Actions Decide had not yet confirmed, a note's words included, stayed in the browser's storage after Sign out. Signing out now sends what still waits, as leaving the page does, and removes the saved copy.
 - **A bot's read check no longer leaves a transaction open.** The check that a bot may read a task before it is told about it opened a transaction it never closed when called with none open; it now reads in a savepoint it releases.
+- **A publish approval reads on a phone.** In Needs you and Decide, a Support reply waiting on "Publish this?" now says where it goes
+  ("Support ticket TK-…", a web address as a link only when it is http or https) and shows the whole reply as wrapped text, instead of
+  raw JSON cut off at the screen's edge. A spend shows its amount, account and what it is for, and a merge its repository and pull
+  request; any other field in the payload gets a row of its own, and a publish without its text says only a hash of it is included.
+  The exact payload, content hash included, folds under Exact payload, and any approval's raw JSON now wraps. Payload text is never
+  read as HTML.
 - **Decide leads a waiting card with what you're asked to do, not the bot's working note.** A task a bot set waiting on you showed
   the bot's status note as the card's message, often a blob of task ids and shorthand. The card now leads with, in order, an open
   question to you on the task, the last thing a bot said to you on it, or the task's request; the status note folds under a muted

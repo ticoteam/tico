@@ -41,7 +41,7 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
   .req>summary{grid-template-columns:22px minmax(0,1fr) auto 14px;gap:8px}.req-meta{font-size:var(--t-xs)}
   .req-body{padding-left:4px;padding-right:4px}.issue-actions .github{margin-left:0}
 }
-/* a send approval: recipients and files readable, the exact payload folded under Details */
+/* an approval: a send's recipients and files, a publish's place and text, readable; the exact payload folded */
 .approval-facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0}
 .approval-facts dt{color:var(--muted)}
 .approval-facts dd{margin:0;overflow-wrap:anywhere}
@@ -53,4 +53,8 @@ button.ghost.danger,.linkish.danger{color:var(--fail)}
 .approval-raw{margin-top:8px}
 .approval-raw>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 .approval-raw pre{margin-top:6px}
+/* the payload as JSON wraps rather than running off a phone's edge; a publish's text keeps its lines */
+.approval-payload .md pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:visible}
+.approval-facts dd.approval-text{white-space:pre-wrap}
+@media (max-width:640px){.req-next.approval-payload{grid-template-columns:minmax(0,1fr);gap:6px}}   /* the label above, the payload full width */
 .approval-file-icon{flex:none;color:var(--muted);align-self:center}
