@@ -48,14 +48,21 @@ You need:
    ```
 
    `doctor` ends with `Everything needed is working.`, and the bot shows online in **Settings → Bots**.
-   `doctor` does not check the model: `openclaw --profile <name> models status` must show no "Missing auth".
+   `doctor` checks the model with OpenClaw's own offline check, `openclaw --profile <name> models status --json --check`,
+   which reads the profile's sign-ins and calls no model, so it costs no tokens. A profile with "Missing auth" is a
+   problem, with the command that signs it in. An OpenClaw whose check `doctor` cannot read gets a `NOTE` that the
+   model was not checked, and the last line says so instead of `Everything needed is working.`. `doctor` also
+   reports a sync run that failed, with OpenClaw's error.
 4. **Test it.** Message the bot in Tico. It answers in the same chat at its next sync run, up to the sync interval
    later (an hour by default). To see it now, run the job once:
    `openclaw --profile <name> cron run <job id> --wait` (the id is in `openclaw --profile <name> cron list`).
 
 `pair` saves the credential on the computer (mode 600), installs the `tico-sync` skill in the profile's
 `skills` folder, schedules the sync job, and starts a heartbeat timer, then prints what it did. It never prints
-the credential.
+the credential. The timer is the last step. If launchd or systemd refuses it (launchd refuses a plist when your
+home folder is on an external volume, for example), the pairing, the skill and the sync job stay in place, heartbeat
+mode becomes manual, and `pair` ends with a `WARNING` that says what failed, gives a cron line for the heartbeat,
+and gives the `reinstall ... --timer` command to retry. It still exits 0, as it does when the sync job can't be made.
 
 ## What is different from Hermes
 
@@ -108,6 +115,8 @@ The commands are Hermes's (see [Keep it working](hermes-agents.md#keep-it-workin
 | `doctor`: "the OpenClaw Gateway is not running" | No cron job fires, `tico-sync` included. The heartbeat still runs, so the bot shows online. | Start the Gateway: `openclaw --profile <name> gateway start` if it is installed as a service, otherwise `openclaw --profile <name> gateway run` in a terminal. The job is kept; the next run picks up everything that waited. |
 | A sync run ends in `error`, "No route-compatible authentication source" | The profile has no signed-in model. | Sign the profile in to a provider (`openclaw --profile <name> configure`), then run the job once. |
 | `reinstall` or `pair` says "WARNING: the sync job is not in place: openclaw cron list: Gateway target ..." | The Gateway was down, so the job could not be made or changed (a job made earlier stays as it was). | Start the Gateway, then `reinstall`. |
+| `pair` or `reinstall` says "WARNING: the heartbeat timer was not installed: launchctl bootstrap failed: ..." | launchd (or systemd) refused the timer. Everything else is in place, and heartbeat mode is now manual, so the bot shows offline until heartbeats run. | Run the printed `heartbeat` line every minute from cron, or fix the cause and run `reinstall --harness openclaw --profile <name> --timer`. No new approval is needed. |
+| `doctor`: "the model ... has no sign-in (Missing auth ...)" | Every sync run fails at its first model call. | Run the `models auth login` or `configure` command it prints, then `openclaw --profile <name> models status`. |
 | `doctor`: "GET /api/v2/me failed: ... credential revoked" (401) | The credential was revoked or replaced in Tico. | `pair` again and approve it, or `uninstall` if the profile should stop. |
 
 **Remove it.** `uninstall` removes the heartbeat timer, the `tico-sync` job, the skill, `tico.env` and the
@@ -168,4 +177,5 @@ With `--no-timer`, heartbeat mode is manual: run `heartbeat` with the same profi
 job's first step answers from the last heartbeat while it is under 5 minutes old, so run `heartbeat` right before
 running the job by hand, or it may end `idle` with work waiting.
 Doctor warns about that requirement without reporting a missing timer as broken. Reinstall and update
-keep your selected mode. To enable the timer later, run `reinstall` with the same profile flags and `--timer`.
+keep your selected mode. To enable the timer later, run `reinstall` with the same profile flags and `--timer`;
+`reinstall ... --no-timer` switches back to manual and removes the timer.

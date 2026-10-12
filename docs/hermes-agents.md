@@ -31,6 +31,9 @@ A separate runner hostname is needed only if an external sign-in proxy intercept
 The `pair` command sets up the profile's config, saves the credential on the computer, starts a
 heartbeat timer and schedules the sync job (hourly unless you add `--sync`, see
 [Keep it in sync](#keep-it-in-sync)), then prints what it did. It never prints the credential.
+The timer is the last step. If launchd or systemd refuses it, the pairing, the skill and the sync job stay in
+place, heartbeat mode becomes manual, and the command ends with a `WARNING` that says what failed, gives a cron
+line for the heartbeat, and gives the `reinstall ... --timer` command to retry (no new approval). It still exits 0.
 
 The setup script downloads without a browser sign-in from the address Tico shows (Tico 0.2.26
 and later). Built-in sign-in and local installs need no separate hostname. If an external proxy
@@ -130,7 +133,10 @@ downloaded `hermes_agent.py` in your current folder works the same while it is t
   heartbeat reply. It never prints the credential.
 - **Doctor.** `python3 hermes_agent.py doctor --profile <name>` checks the setup (config,
   credential, reach to Tico, timer, last heartbeat, sync job and when it last ran) and scans the profile's `SOUL.md`, skills, cron
-  jobs and memories for old tool names. It changes nothing and says what to fix.
+  jobs and memories for old tool names. It changes nothing and says what to fix. A sync run that ended in an error
+  is a problem, with Hermes's error. `doctor` does not check the model, because Hermes has no offline check for it
+  and doctor never calls a model: it prints a `NOTE` saying so, and its last line says
+  `Everything doctor checks is working; it did not check the model`.
 - **Move to another computer.** Run `pair` on the new computer with the same profile name and
   approve it. Approving replaces the credential, so the old computer stops with a 401. On the old
   computer run `python3 hermes_agent.py uninstall --profile <name>`.
@@ -243,4 +249,5 @@ then run `/reload-mcp` in Hermes. Existing MCP servers stay in place. No new pai
 
 With `--no-timer`, heartbeat mode is manual: run `heartbeat` with the same profile flags every minute.
 Doctor warns about that requirement without reporting a missing timer as broken. Reinstall and update
-keep your selected mode. To enable the timer later, run `reinstall` with the same profile flags and `--timer`.
+keep your selected mode. To enable the timer later, run `reinstall` with the same profile flags and `--timer`;
+`reinstall ... --no-timer` switches back to manual and removes the timer.
