@@ -46,6 +46,13 @@ All notable changes to Tico are recorded here. The format follows
   Comment to ask button. Setting a task waiting on a person (`hub task update --status waiting --on <person>`) now warns the bot,
   as the title lint does, when the note has no ask, carries ids, or reads as working notes rather than one plain sentence to that
   person (`TICO_STYLE_LINT=refuse` refuses it instead); the bot template says the same.
+- **A waiting card leads with a task's request only when a person wrote it, and the waiting-note lint is sharper.** On a task a
+  bot set waiting on you, Decide no longer leads with a body a bot wrote (often a blob of ids): with no question or message to you,
+  the card says "<Bot> set this waiting on you without saying what it needs" with Comment to ask. A body a person wrote still leads.
+  The waiting-note lint now catches a commit hash of 7 to 40 hex characters, full 40-character hashes included, and a hex id that
+  ends a sentence. It no longer flags an amount after a currency sign (`$250000`, also £, € and ¥); titles keep their own
+  reference-number check unchanged. No lint now flags a colon that opens a plain clause ("Check the order status: it says
+  pending."); `status: doing` and `owner: bot:cmo` are still flagged.
 
 ## [0.3.40] - 2026-10-11
 

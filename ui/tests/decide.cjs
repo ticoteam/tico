@@ -1,7 +1,7 @@
 // Decide on a phone (390px): a task a bot set waiting on me leads with what I must do, in the bot's words to me,
 // never with the bot's own status note. In order: an open question to me; the last thing the bot said to me on the
-// task (a mirror of the status note does not count); the task's request. The note folds under "Latest note", muted,
-// as text. With nothing said, the card says so and the comment box is the way to ask.
+// task (a mirror of the status note does not count); the task's request, when a person wrote it. The note folds
+// under "Latest note", muted, as text. With nothing said, the card says so and the comment box is the way to ask.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -16,6 +16,9 @@ const items = [
   wait('t-said', 'Refresh the pricing page screenshots', {created: at(490)}),
   wait('t-body', 'Renew the docs domain', {created: at(480), requester: 'human:sam',
     body: 'Renew the docs domain\n\nPlease renew docs.acme.example before it lapses on Friday; the card on file expired.'}),
+  // a bot wrote the request: its body is the bot's own record, not an ask to me
+  wait('t-botbody', 'Sort out the release checklist', {created: at(475),
+    body: 'Sort out the release checklist\n\nRefs db14c907, 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f; see run 03QEZT3C.'}),
   wait('t-blank', 'Check the newsletter list', {created: at(470)}),
 ];
 const comments = {
@@ -79,11 +82,18 @@ const comments = {
     assert.deepEqual({...c.note, size: undefined}, {...noted, size: undefined});
     await next('said');
 
-    // (c) the task's request leads, without its title said twice
+    // (c) the request a person wrote leads, without its title said twice
     c = await read('t-body');
     assert.equal(c.lead, 'Please renew docs.acme.example before it lapses on Friday; the card on file expired.');
     assert.deepEqual({...c.note, size: undefined}, {...noted, size: undefined});
     await next('request');
+
+    // a bot's request body is not an ask: the card says nothing was asked, as with no body
+    c = await read('t-botbody');
+    assert.equal(c.lead, 'Writer set this waiting on you without saying what it needs.');
+    assert.equal(c.ask, true);
+    assert.deepEqual({...c.note, size: undefined}, {...noted, size: undefined});
+    await next('bot-request');
 
     // nothing said: the card says so plainly and offers the comment box
     c = await read('t-blank');

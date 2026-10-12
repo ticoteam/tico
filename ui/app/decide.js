@@ -225,8 +225,9 @@ function decideMeta(it) {
 }
 // What a task card leads with: what the person must do, in the words written to them. In order, an open question
 // to them; the last thing someone else said to them on the task (not a copy of a status note: the server mirrors
-// those into the chat); the task's request, its body. The owner's status note is its own working record (ids,
-// shorthand), so it is never the headline: it folds under "Latest note".
+// those into the chat); the task's request, its body (on a card waiting on them, only when a person wrote it). The
+// owner's status note is its own working record (ids, shorthand), so it is never the headline: it folds under
+// "Latest note".
 function decideLead(st, c) {
   const it = c.it, data = st.data.get(it.id), me = myActor(), comments = data?.comments || [];
   const note = String(it.note || '').trim(), text = s => String(s || '').trim();
@@ -234,9 +235,11 @@ function decideLead(st, c) {
     .find(m => m && m.to_actor === me && m.from_actor !== me && text(m.body));
   const said = comments.filter(m => m.kind === 'say' && m.from_actor !== me && m.to_actor === me && !m.refs?.note
     && text(m.body) && text(m.body) !== note).at(-1);
-  // A body that opens with the title does not say it twice.
+  // A body that opens with the title does not say it twice. On a card waiting on me, the body is the ask only when a
+  // person wrote it: a bot's body is its own working record (ids, shorthand), so the card says nothing was asked.
   const body = text(taskBody(it)), title = text(it.title);
-  const request = body.startsWith(title) ? body.slice(title.length).trim() : body;
+  const asks = !decideWaitingOnMe(it) || String(it.requester || '').startsWith('human:');
+  const request = !asks ? '' : body.startsWith(title) ? body.slice(title.length).trim() : body;
   const lead = text(asked?.body) || text(said?.body) || request;
   return {lead, note: note && note !== lead ? note : ''};
 }

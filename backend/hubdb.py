@@ -1029,7 +1029,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None):
 
 # ----------------------------------------------------------------------------- lint (rule 7)
 LINT_MAX_WORDS = 120
-LINT_CODES = re.compile(r"\b(owner|status)\s*:\s*[\w:./-]+", re.I)
+# `status: doing`, `owner:bot:cmo`. A colon that opens a plain clause ("the order status: it says pending") is prose.
+LINT_CODES = re.compile(r"\b(owner|status)\s*:\s*(?!(?:it|this|that|the|an?|there|they|we|you|i)\b)[\w:./-]+", re.I)
 # Plain-English titles: an identifier is a bare
 # reference number - `DC040302`, `03QEZT3C`, `#18823` - that belongs in the body or a link.
 # Dates, versions (3.5) and short model names are not identifiers.
@@ -1179,9 +1180,12 @@ def lint_title(title):
     return problems
 
 
-# A waiting note is put in front of the person as the ask: a task or message id (`db14c907`, a uuid) is the
-# bot's own shorthand, and so is a page of status.
-LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])[0-9a-f]{8}(?:-[0-9a-f]{4}){0,4}(?:[0-9a-f]{8})?(?![\w/.-])", re.I)
+# A waiting note is put in front of the person as the ask: a task or message id (`db14c907`, a uuid) or a commit
+# hash (7 to 40 hex characters) is the bot's own shorthand, and so is a page of status. A run of hex needs a digit
+# and a letter, so a word ("deadbeef", "defaced") or a plain number is not an id. One may end a sentence.
+LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])"
+                         r"(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){1,4}(?:[0-9a-f]{8})?|[0-9a-f]{7,40})(?![\w/-]|\.[\w/-])", re.I)
+LINT_CURRENCY = "$£€¥"
 LINT_WAIT_WORDS = 40
 
 
@@ -1193,7 +1197,9 @@ def lint_waiting_note(note, person, asked=False):
     if not text:
         return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
     problems = []
-    m = LINT_HEX_ID.search(text) or LINT_IDENT.search(text)
+    # An amount ("$250000") is not a reference number. Only here: a title keeps LINT_IDENT as it is.
+    m = LINT_HEX_ID.search(text) or next((i for i in LINT_IDENT.finditer(text)
+                                          if not (i.start() and text[i.start() - 1] in LINT_CURRENCY)), None)
     if m:
         problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
     n = len(text.split())

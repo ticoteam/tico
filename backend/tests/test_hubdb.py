@@ -637,6 +637,28 @@ class WaitingWithDependency(HubCase):
         self.assertNotIn('warnings', H.task_update(self.conn, CMO, bare['id'], status='doing', note=notes))
         self.assertEqual(H.lint_waiting_note('Restart the build host; it refuses SSH', ANA), [])
 
+    def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
+        flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]
+        sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
+        for note, ident in [('Approve the fix in db14c907.', 'db14c907'), (f'Approve the fix in {sha}.', sha),
+                            ('Approve the fix in 3f2a9c1.', '3f2a9c1'), ('Review #388 before Friday.', '#388'),
+                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f')]:
+            self.assertEqual(flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note)
+        for note in ['Approve the $250000 budget.', 'Approve the £1500000 offer.', 'Approve the €250000 and ¥9000000 quotes.',
+                     'Name the deadbeef test host.', 'Pick a date after 2026-10-11 for the launch.',
+                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.']:
+            self.assertEqual(flagged(note), [], note)
+        # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
+        self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))
+        self.assertTrue(H.lint_title('Approve the $250000 budget'))
+        self.assertEqual(H.lint_title('Fix the db14c907 crash'), [], 'lowercase hex is a waiting-note check, not a title one')
+        # A colon that opens a plain clause is prose; a status code is still jargon.
+        self.assertEqual(H.lint_waiting_note('Check the order status: it says pending.', ANA), [])
+        self.assertEqual(H.lint_waiting_note('Approve the release; status: doing.', ANA),
+                         ['internal jargon in the note for ana: "status: doing."'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nowner: bot:cmo'), ['internal codes: "owner: bot:cmo"'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nThe owner: the CMO, who signs it.'), [])
+
     def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
         H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
         H.status_set(self.conn, H.KEEPER, "seo", state="idle")
