@@ -561,6 +561,9 @@ def redact(text):
     """A harness's message with any credential in it blanked out, so it can be printed and saved."""
     text = re.sub(r'(?i)(bearer\s+|(?:token|api[_-]?key|password)["\']?\s*[=:]\s*["\']?)[^\s&"\']+', r"\1[redacted]", text)
     text = re.sub(r"((?:https?|wss?)://)[^/\s:@]+:[^/\s@]+@", r"\1[redacted]@", text)
+    text = re.sub(r"(?i)\b(basic\s+)[A-Za-z0-9+/=]{8,}", r"\1[redacted]", text)
+    text = re.sub(r"\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{8,}", "[redacted]", text)
+    text = re.sub(r"(?<![\w/.-])[A-Za-z0-9_-]{32,}(?![\w/.-])", "[redacted]", text)   # long opaque tokens, Tico's included
     return re.sub(r"([?&](?:token|key|secret|password)=)[^&\s]+", r"\1[redacted]", text, flags=re.I)
 
 
@@ -1255,7 +1258,10 @@ def doctor_sync(say, harness, profile, directory, config):
         say("ok" if job["enabled"] else "warn",
             f"sync job {JOB_NAME} ({job['schedule'] or wanted}) is " + ("scheduled" if job["enabled"] else "paused") + f"; {ran}")
         if job["status"] and job["status"].lower() in ("error", "failed", "fail", "timeout", "timed-out"):
-            error = " ".join(redact(job.get("error") or "").split())[:300]
+            error = job.get("error") or ""
+            if config.get("token"):
+                error = error.replace(config["token"], "[redacted]")
+            error = " ".join(redact(error).split())[:300]
             say("problem", f"the last sync run ended in {job['status']}" + (f": {error}" if error else "")
                            + f"; see the job's output in {harness_name(harness)}")
     age = time.time() - float(config.get("updated_at") or time.time())
@@ -1284,7 +1290,8 @@ def openclaw_model_check(profile, directory):
     if missing:
         return "problem", (f"the model {model} has no sign-in (\"Missing auth\" for {', '.join(missing)}), so every sync "
                            f"run fails at its first model call: run `{command} models auth login --provider {missing[0]}` "
-                           f"or `{command} configure`, then `{command} models status`")
+                           f"or `{command} configure`, then `{command} models status` (if the key is only in the Gateway "
+                           "service's environment, this check can't see it)")
     if done.returncode == 1:
         return "problem", (f"the model {model} is not ready (OpenClaw's check says missing, expired or unavailable "
                            f"sign-in), so sync runs fail: see `{command} models status`")

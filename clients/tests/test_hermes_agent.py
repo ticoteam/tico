@@ -766,11 +766,17 @@ class OpenClaw(Base):
         self.pair()
         self.fake.models_status = (0, dict(self.MISSING_AUTH, auth={"missingProvidersInUse": []}))
         self.jobs()[0]["state"] = {"lastRunAtMs": 1791777833229, "lastStatus": "error", "lastError":
-                                   "No route-compatible authentication source is configured for openai. token=abc123"}
+                                   "No route-compatible authentication source is configured for openai. token=abc123. "
+                                   "Invalid API key: sk-proj-SECRETkey0123. token sk-SECRETother99 expired. "
+                                   "Authorization: Basic dXNlcjpwYXNz. resolved to " + TOKEN + " and "
+                                   "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyzABC"}
         code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
         self.assertEqual(code, 1, out)
         self.assertIn("PROBLEM the last sync run ended in error: No route-compatible authentication source", out)
         self.assertNotIn("abc123", out)
+        for secret in ("sk-proj-SECRETkey0123", "sk-SECRETother99", "dXNlcjpwYXNz", TOKEN,
+                       "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyzABC"):
+            self.assertNotIn(secret, out)
         self.assertNotIn("Everything needed is working", out)
 
 
