@@ -11,7 +11,7 @@ login and those files.
 
     claude -p --input-format stream-json --replay-user-messages --output-format stream-json
            --verbose --include-partial-messages --permission-mode bypassPermissions
-           [--model m] [--effort e] --session-id <uuid>
+           [--model m] [--effort e] [--autocompact window] --session-id <uuid>
 
 Turn ids are the runner's own uuid4. One turn runs at a time per host, so the runner keeps one
 host per Claude bot. stdin stays open for the whole turn so `steer` can write another user
@@ -23,8 +23,8 @@ the runner's turn only when none is, and then the host closes stdin and the proc
 turn's reply is every result's text in order, so an answer given before a steer was read is
 kept; a steer left unread through STEER_READ_TIMEOUT_S of silence fails the turn. A
 steer after that point is refused with `SteerRefused` (nothing written; the runner gives it a
-turn of its own). Steering is on only from STEER_MIN_VERSION, read with `claude --version` when
-the host starts. `interrupt` terminates the process.
+turn of its own). Steering is on only from STEER_MIN_VERSION, read with `claude --version` when the host
+starts, and `--autocompact` (the bot's "Compact at") only when `claude --help` lists it. `interrupt` terminates the process.
 """
 
 import json
@@ -39,7 +39,7 @@ from pathlib import Path
 
 from .. import isolation
 from clients import mcp_servers
-from .base import Host, HostError, SteerRefused, hub_mcp_server, is_auth_retryable, is_limit
+from .base import Host, HostError, SteerRefused, compact_at, hub_mcp_server, is_auth_retryable, is_limit
 from .codex import iso
 
 STREAM_ARGS = ["--input-format", "stream-json", "--replay-user-messages",
@@ -56,7 +56,12 @@ STDERR_TAIL = 2000
 STEER_READ_TIMEOUT_S = 120
 # The first Claude Code verified to replay stream-json input and fold a mid-turn message into the turn.
 STEER_MIN_VERSION = (2, 1, 296)
+# `--autocompact` takes the context window, and Claude compacts this many tokens below it; the bot's
+# "Compact at" is where compaction starts, so the window passed is that plus the buffer.
+AUTOCOMPACT_BUFFER = 33_000
+AUTOCOMPACT_RANGE = (100_000, 1_000_000)   # what `--autocompact` accepts
 _steer_versions = {}                       # command -> whether its `--version` is new enough
+_autocompact = {}                          # command -> whether its `--help` lists `--autocompact`
 
 
 def version_tuple(text):
@@ -64,13 +69,19 @@ def version_tuple(text):
     return tuple(int(n) for n in m.groups()) if m else None
 
 
-def installed_version(cmd):
-    """`claude --version`, as the bot user like the turns; "" when it cannot be read."""
+def installed_version(cmd, flag="--version"):
+    """`claude --version` (or `--help`), as the bot user like the turns; "" when it cannot be read."""
     try:
-        result = isolation.run(list(cmd) + ["--version"], capture_output=True, text=True, timeout=5)
+        result = isolation.run(list(cmd) + [flag], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return ""
     return (result.stdout or result.stderr or "").strip() if result.returncode == 0 else ""
+
+
+def autocompact_window(value):
+    """`--autocompact` for a bot that compacts at `value` tokens."""
+    low, high = AUTOCOMPACT_RANGE
+    return min(high, max(low, compact_at(value) + AUTOCOMPACT_BUFFER))
 
 
 def effort_for(effort):
@@ -144,14 +155,16 @@ class _Pipe:
 class ClaudeHost(Host):
     name = "claude"
     supports_steer = False                 # until `start` finds a Claude Code that can steer
+    supports_autocompact = False           # until `start` finds a Claude Code with `--autocompact`
 
-    def __init__(self, bot=None, cmd=("claude",), log=None, stderr_path=None, spawn=None, version=None):
+    def __init__(self, bot=None, cmd=("claude",), log=None, stderr_path=None, spawn=None, version=None, help=None):
         super().__init__(log=log)
         self.bot = bot
         self.cmd = list(cmd)
         self.stderr_path = stderr_path
         self._spawn = spawn or isolation.popen
         self._version = version                # `--version` reader; the real command when None
+        self._help = help                      # `--help` reader; the real command when None
         self._replay_fallback_logged = False
         self._up = False
         self.proc = None                   # the running turn's process
@@ -171,7 +184,8 @@ class ClaudeHost(Host):
     def start(self):
         """Nothing runs between turns; `alive` means the host accepts turns. Steering needs a Claude
         Code that replays its input, checked once per command for the runner's life (an update only
-        ever moves it forward); an older or unreadable one queues follow-ups for the next run."""
+        ever moves it forward); an older or unreadable one queues follow-ups for the next run. One whose
+        `--help` does not list `--autocompact` is left to compact on its own."""
         key = tuple(self.cmd)
         if self._version is not None:
             self.supports_steer = (version_tuple(self._version()) or (0,)) >= STEER_MIN_VERSION
@@ -179,6 +193,13 @@ class ClaudeHost(Host):
             if key not in _steer_versions:
                 _steer_versions[key] = (version_tuple(installed_version(self.cmd)) or (0,)) >= STEER_MIN_VERSION
             self.supports_steer = _steer_versions[key]
+        # Which release added `--autocompact` is not known, so ask the command itself.
+        if self._help is not None:
+            self.supports_autocompact = "--autocompact" in str(self._help() or "")
+        else:
+            if key not in _autocompact:
+                _autocompact[key] = "--autocompact" in installed_version(self.cmd, "--help")
+            self.supports_autocompact = _autocompact[key]
         self._up = True
 
     def stop(self):
@@ -250,6 +271,8 @@ class ClaudeHost(Host):
         effort = effort_for(effort or t["settings"].get("effort"))
         if effort:
             argv += ["--effort", effort]
+        if self.supports_autocompact:
+            argv += ["--autocompact", str(autocompact_window(t["settings"].get("compact_at")))]
         if t["fork_from"]:
             argv += ["--resume", t["fork_from"], "--fork-session", "--session-id", thread_id]
         elif t["started"]:

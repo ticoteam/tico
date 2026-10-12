@@ -1,3 +1,5 @@
+import json
+
 
 from backend.store import encode
 
@@ -256,3 +258,16 @@ def test_go_live_for_a_bot_waiting_on_the_repo_create_permission_names_the_owner
     monkeypatch.setattr(remotecli, "run", refuse)
     assert remotecli.main(hubcli.parser().parse_args(["bot", "go-live", "cpo"])) == 2
     assert capsys.readouterr().out.startswith("cpo is waiting for its GitHub repository acme/bot-cpo")
+
+
+def test_compact_at_saves_without_a_fresh_session(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO conversations(id,kind,participants_json) VALUES('c1','chat',?)", (encode(["bot:cpo"]),))
+    assert get(api, "bots/cpo")["compact_at"] == 250_000
+    revision = get(api, "bots/cpo")["revision"]
+    post(api, "bots/cpo/compact-at", {"compact_at": 123_000, "expected_revision": revision}, expected=422)
+    post(api, "bots/cpo/compact-at", {"compact_at": 400_000, "expected_revision": revision})
+    assert get(api, "bots/cpo")["compact_at"] == 400_000
+    with api.app.state.store.read() as c:
+        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 400_000
+        assert not c.execute("SELECT 1 FROM session_epochs").fetchone()

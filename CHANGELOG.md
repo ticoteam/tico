@@ -8,6 +8,16 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Compact at, per bot.** The bot editor's Compact at (150k, 250k the default, 400k, 600k or 1M tokens) sets how full a bot's conversation
+  gets before it is compacted, instead of the model's whole window: Claude Code gets `--autocompact` on every turn (when its `--help` lists it)
+  and Codex `model_auto_compact_token_limit`. Changing it keeps the bot's session.
+
+### Fixed
+- **Chat goals no longer loop on waiting or on goals that can't be met.** The harness's goal now also counts "the only work left is waiting on someone or something else" as done for now: the bot says "Waiting on: <what>" and stops, and the goal shows Paused. A goal sent back to work 30 times (100 Codex continuation turns) with no person writing in between is paused and cleared in the harness, and the bot's reply says so with the last reason. This also stops a Claude Code goal that outlived its chat from looping in the bot's other runs. Codex's `blocked` shows as Paused.
+
+## [0.3.40] - 2026-10-11
+
+### Added
 - **Replay: watch what happened over a stretch of time.** Replay (in the account menu, `#/replay`) plays back a window, Today,
   Yesterday, the last 7 days or a custom start and end, as a task board whose cards appear and move between To do, Doing, Waiting
   and Done, an activity feed where chats, task comments and runs come in and bot replies type out, and bot faces that show who is
