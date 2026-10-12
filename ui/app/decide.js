@@ -155,11 +155,11 @@ function decideRender(st, enter = false) {
     : c.it.requester || c.it.owner;
   const decide = decideDecision(c), needsNote = decideNeedsNote(c);
   const name = actorLabel(from) || 'Tico', chat = decideChatHref(from);
-  // A bot's face and name open its chat; the face is a second way in for the pointer, the name the one for keys.
+  // A bot's face and name open the bot, as the side rail does; the face is a second way in for the pointer, the name the one for keys.
   const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>` : actorFace(from, 32);
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
     <div class="dc-who">${face}
-      <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}'s chat`)}">${esc(name)}</a>` : esc(name)}</div>
+      <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}</div>
         <div class="dc-who-sub">${esc(decide ? plainActors(c.it.title || '') : decideMeta(c.it))}</div></div>
       <span class="pill ${decide ? 'needs' : ''}">${decide ? 'Decide' : 'Task'}</span></div>
     <div class="dc-body"></div>
