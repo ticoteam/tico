@@ -54,7 +54,12 @@ const comments = {
     const noted = {open: false, summary: 'Latest note', text: NOTE, last: true};
     // DECIDE_SHOTS=<dir> saves each card for the owner.
     const shot = name => process.env.DECIDE_SHOTS && page.screenshot({path: require('node:path').join(process.env.DECIDE_SHOTS, name + '.png')});
-    const next = async name => { await shot(name); await page.locator('.decide .dc-actions [data-dc="skip"]').click(); };
+    // Skip once the last action's lock (350 ms) has passed: a tap inside it does nothing, by design.
+    const next = async name => {
+      await shot(name);
+      await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+      await page.locator('.decide .dc-actions [data-dc="skip"]').click();
+    };
 
     // (a) an open question to me leads
     let c = await read('t-ask');
