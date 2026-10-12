@@ -5,8 +5,11 @@ An [OpenClaw](https://openclaw.ai/) profile can be a bot in Tico, the same way a
 credential to use when it chooses. Tico never starts a run for it. It uses the same `hermes_agent.py` Tool,
 with `--harness openclaw`.
 
-**Tested with** OpenClaw 2026.9.9 (stable, October 2026) on macOS with Node 24, and earlier with 2026.3.13. The 2026.9.9 check used a scripted stand-in model; a run with a real model, the macOS heartbeat timer and the Gateway as an installed service were not exercised.
-OpenClaw 2026.9 needs Node `>=24.16 <25` or `>=26.1`.
+**Tested with** OpenClaw 2026.10.1 (stable, October 2026) on macOS with Node 24, and earlier with 2026.9.9 and 2026.3.13.
+The 2026.10.1 and 2026.9.9 checks used a scripted stand-in model: pairing, the guide's checks, a `tico-sync` run that
+answered a message and finished a task, and Tico's MCP tools in an agent turn all worked. A run with a real model,
+the macOS heartbeat timer and the Gateway as an installed service were not exercised.
+OpenClaw 2026.9 and 2026.10 need Node `>=24.16 <25` or `>=26.1`; OpenClaw recommends Node 26.
 
 ## Connect an OpenClaw profile in 2 minutes
 
@@ -45,6 +48,7 @@ You need:
    ```
 
    `doctor` ends with `Everything needed is working.`, and the bot shows online in **Settings → Bots**.
+   `doctor` does not check the model: `openclaw --profile <name> models status` must show no "Missing auth".
 4. **Test it.** Message the bot in Tico. It answers in the same chat at its next sync run, up to the sync interval
    later (an hour by default). To see it now, run the job once:
    `openclaw --profile <name> cron run <job id> --wait` (the id is in `openclaw --profile <name> cron list`).
@@ -68,9 +72,13 @@ the credential.
 - **The job is an OpenClaw cron job**, created with `openclaw cron add`: an isolated agent turn with nothing
   delivered to a chat. It lives in the profile's Gateway, so the Gateway must be running for it to fire. Unlike
   Hermes there is no pre-check that keeps the agent asleep, so every run is one agent turn: its first step is a
-  one-line check that ends the run at once when nothing is waiting (a small, cheap model call).
-- **The Gateway announces itself on the local network** (Bonjour) by default. On shared office Wi-Fi, check
-  OpenClaw's Gateway settings if you don't want it visible to other machines.
+  one-line check that ends the run at once when nothing is waiting (a small, cheap model call). A new profile
+  also has OpenClaw's own jobs (in 2026.10: a heartbeat every 30 minutes, a nightly memory job and a weekly skill
+  review), and each of those is a model turn too; `openclaw --profile <name> cron list` shows them all.
+- **The Gateway announces itself on the local network** (Bonjour) by default on macOS. On shared office Wi-Fi,
+  turn that off with `openclaw --profile <name> config set discovery.mdns.mode off` (or
+  `openclaw --profile <name> plugins disable bonjour`, or `OPENCLAW_DISABLE_BONJOUR=1` in the Gateway's
+  environment). The Gateway itself listens on loopback unless you bind it elsewhere.
 
 ## Keep it in sync
 
@@ -97,7 +105,7 @@ The commands are Hermes's (see [Keep it working](hermes-agents.md#keep-it-workin
 
 | You see | What it means | Do this |
 |---|---|---|
-| `doctor`: "the OpenClaw Gateway is not running" | No cron job fires, `tico-sync` included. The heartbeat still runs, so the bot shows online. | Start the Gateway (`openclaw --profile <name> gateway start`, or `gateway run`). The job is kept; the next run picks up everything that waited. |
+| `doctor`: "the OpenClaw Gateway is not running" | No cron job fires, `tico-sync` included. The heartbeat still runs, so the bot shows online. | Start the Gateway: `openclaw --profile <name> gateway start` if it is installed as a service, otherwise `openclaw --profile <name> gateway run` in a terminal. The job is kept; the next run picks up everything that waited. |
 | A sync run ends in `error`, "No route-compatible authentication source" | The profile has no signed-in model. | Sign the profile in to a provider (`openclaw --profile <name> configure`), then run the job once. |
 | `reinstall` or `pair` says "WARNING: the sync job is not in place: openclaw cron list: Gateway target ..." | The Gateway was down, so the job could not be made or changed (a job made earlier stays as it was). | Start the Gateway, then `reinstall`. |
 | `doctor`: "GET /api/v2/me failed: ... credential revoked" (401) | The credential was revoked or replaced in Tico. | `pair` again and approve it, or `uninstall` if the profile should stop. |
@@ -119,10 +127,19 @@ with the bot's credential lists the bot's `hub_*` tools as `tico__hub_*`.
 
 The connector does not set this up, and the `tico-sync` skill does not depend on it: the skill calls Tico through
 `hermes_agent.py call` on every release. If you add Tico as an MCP server yourself, keep the token out of
-`openclaw.json`: put `TICO_AGENT_TOKEN=...` in the profile's `.env` (mode 600) and use
-`"headers": {"Authorization": "Bearer ${TICO_AGENT_TOKEN}"}`. The Gateway reads `.env` when it starts, so restart
-it after adding the line (`mcp reload` is not enough). In a cron turn the tools are found through OpenClaw's
-`tool_search` and called with `tool_call`. `uninstall` does not remove an MCP entry or `.env` line you added.
+`openclaw.json`: put `TICO_AGENT_TOKEN=...` in the profile's `.env` (`~/.openclaw-<name>/.env`, mode 600) and add the
+server without the built-in probe, which does not read `.env`, then probe it:
+
+```bash
+openclaw --profile <name> mcp add tico --no-probe --url "<Tico URL>/api/v2/mcp" --transport streamable-http \
+  --header 'Authorization=Bearer ${TICO_AGENT_TOKEN}'
+openclaw --profile <name> mcp probe tico
+```
+
+The Gateway reads `.env` when it starts, so restart it after adding the line (`mcp reload` is not enough). In a
+cron turn the tools are found through OpenClaw's `tool_search` and called with `tool_call`.
+`openclaw mcp show tico` prints the header with the token filled in, so don't paste its output anywhere.
+`uninstall` does not remove an MCP entry or `.env` line you added.
 
 ## In Tico
 
@@ -147,6 +164,8 @@ otherwise `OPENCLAW_HOME` supplies the home used for `.openclaw` or `.openclaw-<
 cron command, including listing, replacing and removing the sync job, so files and jobs use the same
 profile after an update or reinstall.
 
-With `--no-timer`, heartbeat mode is manual: run `heartbeat` with the same profile flags every minute.
+With `--no-timer`, heartbeat mode is manual: run `heartbeat` with the same profile flags every minute. The sync
+job's first step answers from the last heartbeat while it is under 5 minutes old, so run `heartbeat` right before
+running the job by hand, or it may end `idle` with work waiting.
 Doctor warns about that requirement without reporting a missing timer as broken. Reinstall and update
 keep your selected mode. To enable the timer later, run `reinstall` with the same profile flags and `--timer`.
