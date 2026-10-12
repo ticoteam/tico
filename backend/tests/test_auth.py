@@ -82,3 +82,18 @@ def test_a_task_conversation_is_not_let_through_this_door():
 def test_a_bot_cannot_reach_an_ask_it_is_not_in():
     from backend.auth import _own_ask_to_a_person
     assert _own_ask_to_a_person(_turn("bot:cpo"), _row()) is False
+
+
+def test_bot_reads_task_leaves_an_autocommit_connection_as_it_found_it(api):
+    """A notice's read check (hubdb.bot_reads_task) on a connection with no transaction open opens none that stays open."""
+    from backend import auth as A
+    from backend.store import H
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Check the vendor list", "", "bot:ops", lint=False, private=False)
+    with store.read() as c:
+        assert not c.in_transaction
+        assert A.bot_reads_task(c, "bot:ops", H.task(c, task["id"]))
+        assert not c.in_transaction
+        assert not A.bot_reads_task(c, "bot:ops", {**H.task(c, task["id"]), "id": "missing"})     # refused, too
+        assert not c.in_transaction

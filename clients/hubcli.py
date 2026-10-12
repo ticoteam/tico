@@ -751,7 +751,7 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
-    s.add_argument("--private", action="store_true", default=None)
+    s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
     s.set_defaults(fn="task question")
     s = task.add_parser("update")
     visibility = s.add_mutually_exclusive_group()

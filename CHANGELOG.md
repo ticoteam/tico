@@ -8,6 +8,22 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Compact at, per bot.** The bot editor's Compact at (150k, 250k the default, 400k, 600k or 1M tokens) sets how full a bot's conversation
+  gets before it is compacted, instead of the model's whole window: Claude Code gets `--autocompact` on every turn (when its `--help` lists it)
+  and Codex `model_auto_compact_token_limit`. Changing it keeps the bot's session.
+
+### Fixed
+- **Chat goals no longer loop on waiting or on goals that can't be met.** The harness's goal now also counts "the only work left is waiting on someone or something else" as done for now: the bot says "Waiting on: <what>" and stops, and the goal shows Paused. A goal sent back to work 30 times (100 Codex continuation turns) with no person writing in between is paused and cleared in the harness, and the bot's reply says so with the last reason. This also stops a Claude Code goal that outlived its chat from looping in the bot's other runs. Codex's `blocked` shows as Paused.
+- **Search shows a temporary bot's flag, not its markup.** A temporary bot appeared in search as `<span class="proj" …>⚑</span>Name`; it now shows the flag and its name, and typing "temp" finds the temporary bots.
+- **Replay refuses a time it cannot convert, and stops scanning early.** A `from` or `to` whose UTC time falls outside years 1 to 9999 (`0001-01-01T00:00:00+14:00`) now gets a 422 that says so, not a 500. Each source a replay reads (tasks, task changes, messages, runs) stops after 20,000 rows, counting rows the viewer may not read or that fall outside the team, bot or person asked for, so one call no longer reads a month of a busy server; when it stops, the replay is cut short as at 5000 items (`truncated`, with `next` to continue).
+- **A bot's private question reaches any person on the team.** `hub task question --private` (MCP `hub_task_question` with `private: true`) worked only when the person asked had started the bot's run; asked of anyone else it was refused for privacy. It now files a private task whose two parties are the bot and the person asked, who must already be able to read the private task the run is working on and the parent task. Nobody else can read it, the person who started the run included.
+- **A refused question stores no option files.** Whether the person asked could read a private question was checked only after its option files were stored; it is now checked before, as it was for a company-visible one.
+- **Signing out leaves no unsent Decide actions in the browser.** Actions Decide had not yet confirmed, a note's words included, stayed in the browser's storage after Sign out. Signing out now sends what still waits, as leaving the page does, and removes the saved copy.
+- **A bot's read check no longer leaves a transaction open.** The check that a bot may read a task before it is told about it opened a transaction it never closed when called with none open; it now reads in a savepoint it releases.
+
+## [0.3.40] - 2026-10-11
+
+### Added
 - **Replay: watch what happened over a stretch of time.** Replay (in the account menu, `#/replay`) plays back a window, Today,
   Yesterday, the last 7 days or a custom start and end, as a task board whose cards appear and move between To do, Doing, Waiting
   and Done, an activity feed where chats, task comments and runs come in and bot replies type out, and bot faces that show who is

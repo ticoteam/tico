@@ -4,6 +4,8 @@ Nothing new is recorded. The items are read from the history Tico already keeps:
 status and owner rows of `task_events`, messages (chats and task comments), runs (`turns`), each bot's
 status rows (`bot_status_history`) and goal status changes (`goal_events`). Each source is read by its
 time-bounded index and capped, so a long history costs what the window holds, not what the tables hold.
+Each source also stops after SCAN_MAX rows read, shown or not (rows the viewer may not read, or outside the
+scope, count too), and the answer is then cut short there like any other cap: `truncated`, with `next`.
 
 Who sees what is decided by the checks the pages already use, one source at a time: the task list's
 `auth.task_sql` for tasks and their history, `auth.conversation` and `task_privacy.message_readable`
@@ -12,6 +14,7 @@ on Read bots for status rows, and the Goals page's Read rule for goals. A replay
 anything one of those pages would not. Nothing is stored: the page's link carries the query.
 """
 
+import heapq
 from datetime import timedelta, timezone
 
 from fastapi import Request
@@ -22,6 +25,7 @@ from .store import H, P, Problem
 
 MAX_DAYS = 31
 LIMIT = 5000
+SCAN_MAX = 20000    # rows read per source, shown or not; past it the replay is cut short
 TEXT_MAX = 1200
 SNAPSHOT_MAX = 300
 MESSAGE_KINDS = ("say", "ask", "answer")
@@ -41,7 +45,10 @@ def window(start, end):
         raise Problem("range", "to is after from", 422)
     if last - first > timedelta(days=MAX_DAYS):
         raise Problem("range", f"A replay is at most {MAX_DAYS} days", 422)
-    return stamp(first), stamp(last)
+    try:
+        return stamp(first), stamp(last)
+    except OverflowError:       # e.g. 0001-01-01T00:00:00+14:00 has no UTC time
+        raise Problem("range", "from and to are out of range: their UTC times fall outside years 1 to 9999", 422) from None
 
 
 def scope_of(bot=None, person=None, team=None):
@@ -108,8 +115,11 @@ def install(app, store, auth):
 
         # Tasks made in the window, then their status and owner changes.
         created = []
-        for row in c.execute(f"SELECT id,title,owner,requester,status,created FROM tasks WHERE created>=? AND created<? "
-                             f"AND ({visible_sql}) ORDER BY created", (first, last)):
+        for scanned, row in enumerate(c.execute(f"SELECT id,title,owner,requester,status,created FROM tasks WHERE created>=? "
+                                                f"AND created<? AND ({visible_sql}) ORDER BY created", (first, last)), 1):
+            if scanned > SCAN_MAX:
+                caps.append(row["created"])
+                break
             task_memo[row["id"]] = dict(row)
             if within(row["owner"], row["requester"]):
                 created.append(dict(row))
@@ -120,10 +130,15 @@ def install(app, store, auth):
         marks = ",".join("?" * len(TASK_FIELDS))
         cursor = c.execute(f"SELECT task_id,ts,actor,field,old,new,note FROM task_events WHERE field IN ({marks}) "
                            "AND ts>=? AND ts<? ORDER BY ts", (*TASK_FIELDS, first, last))
-        while len(changes) <= LIMIT:
+        cut = False
+        while len(changes) <= LIMIT and not cut:
             batch = cursor.fetchmany(500)
             if not batch:
                 break
+            cut = seen + len(batch) > SCAN_MAX
+            if cut:
+                caps.append(batch[SCAN_MAX - seen]["ts"])    # the first row not read
+                batch = batch[:SCAN_MAX - seen]
             seen += len(batch)
             rows = tasks_by_id([r["task_id"] for r in batch])
             for event in batch:
@@ -153,43 +168,52 @@ def install(app, store, auth):
             items.append(item)
         sources.append(items)
 
-        # Messages: the rooms with any message since `from`, each read by its (conversation, created) index.
-        items = []
+        # Messages: the rooms with any message since `from`, each read by its (conversation, created) index and
+        # merged in time order, so a cap (items or rows read) cuts every room at the same moment.
+        rooms = []
         for conv in H._rows(c.execute("SELECT * FROM conversations WHERE COALESCE(last_message_at, created)>=?", (first,))):
             try:
                 auth.conversation(c, who, conv["id"])
             except Problem:
                 continue
             conv["participants"] = H._json(conv.get("participants_json"), []) or []
-            marks = ",".join("?" * len(MESSAGE_KINDS))
-            count = 0
+            rooms.append(conv)
+        marks = ",".join("?" * len(MESSAGE_KINDS))
+
+        def room_rows(conv):
             for row in c.execute(f"SELECT * FROM messages WHERE conversation_id=? AND created>=? AND created<? "
                                  f"AND kind IN ({marks}) AND deleted_at IS NULL ORDER BY created",
                                  (conv["id"], first, last, *MESSAGE_KINDS)):
-                if not within(row["from_actor"], row["to_actor"]):
-                    continue
-                if not privacy.message_readable(c, reader, row, current=True):
-                    continue
-                message = {**dict(row), "refs": H._json(row["refs_json"], {}) or {}}
-                tid = H.message_task_id(message, conv)
-                comment = bool(conv.get("task_id")) or H.is_comment(message)
-                item = {"at": row["created"], "kind": "task.comment" if comment and tid else "chat.message",
-                        "who": row["from_actor"], "to": row["to_actor"], "room": conv["id"],
-                        "text": clip_text(row["body"])}
-                ref = task_ref(tid)
-                if ref:
-                    item["task"] = ref
-                items.append(item)
-                count += 1
-                if count > LIMIT:
-                    caps.append(row["created"])
-                    break
+                yield row["created"], conv, row
+
+        items = []
+        for scanned, (_, conv, row) in enumerate(heapq.merge(*(room_rows(conv) for conv in rooms), key=lambda r: r[0]), 1):
+            if scanned > SCAN_MAX or len(items) > LIMIT:
+                caps.append(row["created"])
+                break
+            if not within(row["from_actor"], row["to_actor"]):
+                continue
+            if not privacy.message_readable(c, reader, row, current=True):
+                continue
+            message = {**dict(row), "refs": H._json(row["refs_json"], {}) or {}}
+            tid = H.message_task_id(message, conv)
+            comment = bool(conv.get("task_id")) or H.is_comment(message)
+            item = {"at": row["created"], "kind": "task.comment" if comment and tid else "chat.message",
+                    "who": row["from_actor"], "to": row["to_actor"], "room": conv["id"],
+                    "text": clip_text(row["body"])}
+            ref = task_ref(tid)
+            if ref:
+                item["task"] = ref
+            items.append(item)
         sources.append(items)
 
         # Runs, with the bot turns page's checks: Read on the bot, then its message, its room and its tasks.
         items = []
-        for turn in H._rows(c.execute("SELECT id,bot,started,finished,exit,summary,message_id,task_id FROM turns "
-                                      "WHERE started>=? AND started<? ORDER BY started", (first, last))):
+        for scanned, turn in enumerate(c.execute("SELECT id,bot,started,finished,exit,summary,message_id,task_id FROM turns "
+                                                 "WHERE started>=? AND started<? ORDER BY started", (first, last)), 1):
+            if scanned > SCAN_MAX:
+                caps.append(turn["started"])
+                break
             if not readable_bot(turn["bot"]) or not within("bot:" + turn["bot"]):
                 continue
             msg = H.message(c, turn["message_id"]) if turn["message_id"] else None

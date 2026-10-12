@@ -624,7 +624,8 @@ def task_ask(api, args):
        "title": _s("Task title; defaults to the question"),
        "body": _s("What the decision is for; defaults to the question"),
        "parent": _s("Parent task id, when this decision is part of a bigger task"),
-       "private": {"type": "boolean", "description": "Only you and the person may read it"}},
+       "private": {"type": "boolean", "description": "Only you and the person may read it; they must already "
+                   "read the private task you are working on, and the parent"}},
       required=("question", "on"), writes=True)
 def task_question(api, args):
     options = [dict(o) for o in args.get("options") or []]

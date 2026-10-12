@@ -1014,10 +1014,20 @@ class Auth:
 
 def bot_reads_task(c, bot, row):
     """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built."""
+    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+    With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
+    a BEGIN open on an autocommit connection."""
     policy = Auth.__new__(Auth)
+    opened = not c.in_transaction
+    if opened:
+        c.execute("SAVEPOINT bot_reads_task")
     try:
+        if opened and row:
+            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
         policy.task_row(c, Identity(bot, "bot"), row)
     except Problem:
         return False
+    finally:
+        if opened:
+            c.execute("RELEASE bot_reads_task")
     return True

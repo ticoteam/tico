@@ -38,6 +38,17 @@ def repository_present(c, bot):
     return bool(report.get("repository_present"))
 
 
+# Where a bot's conversation compacts, in tokens (runner/hosts/base.py DEFAULT_COMPACT_AT): the choices offered,
+# and what a bot that never chose one gets.
+COMPACT_AT = (150_000, 250_000, 400_000, 600_000, 1_000_000)
+DEFAULT_COMPACT_AT = 250_000
+
+
+def compact_at(config):
+    value = (config or {}).get("compact_at")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else DEFAULT_COMPACT_AT
+
+
 class SettingsAdmin:
     def __init__(self, store, auth, execution, models, reset_sessions):
         self.store, self.auth, self.execution = store, auth, execution
@@ -176,6 +187,7 @@ class SettingsAdmin:
                 "operator": config["operator"], "revision": config["revision"],
                 "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
                 "effort": effective.get("reasoning_effort") or row["effort"],
+                "compact_at": compact_at(effective),
                 "session": effective.get("session"),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
                 "fallback": normalize_fallback(effective.get("fallback"))}
@@ -553,6 +565,8 @@ class SettingsAdmin:
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == "fallback":
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
+        if field == "compact_at":
+            return compact_at(_json(config["config_json"], {}))
         if field == "placement":
             row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator AS runner_operator "
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
@@ -961,6 +975,22 @@ class SettingsAdmin:
                       (who.actor, H.now(), undo_change_id))
         H.event(c, who.actor, "bot.fallback_changed", bot, {"before": before, "after": after})
         return {"bot": bot, "fallback": after, "revision": config["revision"] + 1}
+
+    def set_compact_at(self, c, who, bot, body):
+        """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
+        session is kept: the next turn simply compacts at the new size."""
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        before = self.snapshot(c, bot, "compact_at")
+        declared = _json(config["config_json"], {}) or {}
+        declared["compact_at"] = body.compact_at
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
+        H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
+        return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
 
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):

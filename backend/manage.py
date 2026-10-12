@@ -40,7 +40,7 @@ def resolved_registry(projects, registry_dir):
     source = yaml.safe_load((registry_dir / "employees.yaml").read_text())
     entries = {}
     fields = {"name", "display_name", "description", "repo", "reports_to", "team", "runtime", "model",
-              "reasoning_effort", "effort", "status", "max_run_minutes", "schedules", "access", "routines", "tools",
+              "reasoning_effort", "effort", "compact_at", "status", "max_run_minutes", "schedules", "access", "routines", "tools",
               "reads", "slack_channel", "role", "title", "order"}
     for entry in source["employees"]:
         slug = entry["name"]

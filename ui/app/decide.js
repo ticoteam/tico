@@ -330,7 +330,9 @@ const DEC_OUTBOX = new Set();
 // The outbox is kept in this browser too, so a write the page could not confirm before it closed goes out on the
 // next load, under the same keys.
 const DEC_SAVED = 'tico.decide.outbox';
+let DEC_SIGNED_OUT = false;
 function decideSave() {
+  if (DEC_SIGNED_OUT) return;
   try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
 }
 function decideResume() {
@@ -405,6 +407,16 @@ function decideFlush() {
   }
 }
 window.addEventListener('pagehide', decideFlush);
+// Signing out: what still waits goes out as on leaving the page, then none of it (a note's words included) stays in
+// this browser for whoever uses it next. The same links observability.js resets on.
+document.addEventListener('click', e => {
+  const link = e.target.closest?.('a[href]');
+  if (!link || !/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) return;
+  decideFlush();
+  DEC_SIGNED_OUT = true;
+  DEC_OUTBOX.clear();
+  try { localStorage.removeItem(DEC_SAVED); } catch {}
+}, true);
 function decideToast(st, text, undo) {
   const t = $('.decide .dc-toast');
   if (!t) return;
