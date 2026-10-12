@@ -120,11 +120,11 @@ function decideRedraw(st) {
 }
 
 // ---- drawing
-// A bot's chat is where its requests are worked through: its Chat tab leads with what of its work needs you. A bot
-// this person can't see, a person or Tico itself has no link.
+// A bot's name opens the bot, as its side-rail entry does. A bot this person can't see, a person or Tico itself has
+// no link.
 const decideChatHref = actor => {
   const slug = actorSlug(actor);
-  return slug && (S.emps || []).some(e => e.name === slug) ? `#/bot/${encodeURIComponent(slug)}/chat` : '';
+  return slug && (S.emps || []).some(e => e.name === slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
 };
 const decideCurrent = st => st.cards.get(st.queue[0]);
 const decideDecision = c => c.type !== 'task';

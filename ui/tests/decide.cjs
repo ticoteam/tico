@@ -110,13 +110,13 @@ const comments = {
     assert.equal(await page.locator('.decide .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);
 
-    // A bot's face and name open its chat (Chat tab); the face is not a second tab stop.
+    // A bot's face and name open the bot, as the side rail does; the face is not a second tab stop.
     const who = () => page.locator('.decide .dc-who').evaluate(el => ({name: el.querySelector('.dc-who-name').textContent,
       links: [...el.querySelectorAll('a')].map(a => ({cls: a.className, href: a.getAttribute('href'), tab: a.tabIndex, text: a.textContent.trim()})),
       height: el.getBoundingClientRect().height}));
     const bot = await who();
     assert.deepEqual(bot.links.map(({cls, href, tab}) => ({cls, href, tab})), [
-      {cls: 'dc-who-face', href: '#/bot/writer/chat', tab: -1}, {cls: 'dc-who-link', href: '#/bot/writer/chat', tab: 0}]);
+      {cls: 'dc-who-face', href: '#/bot/writer', tab: -1}, {cls: 'dc-who-link', href: '#/bot/writer', tab: 0}]);
     assert.equal(bot.links[1].text, 'Writer');
     await shot('blank');
     await next('blank');
@@ -136,8 +136,8 @@ const comments = {
     const writes = [];
     page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
     await page.locator('.decide .dc-who-link').click();
-    await page.waitForFunction(() => location.hash === '#/bot/writer/chat');
+    await page.waitForFunction(() => location.hash === '#/bot/writer');
     assert.deepEqual(writes, [], 'no card action was sent');
-    console.log("Decide: a waiting card leads with the ask, what the bot said to me or the request; the note folds away; a bot's name opens its chat");
+    console.log("Decide: a waiting card leads with the ask, what the bot said to me or the request; the note folds away; a bot's name opens the bot");
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});
