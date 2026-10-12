@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
-from fastapi import Request
+from fastapi import Query, Request
 
 from . import hubdb as H
 from . import models as M
@@ -221,18 +221,65 @@ def edges_of(conn, *, src=None, dst=None, rel=None, as_of=None):
     return [_edge_row(r) for r in H._rows(conn.execute(sql + " ORDER BY rel, src, dst", args))]
 
 
-def _evidence_for(conn, entity_id, edges):
-    ids = []
-    claims = [("entity", entity_id)] + [("edge", e["id"]) for e in edges]
-    for kind, cid in claims:
-        for row in conn.execute("SELECT evidence_id FROM market_citations WHERE claim_kind=? AND claim_id=?", (kind, cid)):
-            if row[0] not in ids:
-                ids.append(row[0])
+def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include=None):
+    """Rank a one-hop neighborhood in SQL; only bounded drawing rows leave SQLite."""
+    if not fill and not include and not conn.execute("SELECT 1 FROM market_entities WHERE id=? AND status='active'", (focus,)).fetchone():
+        return {"entities": [], "edges": [], "focus": focus, "edges_truncated": False}
+    limit = max(1, min(300, limit))
+    day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
+    args = {"focus": focus, "limit": limit, "day": day, "fill": int(fill), "include": dumps((include or [])[:20])}
+    current = "(since IS NULL OR substr(since,1,10)<=:day) AND (until IS NULL OR substr(until,1,10)>=:day)"
+    rows = H._rows(conn.execute(f"""
+        WITH wanted AS (SELECT value AS id FROM json_each(:include)),
+        live AS MATERIALIZED (SELECT id FROM market_entities WHERE status='active'),
+        degrees AS (
+            SELECT id, count(*) AS degree FROM (
+                SELECT src AS id FROM market_edges WHERE {current}
+                    AND src IN live AND dst IN live
+                UNION ALL
+                SELECT dst AS id FROM market_edges WHERE {current}
+                    AND src IN live AND dst IN live
+            ) GROUP BY id
+        ), neighbors AS (
+            SELECT dst AS id FROM market_edges WHERE src=:focus AND {current}
+            UNION SELECT src FROM market_edges WHERE dst=:focus AND {current}
+        )
+        SELECT e.id, e.name, e.type, e.tier, coalesce(d.degree,0) AS degree
+        FROM market_entities e LEFT JOIN degrees d ON d.id=e.id
+        WHERE e.status='active' AND (e.id=:focus OR e.id IN wanted OR e.id IN neighbors OR :fill)
+        ORDER BY CASE WHEN e.id=:focus THEN 0 WHEN e.id IN wanted THEN 1 WHEN e.id IN neighbors THEN 2 ELSE 3 END,
+            degree DESC, e.name, e.id LIMIT :limit
+    """, args))
+    ids = [row["id"] for row in rows]
     if not ids:
-        return []
-    marks = ",".join("?" * len(ids))
-    rows = {r["id"]: r for r in H._rows(conn.execute(f"SELECT * FROM market_evidence WHERE id IN ({marks})", ids))}
-    return [rows[i] for i in ids if i in rows]
+        return {"entities": [], "edges": [], "focus": focus, "edges_truncated": False}
+    marks = ",".join("?" for _ in ids)
+    # Dense neighborhoods also need a drawing bound; degrees still count every live edge.
+    edge_limit = limit * 8
+    edges = H._rows(conn.execute(f"""
+        SELECT id, src, dst, rel FROM market_edges
+        WHERE src IN ({marks}) AND dst IN ({marks})
+            AND (since IS NULL OR substr(since,1,10)<=?)
+            AND (until IS NULL OR substr(until,1,10)>=?)
+        ORDER BY CASE WHEN src=? OR dst=? THEN 0 ELSE 1 END, id LIMIT ?
+    """, (*ids, *ids, day, day, focus, focus, edge_limit + 1)))
+    return {"entities": rows, "edges": edges[:edge_limit], "focus": focus,
+            "edges_truncated": len(edges) > edge_limit}
+
+
+def _evidence_for(conn, entity_id, edges):
+    claims = [("entity", entity_id)] + [("edge", e["id"]) for e in edges]
+    return H._rows(conn.execute("""
+        WITH cited AS (
+            SELECT c.evidence_id, min(CAST(claim.key AS INTEGER)) AS position
+            FROM json_each(?) claim JOIN market_citations c
+                ON c.claim_kind=json_extract(claim.value,'$[0]')
+                AND c.claim_id=json_extract(claim.value,'$[1]')
+            GROUP BY c.evidence_id
+        )
+        SELECT e.* FROM cited JOIN market_evidence e ON e.id=cited.evidence_id
+        ORDER BY cited.position, e.id
+    """, (dumps(claims),)))
 
 
 def _current(edge, today):
@@ -266,9 +313,9 @@ def show(conn, entity_id, today=None):
         return None
     today = today or datetime.now(timezone.utc).date().isoformat()
     # Current edges only. Symmetric relations are stored once and read from either end.
-    touching = [item for item in edges_of(conn, src=entity_id) if _current(item, today)]
-    incoming = [item for item in edges_of(conn, dst=entity_id)
-                if item["rel"] not in SYMMETRIC and _current(item, today)]
+    touching = edges_of(conn, src=entity_id, as_of=today)
+    incoming = [item for item in edges_of(conn, dst=entity_id, as_of=today)
+                if item["rel"] not in SYMMETRIC]
     seen, edges, pairs = set(), [], set()
     for item in touching + incoming:
         if item["id"] in seen:
@@ -475,12 +522,16 @@ def _keys(name, aliases, external_ids):
 def _resolve_existing(conn, name, aliases, external_ids):
     """Entities whose name, alias or domain is one of these, active or merged."""
     keys = _keys(name, aliases, external_ids)
-    found = []
-    for row in conn.execute("SELECT * FROM market_entities"):
-        item = _entity_row(row)
-        if _keys(item["name"], item["aliases"], item["external_ids"]) & keys:
-            found.append(item)
-    return found
+    if not keys:
+        return []
+    marks = ",".join("?" for _ in keys)
+    # SQLite lower()/trim() cover ASCII names. The partial index also brings in Unicode
+    # and control-character keys for Python's original case and whitespace normalization.
+    rows = conn.execute(f"SELECT * FROM market_entities WHERE id IN "
+                        f"(SELECT entity_id FROM market_entity_keys WHERE key IN ({marks}) "
+                        "UNION SELECT entity_id FROM market_entity_keys WHERE key GLOB '*[^ -~]*')", list(keys))
+    return [item for row in rows if (item := _entity_row(row))
+            and _keys(item["name"], item["aliases"], item["external_ids"]) & keys]
 
 
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
@@ -1111,7 +1162,7 @@ def delta_body(conn, today):
     """The weekly delta page, from market_events. Seed writes this; Monday refresh writes it again."""
     start = (today - timedelta(days=7)).isoformat()
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE substr(ts,1,10)>=? ORDER BY ts, id", (start,)))
+        "SELECT * FROM market_events WHERE ts>=? ORDER BY ts, id", (start,)))
     lines = ["# Weekly delta", "", f"Changes since {start}.", ""]
     if not events:
         lines.append("No market changes in this week.")
@@ -1537,21 +1588,27 @@ def ensure_curator(conn):
 
 # ----------------------------------------------------------------------------- HTTP
 def install(app, store, auth, mutate):
-    def _show(conn, entity_id):
+    def _show(conn, entity_id, names=False):
         body = show(conn, entity_id)
         if not body:
             raise Problem("not_found", "Unknown entity", 404)
+        if names:
+            ids = {end for bucket in body["edges"].values() for e in bucket["out"] + bucket["in"]
+                   for end in (e["src"], e["dst"])}
+            body["neighbors"] = [dict(row) for row in conn.execute(
+                "SELECT id, name FROM market_entities WHERE id IN (SELECT value FROM json_each(?))", (dumps(list(ids)),))]
         return body
 
     @app.get("/api/v2/market/entities")
     def entities(request: Request, type: str | None = None, tier: str | None = None, q: str | None = None,
-                 status: str | None = None, id: str | None = None):
+                 status: str | None = None, id: str | None = None,
+                 limit: int | None = Query(None, ge=1, le=500), offset: int = Query(0, ge=0)):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             if id:
                 return _show(c, id)
-            if q:
+            if q and limit is None:
                 return find(c, q)
             where, args = [], []
             if type:
@@ -1563,15 +1620,38 @@ def install(app, store, auth, mutate):
             if status:
                 where.append("status=?")
                 args.append(status)
-            sql = "SELECT * FROM market_entities" + (" WHERE " + " AND ".join(where) if where else "")
-            return {"entities": [_entity_row(r) for r in H._rows(c.execute(sql + " ORDER BY name", args))]}
+            if q:
+                search = "instr(lower(name),?) OR instr(lower(id),?) OR instr(lower(aliases),?)"
+                args.extend([q.strip().lower()] * 3)
+                tokens = re.findall(r"\w+", q, re.UNICODE)[:8]
+                if tokens:
+                    # FTS folds Unicode names and accents; substring matches still cover partial ids.
+                    search += " OR id IN (SELECT ref FROM market_fts WHERE market_fts MATCH ? AND kind='entity')"
+                    args.append(" AND ".join('"' + token + '"*' for token in tokens))
+                where.append("(" + search + ")")
+            clause = " WHERE " + " AND ".join(where) if where else ""
+            sql = "SELECT * FROM market_entities" + clause + " ORDER BY name, id"
+            if limit is None:
+                return {"entities": [_entity_row(r) for r in H._rows(c.execute(sql, args))]}
+            total = c.execute("SELECT count(*) FROM market_entities" + clause, args).fetchone()[0]
+            rows = [_entity_row(r) for r in c.execute(sql + " LIMIT ? OFFSET ?", (*args, limit, offset))]
+            return {"entities": rows, "total": total,
+                    "next_offset": offset + limit if offset + limit < total else None}
+
+    @app.get("/api/v2/market/graph")
+    def graph_view(request: Request, focus: str = OWN_COMPANY_ID,
+                   limit: int = Query(250, ge=1, le=300), as_of: str | None = None, fill: bool | None = None,
+                   include: list[str] | None = Query(None)):
+        auth.domain(request.state.identity)
+        with store.read() as c:
+            return graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
 
     @app.get("/api/v2/market/entities/{rest:path}")
-    def entity_show(rest: str, request: Request):
+    def entity_show(rest: str, request: Request, names: bool = False):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return _show(c, rest)
+            return _show(c, rest, names)
 
     @app.get("/api/v2/market/edges")
     def edge_list(request: Request, src: str | None = None, dst: str | None = None, rel: str | None = None,

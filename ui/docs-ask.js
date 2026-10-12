@@ -335,8 +335,8 @@ html.demo .dask{top:var(--demo-h)}
       const out = await post('/v2/market/ask', {question: turn.question});
       const ids = [...new Set((out.citations || []).filter(c => c.kind === 'entity').map(c => c.id))];
       turn.answer = String(out.answer || '').replace(/\s*\[[a-z]+:[^\]]+\]/gi, '');
+      await window.marketCite?.(ids);
       turn.cites = ids.map(id => ({href: '#/market?note=' + encodeURIComponent(id), label: window.marketName?.(id) || id})).filter(c => c.label);
-      window.marketCite?.(ids);
     } catch (e) {
       turn.error = (e && e.message) || 'The Librarian could not answer.';
     }

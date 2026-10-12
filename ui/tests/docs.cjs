@@ -127,7 +127,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       // A one-row market, so the Market page draws and Ask the Librarian answers from its graph.
       if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', status: 'active'}]});
       if (p === '/api/v2/market/entities/company/rival') return json({entity: {id: 'company/rival', type: 'company', name: 'Rival', summary: 'Sells to studios.'}, edges: [], evidence: []});
-      if (p === '/api/v2/market/edges') return json({edges: []});
+      if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', degree: 0}], edges: []});
       if (p === '/api/company-docs') return json({documents: []});
       if (p === '/api/v2/market/ask') {
         requests.push({api: 'market/ask', body: req.postDataJSON()});

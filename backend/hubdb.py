@@ -814,6 +814,53 @@ def _refuse_foreign(conn):
             "TICO_DB at an empty path or a Tico database, or restore a snapshot.")
 
 
+def ensure_market_reads(conn):
+    """Additive indexes and exact resolution keys, shared by local and cloud boot."""
+    conn.execute("SAVEPOINT market_read_indexes")
+    try:
+        for name, spec in (
+            ("market_entities_name", "market_entities(name, id)"),
+            ("market_entities_status_name", "market_entities(status, name, id)"),
+            ("market_entities_type_name", "market_entities(type, name, id)"),
+            ("market_events_ts", "market_events(ts, id)"),
+            ("market_edges_rel_pair", "market_edges(rel, src, dst)"),
+        ):
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='market_entity_keys'").fetchone()
+        conn.execute("CREATE TABLE IF NOT EXISTS market_entity_keys (key TEXT NOT NULL, entity_id TEXT NOT NULL, "
+                     "PRIMARY KEY(key, entity_id)) WITHOUT ROWID")
+        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_entity ON market_entity_keys(entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_unicode ON market_entity_keys(entity_id) "
+                     "WHERE key GLOB '*[^ -~]*'")
+        def keys(ref):
+            return f"""SELECT lower(trim({ref}.name)) AS key
+                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid({ref}.external_ids) THEN {ref}.external_ids ELSE '{{}}' END, '$.domain')))
+                UNION SELECT lower(trim(value)) FROM json_each(CASE WHEN json_valid({ref}.aliases) THEN {ref}.aliases ELSE '[]' END)"""
+        if not exists:
+            conn.execute("""INSERT OR IGNORE INTO market_entity_keys
+                SELECT lower(trim(name)), id FROM market_entities WHERE trim(name)<>''
+                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain'))), id
+                    FROM market_entities WHERE coalesce(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain')),'')<>''
+                UNION SELECT lower(trim(j.value)), e.id FROM market_entities e, json_each(CASE WHEN json_valid(e.aliases) THEN e.aliases ELSE '[]' END) j
+                    WHERE trim(j.value)<>''""")
+        for event, before in (("INSERT", ""), ("UPDATE OF name, aliases, external_ids",
+                                               "DELETE FROM market_entity_keys WHERE entity_id=old.id;")):
+            suffix = "insert" if event == "INSERT" else "update"
+            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS market_keys_{suffix} AFTER {event} ON market_entities BEGIN
+                {before}
+                INSERT OR IGNORE INTO market_entity_keys SELECT key, new.id FROM ({keys('new')})
+                    WHERE key IS NOT NULL AND key<>'';
+            END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS market_keys_delete AFTER DELETE ON market_entities BEGIN
+            DELETE FROM market_entity_keys WHERE entity_id=old.id;
+        END""")
+    except Exception:
+        conn.execute("ROLLBACK TO market_read_indexes")
+        raise
+    finally:
+        conn.execute("RELEASE market_read_indexes")
+
+
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -838,6 +885,7 @@ def migrate(conn, adopt_legacy=False):
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
     # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}

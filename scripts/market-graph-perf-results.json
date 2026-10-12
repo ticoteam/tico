@@ -1,0 +1,119 @@
+{
+  "method": "Synthetic in-memory SQLite via FastAPI TestClient; API times are medians of three warm responses including serialization. Playwright Chromium at 1280x860 runs the Market page against those API bodies with the measured API delay. Browser time starts at Market mount; frame times measure draw callback work. The old browser layout is measured only at 4000 nodes.",
+  "runs": [
+    {
+      "entities": 4000,
+      "edges": 6000,
+      "evidence": 16000,
+      "baseline_ref": "767204d4ec8ee6bcd40519f7b5b192ab17d0adf9",
+      "api": {
+        "entities": {
+          "ms": 107.94,
+          "bytes": 1882675
+        },
+        "edges": {
+          "ms": 150.17,
+          "bytes": 1324913
+        },
+        "graph": {
+          "ms": 30.39,
+          "bytes": 42691
+        },
+        "list": {
+          "ms": 4.77,
+          "bytes": 23572
+        },
+        "next_list": {
+          "ms": 3.94,
+          "bytes": 23578
+        },
+        "search": {
+          "ms": 7.98,
+          "bytes": 513
+        },
+        "focus": {
+          "ms": 31.69,
+          "bytes": 708
+        },
+        "show": {
+          "ms": 4.82,
+          "bytes": 4366
+        },
+        "find": {
+          "ms": 6.86,
+          "bytes": 17875
+        }
+      },
+      "drawn_nodes": 250,
+      "drawn_edges": 234,
+      "browser": {
+        "before": {
+          "first_draw_ms": 16315.7,
+          "frame_median_ms": 102.5,
+          "frame_max_ms": 151.6,
+          "list_rows": 4000
+        },
+        "after": {
+          "first_draw_ms": 64.7,
+          "frame_median_ms": 0.7,
+          "frame_max_ms": 9.4,
+          "list_rows": 50
+        }
+      }
+    },
+    {
+      "entities": 20000,
+      "edges": 40000,
+      "evidence": 80000,
+      "baseline_ref": "767204d4ec8ee6bcd40519f7b5b192ab17d0adf9",
+      "api": {
+        "entities": {
+          "ms": 368.14,
+          "bytes": 9413342
+        },
+        "edges": {
+          "ms": 527.8,
+          "bytes": 8838913
+        },
+        "graph": {
+          "ms": 117.55,
+          "bytes": 39565
+        },
+        "list": {
+          "ms": 2.84,
+          "bytes": 23573
+        },
+        "next_list": {
+          "ms": 1.97,
+          "bytes": 23579
+        },
+        "search": {
+          "ms": 19.26,
+          "bytes": 514
+        },
+        "focus": {
+          "ms": 127.36,
+          "bytes": 888
+        },
+        "show": {
+          "ms": 0.84,
+          "bytes": 4217
+        },
+        "find": {
+          "ms": 1.84,
+          "bytes": 17875
+        }
+      },
+      "drawn_nodes": 250,
+      "drawn_edges": 199,
+      "browser": {
+        "after": {
+          "first_draw_ms": 226.5,
+          "frame_median_ms": 0.7,
+          "frame_max_ms": 43.5,
+          "list_rows": 50
+        }
+      }
+    }
+  ]
+}

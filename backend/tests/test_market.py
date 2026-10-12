@@ -7,7 +7,7 @@ from pathlib import Path
 from backend import market as M
 from backend.blobs import Blobs
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry"
@@ -210,3 +210,53 @@ def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, mo
     assert out["answer"].startswith("Pulled from the market graph.")
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 1
+
+
+def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
+    with api.app.state.store.transaction() as c:
+        for name in ('Self', 'Neighbor', 'Retired', 'Merged'):
+            M.create_entity(c, M.SEED_ACTOR, type='company', name=name)
+        M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/neighbor', rel='employs')
+        M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/retired', rel='employs')
+        M.create_edge(c, M.SEED_ACTOR, src='company/merged', dst='company/self', rel='employs')
+        M.create_edge(c, M.SEED_ACTOR, src='company/self', dst='company/neighbor', rel='formerly', until='2000-01-01')
+        c.execute("UPDATE market_entities SET status='retired' WHERE id='company/retired'")
+        c.execute("UPDATE market_entities SET status='merged' WHERE id='company/merged'")
+    get(api, 'market/graph', token='invalid-token', expected=401)
+    computer = runner(api)
+    get(api, 'market/graph', token=computer['token'], expected=403)
+    body = get(api, 'market/graph?fill=true', token='ben-test')
+    assert {r['id'] for r in body['entities']} == {'company/self', 'company/neighbor'}
+    assert [r['degree'] for r in body['entities']] == [1, 1]
+    assert len(body['edges']) == 1
+    assert not get(api, 'market/graph?focus=company/retired')['entities']
+
+
+def test_graph_and_entity_pages_are_bounded_and_focus_works_beyond_the_first_page(api):
+    with api.app.state.store.transaction() as c:
+        for i in range(16):
+            M.create_entity(c, M.SEED_ACTOR, type='company', name=f'Node {i:02}', entity_id=f'company/n{i}')
+        for i in range(12):
+            for j in range(12):
+                if i != j:
+                    M.create_edge(c, M.SEED_ACTOR, src=f'company/n{i}', dst=f'company/n{j}', rel='employs')
+        M.create_edge(c, M.SEED_ACTOR, src='company/n15', dst='company/n0', rel='employs')
+        M.update_entity(c, M.SEED_ACTOR, 'company/n15', aliases=['Élan'])
+    body = get(api, 'market/graph?focus=company/n0&limit=10')
+    assert len(body['entities']) == 10 and body['entities'][0]['id'] == 'company/n0'
+    assert len(body['edges']) == 80 and body['edges_truncated']
+    ids = {r['id'] for r in body['entities']}
+    assert all(e['src'] in ids and e['dst'] in ids for e in body['edges'])
+    assert len(get(api, 'market/graph?fill=true&limit=16')['entities']) == 16
+    cited = get(api, 'market/graph?focus=company/n0&include=company/n14&limit=10')
+    assert len(cited['entities']) == 10 and cited['entities'][1]['id'] == 'company/n14'
+    assert {r['id'] for r in get(api, 'market/graph?focus=company/n15')['entities']} == {'company/n15', 'company/n0'}
+    first = get(api, 'market/entities?status=active&limit=5')
+    second = get(api, 'market/entities?status=active&limit=5&offset=5')
+    assert first['total'] == 16 and first['next_offset'] == 5
+    assert not {r['id'] for r in first['entities']} & {r['id'] for r in second['entities']}
+    assert get(api, 'market/entities?q=n15&status=active&limit=5')['entities'][0]['id'] == 'company/n15'
+    assert get(api, 'market/entities?q=élan&status=active&limit=5')['entities'][0]['id'] == 'company/n15'
+    get(api, 'market/graph?limit=301', expected=422)
+    get(api, 'market/entities?limit=501', expected=422)
+    assert len(get(api, 'market/entities')['entities']) == 16
