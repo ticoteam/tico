@@ -1840,7 +1840,7 @@ def main(argv):
         p.print_help(sys.stderr)
         return 1
     try:
-        if getattr(args, "dry_run", False):     # never reaches remotecli: nothing to send
+        if args.fn == "task create" and args.dry_run:     # never reaches remotecli: nothing to send
             return cmd_task_dry_run(args, who)
         if args.fn == "decision ask" and args.list:    # the sets are files in this checkout, no API needed
             from clients import judge

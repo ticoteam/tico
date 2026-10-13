@@ -514,7 +514,7 @@ def task_create(api, args):
     return s3links.annotate(api.post("tasks", body, key=_key(args)), links)
 
 
-@tool("hub_task_child_create", "Create a subtask carrying its parent's requester rights.",
+@tool("hub_task_child_create", "Create a subtask under a parent; you are its requester.",
       {"parent": TASK_ID, "owner": _s("Bot slug or human id"), "title": _s("What to do"),
        "body": _s("Details", default="")}, required=("parent", "owner", "title"), writes=True)
 def task_child_create(api, args):

@@ -219,10 +219,10 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 
 ## Subtasks and PRs
 
-Subtasks can nest to any depth. A human-created subtask keeps a human parent's requester for
-notices; under a bot-requested parent, the person filing it is its requester.
-A bot-created subtask is requested by the filing bot, which receives its completion
-notice and may close it explicitly. Completed subtasks stay Done until then.
+Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester: it
+shows them as asking, and they receive its completion notice. A bot that filed one may close it
+explicitly; until then a completed subtask stays Done. The parent's requester still hears when
+the parent finishes.
 Subtasks never inherit a human's delegation anchor from a bot's request. BotOps acts with the
 filing bot's rights when that bot asks it to work on a subtask.
 

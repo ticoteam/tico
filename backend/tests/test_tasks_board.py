@@ -471,7 +471,7 @@ def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the feature', 'body': 'x'})
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build the service', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token='ben-test')
     leaf = post(api, 'tasks', {'owner': 'cmo', 'title': 'Build the page', 'body': 'x', 'relations': [{'task': child['id'], 'kind': 'parent'}]})
-    assert child['requester'] == leaf['requester'] == parent['requester']
+    assert child['requester'] == 'human:ben' and leaf['requester'] == parent['requester'] == 'human:ana'
     post(api, 'tasks/' + leaf['id'] + '/links', {'url': 'https://github.com/example/service/pull/1'})
     summary = get(api, 'tasks/' + parent['id'])['task']['children_summary']
     assert summary == {'total': 2, 'open': 2, 'done': 0, 'prs_total': 1, 'prs_merged': 0, 'direct_total': 1, 'direct_done': 0}

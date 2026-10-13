@@ -3250,7 +3250,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     owner = route(conn, actor, owner)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    requester = parent["requester"] if parent and is_human(actor) and is_human(parent["requester"]) else actor
+    # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
+    requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
         private = None              # a bot cannot override a sensitive default to publish
     private = bool((private if private is not None else
