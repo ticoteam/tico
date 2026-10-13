@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend import hubdb as H
+from backend import worktrees as W
 from backend.tests.test_github_app import api, gh, auth, connect, runner_token  # noqa: F401
 from backend.tests.test_repositories import catalog, put
 
@@ -58,10 +59,11 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert link['path'] == f'tasks/{tid[:8]}/Acme__product'
     assert link['branch'].startswith('tico/' + tid[:8])
     assert post(api, path, {'repo': 'Acme/product'}, 'bot-test').json() == link
-    for i in range(9):
+    for i in range(W.LIMIT - 1):
         response = post(api, f'tasks/{tid}/worktrees/attach', {'path': f'tasks/{tid[:8]}/extra{i}', 'repo': 'Acme/product'}, 'bot-test')
         assert response.status_code == 200, response.text
-    assert post(api, f'tasks/{tid}/worktrees/attach', {'path': 'tasks/eleven', 'repo': 'Acme/product'}, 'bot-test').status_code == 409
+    refused = post(api, f'tasks/{tid}/worktrees/attach', {'path': f'tasks/{tid[:8]}/over', 'repo': 'Acme/product'}, 'bot-test')
+    assert refused.status_code == 409 and 'Oldest idle: ' in refused.json()['error']['detail']
     assert post(api, f'tasks/{tid}/worktrees/attach', {'path': '../escape', 'repo': 'Acme/product'}, 'bot-test').status_code == 422
     response = api.patch(f'/api/v2/tasks/{tid}/links/{link["link_id"]}', json={'state': 'present', 'computer_id': 'elsewhere'}, headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})
     assert response.status_code == 403
@@ -247,14 +249,14 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
         c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['release'] is True
-    for i in range(9):
+    for i in range(W.LIMIT - 1):
         assert post(api, f'tasks/{tid}/worktrees/attach', {'path': f'tasks/{tid[:8]}/extra{i}', 'repo': 'Acme/product'},
                     'bot-test').status_code == 200
     refused = post(api, f'tasks/{tid}/worktrees/attach', {'path': f'tasks/{tid[:8]}/eleven', 'repo': 'Acme/product'}, 'bot-test')
     assert refused.status_code == 409
     error = refused.json()['error']
     assert error['code'] == 'worktree_limit' and 'free themselves once you are idle' in error['detail']
-    assert len(error['worktrees']) == 10 and {w['clear'] for w in error['worktrees']} == {'merged'}
+    assert len(error['worktrees']) == W.LIMIT and {w['clear'] for w in error['worktrees']} == {'merged'}
     # A new open pull request on the task means its worktree is in use again: no release.
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/2')

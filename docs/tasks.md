@@ -93,7 +93,7 @@ stuck or unavailable, the diagnostic goes to the human requester, or the team's 
 bot-requested work. An unresolved diagnostic is reused on later days. Health warns when repeated
 runs have escalated a public task without progress; an explicit run is still available.
 
-Task worktrees have a separate lifecycle. The ten-worktree limit stays in effect, and cleanup
+Task worktrees have a separate lifecycle. The 30-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
 request continues to occupy its slot until the runner removes it. For merged work that is still
 awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed

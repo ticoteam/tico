@@ -560,7 +560,7 @@ class MarketPage(Contract):
 
 
 class ApprovalCreate(Contract):
-    kind: Literal["send", "spend", "publish", "merge"]
+    kind: Literal["send", "spend", "publish", "merge", "support"]
     payload: dict
     task_id: ID | None = None
 

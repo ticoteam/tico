@@ -114,7 +114,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
     hub proposal decide <id> confirm|reject [--note "..."]   a person's own decision; a bot is refused
-    hub approval request --kind send|spend|publish|merge --payload-file f.json [--task ID]
+    hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
     hub approval show <id>
@@ -266,6 +266,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub slack channel remove <channel> [--reader BOT]   take the channel off the list, or only that reader off it
     hub slack channel import               store the channels of the old registry/slack-channels.yaml, once
     hub support file "<message>"           tell the Tico team about a gap or fault (a Confirm card first)
+    hub support report --message "..." | --file report.md [--no-ids]
+                                           draft a Tico bug report for the Tico team; a person approves it in Needs
+                                           you (the version and install ID go with it unless --no-ids). Prints its id
+    hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
+                                           same ticket, never a second one
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -304,7 +309,7 @@ if __package__ in (None, ""):                          # run as a script: python
 # Mirrors of the server's vocabulary (backend/hubdb.py), so a typo is refused by the parser
 # before a request is made. The server is the authority when they disagree.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
-APPROVAL_KINDS = ("send", "spend", "publish", "merge")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
 ASKED = ("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
@@ -1684,6 +1689,15 @@ def parser():
     s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
     s.add_argument("message")
     s.set_defaults(fn="support file")
+    s = support.add_parser("report", help="draft a Tico bug report; a person must approve it before it is sent")
+    text = s.add_mutually_exclusive_group(required=True)
+    text.add_argument("--message", help="the whole report: what failed, since when, the exact error, what you tried")
+    text.add_argument("--file", help="a file holding the report (UTF-8)")
+    s.add_argument("--no-ids", dest="no_ids", action="store_true", help="send only the message: not the version and install ID")
+    s.set_defaults(fn="support report")
+    s = support.add_parser("send", help="send a report a person approved; filed as the person who approved it")
+    s.add_argument("--approval", required=True, help="the approval id `support report` printed")
+    s.set_defaults(fn="support send")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")

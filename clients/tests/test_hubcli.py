@@ -152,6 +152,10 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"task": {"id": "T1", "status": body.get("status"), "version": 4}})
         if self.path == "/api/v2/bots/writer/tools":
             return self.reply(200, {"ok": True, "dry_run": bool(body.get("dry_run"))})
+        if self.path == "/api/v2/approvals":
+            return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
+        if self.path == "/api/v2/support/tickets/from-approval":
+            return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
 
 
@@ -192,6 +196,24 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/bots/writer/tools")
         self.assertTrue(posted["dry_run"])
         self.assertEqual(posted["mcp"]["url"], "https://mcp.notion.example/mcp")
+
+    def test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.md"
+            report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
+            code, out = run_hub("support", "report", "--file", str(report), "--no-ids", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out["approval"], "ap-1")
+        self.assertIn("hub support send --approval ap-1", out["next"])
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/approvals")
+        message = "hub task update fails.\nError: refused (version)"
+        self.assertEqual(posted, {"kind": "support", "payload": {
+            "message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest(), "include_ids": False}})
+        code, out = run_hub("support", "send", "--approval", "ap-1", env=self.env)
+        self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
+        self.assertEqual(posted, {"approval": "ap-1"})
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)

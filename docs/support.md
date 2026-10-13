@@ -39,10 +39,32 @@ Replies appear in the selected thread and raise the existing notice and sidebar 
 **Mark read** clears its unread state. Background refresh preserves your draft, focus and scroll position. **Delete** removes
 the request and all its attachments at HQ and its local ticket record. Closed requests remain readable.
 
-- Any signed-in human may file a ticket. A personal API token, the Assistant acting for a human, and a bot may not.
+- Any signed-in human may file a ticket from the form. A personal API token, the Assistant acting for a human, and a bot
+  may not file one directly; they report through a person's yes (below).
 - Demo mode has no Contact support: nothing leaves a demo. Neither does a rehearsal (`TICO_REHEARSAL=1`), which reports "rehearsal" as the reason it is off.
 - `TICO_SUPPORT=off` in the server's `.env` removes it from an install that must not phone out. `TICO_HQ_URL` points it at your
   own HQ (see [telemetry.md](telemetry.md)).
+
+### A bot's report, after a person's yes
+
+A bot that hits a Tico bug (or a person's token, through MCP) reports it to the Tico team without handing the person a
+copy-and-paste task, and nothing leaves the install until a person says yes:
+
+1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
+   `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
+   (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
+   Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
+2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
+   what goes with it and the host it goes to, and approves or declines it in their own browser (not with a token or
+   through the Assistant). A bot's report goes where any approval goes: the owner of its task, else the default person. A
+   person's own report (drafted with their token) goes to them.
+3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
+   files it **as the person who approved it**: the ticket is theirs, its replies show on their Support page, and it counts
+   toward their 10 a day. Only whoever asked for the approval may send it, and only once it is approved and its message
+   still matches its hash. The approval is spent in the same step that keeps the ticket, so if HQ refuses or cannot be
+   reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
+
+No email and no diagnostics bundle go this way: diagnostics need a person to preview them on the form.
 
 ## What is sent and kept
 

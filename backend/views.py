@@ -750,6 +750,11 @@ def needs_items(c, auth, who, task_view, older=None):
                     "requester": row["requested_by"], "conversation_id": msg["conversation_id"]}
             if row["kind"] == "send":
                 item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
+            if row["kind"] == "support":
+                # Where a yes sends it: the Tico team's host (support.Support.compose's `to`).
+                from .census import hq_url
+                item["title"] = "Send this to Tico support?"
+                item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
     return sorted(items, key=lambda x: needs_order(
         x["requester"] if x["kind"] == "approval" else (x.get("ask") or {}).get("from_actor") or x.get("origin_actor") or x.get("requester"),

@@ -89,7 +89,7 @@ def supported(c):
     return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
 
 
-LIMIT = 10            # live worktrees per bot
+LIMIT = 30            # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
 
 
@@ -108,7 +108,7 @@ def holdings(c, owner):
     """The bot's live worktrees, each with what clears it: `merged` or `closed` (its pull requests are finished and the
     computer releases it once the bot is idle), `merge_ready` (an approved, passing pull request), `task_finished`,
     or `in_progress`. A worktree the computer kept says why in `kept`."""
-    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,t.title,t.status FROM task_links l "
+    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
                      "AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
     out = []
@@ -128,7 +128,7 @@ def holdings(c, owner):
             clear, why = 'in_progress', 'in progress'
         detail = json.loads(row['detail_json'] or '{}')
         item = {'link_id': row['id'], 'task_id': row['task_id'], 'task': row['title'], 'path': row['path'],
-                'repo': row['repo'], 'branch': row['branch'], 'clear': clear, 'why': why,
+                'repo': row['repo'], 'branch': row['branch'], 'clear': clear, 'why': why, 'updated': row['updated'],
                 'pull_requests': [{'url': p['url'], 'state': p['state']} for p in prs]}
         if detail.get('error') and (detail.get('cleanup_requested') or detail.get('release_requested')):
             item['kept'] = detail['error']
@@ -372,7 +372,9 @@ def install(app, store, auth, mutate):
             if kept:
                 detail += ' Kept for the reason given; save or discard that work: ' + '; '.join(kept) + '.'
             if not (merge or freeing or kept):
-                detail += ' Finish or close older tasks first.'
+                # Nothing frees itself, and nothing is removed to make room: name the oldest idle ones to clean up.
+                idle = [f"{w['path']} ({w['task']})" for w in sorted(held, key=lambda w: w['updated'] or '')[:3]]
+                detail += ' Clean one up before making another. Oldest idle: ' + '; '.join(idle) + '.'
             raise Problem('worktree_limit', detail, 409, extra={'worktrees': held})
         if existing:
             detail = json.loads(existing['detail_json'] or '{}')

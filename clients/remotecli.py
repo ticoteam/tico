@@ -121,6 +121,13 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
+    if fn in ("support report", "support send"):
+        from clients import hubtools
+        key = os.environ.get("HUB_OPERATION_ID")
+        if fn == "support send":
+            return hubtools.support_send(client, {"approval": args.approval, "operation_id": key})
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
+        return hubtools.support_report(client, {"message": text, "include_ids": not args.no_ids, "operation_id": key})
     if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
