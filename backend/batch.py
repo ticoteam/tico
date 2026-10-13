@@ -428,7 +428,14 @@ def _apply_decide(c, auth, who, item, r):
     decision, text = r["decision"], r.get("text") or ""
     kind, ident = item["key"].split(":", 1)
     if kind == "approval":
-        auth.approval(c, who, ident, decide=True)
+        row = auth.approval(c, who, ident, decide=True)
+        if row["kind"] == "support":
+            # As on the approve route: sending off the install is a person's own tap in Tico, not their token.
+            from .support import require_person
+            try:
+                require_person(who)
+            except Problem:
+                raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
         verdict = "approved" if decision == "approve" else "declined"
         H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
         return f"{verdict.capitalize()}: {item['title']}"

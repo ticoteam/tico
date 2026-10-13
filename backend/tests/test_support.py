@@ -394,3 +394,25 @@ def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  
     approval = draft(api, as_bot(api)).json()
     approver, _ = decide(api, approval["id"])
     assert approver != "bot:coo" and approver.startswith("human:")
+
+
+def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
+    api = environment()
+    approval = draft(api, as_bot(api)).json()
+    with api.app.state.store.read() as c:
+        approver = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+                             (approval["id"],)).fetchone()[0]
+    me = api.get("/api/me", headers=signed_in()).json()
+    api.app.state.store.settings.test_identities["approver-token"] = Identity(
+        approver, me.get("role") or "owner", email=me.get("email") or "", via_token=True)
+    token = signed_in("approver-token")
+    b = api.post("/api/v2/batch", json={}, headers=token).json()
+    assert b.get("item", {}).get("key") == "approval:" + approval["id"], b
+    r = api.post(f"/api/v2/batch/{b['id']}/respond", json={"kind": "decide", "decision": "approve"}, headers=token)
+    assert r.status_code == 200, r.text
+    done = api.post(f"/api/v2/batch/{b['id']}/commit", json={}, headers=token).json()
+    assert done["committed"] and len(done["errors"]) == 1 and "in Tico itself" in done["errors"][0], done
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
+    assert send(api, as_bot(api), approval["id"]).status_code != 200
+    assert hq.seen == [] and not consumed(api, approval["id"])
