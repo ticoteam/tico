@@ -2917,6 +2917,10 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
+            if row["kind"] == "support":
+                # Sending off the install is a person's own tap: not their token or the Assistant (which may have drafted it).
+                from .support import require_person
+                require_person(who)
             privacy.require_payload(c, who, row)
             return H.approval_decide(c, who.actor, aid, body.decision, body.note)
         return mutate(request, body, work)

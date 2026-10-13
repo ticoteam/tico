@@ -4346,6 +4346,9 @@ def approval_request(conn, actor, kind, payload, task_id=None):
         row = task(conn, task_id)
         if row and is_human(row["owner"]):
             owner = row["owner"]
+    if kind == "support" and is_human(actor):
+        # A person's own report (their token, or the Assistant for them) is theirs to approve and is filed as them.
+        owner = actor
     owner = owner or human_actor(default_human(conn))
     ts = now()
     ask = ("Send this to Tico support? " + _clip(payload["message"], 200) if kind == "support"

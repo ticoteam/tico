@@ -358,3 +358,39 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")    # what the person read
     err, again = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
+
+
+def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environment, hq):
+    api = environment()
+    as_person(api, "riley")
+    tokens = {"riley-token": Identity("human:riley", "human", email="riley@acme.example", via_token=True),
+              "riley-assistant": Identity("human:riley", "human", email="riley@acme.example", via="assistant")}
+    api.app.state.store.settings.test_identities.update(tokens)
+    # The Assistant drafts nothing on its own: like any write it may not make, it proposes it on a Confirm card.
+    assert draft(api, signed_in("riley-assistant")).json()["error"]["code"] == "confirm_required"
+    for token, message in (("riley-token", REPORT), ("riley-token", "A second report from Riley's token")):
+        approval = draft(api, signed_in(token), message=message).json()
+        with api.app.state.store.read() as c:
+            to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+                           (approval["id"],)).fetchone()[0]
+        assert to == "human:riley"                                   # not the default person
+        # Neither their token nor the Assistant says yes for them: only Riley at their browser.
+        for proxy in (token, "riley-assistant"):
+            assert api.post(f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"},
+                            headers=signed_in(proxy)).status_code == 403
+        assert api.post(f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"},
+                        headers=signed_in()).status_code == 403      # nor the owner: it isn't theirs
+        assert api.post(f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"},
+                        headers=signed_in("riley")).status_code == 200
+        sent = send(api, signed_in(token), approval["id"])
+        assert sent.status_code == 200, sent.text
+        assert sent.json()["filed_as"] == "human:riley"
+    riley = api.get("/api/v2/support/tickets", headers=signed_in("riley")).json()["tickets"]
+    assert len(riley) == 2 and api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
+
+
+def test_a_bots_draft_keeps_the_usual_approver(environment, hq):
+    api = environment()
+    approval = draft(api, as_bot(api)).json()
+    approver, _ = decide(api, approval["id"])
+    assert approver != "bot:coo" and approver.startswith("human:")

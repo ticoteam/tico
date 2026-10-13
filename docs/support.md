@@ -54,9 +54,10 @@ copy-and-paste task, and nothing leaves the install until a person says yes:
    `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
    (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
    Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
-2. The person the approval goes to (as for any approval: the owner of its task, else the default person) sees
-   **Send this to Tico support?** in Needs you and Decide, with the whole message, what goes with it and the host it goes
-   to, and approves or declines it.
+2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
+   what goes with it and the host it goes to, and approves or declines it in their own browser (not with a token or
+   through the Assistant). A bot's report goes where any approval goes: the owner of its task, else the default person. A
+   person's own report (drafted with their token) goes to them.
 3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
    files it **as the person who approved it**: the ticket is theirs, its replies show on their Support page, and it counts
    toward their 10 a day. Only whoever asked for the approval may send it, and only once it is approved and its message
