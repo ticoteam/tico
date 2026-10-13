@@ -241,6 +241,52 @@ def scrub_log(line):
     return line
 
 
+# Credentials that can turn up in git's own output whoever's they are: a token in a URL's user part, GitHub's
+# token formats, an Authorization header (GIT_TRACE_CURL, http.extraHeader) and a credential helper's answer.
+_CREDENTIAL_SHAPES = [
+    (re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s@'\"]+@", re.I), r"\1" + MASK + "@"),
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})"), MASK),
+    (re.compile(r"\b((?:proxy-)?authorization\s*:\s*)(?:(?:basic|bearer|token)\s+)?\S+", re.I), r"\1" + MASK),
+    (re.compile(r"\b(basic|bearer)\s+[A-Za-z0-9+/._~-]{8,}=*", re.I), r"\1 " + MASK),
+    (re.compile(r"\b(password|oauth_refresh_token|access_token|token)\s*=\s*\S+", re.I), r"\1=" + MASK),
+]
+# Git's progress, advice and recovery hints: never the reason something failed.
+_GIT_NOISE = re.compile(r"^(?:hint:|cloning into|remote: (?:enumerating|counting|compressing|total)|receiving objects|"
+                        r"resolving deltas|updating files|filtering content|checking out files|"
+                        r"you can inspect what was checked out|and retry with|warning: clone succeeded)", re.I)
+_GIT_REASON = re.compile(r"^(?:fatal:|error:|remote:|tico:|git-lfs|batch response|smudge|.*\b(?:error|denied|"
+                         r"not found|timed out|too long|failed)\b)", re.I)
+
+
+def scrub_credentials(text, secrets=()):
+    """`text` with the given secret values, every running turn's secrets and anything shaped like a credential
+    masked. Fails closed."""
+    try:
+        text = str(text or "")
+        known = Redactor(secrets)
+        text = scrub_log(known.scrub_text(text))
+        for pattern, replacement in _CREDENTIAL_SHAPES:
+            text = pattern.sub(replacement, text)
+        return text
+    except Exception:
+        return ERROR
+
+
+def git_failure(stderr, secrets=(), limit=300):
+    """Why a git command failed, in git's own words and safe to show: the last few meaningful lines of its
+    stderr ("remote: Repository not found.", "fatal: unable to checkout working tree", an LFS smudge error),
+    without progress or advice, credentials masked, at most `limit` characters. "" when git said nothing."""
+    lines = []
+    # Scrubbed whole, before anything is cut: a token cut in half no longer looks like one.
+    for raw in scrub_credentials(str(stderr or "").replace("\r", "\n"), secrets).splitlines():
+        line = " ".join(raw.split())
+        if line and not _GIT_NOISE.match(line) and line not in lines:
+            lines.append(line)
+    reasons = [line for line in lines if _GIT_REASON.match(line)] or lines
+    text = " / ".join(line[:200] for line in reasons[-3:])
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def head(root):
     """The checkout's current commit, or "" when it has none."""
     return (_git(Path(root), "rev-parse", "--verify", "-q", "HEAD") or "").strip()
