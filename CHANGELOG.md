@@ -61,6 +61,7 @@ All notable changes to Tico are recorded here. The format follows
   ends a sentence. It no longer flags an amount after a currency sign (`$250000`, also £, € and ¥); titles keep their own
   reference-number check unchanged. No lint now flags a colon that opens a plain clause ("Check the order status: it says
   pending."); `status: doing` and `owner: bot:cmo` are still flagged.
+- **Whoever files a subtask is its requester.** A person who files a subtask under someone else's task now shows as asking for it and gets its completion notice; before, it took the parent's requester. The parent's requester still hears when the parent finishes.
 
 ## [0.3.40] - 2026-10-11
 
