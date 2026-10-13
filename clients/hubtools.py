@@ -46,7 +46,7 @@ def release_version():
 SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
-APPROVAL_KINDS = ("send", "spend", "publish", "merge")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
 PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
@@ -2482,6 +2482,39 @@ def support_file(api, args):
     return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
 
 
+
+
+@tool("hub_support_report", "Report a Tico bug to the Tico team (the maintainers): drafts it for a person, who sees the whole "
+      "message in Needs you and approves or declines it. Nothing leaves this install until then; afterwards send it with "
+      "hub_support_send. Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, "
+      "tokens or customer data. Don't hand the person a copy-and-paste task instead.",
+      {"message": _s("The whole report, plain text, up to 4000 characters"),
+       "include_ids": {"type": "boolean", "description": "Send the Tico version and this install's ID with it (default true)"}},
+      required=("message",), writes=True)
+def support_report(api, args):
+    message = support_message(args.get("message"))
+    payload = {"message": message, "content_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest()}
+    if args.get("include_ids") is False:
+        payload["include_ids"] = False
+    row = api.post("approvals", {"kind": "support", "payload": payload}, key=_key(args))
+    return {"approval": row.get("id"), "decision": row.get("decision"),
+            "next": "A person must approve it in Needs you. Then send it: hub support send --approval "
+                    f"{row.get('id')} (hub_support_send). Until then nothing is sent."}
+
+
+def support_message(value):
+    """The report as backend/support.py `clean_message` keeps it (line ends as \\n, no blank space round it), so the hash
+    a person approves is the hash of what is sent."""
+    return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+@tool("hub_support_send", "Send a Tico bug report a person approved (hub_support_report gave its approval id). It is filed as "
+      "the person who approved it and its replies reach their Support page. Before a yes, after a no, or for someone "
+      "else's approval it is refused; a second call answers with the same ticket. When Tico support cannot be reached "
+      "the approval is not spent: try again later.",
+      {"approval": _s("The approval id hub_support_report returned")}, required=("approval",), writes=True)
+def support_send(api, args):
+    return api.post("support/tickets/from-approval", {"approval": args["approval"]}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- approvals

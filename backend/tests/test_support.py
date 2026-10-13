@@ -339,3 +339,22 @@ def test_the_person_only_routes_still_refuse_a_bot(environment, hq):
     for path in ("/api/v2/support/tickets", "/api/v2/support/compose"):
         assert api.get(path, headers=bot).status_code == 403
     assert hq.seen == []
+
+
+def test_a_bot_reports_and_sends_over_mcp(environment, hq):
+    from backend.tests.test_mcp import call, rpc
+    api = environment()
+    as_bot(api)
+    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
+    assert {"hub_support_report", "hub_support_send"} <= tools
+    err, drafted = call(api, "hub_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo")
+    assert not err, drafted
+    assert "approve" in drafted["next"] and hq.seen == []
+    err, early = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    assert err and hq.seen == []
+    decide(api, drafted["approval"])
+    err, sent = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    assert not err, sent
+    assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")    # what the person read
+    err, again = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
