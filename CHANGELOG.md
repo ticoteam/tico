@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Copy session ID from a task's ⋯ menu.** On a task with a primary session, the menu copies that session's id, for resuming or restoring it by hand.
 - **Tasks show their sessions.** The owning bot's task session is primary, with its resume command to copy; people and bots can link other sessions to track (a thread URL or a resume command; Sessions + on the task, `hub task link --session`). Task chat still goes only to the owning bot. See [Tasks](docs/tasks.md).
 - **Bots report Tico bugs to the Tico team with one tap from you.** A bot drafts its report with `hub support report` (MCP `hub_support_report`); you see **Send this to Tico support?** in Needs you with the whole message, what goes with it (the version and install ID, or nothing) and where it goes, and after your yes the bot sends it with `hub support send`, filed as you so the replies show on your Support page. No more copying a bot's report into the form. See [Contact support](docs/support.md#a-bots-report-after-a-persons-yes).
 - **Add teammates from Team.** The plus beside Team offers a section, bot or human according to your permissions.
