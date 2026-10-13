@@ -360,7 +360,7 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 
-def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environment, hq):
+def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     as_person(api, "riley")
     tokens = {"riley-token": Identity("human:riley", "human", email="riley@acme.example", via_token=True),
@@ -389,7 +389,7 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
     assert len(riley) == 2 and api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
 
 
-def test_a_bots_draft_keeps_the_usual_approver(environment, hq):
+def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     approval = draft(api, as_bot(api)).json()
     approver, _ = decide(api, approval["id"])
