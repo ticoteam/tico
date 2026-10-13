@@ -357,14 +357,14 @@ class Repositories:
             path = self.path(name)
             exists = path.exists()
             if exists and self.rows[name].get('partial') and not (path / '.git' / 'tico-managed').exists():
-                if self.adoption_problem(path, repo['full_name']):
+                if tico_half_clone(path):
                     # A clone this runner started and never finished (it was stopped mid-clone): nothing in it is
                     # anyone's work, so it is removed and cloned again rather than refused as broken forever.
                     discard_failed_clone(path, fresh=True)
                     exists = path.exists()
                 else:
-                    # A person's own clone of this repository now stands where the half clone was: never delete it;
-                    # it is taken over below like any other.
+                    # Something else now stands where the half clone was (a person's own clone, of this repository
+                    # or not): never delete it; it is taken over or refused below like any other folder.
                     self.rows[name].pop('partial', None)
                     self.rows[name].pop('managed', None)
             managed = self.rows[name].get('managed') or (path / '.git' / 'tico-managed').is_file()
@@ -753,6 +753,32 @@ def _clone(name, path, command, url, env, machine_git):
         return f'Git clone of {name} failed: {path.name} {_ELSEWHERE}'
     discard_failed_clone(path, fresh=True)
     return machine_error(name, done.stderr or f'exit {done.returncode}', env) if machine_git else git_error('Git clone', name, done, env)
+
+
+def tico_half_clone(path):
+    """Whether the folder is plainly what Tico's own clone left when stopped halfway: empty, or a Git folder made by
+    this user whose only remote is the one Tico clones with (tico-mirror), or none yet. Anything else, such as a
+    person's clone of a fork or another host, is not proven to be Tico's and is never deleted for being half made."""
+    try:
+        if path.is_symlink() or path.stat().st_uid != os.geteuid():
+            return False
+        if not any(path.iterdir()):
+            return True
+        git_dir = path / '.git'
+        if git_dir.is_symlink() or not git_dir.is_dir() or git_dir.stat().st_uid != os.geteuid():
+            return False
+        config = git_dir / 'config'
+        if config.is_symlink():
+            return False
+        if not config.exists():
+            return True
+    except OSError:
+        return False
+    done = isolation.run([*safe_git.PREFIX, 'config', '--file', str(config), '--name-only', '--get-regexp', r'^remote\.'],
+                         env=safe_git.clean_environment(), capture_output=True, text=True, timeout=15)
+    if done.returncode not in (0, 1):
+        return False
+    return all(key.startswith('remote.tico-mirror.') for key in done.stdout.split())
 
 
 def discard_failed_clone(path, fresh=False):

@@ -780,6 +780,36 @@ def test_a_persons_clone_where_a_half_clone_was_is_taken_over_not_deleted(repos,
     assert row['state'] == 'cloned' and row.get('adopted') and 'partial' not in row, row.get('error')
 
 
+@pytest.mark.parametrize('origin', ['git@github.com:me/one.git', 'git@github-work:org/one.git', 'https://gitlab.com/org/one.git'])
+def test_a_persons_clone_of_something_else_where_a_half_clone_was_is_refused_not_deleted(repos, tmp_path, origin):
+    only_one(repos)
+    source = local_source(tmp_path)
+    repos.rows['org/one'] = {'full_name': 'org/one', 'state': 'cloning', 'managed': True, 'partial': True}
+    path = own_clone(repos, source, origin)
+    with from_local(repos, source), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert (path / 'notes.txt').read_text() == 'my uncommitted notes'
+    assert row['state'] == 'failed' and f'its origin is {origin}, not org/one' in row['error'] and 'partial' not in row
+    assert not (path / '.git' / 'tico-managed').exists()
+
+
+def test_a_half_clone_with_only_the_mirror_remote_is_removed_and_cloned_again(repos, tmp_path):
+    only_one(repos)
+    source = local_source(tmp_path)
+    path = repos.root / 'org__one'
+    repos.root.mkdir(exist_ok=True)
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    subprocess.run(['git', '-C', str(path), 'remote', 'add', 'tico-mirror', repos.mirror_path('org/one').as_uri()], check=True)
+    (path / 'half.txt').write_text('half a checkout')
+    repos.rows['org/one'] = {'full_name': 'org/one', 'state': 'cloning', 'managed': True, 'partial': True}
+    with from_local(repos, source), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert row['state'] == 'cloned' and 'partial' not in row, row.get('error')
+    assert not (path / 'half.txt').exists() and (path / 'README.md').read_text() == 'first'
+
+
 def test_a_mac_takes_over_a_clone_of_the_same_repository_and_keeps_its_origin(repos, tmp_path):
     only_one(repos)
     source = local_source(tmp_path)
