@@ -180,6 +180,22 @@ def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api)
         assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
 
 
+def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the weekly numbers", "body": "x"})
+    queued = jobs_for(api, "ops")
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you send ops the numbers?"})
+    assert said["woke"] is True and said["comment"]["kind"] != "ask"
+    assert jobs_for(api, "ops") == queued + 1
+    with api.app.state.store.read() as c:
+        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
+
+
+def test_a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
+    task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "Any update?"})
+    assert said["woke"] is True and not said["comment"].get("refs", {}).get("quiet")
+
+
 def test_the_author_edits_a_comment_and_nobody_wakes(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the Agust numbers."})

@@ -2665,10 +2665,10 @@ def create_app(settings=None):
                                  "url": f"/api/v2/files/{fid}?v={number}"})
             moves = mover(c, who)
             # A person @mentioned in a comment gets it as a question, so it reaches their Needs you.
-            # The comment itself is the question to the first one, unless it also names the bot,
+            # The comment itself is the question to the first one, unless it would wake the bot,
             # which must hear it; everyone else mentioned gets their own copy.
             people = [] if ask or who.role == "bot" else H.mentioned_people(c, body.text, row, who.actor)
-            if people and not H.names_a_filer(c, body.text, row):
+            if people and not H.comment_wakes(c, who.actor, row, body.text, mover=moves):
                 ask, people = H.mention_ask(body.text, people[0]), people[1:]
             if ask:
                 wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves

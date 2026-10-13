@@ -2984,13 +2984,16 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
 def comment_wakes(conn, actor, row, text, *, mover=False):
     """Whether a comment from `actor` wakes the bot on the other side of the task. A bot's comment
     does. A person's does when they are a mover, the owner or the requester, and the bot owns the
-    task (they are directing its work). On a task a bot only filed, which a person owns, a person's
-    comment wakes the bot only when it names the bot with an @ or the task waits on that person (the
-    bot asked them); anything else is saved for the bot's next turn on the task."""
+    task (they are directing its work), or when no bot is on the task at all. On a task a bot only
+    filed, which a person owns, a person's comment wakes the bot only when it names the bot with an @
+    or the task waits on that person (the bot asked them); anything else is saved for the bot's next
+    turn on the task."""
     if is_bot(actor):
         return True
     if not (mover or actor in (row["owner"], row["requester"])):
         return False
+    if not any(is_bot(a) for a in (row["owner"], row["requester"], task_origin(conn, row))):
+        return True
     if is_bot(row["owner"]):
         return True
     if row.get("waiting_on") == actor:
