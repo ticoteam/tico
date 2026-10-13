@@ -18,6 +18,7 @@ from clients import git_repository
 from . import git_credentials, isolation, safe_git
 
 FETCH_INTERVAL = 15 * 60
+CLONE_TIMEOUT = 120           # a base clone made inside a turn, when no computer mirror is there yet
 REMOVE_AFTER = 30 * 86400
 GB = 1024 ** 3
 
@@ -38,10 +39,22 @@ def base_folder(name):
     return git_repository.folder(name.lower() if valid_name(name) else name)
 
 
-def machine_error(name, detail):
+def machine_error(name, detail, env=None):
     from . import redact
-    first = (str(detail).strip().splitlines() or ['Git command failed'])[0][:200]
-    return f"git could not reach {name} with this computer's git login: {redact.scrub_log(first)}"
+    reason = redact.git_failure(detail, redact.env_secrets(env), limit=240) or 'Git command failed'
+    return f"git could not reach {name} with this computer's git login: {reason}"
+
+
+def git_error(what, name, done, env=None):
+    """`what` failed for `name`, with git's own reason (credentials masked), so nobody has to guess between
+    access, network and disk."""
+    from . import redact
+    reason = redact.git_failure(done.stderr, redact.env_secrets(env), limit=240) or f'exit {done.returncode}'
+    return f'{what} of {name} failed: {reason}'
+
+
+def timed_out(what, name, seconds):
+    return f'{what} of {name} timed out after {int(seconds)} seconds; a large repository or a slow network needs longer'
 
 
 def mirror_warning(mirror):
@@ -502,17 +515,21 @@ def worktree_base(workspace, repo, env):
         if repo.get('default_branch'):
             command += ['--branch', repo['default_branch']]
         try:
-            done = isolation.run([*command, '--', url, str(path)], env=clone_env, capture_output=True, text=True, timeout=120)
+            done = isolation.run([*command, '--', url, str(path)], env=clone_env, capture_output=True, text=True, timeout=CLONE_TIMEOUT)
         except (OSError, subprocess.SubprocessError) as exc:
-            discard_failed_clone(path)
+            discard_failed_clone(path, fresh=True)
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise ValueError(timed_out('Git clone', name, CLONE_TIMEOUT)) from None
             if repo.get('machine_git'):
                 raise ValueError(machine_error(name, type(exc).__name__)) from None
-            raise ValueError('Git clone failed; check repository access, network and disk space') from None
+            raise ValueError(f'Git clone of {name} failed: {type(exc).__name__}') from None
         if done.returncode:
-            discard_failed_clone(path)
+            # Git refuses a destination something else made meanwhile: that folder is not this clone's to remove.
+            if 'already exists' not in (done.stderr or ''):
+                discard_failed_clone(path, fresh=True)
             if repo.get('machine_git'):
-                raise ValueError(machine_error(name, done.stderr or f'exit {done.returncode}'))
-            raise ValueError('Git clone failed; check repository access, network and disk space')
+                raise ValueError(machine_error(name, done.stderr or f'exit {done.returncode}', clone_env))
+            raise ValueError(git_error('Git clone', name, done, clone_env))
         if refreshed:
             for key, value in [('remote.origin.url', git_repository.address(name)),
                                ('remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')]:
@@ -560,14 +577,16 @@ def worktree_base(workspace, repo, env):
         fetch_error = done.stderr or f'exit {done.returncode}'
     except (OSError, subprocess.SubprocessError) as exc:
         fetched = False
-        fetch_error = type(exc).__name__
+        fetch_error = 'timed out' if isinstance(exc, subprocess.TimeoutExpired) else type(exc).__name__
     if not fetched:
         available = isolation.run([*safe_git.prefix(path), '-C', str(path), 'show-ref', '--verify', 'refs/remotes/origin/' + branch],
                                  env=local_env, capture_output=True, timeout=15)
         if available.returncode:
             if repo.get('machine_git'):
-                raise ValueError(machine_error(name, fetch_error))
-            raise ValueError('Git fetch failed; check repository access, network and disk space')
+                raise ValueError(machine_error(name, fetch_error, local_env))
+            from . import redact
+            reason = redact.git_failure(fetch_error, redact.env_secrets(local_env), limit=240) or 'no reason given'
+            raise ValueError(f'Git fetch of {name} failed: {reason}')
         repo.setdefault('fetch_warning', 'Could not refresh origin; using the base clone (age unknown)')
     mark_managed(path, local_env, name)
     # A normal git push then updates the task branch's tracking ref, rather than comparing it to main.
@@ -582,9 +601,17 @@ def worktree_base(workspace, repo, env):
     return path, branch
 
 
-def discard_failed_clone(path):
+def discard_failed_clone(path, fresh=False):
+    """Remove what a failed clone left behind. `fresh`: the folder did not exist before this clone, so nothing
+    in it is anyone's work unless a task worktree was already registered on it; a clone killed halfway or one
+    whose checkout failed is otherwise left half-made, and every retry would refuse it."""
     if not path.exists() or path.is_symlink():
         return
+    if fresh and not (path / '.git').is_symlink():
+        registered = path / '.git' / 'worktrees'
+        if not registered.is_symlink() and not (registered.is_dir() and any(registered.iterdir())):
+            shutil.rmtree(path)
+            return
     if (path / '.git').exists():
         try:
             if base_kept(path):

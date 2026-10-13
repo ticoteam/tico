@@ -273,6 +273,12 @@ def scrub_credentials(text, secrets=()):
         return ERROR
 
 
+def env_secrets(env, names=("TOKEN", "SECRET", "PASSWORD", "API_KEY")):
+    """The values in a git environment that are secrets: its tokens, by name and in TICO_GITHUB_TOKENS."""
+    redactor = for_turn(env, names=names)
+    return list(redactor.values) if redactor else []
+
+
 def git_failure(stderr, secrets=(), limit=300):
     """Why a git command failed, in git's own words and safe to show: the last few meaningful lines of its
     stderr ("remote: Repository not found.", "fatal: unable to checkout working tree", an LFS smudge error),

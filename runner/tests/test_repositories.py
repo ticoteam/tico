@@ -447,3 +447,74 @@ def test_poll_skips_unsafe_managed_markers(repos, tmp_path):
     with mock.patch.object(repos, 'sync'):
         cycle(repos)
     assert repos.rows == {}
+
+
+# ---------------------------------------------------------------- a base clone made in a turn
+TURN_TOKEN = 'ghs_' + 'T' * 36
+
+
+def failing_clone(stderr='', returncode=128, raise_timeout=False, leave='partial'):
+    """isolation.run for worktree_base: the clone leaves a half-made folder and fails as GitHub would."""
+    from runner import repositories as R
+    def run(args, **kwargs):
+        if 'clone' in args:
+            path = Path(args[-1])
+            if leave == 'partial':
+                (path / '.git' / 'objects').mkdir(parents=True)
+                (path / '.git' / 'objects' / 'pack-partial').write_text('half a pack')
+            if raise_timeout:
+                raise subprocess.TimeoutExpired(args, R.CLONE_TIMEOUT)
+            return subprocess.CompletedProcess(args, returncode, '', stderr)
+        return subprocess.CompletedProcess(args, 0, '', '')
+    return run
+
+
+@pytest.mark.parametrize('stderr,wanted', [
+    (f"Cloning into 'x'...\nremote: Repository not found.\nfatal: repository 'https://x-access-token:{TURN_TOKEN}@github.com/acme/web.git/' not found\n",
+     'remote: Repository not found.'),
+    ("error: unable to create file app/" + 'a' * 30 + ".tsx: Filename too long\nfatal: unable to checkout working tree\n"
+     "warning: Clone succeeded, but checkout failed.\n", 'fatal: unable to checkout working tree'),
+    ('error: RPC failed; HTTP 500 curl 22 The requested URL returned error: 500\nfatal: expected flush after ref listing\n',
+     'RPC failed; HTTP 500'),
+])
+def test_turn_clone_failure_names_gits_reason_and_removes_the_partial_clone(tmp_path, stderr, wanted):
+    from runner import repositories as R
+    with mock.patch('runner.repositories.isolation.run', side_effect=failing_clone(stderr)):
+        with pytest.raises(ValueError) as caught:
+            R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'GH_TOKEN': TURN_TOKEN, 'PATH': os.environ['PATH']})
+    message = str(caught.value)
+    assert message.startswith('Git clone of acme/web failed: ') and wanted in message
+    assert TURN_TOKEN not in message and 'check repository access, network and disk space' not in message
+    assert not (tmp_path / 'repos' / R.base_folder('acme/web')).exists()     # the next try starts clean
+
+
+def test_turn_clone_timeout_says_so_and_removes_the_partial_clone(tmp_path):
+    from runner import repositories as R
+    with mock.patch('runner.repositories.isolation.run', side_effect=failing_clone(raise_timeout=True)):
+        with pytest.raises(ValueError, match=r'Git clone of acme/web timed out after 120 seconds'):
+            R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'PATH': os.environ['PATH']})
+    assert not (tmp_path / 'repos' / R.base_folder('acme/web')).exists()
+
+
+def test_turn_clone_never_removes_a_folder_it_did_not_make(tmp_path):
+    from runner import repositories as R
+    target = tmp_path / 'repos' / R.base_folder('acme/web')
+    def appeared(args, **kwargs):
+        if 'clone' in args:
+            target.mkdir(parents=True)
+            (target / 'someone-elses-work').write_text('keep')
+            return subprocess.CompletedProcess(args, 128, '', f"fatal: destination path '{target}' already exists and is not an empty directory.\n")
+        return subprocess.CompletedProcess(args, 0, '', '')
+    with mock.patch('runner.repositories.isolation.run', side_effect=appeared):
+        with pytest.raises(ValueError, match='already exists'):
+            R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'PATH': os.environ['PATH']})
+    assert (target / 'someone-elses-work').read_text() == 'keep'
+
+
+def test_partial_clone_with_a_registered_worktree_is_kept(tmp_path):
+    from runner.repositories import discard_failed_clone
+    path = tmp_path / 'base'
+    (path / '.git' / 'worktrees' / 'task').mkdir(parents=True)
+    with mock.patch('runner.repositories.base_kept', side_effect=ValueError('cannot prune')):
+        discard_failed_clone(path, fresh=True)
+    assert path.exists()
