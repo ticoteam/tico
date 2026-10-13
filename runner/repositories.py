@@ -60,6 +60,18 @@ def timed_out(what, name, seconds):
     return f'{what} of {name} timed out after {int(seconds)} seconds; a large repository or a slow network needs longer'
 
 
+_MIRROR_BROKEN = re.compile(r'corrupt|bad object|missing (?:blob|tree|commit|object)|unable to read|did not send all|'
+                            r'index-pack|unpack-objects|\.lock\b|is not a valid|not a git repository|'
+                            r'could not (?:open|read)|permission denied|unable to create temporary', re.I)
+
+
+def mirror_broken(stderr, mirror):
+    """Whether a failed mirror fetch is the mirror's own fault (corrupt, half-written, locked, unreadable) rather
+    than GitHub's or the network's, so rebuilding it can help."""
+    text = str(stderr or '')
+    return bool(_MIRROR_BROKEN.search(text)) or str(mirror) in text
+
+
 def wait_words(seconds):
     minutes = round(seconds / 60)
     return f'{minutes} minutes' if minutes < 120 else f'{minutes // 60} hours'
@@ -294,6 +306,12 @@ class Repositories:
                         raise ValueError('Mirror is writable by another user; repair the computer mirror permissions')
         return path
 
+    def discard_mirror(self, name):
+        """Remove a computer mirror so it is fetched afresh. It holds only what GitHub has, never anyone's work."""
+        mirror = self.mirror_path(name)
+        if mirror.exists():
+            shutil.rmtree(mirror)
+
     @staticmethod
     def mirror_permissions(path):
         for root, dirs, files in os.walk(path, followlinks=False):
@@ -355,33 +373,45 @@ class Repositories:
                     raise ValueError(git_error('Finding the default branch', repo['full_name'], result, env)
                                      if result.returncode else 'Could not find the default branch; check GitHub access')
                 branch = match.group(1)
-            if not mirror.exists():
-                done = self.run_git([*prefix, 'init', '--bare', '--quiet', '--initial-branch=' + branch, str(mirror)], env=clean, timeout=10)
+            base_prefix = list(prefix)
+
+            def fill_mirror(rebuild=True):
+                """Create the mirror if it is missing and fetch the default branch into it from GitHub."""
+                prefix = list(base_prefix)
+                if not mirror.exists():
+                    done = self.run_git([*prefix, 'init', '--bare', '--quiet', '--initial-branch=' + branch, str(mirror)], env=clean, timeout=10)
+                    if done.returncode:
+                        raise ValueError('Could not create mirror; check disk space and permissions')
+                # Only supervisor-owned Git config is read with an installation token.
+                config = self.run_git([*prefix, '-C', str(mirror), 'config', '--no-includes', '--name-only',
+                                       '--get-regexp', r'^(http|include|includeif)\.'], env=clean, timeout=10)
+                if config.returncode not in (0, 1):
+                    raise ValueError('Could not inspect mirror Git config')
+                for key in config.stdout.splitlines():
+                    if key.lower().startswith(('include.', 'includeif.')):
+                        raise ValueError('Mirror Git config includes another file; remove the include before fetching')
+                    setting = key.rsplit('.', 1)[-1].lower()
+                    value = 'true' if setting == 'sslverify' else (clean.get('GIT_SSL_CAINFO', '') if setting == 'sslcainfo' else '')
+                    prefix += ['-c', key + '=' + value]
+                done = self.run_git([*prefix, '-C', str(mirror), 'fetch', '--quiet', '--prune', '--no-tags',
+                                     '--no-write-fetch-head', '--', url, f'+refs/heads/{branch}:refs/heads/{branch}'],
+                                    env=env, timeout=timeout)
+                if done.returncode and rebuild and mirror_broken(done.stderr, mirror):
+                    # The mirror, not GitHub, failed (corrupt or missing objects, a stale lock): start it again.
+                    self.discard_mirror(name)
+                    return fill_mirror(rebuild=False)
                 if done.returncode:
-                    raise ValueError('Could not create mirror; check disk space and permissions')
-            # Only supervisor-owned Git config is read with an installation token.
-            config = self.run_git([*prefix, '-C', str(mirror), 'config', '--no-includes', '--name-only',
-                                   '--get-regexp', r'^(http|include|includeif)\.'], env=clean, timeout=10)
-            if config.returncode not in (0, 1):
-                raise ValueError('Could not inspect mirror Git config')
-            for key in config.stdout.splitlines():
-                if key.lower().startswith(('include.', 'includeif.')):
-                    raise ValueError('Mirror Git config includes another file; remove the include before fetching')
-                setting = key.rsplit('.', 1)[-1].lower()
-                value = 'true' if setting == 'sslverify' else (clean.get('GIT_SSL_CAINFO', '') if setting == 'sslcainfo' else '')
-                prefix += ['-c', key + '=' + value]
-            done = self.run_git([*prefix, '-C', str(mirror), 'fetch', '--quiet', '--prune', '--no-tags',
-                                 '--no-write-fetch-head', '--', url, f'+refs/heads/{branch}:refs/heads/{branch}'],
-                                env=env, timeout=timeout)
-            if done.returncode:
-                raise ValueError(git_error('Git mirror fetch', repo['full_name'], done, env))
-            done = self.run_git([*prefix, '-C', str(mirror), 'symbolic-ref', 'HEAD', 'refs/heads/' + branch], env=clean, timeout=10)
-            if done.returncode:
-                raise ValueError('Could not set mirror default branch')
-            self.mirror_permissions(mirror)
-            (mirror / 'tico-fetched-at').write_text(str(now))
+                    raise ValueError(git_error('Git mirror fetch', repo['full_name'], done, env))
+                done = self.run_git([*prefix, '-C', str(mirror), 'symbolic-ref', 'HEAD', 'refs/heads/' + branch], env=clean, timeout=10)
+                if done.returncode:
+                    raise ValueError('Could not set mirror default branch')
+                self.mirror_permissions(mirror)
+                (mirror / 'tico-fetched-at').write_text(str(now))
+
+            fill_mirror()
             # Bot-owned directories are touched only by unprivileged Git, without a token.
-            local = [*safe_git.PREFIX, '-c', 'safe.directory=' + str(mirror.resolve()),
+            # Both spellings of the mirror's path: older Git compares safe.directory without resolving symlinks.
+            local = [*safe_git.PREFIX, '-c', 'safe.directory=' + str(mirror.resolve()), '-c', 'safe.directory=' + str(mirror),
                      '-c', 'safe.directory=' + str(path.resolve()), '-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
                      '-c', 'protocol.allow=never', '-c', 'protocol.file.allow=always']
             if not exists:
@@ -390,12 +420,28 @@ class Repositories:
                 with self.lock:
                     self.rows[name].update(state='cloning', managed=True, partial=True)
                     self.save()
-                done = self.run_git([*local, 'clone', '--quiet', '--single-branch', '--no-hardlinks',
-                                     '--origin', 'tico-mirror', '--branch', branch, '--', mirror.as_uri(), str(path)],
-                                    env=clean, timeout=timeout, bot=True)
-                if done.returncode:
-                    # A turn's own clone may have made the folder meanwhile: that one is not this clone's to remove.
-                    created = 'already exists' not in (done.stderr or '')
+                def clone_mirror():
+                    return self.run_git([*local, 'clone', '--quiet', '--single-branch', '--no-hardlinks',
+                                         '--origin', 'tico-mirror', '--branch', branch, '--', mirror.as_uri(), str(path)],
+                                        env=clean, timeout=timeout, bot=True)
+                done = clone_mirror()
+                if done.returncode and 'already exists' not in (done.stderr or ''):
+                    # The mirror itself can be what is broken while GitHub is fine: a fetch killed halfway, missing
+                    # objects, stale lock files, files the bot user cannot read. Rebuild it from GitHub once and
+                    # clone again, rather than leaving every later try to fail the same way.
+                    first = git_error('Cloning the local mirror', repo['full_name'], done, clean)
+                    discard_failed_clone(path, fresh=True)
+                    self.discard_mirror(name)
+                    fill_mirror(rebuild=False)
+                    done = clone_mirror()
+                    if done.returncode:
+                        from . import redact
+                        again = redact.git_failure(done.stderr, redact.env_secrets(clean), limit=200) or f'exit {done.returncode}'
+                        created = 'already exists' not in (done.stderr or '')
+                        raise ValueError(f'{first}; rebuilt the mirror from GitHub and cloning it failed again: {again}')
+                elif done.returncode:
+                    # A turn's own clone made the folder meanwhile: that one is not this clone's to remove.
+                    created = False
                     raise ValueError(git_error('Cloning the local mirror', repo['full_name'], done, clean))
             else:
                 done = self.run_git([*local, '-C', str(path), 'rev-parse', '--git-dir'], env=clean, timeout=10, bot=True)
@@ -409,13 +455,23 @@ class Repositories:
                 done = self.run_git([*local, '-C', str(path), 'config', '--local', '--replace-all', key, value], env=clean, timeout=10, bot=True)
                 if done.returncode:
                     raise ValueError('Could not configure base clone mirror; check its Git config and permissions')
-            done = self.run_git([*local, '-C', str(path), 'fetch', '--quiet', '--no-tags', '--no-write-fetch-head',
-                                 '--', mirror.as_uri(), f'+refs/heads/{branch}:refs/remotes/origin/{branch}',
-                                 f'+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}'],
-                                env=clean, timeout=timeout, bot=True)
+            def fetch_mirror():
+                return self.run_git([*local, '-C', str(path), 'fetch', '--quiet', '--no-tags', '--no-write-fetch-head',
+                                     '--', mirror.as_uri(), f'+refs/heads/{branch}:refs/remotes/origin/{branch}',
+                                     f'+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}'],
+                                    env=clean, timeout=timeout, bot=True)
+            done = fetch_mirror()
             if done.returncode:
                 # git_error masks credentials and local secrets in git's stderr before it reaches a report.
-                raise ValueError(git_error(f'Git {"fetch" if exists else "clone"}', repo['full_name'], done, clean))
+                first = git_error(f'Git {"fetch" if exists else "clone"} from the local mirror', repo['full_name'], done, clean)
+                # As for a clone: a broken mirror is rebuilt from GitHub once before this attempt gives up.
+                self.discard_mirror(name)
+                fill_mirror(rebuild=False)
+                done = fetch_mirror()
+                if done.returncode:
+                    from . import redact
+                    again = redact.git_failure(done.stderr, redact.env_secrets(clean), limit=200) or f'exit {done.returncode}'
+                    raise ValueError(f'{first}; rebuilt the mirror from GitHub and fetching it failed again: {again}')
             done = self.run_git([*local, '-C', str(path), 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + branch], env=clean, timeout=10, bot=True)
             if done.returncode:
                 raise ValueError('Could not record base default branch; check permissions')

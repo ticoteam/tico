@@ -639,3 +639,85 @@ def test_a_failed_clone_leaves_no_half_made_folder(repos):
     row = repos.rows['org/one']
     assert 'Filename too long' in row['error'] and 'unable to checkout working tree' in row['error']
     assert not (repos.root / 'org__one').exists() and 'partial' not in row
+
+
+def local_source(tmp_path):
+    source = tmp_path / 'source'
+    subprocess.run(['git', 'init', '-q', '-b', 'main', str(source)], check=True)
+    (source / 'README.md').write_text('first')
+    subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(source), '-c', 'user.name=Example', '-c', 'user.email=example@example.com',
+                    'commit', '-qm', 'first'], check=True)
+    return source
+
+
+def from_local(repos, source, before=None):
+    """run_git with GitHub replaced by a local repository: real git, no network. `before(args)` may answer first."""
+    original_git = repos.run_git
+    def local_git(args, **kwargs):
+        args = [source.as_uri() if a.startswith('https://github.com/') and 'config' not in args else
+                ('protocol.file.allow=always' if a == 'protocol.file.allow=never' else a) for a in args]
+        assert not any(a.startswith(('https://', 'http://')) for a in args if 'config' not in args)
+        answer = before(args) if before else None
+        return answer if answer is not None else original_git(args, **kwargs)
+    return mock.patch('runner.repositories.Repositories.run_git', side_effect=local_git)
+
+
+def test_a_mirror_the_bot_cannot_clone_is_rebuilt_and_the_clone_succeeds(repos, tmp_path):
+    """GitHub is fine, the copy from the mirror into the workspace is not (the reported case). Real git."""
+    only_one(repos)
+    source = local_source(tmp_path)
+    failed = []
+    def once(args):
+        if 'clone' in args and not failed:
+            failed.append(args)
+            return subprocess.CompletedProcess(args, 128, '', 'error: unable to read 0123abcd\nfatal: remote did not send all necessary objects\n')
+        return None
+    with from_local(repos, source, once), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert failed and row['state'] == 'cloned', row.get('error')
+    assert (repos.path('org/one') / 'README.md').read_text() == 'first'
+
+
+def test_a_corrupt_mirror_is_rebuilt_when_its_fetch_fails(repos, tmp_path):
+    """A mirror whose own objects are corrupt fails to fetch while GitHub is fine. Real git."""
+    only_one(repos)
+    source = local_source(tmp_path)
+    with from_local(repos, source), roomy():
+        cycle(repos)
+        mirror = repos.mirror_path('org/one')
+        for root, dirs, files in os.walk(mirror / 'objects'):
+            for name in files:
+                target = Path(root) / name
+                target.chmod(0o644)
+                target.write_bytes(b'not a git object')
+        (source / 'README.md').write_text('second')
+        subprocess.run(['git', '-C', str(source), '-c', 'user.name=Example', '-c', 'user.email=example@example.com',
+                        'commit', '-qam', 'second'], check=True)
+        first = subprocess.check_output(['git', '-C', str(repos.path('org/one')), 'rev-parse', 'origin/main'], text=True).strip()
+        with mock.patch('runner.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1), \
+                mock.patch.object(repos, 'discard_mirror', wraps=repos.discard_mirror) as discard:
+            cycle(repos)
+    row = repos.rows['org/one']
+    assert row['state'] == 'cloned', row.get('error')
+    assert discard.call_count == 1
+    head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+    assert head != first
+    assert subprocess.check_output(['git', '-C', str(repos.path('org/one')), 'rev-parse', 'origin/main'], text=True).strip() == head
+
+
+def test_a_mirror_that_stays_broken_reports_both_reasons(repos):
+    only_one(repos)
+    def clone_always_fails(args, **kwargs):
+        if 'clone' in args:
+            return subprocess.CompletedProcess(args, 128, '', 'error: Could not read 0123abcd\nfatal: remote did not send all necessary objects\n')
+        return fake_git(args, **kwargs)
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=clone_always_fails) as git, roomy():
+        cycle(repos)
+    error = repos.rows['org/one']['error']
+    assert error.startswith('Cloning the local mirror of org/one failed: ')
+    assert 'remote did not send all necessary objects' in error
+    assert 'rebuilt the mirror from GitHub and cloning it failed again' in error
+    assert sum('clone' in call.args[0] for call in git.call_args_list) == 2      # rebuilt once, not in a loop
+    assert sum(bool('fetch' in call.args[0] and call.kwargs['env'].get('GH_TOKEN')) for call in git.call_args_list) == 2
