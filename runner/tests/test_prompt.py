@@ -170,3 +170,21 @@ class WhoRequestedTheTask(unittest.TestCase):
         other = self.prompt("seo", "bot:botops")
         self.assertIn("This task was requested by bot:botops.", other)
         self.assertNotIn("assigned work within your bot-maintenance role", other)
+
+
+class TaskCheckpoint(unittest.TestCase):
+    """A fresh session on an old task starts from where its last turn left it; a resumed one already knows."""
+
+    def prompt(self, resumed):
+        runner = Runner.__new__(Runner)
+        runner.names = lambda: {"app_name": "Tico", "company_name": "Acme", "assistant_name": "Tico"}
+        message = {"id": "m1", "from_actor": "keeper", "body": "Open: Draft the price page", "refs": {"task": "t1"}}
+        task = {"id": "t1", "title": "Draft the price page", "requester": "human:ana", "owner": "bot:ops",
+                "checkpoint": "Sections 1-2 drafted; pricing table next.", "checkpoint_at": "2026-10-01T09:00:00Z"}
+        return runner.prompt({"bot": "ops", "conversation": {"id": "c", "kind": "chat"}, "message": message,
+                              "history": [message], "task": task}, resumed=resumed)
+
+    def test_only_a_fresh_session_gets_the_checkpoint(self):
+        self.assertIn("Where this task stood after its last turn (2026-10-01T09:00:00Z):\n"
+                      "Sections 1-2 drafted; pricing table next.", self.prompt(resumed=False))
+        self.assertNotIn("pricing table next", self.prompt(resumed=True))

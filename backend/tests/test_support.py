@@ -137,6 +137,44 @@ def test_a_person_sees_their_own_tickets_and_no_one_elses(environment, hq):
     assert [r.url.path for r in hq.seen] == ["/v1/support/TK-00000001"]
 
 
+def test_a_request_reaches_the_real_hq_and_its_reply_comes_back_to_the_page(environment, monkeypatch, tmp_path):
+    """The whole round trip against hq/support.py itself (not FakeHQ): what the page files reaches HQ's queue, a reply
+    posted there with the staff key comes back in the page's list as unread, and opening the thread clears it."""
+    from fastapi.testclient import TestClient
+
+    from hq.app import create_app
+    from hq.db import Database
+    from hq.releases import Latest
+    key = "k" * 32
+    staff = {"Authorization": "Bearer " + key}
+    latest = Latest(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"tag_name": "v0.2.17"})))
+    with TestClient(create_app(Database(tmp_path / "hq.db"), latest, staff_key=key), client=("203.0.113.9", 5000)) as hq_app:
+        def forward(request):
+            answer = hq_app.request(request.method, request.url.path, content=request.content,
+                                    headers={k: v for k, v in request.headers.items() if k in ("content-type", "x-ticket-secret")})
+            return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers["content-type"]})
+        monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(forward))
+        monkeypatch.setattr(support, "FRESH_S", 0)
+        api = environment()
+        mine = file(api).json()
+        (queued,) = hq_app.get("/v1/staff/tickets?status=open", headers=staff).json()["tickets"]
+        assert queued["body"] == "The board will not load"
+        assert hq_app.post(f"/v1/staff/tickets/{queued['ticket_id']}/reply", headers=staff,
+                           json={"body": "Try a reload"}).status_code == 200
+        api.post("/api/v2/support/tickets/refresh", headers=signed_in())
+        listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+        (ticket,) = listed["tickets"]
+        assert ticket["id"] == mine["id"] and ticket["status"] == "answered" and listed["unread"] == 1
+        assert [(m["from"], m["body"]) for m in ticket["messages"]] == [("staff", "Try a reload")]
+        # Writing back reaches HQ too, and reading the thread clears the unread count.
+        assert api.post(f"/api/v2/support/tickets/{mine['id']}/messages", json={"message": "That fixed it"},
+                        headers=signed_in()).json()["status"] == "open"
+        shown = hq_app.get(f"/v1/staff/tickets/{queued['ticket_id']}", headers=staff).json()
+        assert [m["body"] for m in shown["messages"]] == ["Try a reload", "That fixed it"]
+        api.post(f"/api/v2/support/tickets/{mine['id']}/read", headers=signed_in())
+        assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["unread"] == 0
+
+
 def stored_secret(api, ticket_id):
     with api.app.state.store.read() as c:
         return c.execute("SELECT hq_secret FROM support_tickets WHERE id=?", (ticket_id,)).fetchone()[0]

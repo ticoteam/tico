@@ -190,8 +190,7 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
   #pane-more>#bot-status-card{order:9}
   #pane-more>#bot-runs-card{order:10}
   #pane-more>#sess-card{order:11}
-  .bot-more-top>#bot-branches,.bot-more-top>#bot-assignment-branches{flex:1 1 100%}
-  .bot-more-top .assignment-branches{margin-top:0}
+  .bot-more-top>#bot-branches{flex:1 1 100%}
   :is(#pane-more,#pane-docs) section.card{padding:12px 14px;margin-bottom:10px;border-radius:12px}
   :is(#pane-more,#pane-docs) section.card>header{margin-bottom:6px;align-items:center}
   :is(#pane-more,#pane-docs) section.card>header h2{font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}

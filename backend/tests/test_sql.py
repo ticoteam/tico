@@ -124,7 +124,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     # Every queued job but the one Ben's private room raised.
     assert jobs == 5 and len(column(api, "SELECT id FROM jobs")) == 4
     # Clone and subscription profile reports have per-computer keys; the rest are fixed.
-    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key NOT LIKE 'computer-profiles:%'") == ["access", "access_bot_limit", "bot_access", "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated", "librarian_wording35", "librarian_wording36", "message_links.ready", "onboarding", "owner", "people", "release-history", "repositories-access-migrated", "usage-count"]
+    assert column(api, "SELECT key FROM registry_metadata WHERE key NOT LIKE 'computer-repositories:%' AND key NOT LIKE 'computer-profiles:%'") == ["access", "access_bot_limit", "bot_access", "credential-file-migration-v1", "credential-file-migration-v2-hub", "docs_migrated", "librarian_wording35", "librarian_wording36", "message_links.ready", "onboarding", "owner", "people", "release-history", "repositories-access-migrated", "task_session_default", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):
@@ -225,10 +225,6 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
         c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
                   ('tree-1', 'human:cara', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0],
                    H.shift(H.now(), seconds=3600)))
-        c.execute("INSERT INTO assignment_branches(id,source_bot,assignment_key,generation,bot,task_id,allocator,runner_id,"
-                  "display_name,phase,request_hash,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  ('synthetic-assignment', 'ops', 'fixture', 1, 'doc-updater', 'tree-0', 'human:ana',
-                   world['machine']['runner_id'], 'Synthetic branch', 'working', 'fixture', H.now(), H.now()))
     callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
                Identity('human:cara', 'human'), Identity('bot:ops', 'bot'), Identity('bot:doc-updater', 'bot'),
                replace(Identity('human:ana', 'owner'), task_actor='bot:ops')]

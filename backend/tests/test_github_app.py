@@ -333,35 +333,6 @@ def test_runner_refuses_bot_it_does_not_run_and_repo_outside_config(api, gh):
     assert api.post("/api/v2/github/token", json={"bot": "cpo"}, headers=auth("bot-test")).status_code in (403, 409)
 
 
-def test_assignment_token_refusal_precedes_app_setup_and_checks_the_caller(api, gh, monkeypatch):
-    runner_token(api, "cpo")
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"assignment_branch": True}),))
-    # Even an old runner that asks for an assignment gets a structural refusal with
-    # no App configured. Reading the App, installation or private key is unnecessary.
-    def no_app(*args, **kwargs):
-        raise AssertionError("assignment credential requests must not read the GitHub App")
-    with monkeypatch.context() as checks:
-        checks.setattr(api.app_state.github_app, "row", no_app)
-        refused = turn_token(api)
-        assert refused.status_code == 409 and refused.json()["error"]["code"] == "assignment_repository"
-    # Unauthorized requests do not inspect another bot's configuration. Preserve
-    # the old no-App answer, and still forbid them when an App is connected.
-    assert api.post("/api/v2/github/token", json={"bot": "cpo"}, headers=auth()).json() == {"configured": False}
-    with monkeypatch.context() as checks:
-        checks.setattr(api.app_state.github_app, "row", lambda *args: {"org": "Acme"})
-        assert api.post("/api/v2/github/token", json={"bot": "cpo"}, headers=auth()).status_code == 403
-        assert api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("runner-test")).status_code == 403
-        with api.app_state.store.transaction() as c:
-            c.execute("DELETE FROM assignments WHERE bot='cpo'")
-        assert turn_token(api).status_code == 403
-    runner_token(api, "cpo")
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json='{}' WHERE bot='cpo'")
-    assert turn_token(api).json() == {"configured": False}  # ordinary no-App compatibility stays
-    assert not gh.calls
-
-
 def put_extras(api, bot, repos, who="owner-test"):
     return api.put(f"/api/v2/bots/{bot}/github-repos", json={"repositories": repos}, headers=auth(who))
 

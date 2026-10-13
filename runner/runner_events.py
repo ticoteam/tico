@@ -33,7 +33,6 @@ CHANNELS = {
     "assignments": ("sync",),
     "credentials": ("sync",),
     "config": ("sync", "config"),
-    "cleanups": ("sync",),
     "repositories": ("sync",),
     "worktrees": ("heartbeat",),
     "restart": ("heartbeat",),

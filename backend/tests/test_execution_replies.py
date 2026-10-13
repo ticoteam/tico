@@ -170,7 +170,7 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
 
     def turn(task, thread):
         post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
-                                        "capabilities": ["task_lanes_v1"]}, token=r["token"])
+                                        "capabilities": ["task_lanes_v2"]}, token=r["token"])
         attempt = claim(api, r)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": thread}, r["token"])
         finish(api, r, attempt)
@@ -178,7 +178,10 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
             return {link["url"]: json.loads(link["detail_json"])["primary"]
                     for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
 
-    # The bot's one shared thread carries its other conversations too: no task's session.
+    # A bot set to one shared thread carries its other conversations there too: no task's session.
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
     shared = post(api, "tasks", {"owner": "ops", "title": "Check the shared folder", "body": "Check it"})
     assert turn(shared, "shared-thread") == {}
     with api.app.state.store.transaction() as c:

@@ -265,6 +265,9 @@ class ClaudeHost(Host):
             servers = {**project, **servers}
         if servers:
             argv += ["--mcp-config", json.dumps({"mcpServers": servers})]
+        # The task's worktrees in other repos (runner/repo_rules.py), each one readable and writable by the session.
+        for directory in t["settings"].get("add_dirs") or []:
+            argv += ["--add-dir", directory]
         model = model_for(t["settings"].get("model"))
         if model:
             argv += ["--model", model]

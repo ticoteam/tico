@@ -58,6 +58,8 @@ class State:
                   PRIMARY KEY(attempt_id,message_id));
                 CREATE TABLE IF NOT EXISTS session_cursors(
                   thread TEXT PRIMARY KEY, message TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS session_repo_rules(
+                  thread TEXT PRIMARY KEY, digest TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS import_cursors(
                   source TEXT PRIMARY KEY, cursor TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS imports(
@@ -169,6 +171,15 @@ class State:
             if message is not None:
                 c.execute("INSERT OR REPLACE INTO session_cursors VALUES(?,?)", (thread, message))
             row = c.execute("SELECT message FROM session_cursors WHERE thread=?", (thread,)).fetchone()
+            return row[0] if row else None
+
+    def repo_rules(self, thread, digest=None):
+        """The hash of the repo rules a thread was last given (runner/repo_rules.py), so they are sent
+        again only to a fresh thread or when they change."""
+        with self.connect() as c:
+            if digest is not None:
+                c.execute("INSERT OR REPLACE INTO session_repo_rules VALUES(?,?)", (thread, digest))
+            row = c.execute("SELECT digest FROM session_repo_rules WHERE thread=?", (thread,)).fetchone()
             return row[0] if row else None
 
     def import_cursor(self, source, cursor=None):

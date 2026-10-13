@@ -22,7 +22,7 @@ from clients.manifest import manifest_path, repo_dir, tools_of
 from clients.tico import APIError, Client
 from . import container_probe, credential_socket, declared_access, files_publish, git_credentials, harness_tools, isolation, mail_key, op, profiles, tool_probes, usage
 from . import redact as redact_mod
-from . import goals, memory_history, repositories, runner_events, task_sessions, worktrees, safe_git, subscription_usage
+from . import goals, memory_history, repo_rules, repositories, runner_events, task_sessions, worktrees, safe_git, subscription_usage
 from .release_update import Follower
 from .login import POLL_S as LOGIN_POLL_S, Logins
 from .hosts.base import HostError, SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
@@ -351,13 +351,7 @@ def pull_repo(path, env=None, timeout=45):
 def is_shared(config):
     """An original that allows branches, or a branch that shares its repository."""
     config = config or {}
-    if config.get("assignment_branch"):
-        return False
     return bool(config.get("shared") or config.get("shared_from"))
-
-
-def is_assignment(config):
-    return bool((config or {}).get("assignment_branch"))
 
 
 def shared_checkout(config):
@@ -738,11 +732,6 @@ class Runner:
 
     def local_path(self, bot, config=None):
         checkouts = self.__dict__.setdefault("shared_checkouts", {})
-        if is_assignment(config):
-            # Stable actor identity, not its editable label, names the isolated task tree.
-            path = Path(self.config["projects_dir"]) / "assignments" / bot
-            checkouts[bot] = path
-            return path
         checkout = shared_checkout(config)
         source = (config or {}).get("shared_from")
         explicit = self.config.get("repos", {}).get(source or bot)
@@ -1096,40 +1085,12 @@ class Runner:
         else:
             notes.pop(bot, None)
 
-    @staticmethod
-    def github_assignment_key(entry):
-        if not entry:
-            return None
-        assignment = entry.get("assignment") or {}
-        return (entry.get("repository"), entry.get("runner_id"), entry.get("generation"),
-                json.dumps(entry.get("config") or {}, sort_keys=True),
-                assignment.get("id"), assignment.get("revision"))
-
-    def remember_github_assignments(self, assignments):
-        refused = self.__dict__.setdefault("github_assignment_refusals", {})
-        rows = {row["bot"]: row for row in assignments}
-        for bot, previous in list(refused.items()):
-            if previous[0] != self.github_assignment_key(rows.get(bot)):
-                refused.pop(bot, None)
-                # A changed assignment must not wait out an older retry/backoff.
-                for name in ("fetch_notes", "history_notes", "publish_checked"):
-                    self.__dict__.get(name, {}).pop(bot, None)
-
     def github_access(self, bot, entry=None):
         """(environment, problem) for talking to this bot's GitHub repository. The environment carries the
         bot's scoped token, or is the machine's own when no GitHub App is connected; the problem is a plain
         sentence naming why the repository cannot be reached (the server's own words for a repository that is
         not on GitHub yet) and then the environment is None."""
-        # Keep only the private-assignment refusal, not outages or missing repositories.
-        # A changed placement, repository or configuration gets a fresh server answer.
-        # Without an assignment entry there is no reliable invalidation key: do not cache.
         entry = entry or next((row for row in getattr(self, "assignments_seen", ()) if row["bot"] == bot), None)
-        key = self.github_assignment_key(entry)
-        refused = self.__dict__.setdefault("github_assignment_refusals", {})
-        previous = refused.get(bot)
-        if previous and key is not None and previous[0] == key:
-            return None, previous[1]
-        refused.pop(bot, None)
         try:
             body = {"bot": bot}
             if not self.__dict__.get("github_token_legacy_purpose", False):
@@ -1143,8 +1104,6 @@ class Runner:
                 granted = git_credentials.hub_token(self.client, {"bot": bot})
         except APIError as exc:
             problem = git_credentials.token_problem(exc, str((entry or {}).get("repository") or ""))[:400]
-            if exc.status == 409 and exc.code == "assignment_repository" and key is not None:
-                refused[bot] = (key, problem)
             return None, problem
         except Exception as exc:
             return None, f"the server did not answer ({type(exc).__name__})"
@@ -1156,477 +1115,8 @@ class Runner:
         return env, ""
 
     def github_bots(self):
-        """The bots this computer runs whose turns get a GitHub App token: hosted here, not a task assignment."""
-        return sorted(row["bot"] for row in self.assignments_seen
-                      if self.assigned_here(row) and not is_assignment(row.get("config")))
-
-    def assignment_marker(self, bot):
-        root = Path(self.config["projects_dir"]) / "assignments" / ".registrations"
-        return root / (bot + ".json")
-
-    def assignment_learning_path(self, bot):
-        return Path(self.config["projects_dir"]) / "assignment-learning" / bot
-
-    @staticmethod
-    def git_common_dir(path, env=None):
-        result = isolation.run([*safe_git.prefix(path), "-C", str(path), "rev-parse",
-                                "--path-format=absolute", "--git-common-dir"],
-                               capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                               env=safe_git.environment(env), timeout=10)
-        if result.returncode or not result.stdout.strip():
-            return ""
-        return str(Path(result.stdout.strip()).resolve())
-
-    def assignment_learning_source(self, config):
-        source = str((config or {}).get("shared_from") or "")
-        path = self.local_path(source, {"shared": True}) if source else None
-        if not path or not (path / ".git").exists() or not (path / "AGENT.md").is_file():
-            return None, "The persistent role's learning checkout is not ready; assignment stayed not ready"
-        common = self.git_common_dir(path)
-        if not common:
-            return None, "Could not verify the persistent role's Git common directory; assignment stayed not ready"
-        env = safe_git.environment()
-        remote_env = None
-        trunk = isolation.run([*safe_git.prefix(path), "-C", str(path), "symbolic-ref", "--quiet", "--short",
-                               "refs/remotes/origin/HEAD"], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env=env, timeout=10)
-        remote_branch = trunk.stdout.strip().removeprefix("origin/") if trunk.returncode == 0 else ""
-        if not remote_branch:
-            source_env, _ = self.github_access(source)
-            if source_env is None:
-                return None, "Could not access the persistent role's learning trunk; assignment stayed not ready"
-            remote_env = safe_git.environment(source_env)
-            remote_head = isolation.run([*safe_git.prefix(path), "-C", str(path), "ls-remote", "--symref", "origin", "HEAD"],
-                                       capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                       env=remote_env, timeout=20)
-            advertised = next((line.split()[1] for line in remote_head.stdout.splitlines()
-                               if line.startswith("ref: ") and line.endswith(" HEAD")), "")
-            remote_branch = advertised.removeprefix("refs/heads/") if advertised.startswith("refs/heads/") else ""
-        target = "refs/remotes/origin/" + remote_branch if remote_branch else ""
-        if not target.startswith("refs/remotes/origin/") or target.endswith("/"):
-            return None, "The source remote did not advertise an explicit default trunk; assignment stayed not ready"
-        exists = isolation.run([*safe_git.prefix(path), "-C", str(path), "show-ref", "--verify", "--quiet", target],
-                               capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
-        if exists.returncode:
-            if remote_env is None:
-                source_env, _ = self.github_access(source)
-                if source_env is None:
-                    return None, "Could not access the persistent role's learning trunk; assignment stayed not ready"
-                remote_env = safe_git.environment(source_env)
-            fetched = isolation.run([*safe_git.prefix(path), "-C", str(path), "fetch", "--quiet", "--no-tags", "origin",
-                                     f"refs/heads/{remote_branch}:{target}"], capture_output=True, text=True,
-                                    stdin=subprocess.DEVNULL, env=remote_env, timeout=45)
-            if fetched.returncode:
-                return None, "The explicit source learning trunk could not be fetched; assignment stayed not ready"
-        return {"path": path, "common_dir": common, "trunk_ref": target,
-                "trunk_branch": target.removeprefix("refs/remotes/origin/")}, ""
-
-    def materialize_assignment_learning(self, bot, config, task_path):
-        """Add a per-assignment learning worktree to the source repo's common Git directory."""
-        path = self.assignment_learning_path(bot)
-        if path.exists():
-            return None, "The assignment learning path already exists without registration proof; it was left untouched"
-        source, problem = self.assignment_learning_source(config)
-        if problem:
-            return None, problem
-        if path.resolve() == Path(task_path).resolve() or path.resolve() == Path(source["path"]).resolve():
-            return None, "Assignment task and learning paths alias another checkout; assignment stayed not ready"
-        branch = "assignment-learning/" + bot
-        added = isolation.run([*safe_git.prefix(source["path"]), "-C", str(source["path"]),
-                               "worktree", "add", "-b", branch, str(path), source["trunk_ref"]],
-                              capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                              env=safe_git.environment(), timeout=30)
-        if added.returncode:
-            return None, "Could not create the assignment learning worktree; existing checkouts were left untouched"
-        isolation.chown(path, recursive=True)
-        common = self.git_common_dir(path)
-        branch_result = isolation.run([*safe_git.prefix(path), "-C", str(path), "branch", "--show-current"],
-                                      capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                      env=safe_git.environment(), timeout=10)
-        head = isolation.run([*safe_git.prefix(path), "-C", str(path), "rev-parse", "--verify", "HEAD"],
-                             capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                             env=safe_git.environment(), timeout=10)
-        deleted = isolation.run([*safe_git.prefix(path), "-C", str(path), "ls-files", "--deleted"],
-                                capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                env=safe_git.environment(), timeout=10)
-        if (not common or common != source["common_dir"] or branch_result.returncode
-                or branch_result.stdout.strip() != branch or head.returncode or deleted.returncode
-                or deleted.stdout.strip() or not (path / "AGENT.md").is_file()):
-            return None, "The assignment learning worktree failed isolation or completeness checks; it was left untouched"
-        return {"path": str(path.resolve()), "branch": branch, "trunk_ref": source["trunk_ref"],
-                "trunk_branch": source["trunk_branch"], "common_dir": common,
-                "materialized_head": head.stdout.strip()}, ""
-
-    def assignment_learning_refresh(self, bot, config, revision):
-        """Fast-forward only at a changed Hub checkpoint; keep dirty/diverged learning work intact."""
-        cache = self.__dict__.setdefault("assignment_learning_revisions", {})
-        previous = cache.get(bot)
-        if previous and previous[0] == revision:
-            return previous[1]
-        marker_path = self.assignment_marker(bot)
-        try:
-            marker = json.loads(marker_path.read_text())
-        except (OSError, ValueError):
-            return "The assignment learning registration is missing; its tree was left untouched"
-        path = Path(marker.get("learning_path") or "")
-        branch = "assignment-learning/" + bot
-        if (str(path.resolve()) != str(self.assignment_learning_path(bot).resolve())
-                or not path.is_dir() or not (path / ".git").exists()
-                or marker.get("learning_branch") != branch):
-            return "The assignment learning path does not match its registration; its tree was left untouched"
-        source, problem = self.assignment_learning_source(config)
-        if problem:
-            return problem
-        if marker.get("learning_common_dir") != source["common_dir"] or self.git_common_dir(path) != source["common_dir"]:
-            return "The assignment learning worktree no longer shares the registered source Git directory"
-        env = safe_git.environment()
-        dirty = isolation.run([*safe_git.prefix(path), "-C", str(path), "status", "--porcelain"],
-                              capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
-        if dirty.returncode:
-            problem = "Could not inspect the assignment learning worktree; it was left untouched"
-        elif dirty.stdout.strip():
-            problem = "The assignment learning tree has draft changes; they were preserved and not refreshed"
-        else:
-            target = marker.get("learning_trunk_ref") or ""
-            branch_name = marker.get("learning_trunk_branch") or ""
-            if target != "refs/remotes/origin/" + branch_name or not branch_name:
-                problem = "The recorded assignment learning trunk is invalid; its tree was left untouched"
-            else:
-                source_bot = str((config or {}).get("shared_from") or "")
-                source_env, _ = self.github_access(source_bot)
-                if source_env is None:
-                    problem = "Could not access the persistent role's learning trunk; the prior learning commit was retained"
-                else:
-                    with self.push_lock:
-                        fetched = isolation.run([*safe_git.prefix(source["path"]), "-C", str(source["path"]),
-                                                 "fetch", "--quiet", "--no-tags", "origin",
-                                                 f"refs/heads/{branch_name}:{target}"],
-                                                capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                                env=safe_git.environment(source_env), timeout=45)
-                        if fetched.returncode:
-                            problem = "Could not refresh the explicit source learning trunk; the prior learning commit was retained"
-                        else:
-                            merged = isolation.run([*safe_git.prefix(path), "-C", str(path), "merge", "--ff-only", target],
-                                                   capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                                   env=env, timeout=20)
-                            problem = ("The assignment learning branch diverged from the source trunk; both histories were retained for review"
-                                       if merged.returncode else "")
-        cache[bot] = (revision, problem)
-        return problem
-
-    def assignment_checkout_problem(self, bot, config, path):
-        """Verify explicit local materialization proof without repairing or rewriting a tree."""
-        marker_path = self.assignment_marker(bot)
-        if not path.exists() and not marker_path.exists():
-            return ""
-        if not path.is_dir() or not (path / ".git").exists():
-            return "The assignment checkout is missing or incomplete; the existing path was left untouched"
-        try:
-            marker = json.loads(marker_path.read_text())
-        except (OSError, ValueError):
-            return "The assignment checkout has no valid local registration proof; it was left untouched"
-        expected = {"assignment_id": config.get("assignment_id"), "bot": bot,
-                    "task_id": config.get("assignment_task_id"), "source": config.get("shared_from"),
-                    "generation": config.get("generation"), "branch": "assignment/" + bot,
-                    "repository": str(config.get("repo") or "")}
-        if any(marker.get(key) != value for key, value in expected.items()):
-            return "The assignment checkout belongs to a different registration; it was left untouched"
-        env = safe_git.environment()
-        def git(*args):
-            return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True,
-                                 text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
-        try:
-            branch = git("branch", "--show-current")
-            head = git("rev-parse", "--verify", "HEAD")
-            common_dir = git("rev-parse", "--path-format=absolute", "--git-common-dir")
-            deleted = git("ls-files", "--deleted")
-        except (OSError, subprocess.SubprocessError):
-            return "Could not verify the assignment checkout; the tree was left untouched"
-        if branch.returncode or branch.stdout.strip() != expected["branch"]:
-            return "The assignment checkout is on an unexpected local branch; it was left untouched"
-        if head.returncode or not head.stdout.strip():
-            return "The assignment checkout has no complete Git commit; it was left untouched"
-        if common_dir.returncode or not common_dir.stdout.strip():
-            return "Could not verify the assignment Git directory; the tree was left untouched"
-        if marker.get("git_common_dir") != str(Path(common_dir.stdout.strip()).resolve()):
-            return "The assignment checkout's Git directory differs from its registration; it was left untouched"
-        source = str(config.get("shared_from") or "")
-        source_path = self.local_path(source, {"shared": True}) if source else None
-        source_common_dir = ""
-        if source_path and (source_path / ".git").exists():
-            source_common = isolation.run([*safe_git.prefix(source_path), "-C", str(source_path), "rev-parse",
-                                           "--path-format=absolute", "--git-common-dir"],
-                                          capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                          env=env, timeout=10)
-            if source_common.returncode:
-                return "Could not verify the source learning checkout; assignment work was left untouched"
-            source_common_dir = str(Path(source_common.stdout.strip()).resolve())
-            if source_common_dir == str(Path(common_dir.stdout.strip()).resolve()):
-                return "The assignment and source learning checkout share a Git directory; assignment work was left untouched"
-        if deleted.returncode or deleted.stdout.strip():
-            return "Tracked files are missing from the assignment checkout; it was left untouched"
-        if not (path / "AGENT.md").is_file():
-            return "The assignment checkout has no AGENT.md; it was left untouched"
-        learning_path = self.assignment_learning_path(bot)
-        if (Path(marker.get("learning_path") or "").resolve() != learning_path.resolve()
-                or learning_path.resolve() in (path.resolve(), source_path.resolve() if source_path else None)
-                or not learning_path.is_dir() or not (learning_path / ".git").exists()):
-            return "The separate assignment learning worktree is missing or mismatched; all work was left untouched"
-        learned = {}
-        for key, args in {
-            "branch": ["branch", "--show-current"],
-            "head": ["rev-parse", "--verify", "HEAD"],
-            "common": ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            "deleted": ["ls-files", "--deleted"],
-        }.items():
-            result = isolation.run([*safe_git.prefix(learning_path), "-C", str(learning_path), *args],
-                                   capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                   env=env, timeout=10)
-            if result.returncode:
-                return "Could not verify the assignment learning worktree; all work was left untouched"
-            learned[key] = str(Path(result.stdout.strip()).resolve()) if key == "common" else result.stdout.strip()
-        learning_branch = "assignment-learning/" + bot
-        if (learned["branch"] != learning_branch or not learned["head"] or learned["deleted"]
-                or not (learning_path / "AGENT.md").is_file() or not source_common_dir
-                or learned["common"] != source_common_dir
-                or marker.get("learning_common_dir") != source_common_dir
-                or marker.get("learning_branch") != learning_branch):
-            return "The assignment learning worktree failed its registration, trunk-sharing or completeness checks; all work was left untouched"
-        trunk_branch = marker.get("learning_trunk_branch") or ""
-        trunk_ref = marker.get("learning_trunk_ref") or ""
-        if (not trunk_branch or trunk_ref != "refs/remotes/origin/" + trunk_branch
-                or trunk_ref != marker.get("learning_initial_trunk_ref")):
-            return "The explicit assignment learning trunk differs from its registration; all work was left untouched"
-        return ""
-
-    def assignment_cleanup_problem(self, request):
-        """Prove both archived trees are clean and all their commits are already preserved remotely."""
-        bot = str(request.get("bot") or "")
-        config = request.get("config") or {}
-        assignment_id = str(request.get("assignment_id") or request.get("id") or "")
-        root = Path(self.config["projects_dir"]).resolve()
-        product = self.local_path(bot, config)
-        expected_product = root / "assignments" / bot
-        learning = self.assignment_learning_path(bot)
-        expected_learning = root / "assignment-learning" / bot
-        marker = self.assignment_marker(bot)
-        if (not bot or not assignment_id or not is_assignment(config)
-                or config.get("assignment_id") != assignment_id
-                or config.get("assignment_task_id") != request.get("task_id")
-                or config.get("generation") != request.get("generation")):
-            return False, "Runner cleanup identity does not match its archived assignment; all local paths were retained"
-        resolved_product, resolved_learning, resolved_marker = product.resolve(), learning.resolve(), marker.resolve()
-        if (resolved_product != expected_product.resolve() or resolved_learning != expected_learning.resolve()
-                or not resolved_product.is_relative_to(root) or not resolved_learning.is_relative_to(root)
-                or not resolved_marker.is_relative_to(root)):
-            return False, "Assignment paths do not match the fixed local registration; all local paths were retained"
-        paths = (product, learning, marker)
-        if all(not path.exists() and not path.is_symlink() for path in paths):
-            return True, "The assignment's product tree, learning tree, and registration were already absent"
-        if any(path.is_symlink() for path in paths):
-            return False, "An assignment path is a symbolic link; all local paths were retained"
-        if not product.is_dir() or not learning.is_dir() or not marker.is_file():
-            return False, "The assignment's product tree, learning tree, and registration are incomplete; remaining paths were retained"
-        problem = self.assignment_checkout_problem(bot, config, product)
-        if problem:
-            return False, "The assignment checkout does not match its registration; all local paths were retained"
-        try:
-            record = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False, "The assignment registration cannot be verified; all local paths were retained"
-        if record.get("assignment_id") != assignment_id:
-            return False, "The local registration belongs to another assignment; all local paths were retained"
-
-        env = safe_git.environment()
-
-        def git(path, *args, git_env=None, timeout=15):
-            return isolation.run([*safe_git.prefix(path), "-C", str(path), *args], capture_output=True,
-                                 text=True, stdin=subprocess.DEVNULL,
-                                 env=safe_git.environment(git_env) if git_env is not None else env,
-                                 timeout=timeout)
-
-        def clean(path):
-            result = git(path, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
-            return result.returncode == 0 and not result.stdout.strip()
-
-        # Ignored files count as uncertain work too: removing either checkout must not discard them.
-        if not clean(product) or not clean(learning):
-            return False, "An assignment tree contains changed, untracked, or ignored work; all local paths were retained"
-        # A clean checkout may still have unpublished work saved in Git's stash.
-        # Check both repositories, including the learning tree's shared refs, before removal.
-        for tree in (product, learning):
-            stashes = git(tree, "for-each-ref", "--format=%(refname)", "refs/stash")
-            if stashes.returncode or stashes.stdout.strip():
-                return False, "An assignment tree has stashed work or its stash refs could not be verified; all local paths were retained"
-        source = self.local_path(str(config.get("shared_from") or ""), {"shared": True})
-        if not source.is_dir() or not (source / ".git").exists():
-            return False, "The persistent role's source checkout is unavailable; assignment trees were retained"
-        source_common = self.git_common_dir(source)
-        if (not source_common or record.get("learning_common_dir") != source_common
-                or self.git_common_dir(learning) != source_common):
-            return False, "The learning tree no longer matches the registered source Git directory; all paths were retained"
-
-        source_env, _ = self.github_access(str(config.get("shared_from") or ""))
-        if source_env is None:
-            return False, "The source-scoped repository credential is unavailable; all local paths were retained"
-        origins = git(product, "remote", "get-url", "--all", "origin")
-        expected_origin = shared_repository_url(config)
-        if origins.returncode or not expected_origin or origins.stdout.splitlines() != [expected_origin]:
-            return False, "The assignment origin is ambiguous or differs from its registered source repository; all local paths were retained"
-        refspecs = git(product, "config", "--get-all", "remote.origin.fetch")
-        if (refspecs.returncode
-                or refspecs.stdout.splitlines() != ["+refs/heads/*:refs/remotes/origin/*"]):
-            return False, "The assignment origin fetch refspec is ambiguous; all local paths were retained"
-        pushurls = git(product, "config", "--get-all", "remote.origin.pushurl")
-        if pushurls.returncode != 1 or pushurls.stdout.strip():
-            return False, "The assignment origin has a separate or ambiguous push URL; all local paths were retained"
-        # Prune deleted remote branches before treating tracking refs as preservation evidence.
-        # This only updates refs/remotes/origin under the validated default branch refspec.
-        fetched = git(product, "fetch", "--prune", "--quiet", "--no-tags", "origin",
-                      git_env=source_env, timeout=45)
-        if fetched.returncode:
-            return False, "The product branch could not be checked against its origin; all local paths were retained"
-        head = git(product, "rev-parse", "--verify", "HEAD")
-        refs = git(product, "for-each-ref", "--format=%(refname)", "refs/remotes/origin")
-        local_refs = git(product, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags")
-        if head.returncode or refs.returncode or local_refs.returncode or not refs.stdout.strip():
-            return False, "The product branch has no verifiable remote preservation point; all local paths were retained"
-        remote_refs = refs.stdout.splitlines()
-        for local_ref in local_refs.stdout.splitlines():
-            if not any(git(product, "merge-base", "--is-ancestor", local_ref, remote_ref).returncode == 0
-                       for remote_ref in remote_refs):
-                return False, "A local product branch or tag contains commits not preserved on origin; all local paths were retained"
-
-        refresh_problem = self.assignment_learning_refresh(bot, config, int(request.get("revision") or 0))
-        if refresh_problem:
-            return False, "The learning branch contains a draft or conflict not published to the source trunk; all paths were retained"
-        if not clean(learning):
-            return False, "The learning tree changed during cleanup verification; all local paths were retained"
-        trunk_ref = str(record.get("learning_trunk_ref") or "")
-        if (trunk_ref != "refs/remotes/origin/" + str(record.get("learning_trunk_branch") or "")
-                or git(learning, "merge-base", "--is-ancestor", "HEAD", trunk_ref).returncode != 0):
-            return False, "The learning branch is not preserved on the explicit source trunk; all paths were retained"
-        active = set(getattr(self, "active_bots", {}).values())
-        if bot in active or str(request.get("source_bot") or "") in active:
-            return False, "The assignment or persistent role still has a local runner process; all paths were retained"
-        return True, ""
-
-    def cleanup_assignment_trees(self, request):
-        """Remove only a manager-requested archived assignment after local proof succeeds."""
-        bot = str(request.get("bot") or "")
-        source = str(request.get("source_bot") or "")
-        if not bot or not source or bot == source:
-            return "blocked", "The cleanup request has an invalid source/assignment identity; all local paths were retained"
-        locks = [self.worktrees.bot_lock(name) for name in sorted({bot, source})]
-        acquired = []
-        try:
-            for lock in locks:
-                if not lock.acquire(timeout=1):
-                    return "blocked", "The assignment or persistent role is in a local runner turn; all paths were retained"
-                acquired.append(lock)
-            return self._cleanup_assignment_trees_locked(request)
-        finally:
-            for lock in reversed(acquired):
-                lock.release()
-
-    def _cleanup_assignment_trees_locked(self, request):
-        safe, detail = self.assignment_cleanup_problem(request)
-        if not safe:
-            return "blocked", detail
-        bot = request["bot"]
-        product = self.local_path(bot, request["config"])
-        learning = self.assignment_learning_path(bot)
-        marker = self.assignment_marker(bot)
-        if product.exists() or learning.exists() or marker.exists():
-            source = self.local_path(str(request["source_bot"]), {"shared": True})
-            with self.push_lock:
-                removed = isolation.run([*safe_git.prefix(source), "-C", str(source), "worktree", "remove", "--", str(learning)],
-                                        capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                        env=safe_git.environment(), timeout=30)
-            if removed.returncode:
-                return "blocked", "Git refused to remove the verified learning worktree; all remaining paths were retained"
-            try:
-                shutil.rmtree(product)
-                marker.unlink()
-            except OSError:
-                return "blocked", "Local cleanup stopped partway; remaining paths and registration were retained"
-        return "complete", "Verified clean local assignment trees and registration were removed; Hub history and receipts remain"
-
-    def process_assignment_cleanups(self):
-        """Handle explicit parent-role requests outside assignment actors and task processes."""
-        try:
-            requests = self.client.get("runners/assignment-cleanups").get("cleanups", [])
-        except APIError as exc:
-            if exc.status != 404:
-                log(f"Tico runner: assignment cleanup queue unavailable ({describe(exc)})")
-            return
-        except Exception as exc:
-            log(f"Tico runner: assignment cleanup queue unavailable ({type(exc).__name__})")
-            return
-        for request in requests:
-            try:
-                result, detail = self.cleanup_assignment_trees(request)
-                self.client.post(f"runners/assignment-cleanups/{request['id']}",
-                                 {"attempt": request["attempt"], "result": result, "detail": detail},
-                                 key=f"assignment-cleanup-{request['id']}-{request['attempt']}-{result}")
-            except Exception as exc:
-                log(f"Tico runner: assignment cleanup report failed ({type(exc).__name__}); local evidence remains governed by its request")
-
-    def materialize_assignment(self, bot, config, path):
-        """Clone into a new assignment path, verify the branch/tree, then write local proof."""
-        marker = self.assignment_marker(bot)
-        if path.exists() or marker.exists():
-            return self.assignment_checkout_problem(bot, config, path)
-        source_bot = str((config or {}).get("shared_from") or "")
-        source_env, access_problem = self.github_access(source_bot)
-        if source_env is None:
-            return "Could not access the persistent role's product repository; existing paths were left untouched"
-        problem = clone_shared(path, config, env=source_env)
-        if problem:
-            return f"Could not clone the source repository: {problem}"
-        isolation.chown(path, recursive=True)
-        branch_name = "assignment/" + bot
-        env = safe_git.environment()
-        checked = isolation.run([*safe_git.prefix(path), "-C", str(path), "checkout", "-b", branch_name],
-                                capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=15)
-        if checked.returncode:
-            return "Could not create the isolated assignment branch; the checkout was left in place"
-        head = isolation.run([*safe_git.prefix(path), "-C", str(path), "rev-parse", "--verify", "HEAD"],
-                             capture_output=True, text=True, env=env, timeout=10)
-        deleted = isolation.run([*safe_git.prefix(path), "-C", str(path), "ls-files", "--deleted"],
-                                capture_output=True, text=True, env=env, timeout=10)
-        common_dir = isolation.run([*safe_git.prefix(path), "-C", str(path), "rev-parse",
-                                    "--path-format=absolute", "--git-common-dir"],
-                                   capture_output=True, text=True, stdin=subprocess.DEVNULL, env=env, timeout=10)
-        if (head.returncode or deleted.returncode or deleted.stdout.strip() or common_dir.returncode
-                or not common_dir.stdout.strip() or not (path / "AGENT.md").is_file()):
-            return "The cloned assignment checkout did not pass completeness checks; the tree was left untouched"
-        learning, problem = self.materialize_assignment_learning(bot, config, path)
-        if problem:
-            return problem
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        record = {"assignment_id": config.get("assignment_id"), "bot": bot,
-                  "task_id": config.get("assignment_task_id"), "source": config.get("shared_from"),
-                  "generation": config.get("generation"), "branch": branch_name,
-                  "repository": str(config.get("repo") or ""), "materialized_head": head.stdout.strip(),
-                  "git_common_dir": str(Path(common_dir.stdout.strip()).resolve()),
-                  "learning_path": learning["path"], "learning_branch": learning["branch"],
-                  "learning_trunk_ref": learning["trunk_ref"],
-                  "learning_initial_trunk_ref": learning["trunk_ref"],
-                  "learning_trunk_branch": learning["trunk_branch"],
-                  "learning_common_dir": learning["common_dir"],
-                  "learning_materialized_head": learning["materialized_head"],
-                  "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        fd, temporary = tempfile.mkstemp(prefix="." + bot + ".", dir=marker.parent)
-        try:
-            with os.fdopen(fd, "w") as output:
-                json.dump(record, output, sort_keys=True)
-                output.write("\n")
-            os.replace(temporary, marker)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        return self.assignment_checkout_problem(bot, config, path)
+        """The bots this computer runs whose turns get a GitHub App token: those hosted here."""
+        return sorted(row["bot"] for row in self.assignments_seen if self.assigned_here(row))
 
     def fetch_repository(self, bot, entry, path):
         """Clone the bot's repository onto this computer when it is assigned here and has no checkout.
@@ -1644,45 +1134,18 @@ class Runner:
             repository = shared_repository_url(config) or str(config.get("repo") or "")
         if not repository and not personal:
             return ""
-        if is_assignment(config):
-            assignment_problem = self.assignment_checkout_problem(bot, config, path)
-            if assignment_problem:
-                return assignment_problem
-            if path.exists():
-                return ""
         notes = self.__dict__.setdefault("fetch_notes", {})
         key = (repository, str(path), entry.get("generation"))
         last = notes.get(bot)
         if last and last["key"] == key and time.monotonic() - last["at"] < FETCH_RETRY_S:
             return last["problem"]
         problem = ""
-        if is_assignment(config):
-            problem = self.assignment_checkout_problem(bot, config, path)
-            if not problem and not path.exists():
-                problem = self.materialize_assignment(bot, config, path)
-        elif (path / ".git").exists():
-            if is_assignment(config):
-                branch = "assignment/" + bot
-                current = isolation.run([*safe_git.prefix(path), "-C", str(path), "branch", "--show-current"],
-                                        capture_output=True, text=True, env=safe_git.environment(), timeout=10)
-                problem = ("The assignment checkout is incomplete or on a different local branch; left as it is"
-                           if not (path / "AGENT.md").is_file() or current.returncode or current.stdout.strip() != branch else "")
-            else:
-                problem = f"{repository} is checked out here but has no AGENT.md"      # a clone of an empty repository
+        if (path / ".git").exists():
+            problem = f"{repository} is checked out here but has no AGENT.md"      # a clone of an empty repository
         elif personal:
             detail = clone_shared(path, config)
             if not detail:
                 isolation.chown(path, recursive=True)
-                if is_assignment(config):
-                    branch = "assignment/" + bot
-                    current = isolation.run([*safe_git.prefix(path), "-C", str(path), "branch", "--show-current"],
-                                            capture_output=True, text=True, env=safe_git.environment(), timeout=10)
-                    if current.returncode == 0 and current.stdout.strip() != branch:
-                        created = isolation.run([*safe_git.prefix(path), "-C", str(path), "checkout", "-b", branch],
-                                                capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                                env=safe_git.environment(), timeout=15)
-                        if created.returncode:
-                            return "Could not prepare the isolated assignment branch; the checkout was left in place"
                 log(f"Tico runner: {bot} cloned from {repository} to {path}")
                 problem = "" if (path / "AGENT.md").is_file() else f"{repository} was cloned but has no AGENT.md"
             else:
@@ -1711,7 +1174,7 @@ class Runner:
         only exists here cannot be cloned by the computer that takes it over. Tried at most once per
         PUBLISH_RETRY_S; the reason a repository could not be reached is the bot's warning (Health, Bot history)."""
         repository = str(entry.get("repository") or "")
-        if is_assignment(entry.get("config")) or not repository or (entry.get("state") or "active") != "active":
+        if not repository or (entry.get("state") or "active") != "active":
             return
         checked = self.__dict__.setdefault("publish_checked", {})
         now = time.monotonic()
@@ -1744,8 +1207,6 @@ class Runner:
         for row in assignments:
             if self.stop.is_set():
                 return
-            if is_assignment(row.get("config")):
-                continue                # task work is never pushed to the source learning trunk
             path = self.local_path(row["bot"], row.get("config"))
             if path in pushed:
                 continue
@@ -1987,8 +1448,6 @@ class Runner:
         for role in ("AUTHOR", "COMMITTER"):
             env.setdefault(f"GIT_{role}_NAME", name)
             env.setdefault(f"GIT_{role}_EMAIL", f"{attempt['bot']}@bots.tico.invalid")
-        if is_assignment(attempt.get("config")):
-            env["TICO_ASSIGNMENT_LEARNING_DIR"] = str(self.assignment_learning_path(attempt["bot"]))
         return env
 
     def runtime_report(self, assignments):
@@ -2152,38 +1611,19 @@ class Runner:
                 problems.append(f"Subscription {entry['profile']} doesn't cover {runtime}")
             if missing_profile:
                 problems.append(self.subscription_problem(entry["profile"], computer=entry.get("computer_label")))
-            assignment_problem = (self.assignment_checkout_problem(bot, entry.get("config") or {}, path)
-                                 if is_assignment(entry.get("config")) else "")
-            repository_present = (path / "AGENT.md").is_file() and not assignment_problem
+            repository_present = (path / "AGENT.md").is_file()
             materialized, failure = "", ""
             if not repository_present:
-                failure = assignment_problem
                 # The assistant, BotOps and the starters first run created are the runner's to set up
                 # from the catalog; every other bot is BotOps's, and stays missing until BotOps has.
-                if not failure and self.assigned_here(entry) and not is_assignment(entry.get("config")):
+                if self.assigned_here(entry):
                     materialized, failure = self.bootstrap(bot, entry.get("config"), path, entry)
                     if not failure and not (path / "AGENT.md").is_file():
                         failure = self.fetch_repository(bot, entry, path)
-                elif not failure and self.assigned_here(entry) and is_assignment(entry.get("config")):
-                    failure = self.fetch_repository(bot, entry, path)
                 repository_present = (path / "AGENT.md").is_file()
-                if is_assignment(entry.get("config")):
-                    repository_present = repository_present and not failure and not self.assignment_checkout_problem(bot, entry.get("config") or {}, path)
                 if not repository_present:
                     problems.append(failure or "Missing bot repository or AGENT.md")
             if repository_present:
-                if is_assignment(entry.get("config")):
-                    assignment = entry.get("assignment") or {}
-                    source_bot = str((entry.get("config") or {}).get("shared_from") or "")
-                    active_bots = set(getattr(self, "active", {}))
-                    if bot in active_bots or source_bot in active_bots:
-                        sync_problem = "Learning refresh waits until both the assignment and source role are between turns"
-                    else:
-                        sync_problem = self.assignment_learning_refresh(bot, entry.get("config") or {},
-                                                                        assignment.get("revision", 0))
-                    if sync_problem:
-                        warnings.append(sync_problem)
-                    self.__dict__.setdefault("assignment_learning_problems", {})[bot] = sync_problem
                 if runtime == "claude" and (denied := claude_denied(path)):
                     warnings.append(DENIED_WARNING + ", ".join(denied) + ". Edit .claude/settings.json in its repository")
                 try:
@@ -2269,10 +1709,8 @@ class Runner:
                                               env=safe_git.clean_environment(), capture_output=True, text=True, timeout=5).returncode == 0
                 except (OSError, subprocess.SubprocessError):
                     pass
-                if published is False and self.assigned_here(entry) and not is_assignment(entry.get("config")):
+                if published is False and self.assigned_here(entry):
                     self.publish_unpublished(bot, entry, path)
-                if is_assignment(entry.get("config")):
-                    published = None     # local task branches are deliberately not published
             unrelated = getattr(self, "publish_notes", {}).get(bot, "")
             if published is False and "unrelated history" in unrelated:
                 # GitHub holds the bot's history and this checkout shares none of it (a template copy, say): a turn
@@ -2711,23 +2149,6 @@ class Runner:
                          + (f" The checkout could not sync before this turn ({attempt['branch_sync_problem']}): "
                             "commit or keep what is there, run `git pull --rebase`, and resolve conflicts first."
                             if attempt.get("branch_sync_problem") and not is_shared(attempt.get("config")) else ""))
-        if is_assignment(attempt.get("config")):
-            linked = (attempt.get("config") or {}).get("assignment_task_id") or "the assigned delivery task"
-            lines.insert(1, f"You are a temporary instance of a persistent role, assigned only to task {linked}. "
-                         "This local branch is task work: keep task and customer details out of reusable role learning, "
-                         "and never push or merge this branch. Use the task's review and release checkpoints.")
-            learning = self.assignment_learning_path(attempt["bot"])
-            lines.insert(2, f"The separate reusable-learning worktree is `{learning}` on branch "
-                         f"`assignment-learning/{attempt['bot']}` in the persistent role's shared Git common directory. "
-                         "Read its current AGENT.md and memory at the start of work and after each recorded checkpoint. "
-                         "Draft only generalized engineering lessons there; never copy task code, customer details, "
-                         "transcripts, attachments, or credentials. Do not publish that branch yourself. A human "
-                         "manager must review reusable lessons and ask the persistent role to publish them to its "
-                         "explicit upstream trunk. Keep draft changes and conflicts in this learning worktree.")
-            sync_problem = self.__dict__.get("assignment_learning_problems", {}).get(attempt["bot"])
-            if sync_problem:
-                lines.insert(3, "The learning worktree could not refresh safely at this checkpoint: " + sync_problem +
-                             ". Preserve both histories and continue from the recorded checkpoint; do not reset or force-push.")
         if attempt["bot"] == "coo" and conversation.get("scope") == "personal":
             lines += [
                 f"You are privately assisting {conversation.get('owner_actor') or attempt.get('principal')}. ",
@@ -2767,7 +2188,12 @@ class Runner:
             if stale:
                 lines.append(stale)
         if attempt.get("task"):
-            lines.append("Assigned task:\n" + json.dumps(attempt["task"], ensure_ascii=False))
+            task = {k: v for k, v in attempt["task"].items() if k not in ("checkpoint", "checkpoint_at", "checkpoint_by", "checkpoint_blocked")}
+            lines.append("Assigned task:\n" + json.dumps(task, ensure_ascii=False))
+            if not resumed and attempt["task"].get("checkpoint"):
+                # A fresh session has none of the task's past turns; the hub's checkpoint is where they left it.
+                lines.append(f"Where this task stood after its last turn ({attempt['task'].get('checkpoint_at')}):\n"
+                             + attempt["task"]["checkpoint"])
             lines.append("Check this task’s worktree links before code work. If detail_json has setup_pending=true, "
                          "run `hub task worktree setup <repo>` in this turn; restored worktrees need setup.")
             requester = str((attempt["task"] or {}).get("requester") or "")
@@ -2787,6 +2213,10 @@ class Runner:
                              "responsible human; keeper cannot answer questions. Finish a "
                              "diagnostic task when its diagnosis is complete, even if the repair is waiting. These "
                              "rules replace any older rule that treats all bot-requested tasks as records to ignore.")
+        # Below the bot's own lines, so a repo's rules shape how code is written there and nothing more. A resumed
+        # thread already has them unless they changed (runner/repo_rules.py).
+        if attempt.get("_repo_rules") and (not resumed or attempt.get("_repo_rules_changed")):
+            lines.append(attempt["_repo_rules"])
         def speaker(msg):
             # Who really said a room line: a person's committed batch is labelled as such.
             actor = str(msg.get("from_actor") or "")
@@ -3011,9 +2441,9 @@ class Runner:
             return self.session_git_locks.setdefault(str(main), threading.Lock())
 
     def task_session(self, attempt, config, lane):
-        """The task this turn runs in its own worktree for, or "": the main lane, an assignment (its tree is
-        already per task), or a bot or task whose name is unfit for a path."""
-        if is_assignment(config) or not task_sessions.SLUG.fullmatch(attempt["bot"]):
+        """The task this turn runs in its own worktree for, or "": the main lane, or a bot or task whose
+        name is unfit for a path."""
+        if not task_sessions.SLUG.fullmatch(attempt["bot"]):
             return ""
         return task_sessions.task_of(lane)
 
@@ -3076,6 +2506,7 @@ class Runner:
 
         checkout_lock = self.worktrees.bot_lock(bot)
         session_path, session_problem = None, ""
+        worktree_dirs, rules_digest = [], ""
         try:
             try:
                 hold(self.worktrees.lane_lock(bot, lane))
@@ -3091,10 +2522,9 @@ class Runner:
                 env = base_env = self.environment(attempt)
                 # GitHub App: this turn's repository-scoped token (runner/git_credentials.py).
                 socket_path = self.arm_credentials(env, attempt, bot)
-                if not is_assignment(config):
-                    git_credentials.apply(env, self.client, bot, self.config_path if not socket_path else None, socket_path)
-                    if checkout_lock in held:
-                        self.prepare_history(bot, attempt.get("generation"), self.local_path(bot), env)
+                git_credentials.apply(env, self.client, bot, self.config_path if not socket_path else None, socket_path)
+                if checkout_lock in held:
+                    self.prepare_history(bot, attempt.get("generation"), self.local_path(bot), env)
                 redactor = redact_mod.for_turn(env, self.vault_values.get(aid, []))
                 if self.credentials:
                     redactor = redactor or redact_mod.Redactor([])
@@ -3155,6 +2585,9 @@ class Runner:
                         conv += ":worktree"
                 started_at = redact_mod.head(execution_path) if redactor else ""
                 memory_before = redact_mod.head(execution_path)
+                # The task's set-up worktrees join its session, and their repos' rules join its prompt.
+                worktree_dirs = repo_rules.resolve(self.config["projects_dir"], attempt.get("worktrees"))
+                attempt["_repo_rules"], rules_digest = repo_rules.block(worktree_dirs)
                 # A bot keeps one thread and stays on it; this machine alone remembers which.
                 # When the conversation fills the model's window the runtime compacts it, which
                 # is what a long-lived assistant does; nothing here ends a thread that still works.
@@ -3323,6 +2756,7 @@ class Runner:
                 settings = host_settings(execution_path, model=config.get("model"),
                                          effort=config.get("reasoning_effort"), env=env, slug=bot,
                                          shared=is_shared(config), compact_at=config.get("compact_at"),
+                                         add_dirs=[str(path) for _, path in worktree_dirs],
                                          mcp_servers=self.mcp_for_run(attempt, execution_path, env, config.get("runtime"),
                                                                       config.get("harness"), diagnose))
                 resumed = False
@@ -3341,6 +2775,8 @@ class Runner:
                 # Acknowledge before execution. Any later crash is explicitly uncertain.
                 self.client.post(f"attempts/{aid}/started", {"thread_id": thread}, key=f"started:{aid}")
                 self.state.phase(aid, "running")
+                # A resumed thread already holds the repo rules unless they changed since it was given them.
+                attempt["_repo_rules_changed"] = bool(rules_digest) and self.state.repo_rules(thread) != rules_digest
                 prompt = self.prompt(attempt, after=self.state.cursor(thread) if resumed else None,
                                       resumed=resumed)
                 refs = (attempt.get("message") or {}).get("refs") or {}
@@ -3372,6 +2808,8 @@ class Runner:
                             time.sleep(0.5)
                 else:
                     turn = start_turn()
+                if rules_digest:
+                    self.state.repo_rules(thread, rules_digest)
                 outcome, reply, tokens, limited, retryable = drive(host, thread, turn)
                 self.state.save_session(bot, conv, runtime, host.session_id(thread))
                 # A runtime that cannot sign itself in is as unavailable as one out of quota:
@@ -3431,6 +2869,7 @@ class Runner:
                     settings = host_settings(execution_path, model=hop["model"], shared=is_shared(config),
                                              effort=hop["reasoning_effort"], env=hop_env, slug=bot,
                                              compact_at=config.get("compact_at"),
+                                             add_dirs=[str(path) for _, path in worktree_dirs],
                                              mcp_servers=self.mcp_for_run(attempt, execution_path, hop_env, hop["runtime"],
                                                                           hop["harness"], diagnose))
                     thread = host.start_thread(bot, settings)
@@ -3540,7 +2979,7 @@ class Runner:
                     secret = bool(tree and tree["committed"])
                     skipped = (tree or {}).get("left_out", []) + (tree or {}).get("too_large", [])
                     root = session_path or self.local_path(bot)
-                    if not secret and not is_assignment(config) and not session_path:
+                    if not secret and not session_path:
                         self.publish(bot, self.local_path(bot), env)
                     if session_path and not secret:
                         # Lanes push to the same branch, one at a time: each lands its commits on what the others pushed.
@@ -3550,7 +2989,7 @@ class Runner:
                                 log(f"Tico runner: {bot}: task {session_task}'s commits stay in {session_path} ({problem})")
                             pushed = self.push(session_path, env)
                     else:
-                        pushed = False if secret or is_assignment(config) else self.push(root, env)
+                        pushed = False if secret else self.push(root, env)
                         if pushed:
                             self.__dict__.get("product_unpushed", set()).discard(bot)
                     files_publish.after_turn(self, attempt, root, pushed,
@@ -3672,11 +3111,9 @@ class Runner:
         if full:
             repository_rows = self.repositories.poll()
             assignments = self.client.get("runners/assignments")
-            self.process_assignment_cleanups()
             self.migrate_credentials(assignments)
             self.bot_credential_names = self.client.get("runner-credential-grants")["bots"]
             self.assignments_seen = assignments
-            self.remember_github_assignments(assignments)
         else:
             repository_rows, assignments = None, self.assignments_seen
         candidates = self.readiness_candidates(assignments)
@@ -3713,8 +3150,7 @@ class Runner:
             if self._checkout and checkout.get("behind") and getattr(self, "_update_note", None):
                 self._checkout = {**self._checkout, "blocked": self._update_note}
         body = {"version": RUNNER_VERSION, "platform": sys.platform,
-                "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1",
-                                 *(["task_lanes_v1"] if time.monotonic() >= getattr(self, "_task_lanes_after", 0) else [])],
+                "capabilities": ["task_lanes_v2"] if time.monotonic() >= getattr(self, "_task_lanes_after", 0) else [],
                 "capacity": self.capacity, "readiness": self.readiness(candidates, checks, runtimes),
                 "mail_agent_instructions": self.mail_agent_instructions(assignments),
                 "agent_instructions": agent_instructions,
@@ -3809,9 +3245,9 @@ class Runner:
                         for state in profile.get("runtimes", {}).values():
                             state.pop("weekly", None)
                     continue  # Older servers keep receiving the existing sign-in report.
-                if exc.status == 422 and "capabilities" in detail and "task_lanes_v1" in body.get("capabilities", []):
+                if exc.status == 422 and "capabilities" in detail and "task_lanes_v2" in body.get("capabilities", []):
                     # A server from before task lanes knows the other capabilities; only the new one goes.
-                    body["capabilities"].remove("task_lanes_v1")
+                    body["capabilities"].remove("task_lanes_v2")
                     self._task_lanes_after = time.monotonic() + 600
                     continue
                 root_fields = ("worktrees", "profiles", "repositories", "capabilities")

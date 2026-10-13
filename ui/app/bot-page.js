@@ -250,7 +250,6 @@ async function pageBot(slug, tab) {
     <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
       <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}</h1><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button><span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
-        <div class="meta" id="bot-assignment-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
       ${tabsShown.map(t => { const label = t[0].toUpperCase() + t.slice(1);
@@ -374,7 +373,6 @@ async function pageBot(slug, tab) {
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
   if (!limited) {
     void botBranchesLoad(slug);
-    void assignmentBranchesLoad(slug);
     void botLearningsLoad(slug);
   }
   if (!limited) void botGoalLoad(slug);
@@ -446,14 +444,14 @@ async function pageBot(slug, tab) {
 // on its own (#514). A phone keeps one at a time behind the Chat | Tasks switch.
 const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // On a phone the top line is back, the bot and its tabs, nothing else. More is the rest, condensed: the Goals
-// card first, then an alert, Learnings, branches and temporary assignments (moved here from beside the name,
+// card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
 const BOT_TAB_ICONS = {chat: 'chat_bubble', tasks: 'task_alt', history: 'dynamic_feed', more: 'menu'};
 function placeBotHead() {
   const host = $('#bot-more-top'), top = $('#bot-top');
   if (!host || !top) return;
-  const [alert, learn, ...rest] = ['#bot-alert', '#bot-learn', '#bot-branches', '#bot-assignment-branches'].map(q => $(q));
+  const [alert, learn, ...rest] = ['#bot-alert', '#bot-learn', '#bot-branches'].map(q => $(q));
   if (BOT_PHONE.matches) { host.append(...[alert, learn, ...rest].filter(Boolean)); return; }
   if (learn?.parentElement === host) $('#bot-tool-strip').before(learn);
   for (const el of [...rest, alert]) if (el?.parentElement === host) top.querySelector('.botid').append(el);

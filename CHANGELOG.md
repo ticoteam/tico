@@ -8,6 +8,7 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Paused tasks pick back up, idle ones get asked.** Each completed turn leaves a short checkpoint on its task, and a fresh session on that task starts from it. A task idle for 7 days gets one **Still wanted?** (Keep or Close) to its person; nothing closes without their answer. See [Tasks](docs/tasks.md#picking-work-back-up).
 - **Copy session ID from a task's ⋯ menu.** On a task with a primary session, the menu copies that session's id, for resuming or restoring it by hand.
 - **Tasks show their sessions.** The owning bot's task session is primary, with its resume command to copy; people and bots can link other sessions to track (a thread URL or a resume command; Sessions + on the task, `hub task link --session`). Task chat still goes only to the owning bot. See [Tasks](docs/tasks.md).
 - **A bot works on several tasks at once.** A bot with a session per task (BotOps, or `session: task`) runs turns on different
@@ -38,9 +39,11 @@ All notable changes to Tico are recorded here. The format follows
 - **A Decide card's bot opens the bot.** Tapping the bot's name or face at the top of a card opens that bot, as its entry in the side rail does. The card's own buttons aren't touched. A card from a person has no link.
 
 ### Changed
+- **Every task is its own bot session by default.** A bot's turns on a task continue that task's own session (and run beside its other tasks on a runner with lanes); chat and other turns keep the bot's one thread. `session: bot` opts out; `session: task` (BotOps) also keys chat on its conversation. Existing bots lose the `session: bot` older servers wrote by default, once. A task's set-up worktrees join its session (`--add-dir` on Claude Code), and each repo's AGENTS.md (else CLAUDE.md) joins the prompt as rules for writing code there, capped at 16 KB.
+- **Support reads like a conversation.** Help's Support rail lists your requests with a status badge (Open, Answered, Closed), when each last changed and a dot for an unread reply; opening one shows the conversation as bubbles from you and Tico support, with times, and marks it read. Enter sends, Shift+Enter adds a line, a failed send says **Not sent** under the box and keeps your message, and delete is a trash icon that asks first. The `?` shows how many replies you haven't read. The Mark read and Refresh buttons are gone: replies are checked when the app comes back into focus. See [Contact support](docs/support.md#for-a-human).
 - **BotOps builds the bot you ask for instead of asking questions first.** It picks the slug, repository, team, model and starting Instructions from your request, creates the bot right away, lists missing optional access (cloud logs, another repository, a Credential, a Computer to reconnect) as follow-ups, and tells you the assumptions it made so you can correct them. Spending, Credentials and publishing still need your approval.
 - **A bot can hold 30 task worktrees, up from 10.** The computer's 5 GB free-disk floor can stop it sooner. Nothing is removed to make room: at the limit, creation names the oldest idle worktrees to clean up first.
-- **The server can hand a bot's tasks out side by side.** A bot keyed on tasks (`session: task`, BotOps by default) gets one turn at a time per task instead of one per bot, once its computer says it runs them that way (`task_lanes_v1`); chat and other work without a task still run one at a time. Until a runner advertises it, nothing changes. Stopping a bot that is running more than one turn names the turn. Before going back to an older release, drain the bots: it allows one running turn per bot.
+- **The server can hand a bot's tasks out side by side.** A bot keyed on tasks (`session: task`, BotOps by default) gets one turn at a time per task instead of one per bot, once its computer says it runs them that way (`task_lanes_v2`); chat and other work without a task still run one at a time. Until a runner advertises it, nothing changes. Stopping a bot that is running more than one turn names the turn. Before going back to an older release, drain the bots: it allows one running turn per bot.
 - **A person's comment wakes the bot that filed a task only when it's meant for it, and an @mention reaches the person.** On a task a bot filed and a person owns, a person's comment wakes that bot only when it @mentions the bot (`@ops`, or its name) or the task waits on that person; any other comment reaches the bot on its next turn. A comment on a task a bot owns, or on a task with no bot on it, wakes as before. A person @mentioned in a comment gets it as a question, which puts the task in their Needs you.
 
 ### Fixed
@@ -83,6 +86,9 @@ All notable changes to Tico are recorded here. The format follows
   reference-number check unchanged. No lint now flags a colon that opens a plain clause ("Check the order status: it says
   pending."); `status: doing` and `owner: bot:cmo` are still flagged.
 - **Whoever files a subtask is its requester.** A person who files a subtask under someone else's task now shows as asking for it and gets its completion notice; before, it took the parent's requester. The parent's requester still hears when the parent finishes.
+
+### Removed
+- **Temporary task assignments.** Per-task bot sessions replace them: the section on a bot's page, the API routes, `hub bot assignment` commands and MCP tools are gone. Existing assignment bots are archived, their open tasks go back to the bot they came from, and their history stays. An older runner still connects. ([#420](https://github.com/ticoteam/tico/issues/420))
 
 ## [0.3.40] - 2026-10-11
 

@@ -1001,8 +1001,6 @@ def install_github_app(app, settings, store):
                 allowed = False
             from .shared_bots import declared, source_of
             bot_config = declared(c, body.bot) if allowed else {}
-            if bot_config.get("assignment_branch"):
-                raise Problem("assignment_repository", "Temporary task assignments use a private local branch; GitHub credentials are not issued for them", 409)
             row = service.row(c)
             if not row:
                 return {"configured": False}

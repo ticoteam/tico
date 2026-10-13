@@ -69,7 +69,7 @@ People without an active branch reach the original. Selecting another person's b
 Existing task threads keep their participants and history.
 
 A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status;
-change the original to change its definition. `session: task` gives each task its own provider session, and chat keeps its own session.
+change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything.
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
 Turning off **Allow branches** preserves existing branches but stops automatic routing; their pages say **branches off**.

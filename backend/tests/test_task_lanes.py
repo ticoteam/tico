@@ -5,7 +5,7 @@ from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 
 
-def task_bot(api, lanes):
+def task_bot(api, lanes, capability="task_lanes_v2"):
     """`ops` keyed on tasks, assigned to a runner that does or does not advertise lanes."""
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
@@ -13,7 +13,7 @@ def task_bot(api, lanes):
     machine = runner(api)
     assign(api, machine, "ops")
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
-                                    "capabilities": ["task_lanes_v1"] if lanes else []}, token=machine["token"])
+                                    "capabilities": [capability] if lanes else []}, token=machine["token"])
     return machine
 
 
@@ -40,6 +40,14 @@ def test_task_lanes_run_side_by_side_and_each_lane_stays_serial(api):
 
 def test_a_runner_without_lanes_runs_one_turn_per_bot(api):
     machine = task_bot(api, lanes=False)
+    new_task(api, "first"), new_task(api, "second")
+    assert claim(api, machine)["lane"] == "main"
+    assert claim(api, machine) is None
+
+
+def test_a_main_built_runner_advertising_task_lanes_v1_runs_serially(api):
+    """Its session key reads an unset `session` as the bot thread, so its lanes would share one thread."""
+    machine = task_bot(api, lanes=True, capability="task_lanes_v1")
     new_task(api, "first"), new_task(api, "second")
     assert claim(api, machine)["lane"] == "main"
     assert claim(api, machine) is None
@@ -80,3 +88,14 @@ def test_a_usage_limit_in_one_lane_holds_the_bot_when_another_lane_finishes(api)
     with api.app.state.store.read() as c:
         assert H.status(c, "ops")["state"] == "limited"
     assert claim(api, machine) is None, "the limited lane's job waits out the cooldown"
+
+
+def test_an_older_runner_advertising_retired_assignment_capabilities_still_heartbeats_and_claims(api):
+    """Temporary assignments are gone (#420); a runner from before still names them in its heartbeat."""
+    machine = runner(api)
+    assign(api, machine, "ops")
+    post(api, "runners/heartbeat", {"version": "old", "platform": "test", "readiness": {"ops": True},
+                                    "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1"]},
+         token=machine["token"])
+    post(api, "chat/ops", {"text": "Still there?"})
+    assert claim(api, machine)["bot"] == "ops"

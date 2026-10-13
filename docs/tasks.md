@@ -99,6 +99,27 @@ request continues to occupy its slot until the runner removes it. For merged wor
 awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed
 just to free space.
 
+## Picking work back up
+
+Each completed turn on a task leaves a **checkpoint** on it: the turn's final reply, up to 1,500
+characters, with when (`checkpoint_at`) and which bot (`checkpoint_by`). The full task view
+(`GET /api/v2/tasks/{id}`) and the task a run is handed both carry it; task lists leave the text
+out. When a turn on the task starts a fresh session (no saved thread to resume), its prompt opens
+with where the task stood after its last turn. A reply that drew on a private task the task's
+readers cannot read is not kept as a checkpoint.
+
+Waiting work is not starved: a bot's queued jobs are claimed oldest first (a person's chat message
+still goes ahead), so a newer task never jumps one that has been waiting. Task ranks stay as people
+set them.
+
+A task still on the board with no activity for 7 days (no update, comment or checkpoint, no run
+going, and no question already waiting on someone) gets one **Still wanted?** question with
+**Keep** and **Close**: to its requester when a person asked for it, otherwise to its owner when a
+person owns it; a task only bots are on is left alone. It shows in that person's Needs you and
+Decide. **Keep** restarts the clock; **Close** closes the task as theirs with a note. Nothing
+closes without the answer, and the task is asked again only after new activity and another idle
+week (`stale_asked_at`).
+
 ## Done and Closed
 
 **Done** means the owner reports that the work is complete, with a result note. **Closed** means
@@ -283,8 +304,9 @@ A merged PR becomes Shipped once the running release includes its merge commit; 
 where it is. PRs in another repository stay Merged.
 
 Sessions show who is working a task. The primary session is the owning bot's task session, recorded
-by Tico when its turn starts in the task's own lane (bots set to `session: task`, and BotOps, on a runner
-that runs lanes); a bot's shared thread is never one. A task has at most one primary: a newer thread or a
+by Tico when its turn starts in the task's own lane (every bot by default, unless set to `session: bot`, on a runner
+that runs lanes); a bot's shared thread is never one. The task's set-up worktrees on that computer are added to
+its session, with each repo's AGENTS.md (else CLAUDE.md) in the prompt as rules for writing code there. A task has at most one primary: a newer thread or a
 new owner's session replaces it, and the old one stays as an alternate. Anyone with link rights can add other sessions to track:
 a thread URL, a `claude --resume <id>` or `codex resume <id>` command, or another reference
 (`hub task link <id> <value> --session`, `hub_task_link` with `kind: session`, or Sessions + on the task).

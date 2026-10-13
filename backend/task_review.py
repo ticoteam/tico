@@ -3,6 +3,7 @@ import html
 import re
 
 from .store import H, Problem, encode
+from . import still_wanted
 from . import task_privacy as privacy
 
 
@@ -177,8 +178,12 @@ def answer_task(c, auth, who, task_id, body, wake):
         text += " " + body.other
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now()}
+    picked = still_wanted.choice(asked, body, who.actor)
+    if picked == still_wanted.CLOSE:
+        wake = False                 # the close itself tells the bot; the answer need not start a run too
     msg = H.task_comment(c, who.actor, task_id, text, wake=wake,
                          extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
+    still_wanted.act(c, who.actor, task_id, picked)
     return {"comment": {**msg, "answer": value}, "answer": value,
             "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": bool(wake)}
 

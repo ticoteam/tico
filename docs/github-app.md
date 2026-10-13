@@ -189,13 +189,6 @@ Cache hits still check current identity, assignment and repository grants, but d
 GitHub, open a write transaction or repeat the token audit. Repository reachability uses the
 same request snapshot as the grants.
 
-Temporary task assignments return `409 assignment_repository` before reading the App or
-looking up its installation, including when no App is connected. Runners remember only this
-refusal in memory per bot and repository, until the placement, assignment revision or effective
-configuration changes, the bot is removed, or the runner restarts. A remembered refusal keeps
-GitHub access blocked; it never falls back to machine credentials. Other errors retain their
-normal retries. Older servers and runners need no new response fields or request parameters.
-
 ## How bots sign in to GitHub
 
 The GitHub App is every bot's GitHub identity: `git push`, `gh pr create`, `gh pr view` and `gh api` in a turn

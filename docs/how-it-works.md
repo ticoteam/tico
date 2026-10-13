@@ -254,10 +254,14 @@ Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limi
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
 
-**A bot's session is its own.** By default each bot has one provider thread. BotOps defaults to
-one thread per task and per chat conversation so unrelated jobs and requesters stay separate.
-Other bots can opt into that isolation with `session: task`; explicit `session: bot` keeps one
-thread. Wakes about the same task resume its thread. A bot's chat and its own thread use the local
+**A bot's session is its own.** By default every task is its own provider thread, and the bot's
+chat and other turns share one more. BotOps (and any bot set to `session: task`) also gives each
+chat conversation its own thread, so unrelated requesters stay separate; `session: bot` keeps
+everything on one thread. Wakes about the same task resume its thread. A task's set-up worktrees
+on that computer join its session (Claude Code's `--add-dir`), and the prompt carries each repo's
+AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never grant access;
+a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets
+them again only when they change. A bot's chat and its own thread use the local
 `bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
 task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. Only that
 computer knows which thread

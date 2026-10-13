@@ -189,4 +189,11 @@ class Scheduler:
             self.stranded = at
             with self.store.transaction() as c:
                 H.sweep_stranded(c, stamp(at))
+            # And a task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
+            try:
+                from . import still_wanted
+                with self.store.transaction() as c:
+                    still_wanted.ask_idle(c, stamp(at))
+            except Exception as exc:
+                failures.append({"still_wanted": type(exc).__name__})
         return {"fired": fired, "failures": failures}

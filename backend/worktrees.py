@@ -104,6 +104,19 @@ def inventory(c, computer):
             "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))", (computer,))]
 
 
+def attached(c, task_id, computer, bot):
+    """The task's worktrees this bot's turn on this computer works in: its own, set up, not removed. A claimed
+    task turn carries them (backend/execution.py) so the runner adds each to the session with its repo's rules."""
+    if not supported(c) or not task_id or not computer:
+        return []
+    owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
+    rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id "
+                     f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
+                     "ORDER BY l.created", (task_id, computer, "bot:" + bot)).fetchall()
+    return [{"repo": r["repo"] or "", "branch": r["branch"] or "", "path": r["path"]} for r in rows
+            if r["path"] and not json.loads(r["detail_json"] or "{}").get("setup_pending")]
+
+
 def holdings(c, owner):
     """The bot's live worktrees, each with what clears it: `merged` or `closed` (its pull requests are finished and the
     computer releases it once the bot is idle), `merge_ready` (an approved, passing pull request), `task_finished`,

@@ -159,12 +159,6 @@ def access(c, bot, org, reads=None):
     if not row:
         raise Problem('not_found', 'No such bot', 404)
     config = json.loads(row['config_json'] or '{}')
-    if config.get('assignment_branch'):
-        # Assignment code is a private local checkout. Its runner already has the
-        # source role's same-machine clone access; never mint or advertise a source
-        # role GitHub grant for the temporary actor.
-        return {'mode': 'chosen', 'all_access': 'read', 'chosen': [], 'effective': [],
-                'create_repositories': False}
     mode, all_access = config.get('repo_access_mode', 'own'), config.get('repo_all_access', 'write')
     source = source_of(_json(row['config_json'])) or bot
     own_row = reads.configs.get(source)

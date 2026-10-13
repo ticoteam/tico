@@ -214,7 +214,7 @@ TRIGGERS = [
 # every answer was no. The same log now carries `runner` rows: one per computer a write concerns,
 # its id as the subject, naming which of the computer's reads to repeat. A row carries a kind and
 # at most a bot slug, never a value (`GET /api/v2/runners/me/events`, runner/runner_events.py).
-RUNNER_KINDS = ("work", "assignments", "credentials", "config", "cleanups", "repositories", "worktrees", "restart",
+RUNNER_KINDS = ("work", "assignments", "credentials", "config", "repositories", "worktrees", "restart",
                 "logins", "harness_actions", "credential_imports", "subscription_refresh")
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
@@ -255,10 +255,6 @@ RUNNER_TRIGGERS = [
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
     ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
-    ("changes_runner_cleanup_insert", "INSERT", "assignment_branch_cleanup", "NEW.state='requested'",
-     _tell("cleanups", "SELECT NEW.runner_id AS rid")),
-    ("changes_runner_cleanup_update", "UPDATE", "assignment_branch_cleanup",
-     f"NEW.state='requested' AND ({_changed('state', 'attempt')})", _tell("cleanups", "SELECT NEW.runner_id AS rid")),
     # The names of the credentials its bots are granted, and the one-time move of secrets files.
     ("changes_runner_credential_grants_insert", "INSERT", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked", "subject"),

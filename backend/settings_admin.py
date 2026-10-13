@@ -521,7 +521,11 @@ class SettingsAdmin:
         if values["status"] == "active" and before.get("status") != "active":
             self.ensure_activation(c, who, bot)
         if "session" in body.model_fields_set:
-            declared["session"] = body.session or "bot"
+            # Cleared means the default: every task its own session (clients/sessions.py).
+            if body.session:
+                declared["session"] = body.session
+            else:
+                declared.pop("session", None)
         if "shared" in body.model_fields_set:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:

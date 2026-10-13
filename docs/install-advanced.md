@@ -98,7 +98,7 @@ Tico does not build or manage the load balancer, Cognito or the network around t
 ## Run recovery
 
 Each claim includes `busy_lanes`: the `bot|lane` of every live turn process on that computer
-(`main`, or `task:<id>` for a bot with a session per task), and `busy_bots` for bots whose task
+(`main`, or `task:<id>` for a task's own session), and `busy_bots` for bots whose task
 worktrees are being maintained. A turn that outlives its lease stays busy until its process exits,
 so the server skips new work in that lane on that computer. A server from before lanes refuses
 `busy_lanes`; the runner then sends every bot with a live turn in `busy_bots`. The list is kept by the runner supervisor, with no checkout lock files

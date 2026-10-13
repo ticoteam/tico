@@ -211,8 +211,6 @@ def github_app_covers(c, bot):
     from .github_app import repo_of
     from .shared_bots import declared, source_of
     config = declared(c, bot)
-    if config.get("assignment_branch"):
-        return False
     row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (source_of(config) or bot,)).fetchone()
     repo = repo_of(row["repo"] if row else "", app["org"])
     return bool(repo) and repo.split("/")[0].lower() == app["org"].lower()

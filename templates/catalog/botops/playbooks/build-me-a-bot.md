@@ -29,8 +29,8 @@ not waiting on it. The human reads one message at the end.
 3. **What it needs.** If the bot talks to a tool (Jira, GitHub, a mailbox), find out what credential it
    takes and open the card for each: `playbooks/connect-a-tool.md`. Do not wait for the answer to
    finish everything else. When the human saves it you are woken. Missing optional access (cloud logs,
-   another repository, a Credential, a Computer to reconnect to Claude) never stops the build: the bot goes
-   live without it, and it is a follow-up in the report.
+   another repository, a Credential, a Computer to reconnect to Claude) never stops the build: the build goes on
+   as far as it can without it, and it is a follow-up in the report.
 4. **Who sees it.** Default is everyone. If they said otherwise, `hub bot access <slug> ...` now. Do
    not ask a question they did not raise.
 5. **Verify the live Routines.** Read them as the requester with `hub routine list --bot <slug>`.
