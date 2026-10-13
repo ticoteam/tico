@@ -810,6 +810,22 @@ def test_a_half_clone_with_only_the_mirror_remote_is_removed_and_cloned_again(re
     assert not (path / 'half.txt').exists() and (path / 'README.md').read_text() == 'first'
 
 
+def test_where_bots_run_as_a_separate_user_their_half_clone_is_still_tico_s(repos, tmp_path, monkeypatch):
+    from runner.repositories import tico_half_clone
+    path = tmp_path / 'half'
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    subprocess.run(['git', '-C', str(path), 'remote', 'add', 'tico-mirror', 'file:///mirror'], check=True)
+    bot = os.stat(path).st_uid
+    # The runner is another user; the folder was made by the bot user the clone ran as.
+    monkeypatch.setattr('runner.repositories.os.geteuid', lambda: bot + 1)
+    monkeypatch.setattr('runner.repositories.isolation.identity', lambda: (bot, bot))
+    monkeypatch.setattr('runner.repositories.isolation.run', subprocess.run)  # no setpriv on a test machine
+    assert tico_half_clone(path)
+    # Made by neither the runner nor its bot user: someone else's, never Tico's.
+    monkeypatch.setattr('runner.repositories.isolation.identity', lambda: (bot + 2, bot + 2))
+    assert not tico_half_clone(path)
+
+
 def test_a_mac_takes_over_a_clone_of_the_same_repository_and_keeps_its_origin(repos, tmp_path):
     only_one(repos)
     source = local_source(tmp_path)

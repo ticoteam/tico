@@ -757,15 +757,18 @@ def _clone(name, path, command, url, env, machine_git):
 
 def tico_half_clone(path):
     """Whether the folder is plainly what Tico's own clone left when stopped halfway: empty, or a Git folder made by
-    this user whose only remote is the one Tico clones with (tico-mirror), or none yet. Anything else, such as a
-    person's clone of a fork or another host, is not proven to be Tico's and is never deleted for being half made."""
+    this runner or its bot user (where bots run as a separate user, Tico's clones are theirs) whose only remote is
+    the one Tico clones with (tico-mirror), or none yet. Anything else, such as a person's clone of a fork or
+    another host, is not proven to be Tico's and is never deleted for being half made."""
+    who = isolation.identity()
+    owners = {os.geteuid(), *((who[0],) if who else ())}
     try:
-        if path.is_symlink() or path.stat().st_uid != os.geteuid():
+        if path.is_symlink() or path.stat().st_uid not in owners:
             return False
         if not any(path.iterdir()):
             return True
         git_dir = path / '.git'
-        if git_dir.is_symlink() or not git_dir.is_dir() or git_dir.stat().st_uid != os.geteuid():
+        if git_dir.is_symlink() or not git_dir.is_dir() or git_dir.stat().st_uid not in owners:
             return False
         config = git_dir / 'config'
         if config.is_symlink():
@@ -774,8 +777,11 @@ def tico_half_clone(path):
             return True
     except OSError:
         return False
-    done = isolation.run([*safe_git.PREFIX, 'config', '--file', str(config), '--name-only', '--get-regexp', r'^remote\.'],
-                         env=safe_git.clean_environment(), capture_output=True, text=True, timeout=15)
+    try:
+        done = isolation.run([*safe_git.PREFIX, 'config', '--file', str(config), '--name-only', '--get-regexp', r'^remote\.'],
+                             env=safe_git.clean_environment(), capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
     if done.returncode not in (0, 1):
         return False
     return all(key.startswith('remote.tico-mirror.') for key in done.stdout.split())
