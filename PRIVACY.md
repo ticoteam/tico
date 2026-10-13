@@ -174,7 +174,10 @@ these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
 Help > **Support** sends the Tico team a message. It is separate from the count, and it works whether counting is on or
 off: it is a message you write and send yourself, never automatic, never in demo mode, and only from a signed-in human's own
-browser (not a token, the Assistant or a bot). `TICO_SUPPORT=off` removes it from an install.
+browser (not a token, the Assistant or a bot). A bot, the Assistant or a person's token may instead draft a report as an
+approval: it is sent only after a person reads the whole message in Needs you and approves it, then is filed as that person,
+with the message and, unless the draft says otherwise, the version and install ID (never an email or diagnostics;
+[docs/support.md](docs/support.md#a-bots-report-after-a-persons-yes)). `TICO_SUPPORT=off` removes both from an install.
 
 **What is sent**, shown in one line on the form before you press Send, and only these fields:
 

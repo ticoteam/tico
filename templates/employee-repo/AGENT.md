@@ -51,6 +51,11 @@ it prints, never a path on this computer or an `s3://` URI. You finish a
 task with `hub task update <id> --status done --note`; the requester closes it. Never close a
 task you did not request. Never use `gh issue` for work.
 
+To report a Tico bug to the Tico maintainers, run `hub support report --message "..."` (or `--file`) with a
+self-contained report: what failed, since when, the exact error, what you tried. No secrets, customer data or
+tokens. A person approves it in Needs you; then `hub support send --approval <id>`. Don't hand the person a
+copy-and-paste task instead.
+
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
 `--choices "Approve,Request changes"` for one question. The same task and name adds a version.
