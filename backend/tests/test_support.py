@@ -184,3 +184,158 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
     r = file(api, message="Another problem")
     assert r.status_code == 503 and r.json()["error"]["code"] == "vault_unavailable"
     assert hq.seen == [] and len(hq.tickets) == 1
+
+
+# ----------------------------------------------------------------------------- a bot's report, approved by a person
+REPORT = "hub task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
+
+
+def as_bot(api, slug="coo"):
+    """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                  (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:test"))
+    api.app.state.store.settings.test_identities["bot-" + slug] = Identity("bot:" + slug, "bot", agent="hermes")
+    return signed_in("bot-" + slug)
+
+
+def draft(api, headers, message=REPORT, **extra):
+    import hashlib
+    payload = {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest(), **extra}
+    import uuid
+    return api.post("/api/v2/approvals", json={"kind": "support", "payload": payload},
+                    headers={**headers, "Idempotency-Key": str(uuid.uuid4())})
+
+
+def decide(api, approval_id, decision="approved"):
+    with api.app.state.store.read() as c:
+        to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+                       (approval_id,)).fetchone()[0]
+    return to, api.post(f"/api/v2/approvals/{approval_id}", json={"decision": decision}, headers=signed_in())
+
+
+def send(api, headers, approval_id):
+    return api.post("/api/v2/support/tickets/from-approval", json={"approval": approval_id}, headers=headers)
+
+
+def consumed(api, approval_id):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval_id,)).fetchone()[0]
+
+
+def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_the_person(environment, hq):
+    api = environment()
+    bot = as_bot(api)
+    r = draft(api, bot)
+    assert r.status_code == 200, r.text
+    approval = r.json()
+    assert approval["kind"] == "support" and hq.seen == []          # drafting sends nothing
+    assert send(api, bot, approval["id"]).json()["error"]["code"] == "approval"     # not approved yet
+    assert hq.seen == [] and not consumed(api, approval["id"])
+    needs = api.get("/api/v2/needs-you", headers=signed_in()).json()["items"]
+    card = next(i for i in needs if i.get("id") == approval["id"])
+    assert card["title"] == "Send this to Tico support?" and card["support"] == {"to": "updates.tico.team"}
+    approver, decided = decide(api, approval["id"])
+    assert decided.status_code == 200, decided.text
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 200, r.text
+    sent = r.json()
+    assert sent["filed_as"] == approver and sent["ticket"]["message"] == REPORT and consumed(api, approval["id"])
+    assert sent["ticket"]["sent"]["version"] == "0.2.17" and "secret" not in r.text
+    (request,) = hq.seen
+    assert set(json.loads(request.content)) == {"message", "version", "install_id"}    # no email, no diagnostics
+    # The approver's ticket: on their Support page, counted for them, not the bot's.
+    with api.app.state.store.read() as c:
+        assert [tuple(x) for x in c.execute("SELECT actor FROM support_tickets")] == [(approver,)]
+    mine = api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"]
+    assert [t["id"] for t in mine] == [sent["ticket"]["id"]]
+    # Again: the same ticket back, nothing more reaches HQ.
+    again = send(api, bot, approval["id"])
+    assert again.status_code == 200 and again.json()["ticket"]["id"] == sent["ticket"]["id"] and again.json()["again"]
+    assert len(hq.seen) == 1 and len(hq.tickets) == 1
+
+
+def test_without_ids_only_the_message_goes(environment, hq):
+    api = environment()
+    bot = as_bot(api)
+    approval = draft(api, bot, include_ids=False).json()
+    decide(api, approval["id"])
+    assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {}
+    assert json.loads(hq.seen[-1].content) == {"message": REPORT}
+
+
+def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):
+    api = environment()
+    bot = as_bot(api)
+    declined = draft(api, bot, message="Declined report").json()
+    decide(api, declined["id"], "declined")
+    r = send(api, bot, declined["id"])
+    assert r.status_code == 409 and "declined" in r.json()["error"]["detail"]
+    approval = draft(api, bot).json()
+    decide(api, approval["id"])
+    for other in (as_bot(api, "botops"), signed_in()):           # another bot, or the approver themselves
+        assert send(api, other, approval["id"]).status_code == 403
+    assert send(api, bot, "nope").status_code == 404
+    # The stored message changed after the person read it: its hash no longer matches.
+    with api.app.state.store.transaction() as c:
+        row = c.execute("SELECT payload_json FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+        c.execute("UPDATE approvals SET payload_json=? WHERE id=?",
+                  (row.replace("hub task update", "hub task delete"), approval["id"]))
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
+    assert hq.seen == [] and not consumed(api, approval["id"])
+
+
+@pytest.mark.parametrize("payload, why", [
+    ({"message": REPORT, "content_sha256": "0" * 64}, "doesn't match"),
+    ({"message": REPORT, "content_sha256": "ABC"}, "64 lower-case hex"),
+    ({"message": REPORT}, "support needs content_sha256"),
+    ({"message": " padded ", "content_sha256": __import__("hashlib").sha256(b" padded ").hexdigest()}, "blank space"),
+    ({"message": "x" * 4001, "content_sha256": __import__("hashlib").sha256(b"x" * 4001).hexdigest()}, "4000"),
+    ({"message": REPORT, "content_sha256": __import__("hashlib").sha256(REPORT.encode()).hexdigest(),
+      "diagnostics": "abc"}, "not diagnostics"),
+    ({"message": REPORT, "content_sha256": __import__("hashlib").sha256(REPORT.encode()).hexdigest(),
+      "include_ids": "yes"}, "true or false"),
+])
+def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq, payload, why):
+    api = environment()
+    r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=as_bot(api))
+    assert r.status_code >= 400 and why in r.text, r.text
+
+
+def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
+    api = environment()
+    bot = as_bot(api)
+    approval = draft(api, bot).json()
+    decide(api, approval["id"])
+    monkeypatch.setenv("TICO_SUPPORT", "off")
+    assert draft(api, bot, message="Another").status_code == 409
+    assert send(api, bot, approval["id"]).status_code == 409
+    assert hq.seen == [] and not consumed(api, approval["id"])
+
+
+def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):
+    api = environment()
+    bot = as_bot(api)
+    approval = draft(api, bot).json()
+    decide(api, approval["id"])
+    hq.down = True
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 502 and r.json()["error"]["retryable"] is True and not consumed(api, approval["id"])
+    hq.down, hq.status_override = False, 429
+    assert send(api, bot, approval["id"]).status_code == 429 and not consumed(api, approval["id"])
+    hq.status_override = None
+    r = send(api, bot, approval["id"])
+    assert r.status_code == 200 and consumed(api, approval["id"]) and len(hq.tickets) == 1
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def test_the_person_only_routes_still_refuse_a_bot(environment, hq):
+    api = environment()
+    bot = as_bot(api)
+    assert file(api, headers=bot).status_code == 403
+    for path in ("/api/v2/support/tickets", "/api/v2/support/compose"):
+        assert api.get(path, headers=bot).status_code == 403
+    assert hq.seen == []

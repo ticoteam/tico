@@ -9,6 +9,11 @@ browser, and is sealed with the credential vault's key: `seal_plaintext_secrets`
 timer of its own. Every route shows a person their own tickets and no one else's. Ticket text, from either side, is data:
 it is stored as plain text and the page escapes it.
 
+A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report as
+a `support` approval (backend/hubdb.py `lint_support`: the message, its hash, whether the IDs go), a person reads it in
+Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
+filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
+
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
 import json
@@ -16,6 +21,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 from typing import Literal
 
 import httpx
@@ -24,6 +30,7 @@ from pydantic import Field
 
 from . import diagnostics
 from .census import hq_url
+from .auth import Identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
@@ -56,6 +63,10 @@ class SupportTicket(Contract):
     email: str = Field(default="", max_length=254)
     include_ids: bool = True            # the version and the install ID go with it, unless the person unticks it
     diagnostics: str = Field(default="", max_length=64)     # the digest of the bundle the person previewed (backend/diagnostics.py)
+
+
+class SupportFromApproval(Contract):
+    approval: str = Field(min_length=1, max_length=64)     # an approved `support` approval the caller asked for
 
 
 class SupportMessage(Contract):
@@ -200,6 +211,7 @@ class Support:
     def __init__(self, store, settings, census, vault=None):
         self.store, self.settings, self.census, self.vault = store, settings, census, vault
         self.previews = diagnostics.Previews()
+        self.sending = threading.Lock()     # one approval is sent once, even when two calls race
 
     def secret(self, row):
         """The ticket's HQ secret, opened with the vault. One still in plaintext (sealing failed at start) is sealed
@@ -268,8 +280,9 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key=""):
-        """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached."""
+    def file(self, who, body, key="", on_filed=None):
+        """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
+        `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it)."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -313,7 +326,55 @@ class Support:
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
             H.event(c, who.actor, "support.filed", ticket_id, {"email": bool(email), "ids": bool({k: v for k, v in sent.items() if k != "diagnostics"}),
                                                               "diagnostics": "diagnostics" in sent})
+            if on_filed:
+                on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
+
+    def file_approved(self, who, approval_id):
+        """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
+        approved it (theirs to read and answer, counted against their day) and the approval is spent in the same
+        transaction that keeps the ticket: HQ refusing or out of reach spends nothing, so the call can be made again.
+        A second call for a spent approval answers with the same ticket."""
+        with self.sending:
+            with self.store.read() as c:
+                row = H.approval(c, approval_id)
+                quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
+            if not row:
+                raise Problem("not_found", "Approval not found", 404)
+            if row["requested_by"] != who.actor:
+                raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
+            if quarantined:
+                raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
+            if row["kind"] != "support":
+                raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
+            if row["decision"] != "approved":
+                state = row["decision"] or "waiting for a person"
+                raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
+            payload = row["payload"] or {}
+            if H.lint_support(payload) or not H.support_text_matches(payload):
+                raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
+            person = Identity(row["decided_by"], "human")
+            key = "approval:" + approval_id
+            if row["consumed_at"]:
+                with self.store.read() as c:
+                    done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
+                                     (person.actor, key)).fetchone()
+                if not done:
+                    raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
+                return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
+
+            def spend(c, _ticket_id=None):
+                spent = c.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
+                                  (H.now(), approval_id)).rowcount
+                if spent:
+                    H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
+
+            ticket = self.file(person, SupportTicket(message=payload["message"],
+                                                     include_ids=payload.get("include_ids", True) is not False),
+                               key, on_filed=spend)
+            with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
+                spend(c)
+            return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
         """Add a message to one of the caller's tickets."""
@@ -459,6 +520,12 @@ def install(app, store, settings, census):
         who = person(request)
         require_on(settings)
         return support.file(who, body, (request.headers.get("idempotency-key") or "")[:200])
+
+    @app.post("/api/v2/support/tickets/from-approval")
+    def support_file_approved(request: Request, body: SupportFromApproval):
+        """A bot, a person's token or the Assistant sends the report a person approved (docs/support.md)."""
+        require_on(settings)
+        return support.file_approved(request.state.identity, body.approval)
 
     @app.post("/api/v2/support/tickets/refresh")
     def support_refresh(request: Request):

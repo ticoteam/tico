@@ -120,11 +120,15 @@ TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
 # for them. A missing title or approval field is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")     # warn | refuse | off
-APPROVAL_KINDS = ("send", "spend", "publish", "merge")
+APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 APPROVAL_FIELDS = {"send": ("to", "cc", "subject", "body_sha256", "mailbox"),
                    "spend": ("amount", "account", "what"),
                    "publish": ("url", "content_sha256"),
-                   "merge": ("repo", "pr")}
+                   "merge": ("repo", "pr"),
+                   # A report to the Tico team (backend/support.py `file_approved`): the message, its hash, and whether
+                   # the version and install ID go with it. Nothing else may: no email, no diagnostics bundle.
+                   "support": ("message", "content_sha256")}
+SUPPORT_APPROVAL_KEYS = ("message", "content_sha256", "include_ids")
 
 CAP_PER_HOUR = 20               # rule 3: messages in one conversation between bots, per hour
 MAX_ASK_DEPTH = 3               # rule 3: A asks B asks C; C may not ask on
@@ -1278,11 +1282,50 @@ def lint_approval(kind, payload):
     if kind == "publish" and digest not in (None, "") and not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
         # Every publisher compares against hashlib's hexdigest(), so any other shape could never publish.
         problems.append("content_sha256 must be 64 lower-case hex characters")
+    if kind == "support":
+        problems += lint_support(payload)
     if kind == "merge" and "merge needs pr" in problems:
         # A merge approval is for one pull request; a change with none is a decision for a person.
         problems[problems.index("merge needs pr")] = ("merge needs pr (the pull request number); for a change "
                                                       "with no pull request, file a decision task for the person instead")
     return problems
+
+
+def lint_support(payload):
+    """A support report is sent exactly as the person read it: the message already clean (support.clean_message would
+    leave it unchanged), its SHA-256 matching, and nothing but the three keys."""
+    from .support import CONTROL, MAX_MESSAGE
+    problems = []
+    extra = sorted(set(payload) - set(SUPPORT_APPROVAL_KEYS))
+    if extra:
+        problems.append(f"support takes only {', '.join(SUPPORT_APPROVAL_KEYS)}, not {', '.join(extra)}")
+    message, digest = payload.get("message"), payload.get("content_sha256")
+    if "include_ids" in payload and not isinstance(payload["include_ids"], bool):
+        problems.append("include_ids must be true or false")
+    if message in (None, ""):
+        return problems
+    if not isinstance(message, str):
+        return problems + ["message must be a string"]
+    if len(message) > MAX_MESSAGE:
+        problems.append(f"message must be at most {MAX_MESSAGE} characters")
+    if "\r" in message or CONTROL.search(message) or message != message.strip():
+        problems.append("message must be plain text with no control characters and no leading or trailing blank space")
+    if digest not in (None, "") and not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+        problems.append("content_sha256 must be 64 lower-case hex characters")
+    elif digest and not support_text_matches(payload):
+        problems.append("the message doesn't match content_sha256; send the exact message that will be sent")
+    return problems
+
+
+def support_text_matches(payload):
+    """A support payload's message is still the one its hash names (SHA-256 of its UTF-8 bytes)."""
+    message, digest = payload.get("message"), payload.get("content_sha256")
+    if not isinstance(message, str) or not isinstance(digest, str):
+        return False
+    try:
+        return hashlib.sha256(message.encode("utf-8")).hexdigest() == digest
+    except UnicodeEncodeError:
+        return False
 
 
 def publish_text_matches(payload):
@@ -4305,8 +4348,9 @@ def approval_request(conn, actor, kind, payload, task_id=None):
             owner = row["owner"]
     owner = owner or human_actor(default_human(conn))
     ts = now()
-    msg = _write_message(conn, actor, owner,
-                         f"Approve this {kind}: " + _clip(text, 200),
+    ask = ("Send this to Tico support? " + _clip(payload["message"], 200) if kind == "support"
+           else f"Approve this {kind}: " + _clip(text, 200))
+    msg = _write_message(conn, actor, owner, ask,
                          _pair_conversation(conn, actor, owner, "notice"), "notice",
                          {"approval": "pending", "task": task_id}, None, None)
     row = {"id": new_id(), "kind": kind, "task_id": task_id, "message_id": msg["id"],

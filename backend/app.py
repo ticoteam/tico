@@ -2894,6 +2894,9 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals")
     def approval_request(request: Request, body: M.ApprovalCreate):
         who = request.state.identity
+        if body.kind == "support":
+            from .support import require_on
+            require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
         def work(c):
             auth.domain(who)
             if body.task_id:
