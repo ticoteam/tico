@@ -124,6 +124,14 @@ def prepare(state, bot, attempt_id, root, config, pushed=False, skip=()):
     return queued, refused
 
 
+def pending_under(state, root):
+    """Whether a file under `root` still waits to be uploaded: its folder must stay until it has gone."""
+    with state.connect() as c:
+        c.executescript(TABLES)
+        return c.execute("SELECT 1 FROM file_outbox WHERE phase='pending' AND root=? LIMIT 1",
+                         (str(Path(root).resolve()),)).fetchone() is not None
+
+
 def _query(row, extra=None):
     return urlencode({"bot": row["bot"], "attempt": row["attempt_id"], "path": row["rel"],
                       "name": Path(row["rel"]).name, **({"commit": row["commit_sha"]} if row["commit_sha"] else {}),

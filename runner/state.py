@@ -18,6 +18,12 @@ def session_key(config, attempt):
                                 (attempt.get("conversation") or {}).get("id"))
 
 
+def lane(config, attempt):
+    """The lane this turn runs in: the server's word when it sent one, else worked out the same way."""
+    return attempt.get("lane") or sessions.lane(config, attempt.get("bot"), (attempt.get("task") or {}).get("id"),
+                                                (attempt.get("conversation") or {}).get("id"))
+
+
 class State:
     def __init__(self, directory):
         self.directory = Path(directory)

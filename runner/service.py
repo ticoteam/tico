@@ -22,14 +22,14 @@ from clients.manifest import manifest_path, repo_dir, tools_of
 from clients.tico import APIError, Client
 from . import container_probe, credential_socket, declared_access, files_publish, git_credentials, harness_tools, isolation, mail_key, op, profiles, tool_probes, usage
 from . import redact as redact_mod
-from . import goals, memory_history, repositories, runner_events, worktrees, safe_git, subscription_usage
+from . import goals, memory_history, repositories, runner_events, task_sessions, worktrees, safe_git, subscription_usage
 from .release_update import Follower
 from .login import POLL_S as LOGIN_POLL_S, Logins
 from .hosts.base import HostError, SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
 from .hosts.cursor import MODELS as CURSOR_HOST_MODELS
 from .hosts.pi import MODELS as PI_HOST_MODELS
 from .outage import RECENT, Outage, describe, log
-from .state import BOT_THREAD, State, session_key
+from .state import BOT_THREAD, State, lane as turn_lane, session_key
 from .warm import WarmSessions
 from .watchers import PARKED_STATES, Watchers
 from .profiles import SubscriptionUnavailable
@@ -265,6 +265,22 @@ def self_update(root=None, running=None, run=subprocess.run):
     if head != old:
         log(f"Tico runner: updated its checkout {old[:7]}..{head[:7]}; restarting when no turn is running")
     return bool(running and head and head != running), ""
+
+
+def machine_capacity(configured=None):
+    """How many turns this computer runs at once. A number in the config is kept as written; missing or "auto"
+    is sized to the machine, since a bot's task lanes now run side by side: a core and about 2 GB of memory per
+    turn, never below the 4 every runner had, and at most 16 so one large server does not take a whole team's queue."""
+    if configured not in (None, "", "auto"):
+        try:
+            return max(1, int(configured))
+        except (TypeError, ValueError):
+            pass
+    try:
+        memory_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // 2**30
+    except (AttributeError, OSError, ValueError):
+        memory_gb = 8
+    return max(4, min(os.cpu_count() or 4, memory_gb // 2, 16))
 
 
 def supervised():
@@ -634,16 +650,19 @@ class Runner:
         self.client = client or Client(config["url"], config["token"], timeout=10, retries=1)
         self.state = State(state_dir)
         self.repositories = repositories.Repositories(config["projects_dir"], self.state.directory / "repositories.json", self.client)
-        self.worktrees = worktrees.Worktrees(config["projects_dir"], self.client, idle=lambda bot: bot.removeprefix("bot:") not in self.active_bots.values(), vault_values=lambda bot: self.worktree_vault.get(bot.removeprefix("bot:"), []), retain_vault=self.retain_worktree_vault, refresh=self.repositories.refresh_mirror, environment=lambda bot: self.credential_environment(bot.removeprefix("bot:")))
+        self.worktrees = worktrees.Worktrees(config["projects_dir"], self.client, idle=self.lane_idle, vault_values=lambda bot: self.worktree_vault.get(bot.removeprefix("bot:"), []), retain_vault=self.retain_worktree_vault, refresh=self.repositories.refresh_mirror, environment=lambda bot: self.credential_environment(bot.removeprefix("bot:")))
         self.follower = Follower(config, self.state.directory, self.client, supervised=supervised)
-        self.capacity = int(config.get("capacity", 4))
+        self.capacity = machine_capacity(config.get("capacity"))
         self.host_factory = host_factory or self.make_host
         self.stop = threading.Event()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=self.capacity)
         self.active = {}
         self.attempt_bots = {}
+        self.attempt_lanes = {}              # attempt id -> (bot, lane, task id) while its turn may still be running
+        self.session_git_locks = {}          # main checkout -> lock over adding, syncing and removing its task worktrees
+        self.session_git_guard = threading.Lock()
         self.product_refreshed = set()       # the built-in bots whose product files were checked since this runner started
-        self.goal_tries = {}                 # bot -> [goal continuations since a person last wrote, the last reason given]
+        self.goal_tries = {}                 # (bot, session key) -> [goal continuations since a person last wrote, the last reason given]
         self._weekly_usage = subscription_usage.Reports()
         self.last_heartbeat = 0
         self.vault_files = {}
@@ -655,7 +674,7 @@ class Runner:
         # a turn's host process needs lives in a directory the bot user owns instead.
         self.host_state = isolation.bot_state(self.state.directory)
         self.credentials = credential_socket.serve(self.client, mail=mail_key.minter(config), refresh=self.repositories.refresh_mirror)
-        self.warm = WarmSessions(self.host_state / "antigravity")
+        self.warm = WarmSessions(self.host_state / "antigravity", limit=max(8, self.capacity))
         self.attempt_runtimes = {}     # attempt id -> host names its turn may use
         self.tools = harness_tools.Harnesses(
             harness_tools.tools_dir(config, config_path, self.state.directory),
@@ -741,24 +760,33 @@ class Runner:
             return checkouts[bot]
         return Path(explicit or repo_dir(self.config["projects_dir"], bot))
 
-    def refresh_product_files(self, bot, config, path):
+    def refresh_product_files(self, bot, config, path, push_env=None):
         """A built-in bot's instructions and playbooks follow the release: once per start of this runner, before the bot's
         turn (so nothing is being edited), the ones the template changed are brought up (clients/catalog.py refresh).
-        A failure is a log line, never a failed turn."""
-        if bot in self.product_refreshed:
-            return
-        self.product_refreshed.add(bot)
-        try:
-            from clients import catalog
-            template = self.bootstrap_template(bot, config, {row["template"]: row for row in catalog.cards()})
-            if not template:
-                return
-            changed = catalog.refresh(template, path, self.names(), display_name=(config or {}).get("display_name"))
-            if changed:
-                isolation.chown(path, recursive=True)
-                log(f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template")
-        except Exception as exc:
-            log(f"Tico runner: could not refresh {bot} from its template ({type(exc).__name__})")
+        A failure is a log line, never a failed turn.
+
+        Task worktrees sync from the upstream, not from this checkout, so a refresh commit stays in `product_unpushed`
+        until a push of this checkout succeeds: at once with `push_env` (a task-lane turn), or at the end of a main-lane
+        turn. Returns False while it is still unpushed; a task-lane turn then runs in this checkout instead."""
+        unpushed = self.__dict__.setdefault("product_unpushed", set())
+        if bot not in self.product_refreshed:
+            self.product_refreshed.add(bot)
+            try:
+                from clients import catalog
+                template = self.bootstrap_template(bot, config, {row["template"]: row for row in catalog.cards()})
+                changed = template and catalog.refresh(template, path, self.names(),
+                                                       display_name=(config or {}).get("display_name"))
+                if changed:
+                    isolation.chown(path, recursive=True)
+                    log(f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template")
+                    unpushed.add(bot)
+            except Exception as exc:
+                log(f"Tico runner: could not refresh {bot} from its template ({type(exc).__name__})")
+        if bot in unpushed and push_env is not None:
+            with self.session_git_lock(path):
+                if self.push(path, push_env):
+                    unpushed.discard(bot)
+        return bot not in unpushed
 
     def refresh_workspace(self, bot, path, env=None):
         """Same checkout and same provider thread for chat and routines. Pull first so a
@@ -2674,6 +2702,15 @@ class Runner:
         ]
         if is_shared(attempt.get("config")):
             lines = self.shared_lines(attempt["bot"], attempt["config"], attempt.get("branch_sync_problem", "")) + lines
+        session = attempt.get("_session")
+        if session:
+            lines.append(f"This task has its own checkout of your repository, `{session['path']}` on branch "
+                         f"`{session['branch']}`; your other tasks run at the same time in theirs. Commit here, then "
+                         f"`git pull --rebase` and `git push`, which sends to `{session['upstream']}`. What you leave "
+                         "uncommitted in memory/ or knowledge/ is committed for you when the turn ends."
+                         + (f" The checkout could not sync before this turn ({attempt['branch_sync_problem']}): "
+                            "commit or keep what is there, run `git pull --rebase`, and resolve conflicts first."
+                            if attempt.get("branch_sync_problem") and not is_shared(attempt.get("config")) else ""))
         if is_assignment(attempt.get("config")):
             linked = (attempt.get("config") or {}).get("assignment_task_id") or "the assigned delivery task"
             lines.insert(1, f"You are a temporary instance of a persistent role, assigned only to task {linked}. "
@@ -2897,9 +2934,10 @@ class Runner:
             self.ack_input(aid, mid)
         return result["messages"]
 
-    def goal_tried(self, bot, note, cap=goals.MAX_GOAL_TRIES):
-        """Count one goal continuation; True once the bot has tried `cap` times with no person in between."""
-        tries = self.goal_tries.setdefault(bot, [0, ""])
+    def goal_tried(self, key, note, cap=goals.MAX_GOAL_TRIES):
+        """Count one goal continuation on a (bot, session key) thread; True once it has tried `cap` times with no
+        person in between."""
+        tries = self.goal_tries.setdefault(key, [0, ""])
         tries[0] += 1
         tries[1] = (note or "").strip() or tries[1]
         return tries[0] >= cap
@@ -2954,11 +2992,51 @@ class Runner:
             if bot not in keep:
                 self.worktree_vault.pop(bot, None)
 
+    def lane_idle(self, bot, task=None):
+        """Worktree maintenance's check (runner/worktrees.py): no turn here for `bot` that could be in `task`'s
+        worktree, which is one in the bot's main lane or in that task's lane. Without a task: no turn for the bot."""
+        bot = bot.removeprefix("bot:")
+        for aid, name in list(self.active_bots.items()):
+            if name != bot:
+                continue
+            _, lane, turn_task = self.__dict__.get("attempt_lanes", {}).get(aid, (bot, "main", ""))
+            if task is None or lane == "main" or turn_task == str(task):
+                return False
+        return True
+
+    def session_git_lock(self, main):
+        """One git step at a time on a checkout's task worktrees: adding, syncing, rebasing and removing them
+        all write the repository they share."""
+        with self.session_git_guard:
+            return self.session_git_locks.setdefault(str(main), threading.Lock())
+
+    def task_session(self, attempt, config, lane):
+        """The task this turn runs in its own worktree for, or "": the main lane, an assignment (its tree is
+        already per task), or a bot or task whose name is unfit for a path."""
+        if is_assignment(config) or not task_sessions.SLUG.fullmatch(attempt["bot"]):
+            return ""
+        return task_sessions.task_of(lane)
+
+    def task_closed(self, attempt):
+        """Whether the turn's task is finished, read with the turn's own token before its result is sent."""
+        task = (attempt.get("task") or {}).get("id")
+        if not task or not attempt.get("token"):
+            return False
+        try:
+            row = Client(self.config["url"], attempt["token"], timeout=10, retries=0).get("tasks/" + task).get("task") or {}
+        except Exception:
+            return False
+        return row.get("status") in task_sessions.CLOSED
+
     def execute(self, attempt):
         aid, bot = attempt["id"], attempt["bot"]
         self.state.record(attempt)
+        config = attempt["config"]
+        lane = turn_lane(config, attempt)
+        # Goal continuations count per thread: one task's stuck goal does not pause another's.
+        tries_key = (bot, session_key(config, attempt))
         if from_person(attempt.get("message")):
-            self.goal_tries.pop(bot, None)
+            self.goal_tries.pop(tries_key, None)
         # Keep the binding out of the persisted request and the caller's shared dictionary.
         attempt = dict(attempt)
         attempt.pop("_subscription_profile", None)
@@ -2967,7 +3045,6 @@ class Runner:
         renewer = threading.Thread(target=self.renew_loop, args=(aid, lost, done, deadline, stopped), daemon=True)
         renewer.start()
         host, thread, turn, env = None, None, None, None
-        config = attempt["config"]
         persistent = config.get("harness") == "antigravity" and config.get("runtime") == "gemini"
         conv, runtime = None, None
         reply, outcome, tokens, limited, retryable, fallback = "", "interrupted", {}, False, False, None
@@ -2984,14 +3061,29 @@ class Runner:
         carried = {}
         redactor, started_at, tree, memory_before = None, "", {}, ""
         meter, metered = [usage.Meter()], []
-        bot_lock, acquired = self.worktrees.bot_lock(bot), False
+        # A lane runs one turn at a time. A main-lane turn holds the bot's checkout for the whole turn; a task
+        # lane works in its own worktree and takes the checkout only to refresh it, when no main-lane turn has it.
+        session_task = self.task_session(attempt, config, lane)
+        held = []                                   # the locks this turn holds, released last-first
+
+        def hold(lock):
+            acquired = False
+            while not acquired and not lost.is_set():
+                acquired = lock.acquire(timeout=1)
+            if not acquired:
+                raise RuntimeError('Attempt lease lost while waiting for worktree maintenance')
+            held.append(lock)
+
+        checkout_lock = self.worktrees.bot_lock(bot)
+        session_path, session_problem = None, ""
         try:
             try:
-                while not acquired and not lost.is_set():
-                    acquired = bot_lock.acquire(timeout=1)
-                if lost.is_set():
-                    raise RuntimeError('Attempt lease lost while waiting for worktree maintenance')
-                self.local_path(bot, config)
+                hold(self.worktrees.lane_lock(bot, lane))
+                if session_task and checkout_lock.acquire(blocking=False):
+                    held.append(checkout_lock)
+                elif not session_task:
+                    hold(checkout_lock)
+                main_path = self.local_path(bot, config)
                 selected_profile = self.turn_profile(attempt)
                 attempt["_subscription_profile"] = selected_profile
                 metered.append((meter[0], dict(config), selected_profile.name if selected_profile else None,
@@ -3001,7 +3093,8 @@ class Runner:
                 socket_path = self.arm_credentials(env, attempt, bot)
                 if not is_assignment(config):
                     git_credentials.apply(env, self.client, bot, self.config_path if not socket_path else None, socket_path)
-                    self.prepare_history(bot, attempt.get("generation"), self.local_path(bot), env)
+                    if checkout_lock in held:
+                        self.prepare_history(bot, attempt.get("generation"), self.local_path(bot), env)
                 redactor = redact_mod.for_turn(env, self.vault_values.get(aid, []))
                 if self.credentials:
                     redactor = redactor or redact_mod.Redactor([])
@@ -3020,13 +3113,46 @@ class Runner:
                     binding = hashlib.sha256(json.dumps([str(selected_profile.directory),
                                              selected_profile.share_operator]).encode()).hexdigest()
                     conv += ":profile:" + selected_profile.name + ":" + binding
-                execution_path = self.local_path(bot, config)
-                if is_shared(config):
-                    attempt["branch_sync_problem"] = sync_shared(execution_path, env)
-                    self.ensure_reads(execution_path)
-                else:
-                    self.refresh_workspace(bot, execution_path, env)
-                self.refresh_product_files(bot, config, execution_path)
+                execution_path = main_path
+                if checkout_lock in held:
+                    if is_shared(config):
+                        attempt["branch_sync_problem"] = sync_shared(execution_path, env)
+                        self.ensure_reads(execution_path)
+                    else:
+                        self.refresh_workspace(bot, execution_path, env)
+                    self.refresh_product_files(bot, config, execution_path, env if session_task else None)
+                if session_task:
+                    session_path = task_sessions.path_for(self.config["projects_dir"], bot, session_task)
+                    if bot in self.__dict__.get("product_unpushed", ()):
+                        # The worktree would sync from an upstream without the refreshed product files.
+                        session_problem = "its refreshed product files are not pushed yet"
+                    else:
+                        with self.session_git_lock(main_path):
+                            tracked, session_problem = task_sessions.ensure(main_path, session_path, session_task, env)
+                            if not session_problem:
+                                attempt["branch_sync_problem"] = sync_shared(session_path, env)
+                    if session_problem:
+                        # Without a worktree of its own the task's turn waits for the main checkout like any other.
+                        log(f"Tico runner: {bot}: task {session_task} runs in the bot's checkout ({session_problem})")
+                        session_path = None
+                        if checkout_lock not in held:
+                            hold(checkout_lock)
+                            if is_shared(config):
+                                attempt["branch_sync_problem"] = sync_shared(execution_path, env)
+                            else:
+                                self.refresh_workspace(bot, execution_path, env)
+                    else:
+                        if checkout_lock in held:
+                            held.remove(checkout_lock)
+                            checkout_lock.release()
+                        execution_path = session_path
+                        self.ensure_reads(execution_path)
+                        attempt["_session"] = {"path": str(session_path), "branch": task_sessions.BRANCH + session_task,
+                                               "upstream": tracked}
+                        # Claude finds a session to resume by its working directory, so a thread begun in the main
+                        # checkout is not resumed here (nor this one there): the worktree keeps threads of its own,
+                        # and its first turn is a fresh session with the whole prompt.
+                        conv += ":worktree"
                 started_at = redact_mod.head(execution_path) if redactor else ""
                 memory_before = redact_mod.head(execution_path)
                 # A bot keeps one thread and stays on it; this machine alone remembers which.
@@ -3059,9 +3185,9 @@ class Runner:
                     def stuck(note, cap=goals.MAX_GOAL_TRIES):
                         """Count a continuation; past the cap, interrupt the turn so its goal can be cleared."""
                         nonlocal goal_running, pausing, pause_at
-                        if pausing or clearing or not self.goal_tried(bot, note, cap):
+                        if pausing or clearing or not self.goal_tried(tries_key, note, cap):
                             return
-                        count, last = self.goal_tries.pop(bot)
+                        count, last = self.goal_tries.pop(tries_key)
                         last = " ".join(last.split())
                         goal_paused[0] = (f"Goal paused after {count} tries without progress"
                                           + (": " + (last if len(last) <= 300 else last[:299] + "…") if last else ""))
@@ -3175,7 +3301,7 @@ class Runner:
                                         goal_running, complete, outcome = False, True, "completed"
                                 if not complete and host.supports_steer:
                                     if any(from_person(m) for m in self.receive_inputs(aid, host, thread, turn, carried)):
-                                        self.goal_tries.pop(bot, None)
+                                        self.goal_tries.pop(tries_key, None)
                             except APIError as exc:
                                 if not exc.retryable:
                                     raise
@@ -3402,6 +3528,7 @@ class Runner:
                                                 **({"auth_rejected": {"runtime": auth_rejected["runtime"],
                                                                       "reason": rejection_reason(auth_rejected["reason"])}}
                                                    if auth_rejected and outcome == "failed" else {})})
+            closed = bool(session_path and outcome == "completed" and self.task_closed(attempt))
             try:
                 self.flush(aid)
                 self.complete(aid, completion)
@@ -3410,14 +3537,32 @@ class Runner:
                     self.state.cursor(thread, attempt["message"]["id"])
                 self.state.phase(aid, "synced")
                 if outcome == "completed":
-                    held = bool(tree and tree["committed"])
-                    if not held and not is_assignment(config):
+                    secret = bool(tree and tree["committed"])
+                    skipped = (tree or {}).get("left_out", []) + (tree or {}).get("too_large", [])
+                    root = session_path or self.local_path(bot)
+                    if not secret and not is_assignment(config) and not session_path:
                         self.publish(bot, self.local_path(bot), env)
-                    pushed = False if held or is_assignment(config) else self.push(self.local_path(bot), env)
-                    files_publish.after_turn(self, attempt, self.local_path(bot), pushed,
-                                             skip=[str(Path(p).relative_to(execution_path))
-                                                   for p in (tree or {}).get("left_out", []) + (tree or {}).get("too_large", [])])
-                    memory_history.report(self, bot, self.local_path(bot), aid, memory_before, own_turn=not is_shared(config))
+                    if session_path and not secret:
+                        # Lanes push to the same branch, one at a time: each lands its commits on what the others pushed.
+                        with self.session_git_lock(self.local_path(bot, config)):
+                            problem = task_sessions.finish(session_path, aid, env, skipped)
+                            if problem:
+                                log(f"Tico runner: {bot}: task {session_task}'s commits stay in {session_path} ({problem})")
+                            pushed = self.push(session_path, env)
+                    else:
+                        pushed = False if secret or is_assignment(config) else self.push(root, env)
+                        if pushed:
+                            self.__dict__.get("product_unpushed", set()).discard(bot)
+                    files_publish.after_turn(self, attempt, root, pushed,
+                                             skip=[str(Path(p).relative_to(execution_path)) for p in skipped])
+                    # A task lane's commits carry their run's trailer; other lanes' commits sit beside them.
+                    memory_history.report(self, bot, root, aid, memory_before,
+                                          own_turn=not is_shared(config) and not session_path)
+                    # A file still waiting to upload is read from the worktree, so the worktree waits for it.
+                    if closed and not files_publish.pending_under(self.state, session_path):
+                        with self.session_git_lock(self.local_path(bot, config)):
+                            if task_sessions.remove(self.local_path(bot, config), session_path, session_task, env):
+                                log(f"Tico runner: {bot}: task {session_task} is finished; removed its worktree")
             except APIError as exc:
                 if not exc.retryable:
                     # This Mac holds the only copy of the result until the cloud takes it, so a
@@ -3450,8 +3595,8 @@ class Runner:
                     Path(filename).unlink(missing_ok=True)
                 done.set()
                 renewer.join(timeout=2)
-                if acquired:
-                    bot_lock.release()
+                for lock in reversed(held):
+                    lock.release()
 
     def complete(self, aid, completion):
         """Send a result. A server from before usage refuses the field outright (422): the result must not
@@ -3568,7 +3713,8 @@ class Runner:
             if self._checkout and checkout.get("behind") and getattr(self, "_update_note", None):
                 self._checkout = {**self._checkout, "blocked": self._update_note}
         body = {"version": RUNNER_VERSION, "platform": sys.platform,
-                "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1"],
+                "capabilities": ["assignment_instances_v1", "assignment_cleanup_v1",
+                                 *(["task_lanes_v1"] if time.monotonic() >= getattr(self, "_task_lanes_after", 0) else [])],
                 "capacity": self.capacity, "readiness": self.readiness(candidates, checks, runtimes),
                 "mail_agent_instructions": self.mail_agent_instructions(assignments),
                 "agent_instructions": agent_instructions,
@@ -3663,6 +3809,11 @@ class Runner:
                         for state in profile.get("runtimes", {}).values():
                             state.pop("weekly", None)
                     continue  # Older servers keep receiving the existing sign-in report.
+                if exc.status == 422 and "capabilities" in detail and "task_lanes_v1" in body.get("capabilities", []):
+                    # A server from before task lanes knows the other capabilities; only the new one goes.
+                    body["capabilities"].remove("task_lanes_v1")
+                    self._task_lanes_after = time.monotonic() + 600
+                    continue
                 root_fields = ("worktrees", "profiles", "repositories", "capabilities")
                 field = next((name for name in root_fields if name in body and re.search(
                     r"(?:^|[ ;])(?:body\.)?" + name + r"(?:[.: ;]|$)", detail)), None)
@@ -3771,6 +3922,7 @@ class Runner:
                 del self.active[aid]
                 self.active_bots.pop(aid, None)
                 self.attempt_bots.pop(aid, None)
+                self.attempt_lanes.pop(aid, None)
                 self.next_claim = 0         # capacity came free: look for the next job now
                 self.attempt_runtimes.pop(aid, None)
                 try:
@@ -3834,6 +3986,8 @@ class Runner:
                 config = attempt.get("config") or {}
                 self.attempt_bots[attempt["id"]] = attempt["bot"]
                 self.active_bots[attempt["id"]] = attempt["bot"]
+                lane = turn_lane(config, attempt)
+                self.attempt_lanes[attempt["id"]] = (attempt["bot"], lane, str((attempt.get("task") or {}).get("id") or ""))
                 self.attempt_runtimes[attempt["id"]] = {config.get("runtime") or "",
                                                         (configured_fallback(config) or {}).get("runtime") or ""} - {""}
                 self.active[attempt["id"]] = self.pool.submit(self.execute, attempt)
@@ -3898,15 +4052,24 @@ class Runner:
 
     def _claim_next(self, maintaining):
         body = {"next_run": True}
-        # Lease expiry does not mean this supervisor's worker has stopped.
+        # Lease expiry does not mean this supervisor's worker has stopped: every live worker's lane stays busy.
+        live = [aid for aid, future in self.active.items() if not future.done() and aid in self.attempt_bots]
         if time.monotonic() >= getattr(self, "_busy_bots_after", 0):
-            body["busy_bots"] = sorted(set(maintaining) | {self.attempt_bots[aid] for aid, future in self.active.items()
-                                        if not future.done() and aid in self.attempt_bots})
+            if time.monotonic() >= getattr(self, "_busy_lanes_after", 0):
+                lanes = self.__dict__.get("attempt_lanes", {})
+                body["busy_bots"] = sorted(set(maintaining))
+                body["busy_lanes"] = sorted({"|".join(lanes.get(aid, (self.attempt_bots[aid], "main"))[:2]) for aid in live})
+            else:
+                body["busy_bots"] = sorted(set(maintaining) | {self.attempt_bots[aid] for aid in live})
         try:
             return self.client.post("jobs/claim", body)
         except APIError as exc:
             if exc.status != 422 or "busy_bots" not in body:
                 raise
+            if "busy_lanes" in body:
+                # A server from before lanes: a bot with a turn running here gets nothing more.
+                self._busy_lanes_after = time.monotonic() + 600
+                return self._claim_next(maintaining)
             self._busy_bots_after = time.monotonic() + 600
             return self.client.post("jobs/claim", {"next_run": True})
 

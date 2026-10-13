@@ -8,7 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Copy session ID from a task's ⋯ menu.** On a task with a primary session, the menu copies that session's id, for resuming or restoring it by hand.
 - **Tasks show their sessions.** The owning bot's task session is primary, with its resume command to copy; people and bots can link other sessions to track (a thread URL or a resume command; Sessions + on the task, `hub task link --session`). Task chat still goes only to the owning bot. See [Tasks](docs/tasks.md).
+- **A bot works on several tasks at once.** A bot with a session per task (BotOps, or `session: task`) runs turns on different
+  tasks side by side on its computer, each in its own git worktree of the bot's repository (`sessions/bot-<slug>/<task>` in the
+  workspace, branch `tico-session/<task>`); chat and the bot's own thread still take turns in its main folder. At the end of a turn
+  the runner commits what it left in memory/ and knowledge/, stamps the turn's commits with `Tico-Run:`, rebases them onto the
+  bot's default branch and pushes; the worktree goes once the task is finished. A runner whose config has no `capacity` (or
+  `"auto"`) sizes it to the computer. An older server keeps giving a bot one turn at a time.
 - **Bots report Tico bugs to the Tico team with one tap from you.** A bot drafts its report with `hub support report` (MCP `hub_support_report`); you see **Send this to Tico support?** in Needs you with the whole message, what goes with it (the version and install ID, or nothing) and where it goes, and after your yes the bot sends it with `hub support send`, filed as you so the replies show on your Support page. No more copying a bot's report into the form. See [Contact support](docs/support.md#a-bots-report-after-a-persons-yes).
 - **Add teammates from Team.** The plus beside Team offers a section, bot or human according to your permissions.
   Bots come from the existing template picker or an editable, unsent BotOps request for a custom bot or help with an
@@ -32,6 +39,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Changed
 - **Support reads like a conversation.** Help's Support rail lists your requests with a status badge (Open, Answered, Closed), when each last changed and a dot for an unread reply; opening one shows the conversation as bubbles from you and Tico support, with times, and marks it read. Enter sends, Shift+Enter adds a line, a failed send says **Not sent** under the box and keeps your message, and delete is a trash icon that asks first. The `?` shows how many replies you haven't read. The Mark read and Refresh buttons are gone: replies are checked when the app comes back into focus. See [Contact support](docs/support.md#for-a-human).
+- **BotOps builds the bot you ask for instead of asking questions first.** It picks the slug, repository, team, model and starting Instructions from your request, creates the bot right away, lists missing optional access (cloud logs, another repository, a Credential, a Computer to reconnect) as follow-ups, and tells you the assumptions it made so you can correct them. Spending, Credentials and publishing still need your approval.
 - **A bot can hold 30 task worktrees, up from 10.** The computer's 5 GB free-disk floor can stop it sooner. Nothing is removed to make room: at the limit, creation names the oldest idle worktrees to clean up first.
 - **The server can hand a bot's tasks out side by side.** A bot keyed on tasks (`session: task`, BotOps by default) gets one turn at a time per task instead of one per bot, once its computer says it runs them that way (`task_lanes_v1`); chat and other work without a task still run one at a time. Until a runner advertises it, nothing changes. Stopping a bot that is running more than one turn names the turn. Before going back to an older release, drain the bots: it allows one running turn per bot.
 - **A person's comment wakes the bot that filed a task only when it's meant for it, and an @mention reaches the person.** On a task a bot filed and a person owns, a person's comment wakes that bot only when it @mentions the bot (`@ops`, or its name) or the task waits on that person; any other comment reaches the bot on its next turn. A comment on a task a bot owns, or on a task with no bot on it, wakes as before. A person @mentioned in a comment gets it as a question, which puts the task in their Needs you.

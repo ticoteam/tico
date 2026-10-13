@@ -307,6 +307,13 @@ function taskPropsBind(d, task, change) {
     items.push({text: 'Copy link', run: async () => {
       try { await navigator.clipboard.writeText(`${location.origin}/#/task/${encodeURIComponent(task.id)}`); toast('Link copied'); } catch { toast('Could not copy the link', true); }
     }});
+    // The owning bot's session id, for resuming or restoring that session by hand.
+    const primary = ((d.liveTask || task).links || []).filter(l => l.kind === 'session').map(l => {
+      try { return JSON.parse(l.detail_json || '{}'); } catch { return {}; }
+    }).find(s => s.primary && s.thread_id);
+    if (primary) items.push({text: 'Copy session ID', run: async () => {
+      try { await navigator.clipboard.writeText(primary.thread_id); toast('Session ID copied'); } catch { toast('Could not copy the session ID', true); }
+    }});
     if (!r.live && r.reopen) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
     if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
     propMenu(d, more, {label: 'Task', items: items.map(it => ({...it, html: `<span>${esc(it.text)}</span>`})), onPick: it => it.run()});

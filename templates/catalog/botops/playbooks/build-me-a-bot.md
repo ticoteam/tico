@@ -15,9 +15,11 @@ not waiting on it. The human reads one message at the end.
 
 ## The flow
 
-1. **Register it.** `hub bot create --record-only <slug> --name "<Display>" --description "<one line>"`. They become
+1. **Register it, first.** Do not ask for a slug, a repository, sources, outputs or limits: pick them from the
+   request (`playbooks/set-up-a-bot.md` §1, AGENT.md Defaults, not questions) and create the bot now:
+   `hub bot create --record-only <slug> --name "<Display>" --description "<one line>"`. They become
    an owner. If they may not add bots, or are at their limit, say exactly that and stop.
-   Check archived bots too. If the slug is taken, offer a fresh one; never restore the old bot for
+   Check archived bots too. If the slug is taken, pick a fresh one; never restore the old bot for
    a new-bot request. Preserve this request's description, Instructions and limits throughout the build.
 2. **Build it.** Follow `playbooks/set-up-a-bot.md` from step 2: repository from the closest template,
    real instructions, `hub bot check <slug>` clean, committed. Read `hub bot create`'s exit status and the
@@ -26,7 +28,9 @@ not waiting on it. The human reads one message at the end.
    person once for the exact fix it names and end the run (AGENT.md rule 11).
 3. **What it needs.** If the bot talks to a tool (Jira, GitHub, a mailbox), find out what credential it
    takes and open the card for each: `playbooks/connect-a-tool.md`. Do not wait for the answer to
-   finish everything else. When the human saves it you are woken.
+   finish everything else. When the human saves it you are woken. Missing optional access (cloud logs,
+   another repository, a Credential, a Computer to reconnect to Claude) never stops the build: the bot goes
+   live without it, and it is a follow-up in the report.
 4. **Who sees it.** Default is everyone. If they said otherwise, `hub bot access <slug> ...` now. Do
    not ask a question they did not raise.
 5. **Verify the live Routines.** Read them as the requester with `hub routine list --bot <slug>`.
@@ -56,6 +60,8 @@ not waiting on it. The human reads one message at the end.
    - what exists ("Jira Manager is live"), and what it can do now;
    - who can see and use it;
    - what the test showed, or that it was not tested;
+   - the assumptions you made (slug, repository, team, model, sources, limits), so they can correct them;
+   - follow-ups: the optional access still missing, with the card or fix for each;
    - the single next step for them, if any ("Ask it to close last week's stale tickets").
    If a Credential is missing, lead with that. If a step failed, say which and what you tried.
 

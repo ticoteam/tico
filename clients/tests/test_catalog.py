@@ -196,6 +196,13 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
                      "waiting for a computer to get the repository is not a failure", "do not copy the repository"):
             self.assertIn(rule, build)
 
+    def test_a_new_bot_is_built_on_defaults_not_questions(self):
+        self.assertIn("## Defaults, not questions", self.text("AGENT.md"))
+        setup, build = self.text("playbooks/set-up-a-bot.md"), self.text("playbooks/build-me-a-bot.md")
+        self.assertNotIn("stop until it is answered", setup)
+        for rule in ("Do not ask for a slug", "a follow-up in the report", "the assumptions you made"):
+            self.assertIn(rule, build)
+
     def test_no_playbook_suggests_a_sleep_retry_or_a_hand_copy(self):
         for path in [self.folder / "AGENT.md", *sorted((self.folder / "playbooks").glob("*.md"))]:
             for line in path.read_text().splitlines():
