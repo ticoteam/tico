@@ -4,7 +4,8 @@
 // server did not verify is no link and says so. A Support reply to publish, on a 390px phone, says which ticket and
 // shows its whole text wrapped (in Needs you and in Decide), its HTML-looking text stays text, and the exact payload
 // (with the content hash) folds under Exact payload. A field the facts list does not name gets its own row, and a
-// publish without its text says so.
+// publish without its text says so. A bot's report to Tico support reads "Send this to Tico support?" in both places,
+// with where it goes, what goes with it and its whole message wrapped as text.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -92,6 +93,43 @@ async function phonePublish(browser) {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
+const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
+  'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
+const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester: 'bot:support',
+  requested_by: 'bot:support', created: new Date().toISOString(), support: {to: 'updates.tico.team'},
+  payload: {message: REPORT, content_sha256: 'e'.repeat(64)}};
+async function phoneSupport(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [report]})}));
+  await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
+  await page.locator('#task-view [data-view="foryou"]').click();
+  const card = page.locator('[data-group="approvals"] details.req');
+  assert.match(await card.locator('> summary .req-text').textContent(), /Send this to Tico support\?/);
+  await card.locator('> summary').click();
+  const facts = ['To', 'Tico support (updates.tico.team)', 'With it', "The Tico version and this install's ID", 'Message', REPORT];
+  const check = async (box, where) => {
+    assert.deepEqual(await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent)), facts, where);
+    const fit = await box.locator('.approval-facts dd.approval-text').evaluate(dd => {
+      const r = dd.getBoundingClientRect();
+      return {inside: r.left >= 0 && r.right <= innerWidth, wraps: dd.scrollWidth <= dd.clientWidth};
+    });
+    assert.deepEqual(fit, {inside: true, wraps: true}, `${where}: the message wraps inside 390px`);
+    assert.equal(await box.locator('script, img').count(), 0, `${where}: the message stays text`);
+  };
+  await check(card.locator('.approval-payload'), 'Needs you');
+  await page.evaluate(() => { location.hash = '#/decide'; });
+  const dc = page.locator('.decide .dc-card');
+  await dc.waitFor();
+  assert.equal(await dc.locator('.dc-q').textContent(), 'Send this to Tico support?');
+  await check(dc.locator('.approval-payload'), 'Decide');
+  // Without the IDs, the card says only the message goes.
+  const bare = await page.evaluate(r => [...approvalPayloadNode({...r, payload: {...r.payload, include_ids: false}})
+    .querySelectorAll('.approval-facts > *')].map(x => x.textContent), report);
+  assert.deepEqual(bare, ['To', 'Tico support (updates.tico.team)', 'With it', 'Nothing else: only the message', 'Message', REPORT]);
+  assert.equal(await page.evaluate(() => window.pwned), undefined);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
@@ -140,6 +178,7 @@ async function phonePublish(browser) {
     assert.deepEqual(errors, []);
     await page.close();
     await phonePublish(browser);
-    console.log('Needs you approvals: send payload readable, files open, HTML stays text, Approve posts; publish readable at 390px');
+    await phoneSupport(browser);
+    console.log('Needs you approvals: send payload readable, files open, HTML stays text, Approve posts; publish and support readable at 390px');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});
