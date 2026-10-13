@@ -224,7 +224,7 @@ def consumed(api, approval_id):
         return c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval_id,)).fetchone()[0]
 
 
-def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_the_person(environment, hq):
+def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_the_person(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     r = draft(api, bot)
@@ -256,7 +256,7 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     assert len(hq.seen) == 1 and len(hq.tickets) == 1
 
 
-def test_without_ids_only_the_message_goes(environment, hq):
+def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     approval = draft(api, bot, include_ids=False).json()
@@ -265,7 +265,7 @@ def test_without_ids_only_the_message_goes(environment, hq):
     assert json.loads(hq.seen[-1].content) == {"message": REPORT}
 
 
-def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):
+def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     declined = draft(api, bot, message="Declined report").json()
@@ -298,13 +298,13 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     ({"message": REPORT, "content_sha256": __import__("hashlib").sha256(REPORT.encode()).hexdigest(),
       "include_ids": "yes"}, "true or false"),
 ])
-def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq, payload, why):
+def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq, payload, why):  # noqa: F811  (the fixture)
     api = environment()
     r = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=as_bot(api))
     assert r.status_code >= 400 and why in r.text, r.text
 
 
-def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
+def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     approval = draft(api, bot).json()
@@ -315,7 +315,7 @@ def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
     assert hq.seen == [] and not consumed(api, approval["id"])
 
 
-def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):
+def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     approval = draft(api, bot).json()
@@ -332,7 +332,7 @@ def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
 
 
-def test_the_person_only_routes_still_refuse_a_bot(environment, hq):
+def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
     assert file(api, headers=bot).status_code == 403
@@ -341,7 +341,7 @@ def test_the_person_only_routes_still_refuse_a_bot(environment, hq):
     assert hq.seen == []
 
 
-def test_a_bot_reports_and_sends_over_mcp(environment, hq):
+def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the fixture)
     from backend.tests.test_mcp import call, rpc
     api = environment()
     as_bot(api)
