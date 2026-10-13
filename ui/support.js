@@ -54,13 +54,6 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
-  // Keeps a scroller on its newest content only when it is already there (or `pin` asks), so a poll never moves someone
-  // reading back. A shared ui/app/stick-scroll.js can replace this one function.
-  function keepScroll(host, update, pin = false) {
-    const bottom = pin || host.scrollHeight - host.scrollTop - host.clientHeight < 40, top = host.scrollTop;
-    update();
-    host.scrollTop = bottom ? host.scrollHeight : top;
-  }
   function mark() {
     const link = document.getElementById('help-open'), n = state.unread;
     if (!link) return;
@@ -138,8 +131,14 @@
     const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
         + (after[t.status] ? `<p class="support-delivered">${after[t.status]}</p>` : '')
       : `<div class="support-empty"><h3>Ask Tico support</h3><p>Tell us what happened and what you expected. A person on the Tico team replies here, and a number on the ? button tells you when they have.</p></div>`;
-    if (host.dataset.shown !== html) keepScroll(host, () => { host.innerHTML = html; host.dataset.shown = html; }, pin);
-    else if (pin) host.scrollTop = host.scrollHeight;
+    // stays on the newest message only while the reader is there, so a poll never moves someone reading back
+    // (ui/app/stick-scroll.js); a reply that lands while they are scrolled up shows the "New reply" pill instead
+    const stick = stickScroll(host), id = t ? t.id : '';
+    if (pin) stick.toBottom();                                        // a conversation just opened, or a message just sent
+    if (host.dataset.shown !== html) {
+      const fresh = !pin && !!host.dataset.shown && host.dataset.ticket === id;
+      stick.update(() => { host.innerHTML = html; host.dataset.shown = html; host.dataset.ticket = id; }, {fresh});
+    }
     rail.querySelector('[data-back]').hidden = !state.tickets.length;
     rail.querySelector('[data-title]').textContent = t ? title(t) : 'New request';
     rail.querySelector('[data-status]').innerHTML = t ? badge(t.status) : '';

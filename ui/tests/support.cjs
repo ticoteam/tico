@@ -181,6 +181,27 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     assert.deepEqual(rows, [['Answered question', 'Answered', true], ['Waiting question', 'Open', false], ['Old question', 'Closed', true]]);
     assert.equal(await v.page.locator('#help-open').getAttribute('data-support-unread'), '3');
     assert.ok(!v.calls.some(c => c.endsWith('/read')), 'nothing is read until a conversation is opened');
+    // A long conversation opens at its newest reply. Scrolled up to read, a new reply doesn't move it: the pill offers it.
+    const long = v.hq.tickets.find(x => x.id === 'sup_c');
+    for (let i = 3; i < 30; i++) long.messages.push({...reply(i, 4), body: `Reply ${i}\n` + 'More detail. '.repeat(20)});
+    await v.page.evaluate(() => window.supportPoll());
+    await v.page.locator('[data-requests] .support-item').first().click();
+    const thread = v.page.locator('[data-thread]'), gap = () => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
+    await v.page.waitForFunction(() => document.querySelectorAll('.support-msg').length === 30);
+    assert.ok(await gap() < 2, 'opens at the newest reply');
+    await thread.hover();
+    await v.page.mouse.wheel(0, -600);
+    await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight > 300; });
+    const top = await thread.evaluate(el => el.scrollTop);
+    long.messages.push({...reply(30, 0), body: 'A new reply while you read'});
+    await v.page.evaluate(() => window.supportPoll());
+    await v.page.waitForFunction(() => document.querySelectorAll('.support-msg').length === 31);
+    assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a reader scrolled up is not moved');
+    const pill = v.page.locator('#support-rail .stick-pill');
+    await pill.waitFor();
+    await pill.click();
+    await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
+    assert.equal(await pill.isVisible(), false);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
