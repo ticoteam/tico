@@ -151,6 +151,21 @@ def missing_repositories(c, online_ids):
     return out
 
 
+def failed_repository_copies(c, online_ids):
+    """(computer, repository, why) for the repositories an online computer could not copy to its workspace: the
+    runner's own words, git's reason included, so nobody has to guess between access, network and disk."""
+    from .repositories import metadata
+    out = []
+    for r in c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL ORDER BY label"):
+        if r["id"] not in online_ids:
+            continue
+        rows = metadata(c, "computer-repositories:" + r["id"]).get("repositories")
+        for row in rows if isinstance(rows, list) else ():
+            if isinstance(row, dict) and row.get("state") == "failed" and row.get("full_name"):
+                out.append((r["label"], str(row["full_name"]), str(row.get("error") or "the copy failed")[:500]))
+    return out
+
+
 def _listening(settings):
     from . import listening
     from clients.judge import JudgeError
@@ -910,6 +925,14 @@ def view(c, who, settings, auth, github, config):
                                          for bot, label, why in lacking[:3])
                              + ("." if len(lacking) <= 3 else f"; and {len(lacking) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots")]))
+    copies = failed_repository_copies(c, online_ids) if full else []
+    if copies:
+        checks.append(_check("repository_copies", "Repository copies", "warn",
+                             "A computer could not copy a repository its bots work in: "
+                             + "; ".join(f"{repository} on {label}: {why}" for label, repository, why in copies[:3])
+                             + ("" if len(copies) <= 3 else f"; and {len(copies) - 3} more")
+                             + ". Restart that computer's runner to retry now.",
+                             [_fix("Open Computers", "#/settings", "devices")]))
     from .subscriptions import bot_subscription, effective, context
     subscription_context = context(c, settings)
     subscription_problems = []

@@ -359,3 +359,22 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     assert check["status"] == "warn" and check["summary"] == "support hasn't finished setup; 1 task waiting since 2026-01-02."
     assert check["fixes"][0]["href"] == "#/bot/support"
     assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
+
+
+def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(environment):
+    from backend.repositories import save_metadata
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
+    why = ("Cloning the local mirror of acme/web failed: error: unable to create file a: Filename too long. "
+           "Retrying in 5 minutes, or restart the computer's runner to retry now")
+    with api.app.state.store.transaction() as c:
+        save_metadata(c, "computer-repositories:" + runner, {"repositories": [
+            {"full_name": "acme/web", "state": "failed", "last_fetch": None, "size_mb": 0, "error": why},
+            {"full_name": "acme/api", "state": "cloned", "last_fetch": None, "size_mb": 1}]})
+    check = health_of(api)[1]["repository_copies"]
+    assert check["status"] == "warn"
+    assert "acme/web on " in check["summary"] and "Filename too long" in check["summary"]
+    assert "acme/api" not in check["summary"]
+    heartbeat(api, runner, seconds_ago=3600, runtimes=SIGNED_IN)          # an offline computer is reported elsewhere
+    assert "repository_copies" not in health_of(api)[1]
