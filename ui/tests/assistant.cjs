@@ -42,7 +42,13 @@ async function open(browser, viewport, state) {
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
     if (p === '/api/v2/assistant/turn-on') { state.turnedOn = (state.turnedOn || 0) + 1; return json({bot: 'coo', state: 'active', restored: true, placed: true}); }
     if (p === '/api/v2/assistant/actions/act1' && method === 'GET') return json({action: state.card});
-    if (act) { state.decided.push([act[1], act[2]]); state.card.status = act[2] === 'confirm' ? 'done' : 'cancelled'; return json({action: state.card}); }
+    if (p === '/api/v2/assistant/actions/act2' && method === 'GET') return json({action: state.bulk});
+    if (act) {
+      const card = act[1] === 'act2' ? state.bulk : state.card;
+      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
+      return json({action: card});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json({});
   });
@@ -53,8 +59,12 @@ function fixture() {
   const state = {reads: 0, sent: [], decided: [], messages: [], card: null};
   state.card = {id: 'act1', summary: 'Archive the Ops bot', method: 'POST', path: '/api/v2/bots/ops/archive', status: 'pending', result: null,
     description: 'Archive bot Ops', diff: [], body: {expected_revision: 3, text: 'Long message. '.repeat(30) + 'THE-END'}, proposed_via: 'assistant'};
+  // One card for a group of task actions: one line per task, one Confirm for all of them.
+  state.bulk = {id: 'act2', summary: 'Close the three launch tasks', method: 'POST', path: '/api/v2/assistant/batch', status: 'pending', result: null,
+    description: '3 task actions, on one Confirm', proposed_via: 'assistant', body: {actions: []},
+    diff: ['Plan the launch', 'Book the venue', 'Draft the post'].map(t => ({field: `Change task “${t}” (2 fields)`, new: 'close: true, note: Done'}))};
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
-    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card}, pending: []});
+    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk}, pending: []});
   state.reply = () => {
     const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1));
     const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)', {fast: true});
@@ -133,6 +143,19 @@ function fixture() {
       await card.locator('[data-confirm]').click();
       await page.locator('.asst-card[data-status="done"]').waitFor();
       assert.deepEqual(state.decided, [['act1', 'confirm']], tag + ': the click confirmed it');
+
+      // A group of task actions is one card, one line per task; one click runs them all and says what did not go through.
+      state.messages.push(msg('m10', 'bot:coo', 'Needs your OK: Close the three launch tasks', {action: 'act2'}));
+      await page.goto('https://tico-ui.test/#/updates');
+      await page.goto('https://tico-ui.test/#/assistant');
+      const bulk = page.locator('.asst-card[data-action="act2"]');
+      await bulk.waitFor();
+      assert.equal(await bulk.locator('.asst-body li').count(), 3, tag + ': one line per task');
+      assert.equal(await bulk.locator('[data-confirm]').count(), 1, tag + ': one Confirm for the group');
+      await bulk.locator('[data-confirm]').click();
+      await page.locator('.asst-card[data-action="act2"][data-status="done"]').waitFor();
+      assert.match(await page.locator('.asst-card[data-action="act2"]').innerText(), /1 of 3 did not go through/, tag + ': what failed is said');
+      assert.deepEqual(state.decided, [['act1', 'confirm'], ['act2', 'confirm']], tag + ': one click for the group');
 
       // It fits: no sideways scroll, the box and Send are on screen.
       const at = await box.boundingBox(), send = await page.locator('#chat-composer .p-send').boundingBox();

@@ -177,8 +177,8 @@ version for a bot:
 - The key is Tico's: do not ask for it, look for it, or call the API yourself. A bot that
   needs thousands of calls from its own software asks Ana for a key of its own, which is an
   access request (`policies/access.md`).
-- There is a budget per actor per day (`GET /api/v2/decisions` reports it). A loop that spends it
-  is a bug; stop and say so.
+- There is a budget per actor per day (`GET /api/v2/decisions` reports it; the server sets it with
+  `TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN` and `_BOT`). A loop that spends it is a bug; stop and say so.
 - Test before you trust. Run a new question over ten rows you already know the answer to and
   read the misses: missing evidence in the state, a literal reading of your words, a model
   miss, or a code bug are four different fixes. Cookbook thresholds are examples, not rules.

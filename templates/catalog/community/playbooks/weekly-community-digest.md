@@ -36,5 +36,5 @@ Support cases become tasks for the Support Agent. Doc gaps go to the Librarian.
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-community.md` in the shape of `knowledge/examples/community-digest.md`,
-then `hub file publish reports/YYYY-MM-DD-community.md`. Attach the reply batch and its thread links; post requested replies with your Tools when `outbound_send` is on, otherwise keep drafts. Commit, and
+then `hub file publish reports/YYYY-MM-DD-community.md`. Attach the reply batch and its thread links; post requested replies with your Tools when a person has turned mail sending on in Tico, otherwise keep drafts. Commit, and
 `hub task update <id> --status done --note`.

@@ -18,11 +18,11 @@ The packet uses the exact version requested on the task: name the file and its d
 - the document to sign (the approved file), and anything it references that must travel with it;
 - the signers from `state.md` setup answers, their titles and the order (the other side first or us first);
 - the legal names of both parties exactly as written in the document;
-- a short cover note to send with Tools when outbound_send is on, three sentences, no legal commentary.
+- a short cover note to send with Tools when a person has turned mail sending on in Tico, three sentences, no legal commentary.
 
 ## 3. Ask for the send
 
-Put the packet on the task. Send requested packets with the file, recipient and cover note using your Tools when `outbound_send` is on; otherwise keep the draft. Record who actually sent it.
+Put the packet on the task. Send requested packets with the file, recipient and cover note using your Tools when a person has turned mail sending on in Tico; otherwise keep the draft. Record who actually sent it.
 
 ## 4. File the signed copy
 

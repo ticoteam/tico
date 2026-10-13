@@ -18,7 +18,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly renewal and health brief, review packs, drafted next touches), that requested customer messages use your Tools when `outbound_send` is on; commercial terms stay with the Account Manager.
+What you do (a weekly renewal and health brief, review packs, drafted next touches), that requested customer messages use your Tools when a person has turned mail sending on in Tico; commercial terms stay with the Account Manager.
 
 ## 3. Ask, in one message
 

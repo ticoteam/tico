@@ -11,7 +11,7 @@ Support Specialist paused (filled 2026-09-25).**
 
 ## Yeses handed to the Recruiter (tasks created)
 - **BE-S-14**: maintains a scheduling library used by booking tools; replied "happy to talk" 2026-09-26.
-- **BE-S-09**, **BE-S-11**: both asked for the pay range first; range sent when `outbound_send` is on 2026-09-24.
+- **BE-S-09**, **BE-S-11**: both asked for the pay range first; range sent when a person has turned mail sending on in Tico 2026-09-24.
 
 ## Backend Engineer: new profiles (criteria from `roles/backend-engineer.md`, 2026-09-10)
 | Ref | Python services in production | Calendar or booking domain (preferred) | Public source |

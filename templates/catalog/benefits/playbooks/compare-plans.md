@@ -37,4 +37,4 @@ who answers personal questions (the broker contact). No "best for" labels; peopl
 
 ## 6. Hand over
 
-Attach it to the task and share with the intended audience within the requested work and your Tools. Messages to outsiders stay drafts until `outbound_send` is on.
+Attach it to the task and share with the intended audience within the requested work and your Tools. Messages to outsiders stay drafts until a person turns mail sending on in Tico.

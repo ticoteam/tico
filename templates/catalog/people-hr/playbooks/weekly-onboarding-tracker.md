@@ -48,7 +48,7 @@ Write `reports/YYYY-MM-DD-onboarding-tracker.md` in the shape of `knowledge/exam
 
     hub file publish reports/YYYY-MM-DD-onboarding-tracker.md
 
-Write and send requested welcome messages with the exact text and recipient using your Tools; messages to outsiders stay drafts until `outbound_send` is on. Chase each late item's owner with one
+Write and send requested welcome messages with the exact text and recipient using your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico. Chase each late item's owner with one
 line on its task. Then
 `hub task update <id> --status done --note`: the headline, counts (late, due), what you could not read.
 

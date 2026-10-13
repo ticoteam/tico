@@ -102,3 +102,50 @@ class FakeClient:
     def close(self):
         self.up, self.closed = False, True
 
+
+
+def test_the_gateway_opens_tokens_the_api_sealed_under_a_kms_key(tmp_path, monkeypatch, capsys):
+    from backend.credentials import CredentialCipher, Vault
+    from backend.store import Store
+    from backend.tests.test_credentials import FakeKMS
+    kms = FakeKMS()
+    monkeypatch.setattr("boto3.client", lambda name, *a, **k: kms if name == "kms" else pytest.fail(name))
+    monkeypatch.delenv("TICO_AUTH_PROXY", raising=False)
+    for name, value in {"TICO_COMPANY_NAME": "Acme", "TICO_OWNER_EMAIL": "ana@acme.example", "TICO_DB": str(tmp_path / "hub.db"), "TICO_CREDENTIAL_KMS_KEY": "test-key",
+                        "TICO_ENVIRONMENT_ID": "acme-test"}.items():
+        monkeypatch.setenv(name, value)
+    settings = Settings.from_env()
+    store = Store(settings)
+    store.initialize()
+    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN, Vault(store, CredentialCipher("test-key", kms)))
+    assert not (tmp_path / "slack.key").exists()
+    assert G.main(["--check"], make_slack=FakeClient) == 0
+    assert FakeClient.instances[-1].bot == BOT and '"team_id": "T0FAKE1"' in capsys.readouterr().out
+
+
+def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resealed(tmp_path, caplog):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from backend.credentials import CredentialCipher, Vault
+    from backend.store import Store
+    from backend.tests.test_credentials import FakeKMS
+    settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
+    store = Store(settings)
+    store.initialize()
+    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)           # before KMS: sealed with slack.key
+    legacy = (tmp_path / "slack.key").read_bytes()
+    settings.credential_kms_key = "test-key"
+    vault = Vault(store, CredentialCipher("test-key", FakeKMS()))
+    caplog.set_level("INFO")
+    assert slack_app.load(store, settings, vault)["bot_token"] == BOT
+    with store.read() as c:
+        row = c.execute("SELECT * FROM slack_credentials").fetchone()
+        AESGCM(vault.cipher.key(c)).decrypt(row["nonce"], row["ciphertext"], slack_app.AAD)   # now the vault's
+    assert any("Re-sealed slack_credentials app" in r.getMessage() for r in caplog.records)
+    assert not any(BOT in r.getMessage() for r in caplog.records)
+    assert slack_app.load(store, settings, vault)["app_token"] == APP_TOKEN
+    assert (tmp_path / "slack.key").read_bytes() == legacy
+    # Without slack.key nothing opens them, and the read makes no key file.
+    slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)
+    (tmp_path / "slack.key").unlink()
+    assert slack_app.load(store, settings, vault) is None and not (tmp_path / "slack.key").exists()

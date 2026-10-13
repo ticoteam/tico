@@ -40,7 +40,7 @@ CREDENTIALS_NOTE = ("Store a needed Credential through Credentials or its chat c
 ONLINE_WITHIN_S = 60
 
 HARNESS_NAMES = {"codex": "Codex", "claude": "Claude Code", "gemini": "Gemini CLI", "antigravity": "Antigravity",
-                 "grok": "Grok Build", "pi": "pi", "cursor": "Cursor", "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot"}
+                 "grok": "Grok Build", "pi": "pi", "cursor": "Cursor", "hermes": "Hermes", "openclaw": "OpenClaw", "grokbot": "Grok Bot", "dots": "Dots", "muse": "Muse"}
 PROVIDER_LOGOS = {"openai": "openai", "anthropic": "anthropic", "google": "google"}
 
 SERVICE_NAMES = {
@@ -425,7 +425,7 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
 
 def register(c, auth, settings_admin, settings, who, bot, body):
     auth.domain(who)
-    settings_admin._manager(c, who, bot)      # Auth.bot_manager
+    settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     try:
@@ -456,7 +456,7 @@ def register(c, auth, settings_admin, settings, who, bot, body):
 
 def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
     auth.domain(who)
-    settings_admin._manager(c, who, bot)      # Auth.bot_manager
+    settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     requests = _requests(c, bot)
@@ -526,7 +526,7 @@ def update(c, auth, settings_admin, settings, who, bot, tool_id, body):
     """Change a declared tool in place: only `can`, `scope`, `note` and an MCP server's `mcp` block. The server holds no bot repository, so this is
     the add path's way: a pending request and one task for BotOps with the whole changed entry. Nothing is removed."""
     auth.domain(who)
-    settings_admin._manager(c, who, bot)      # Auth.bot_manager
+    settings_admin._manager(c, who, bot, botops=True)      # Auth.bot_manager, or BotOps' own run
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     if tool_id.startswith("pending-"):

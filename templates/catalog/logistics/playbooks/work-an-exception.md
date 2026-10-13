@@ -22,7 +22,7 @@ Order, carrier, tracking number, service, ship date, promised date, and the last
 
 Late: note and check again tomorrow. Stuck: open a trace with the carrier. Damaged or lost: prepare a
 claim with the value (invoice), the proof of shipment and the customer's photos, before the deadline.
-Attach carrier messages to the task and send within the requested work when `outbound_send` is on; otherwise keep drafts.
+Attach carrier messages to the task and send within the requested work when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## 4. The customer update
 

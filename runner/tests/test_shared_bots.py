@@ -83,18 +83,11 @@ class TwoCopies(unittest.TestCase):
         self.write(self.sam, "memory/decisions.md", "sam's lesson\n")
         runner = Runner({"url": "https://runner.acme.example", "token": "m", "projects_dir": self.tmp.name},
                         Path(self.tmp.name) / "state", host_factory=lambda a, e: None, client=mock.Mock())
-        self.assertFalse(runner.push(self.sam))
-        self.assertTrue(runner.push(self.sam, shared=True))
+        self.assertTrue(runner.push(self.sam))
         self.assertEqual(git(self.sam, "rev-parse", "HEAD").stdout, git(self.origin, "rev-parse", "main").stdout)
 
 
 class Copy(unittest.TestCase):
-    def test_a_copy_keeps_its_own_repositorys_paths_in_its_reply(self):
-        text = "See bot-backend-architect/memory/learnings.md and emp-legal/x.md"
-        scrubbed = service.scrub_reply(text, "backend-architect-sam", own="bot-backend-architect")
-        self.assertIn("bot-backend-architect/memory/learnings.md", scrubbed)
-        self.assertNotIn("emp-legal/", scrubbed)
-
     @pytest.mark.slow
     def test_assignment_instances_get_registration_bound_local_branches_and_never_repair_missing_work(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -8,7 +8,8 @@
                                          summary first, then the whole redacted bundle
     hq-tickets payload TK-XXXXXXXX FILE  the JSON for `hub approval request --kind publish --payload-file`
     hq-tickets reply TK-XXXXXXXX FILE [--approval ID]
-                                         post FILE when outbound_send is on; an optional approval must match
+                                         post FILE when a person turned sending on for this bot in Tico
+                                         (bot.yaml's outbound_send only asks); an optional approval must match
                                          these bytes and this ticket
 
 It needs HQ_STAFF_KEY and HQ_URL in this bot's credentials (docs/support.md). Without HQ_STAFF_KEY every command
@@ -301,16 +302,41 @@ def approved(approval_id, ticket_id, data, run=subprocess.run):
         raise Refused(f"approval {approval_id} is not for this exact reply to {ticket_id}")
 
 
-def sending_enabled():
+def mail_policy(env):
+    """The mail connector's policy module (connectors/mail/policy.py), from the Tico checkout a bot turn names in
+    HUB_DIR. Its `switch` reads the server-held setting a person sets (GET /api/v2/bots/<slug>/mail-settings)."""
+    hub = (env.get("HUB_DIR") or "").strip()
+    if hub and hub not in sys.path:
+        sys.path.insert(0, hub)
+    try:
+        from connectors.mail import policy                # noqa: PLC0415 - found through HUB_DIR at run time
+    except Exception:
+        raise Refused("could not load Tico's mail sending check (HUB_DIR); keep the reply as a draft") from None
+    return policy
+
+
+def bot_yaml():
+    """This bot's manifest, for the message only: `outbound_send` in it is a request, not the switch."""
     path = Path("bot.yaml")
     if not path.is_file():
         path = Path("employee.yaml")
     try:
         manifest = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError):
-        raise Refused("could not read outbound_send from this bot's manifest") from None
-    if not isinstance(manifest, dict) or manifest.get("outbound_send") is not True:
-        raise Refused("outbound_send is off; keep the reply as a draft")
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def sending_enabled(env):
+    """Refuse unless a person turned sending on for this bot in Tico. bot.yaml's `outbound_send` only asks; with no
+    server value, or no Tico reachable from this run, the reply stays a draft (docs/mail.md, "Turning sending on")."""
+    slug = (env.get("HUB_BOT") or env.get("HUB_EMPLOYEE") or "").strip()
+    if not slug:
+        raise Refused("this run does not name its bot (HUB_BOT), so it cannot read the mail setting from Tico; "
+                      "keep the reply as a draft")
+    switch = mail_policy(env).switch(slug, bot_yaml())
+    if not switch["on"]:
+        raise Refused(f"outbound_send is off for {slug}: {switch['detail']}; keep the reply as a draft")
 
 
 def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, now=None):
@@ -336,7 +362,7 @@ def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, 
         elif command == "reply" and TICKET.fullmatch(args[0] if args else "") and (
                 len(args) == 2 or (len(args) == 4 and args[2] == "--approval")):
             data, text = read_reply(args[1])
-            sending_enabled()
+            sending_enabled(env)
             if len(args) == 4:
                 approved(args[3], args[0], data, run)
             done = hq.call("POST", f"/v1/staff/tickets/{args[0]}/reply", {"body": text})

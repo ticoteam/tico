@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from clients.tico import APIError
-from runner import service
+from runner import goals, service
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -183,6 +183,156 @@ class Execution(unittest.TestCase):
         self.assertEqual(client.completion()["outcome"], "completed")
         self.assertEqual(client.completion()["text"], "finished anyway")
 
+    def test_a_follow_up_refused_by_an_ending_turn_gets_a_turn_of_its_own_in_the_same_run(self):
+        # The turn ends between the inputs poll and the steer: the host writes nothing and says
+        # so. The poll already assigned the message to this run, so the run answers it itself.
+        client = FakeClient()
+        runner = self.runner(client)
+        self.host.hold_next_turn()
+        self.host.replies = ["the follow-up's answer"]          # the held first turn takes none
+        follow_up = {"id": "msg-2", "kind": "chat", "body": "one more thing", "from_actor": "human:ana"}
+        post, polls = client.post, []
+
+        def inputs_once(path, body=None, key=None):
+            if path.endswith("/inputs") and self.host.turn_of:
+                polls.append(path)
+                return {"messages": [follow_up]}
+            return post(path, body, key)
+
+        def refuse(thread_id, turn_id, text):
+            self.host.emit("tokens", thread_id, turn_id, input=40, output=2, total=42,
+                           usage={"input": 40, "cached": 0, "output": 2})
+            self.host.complete(thread_id, "the first answer")
+            raise service.SteerRefused("turn is ending")
+
+        with mock.patch.object(client, "post", side_effect=inputs_once), \
+                mock.patch.object(self.host, "steer", side_effect=refuse):
+            runner.execute(attempt())
+        self.assertEqual(len(polls), 1)
+        self.assertEqual(len(self.host.prompts), 2)
+        self.assertIn("human:ana: one more thing", self.host.prompts[1][1])
+        self.assertIn("already given; answer only the follow-up", self.host.prompts[1][1])
+        self.assertIn(("attempts/att-1/inputs/msg-2/ack", {}), client.posts)
+        self.assertEqual(runner.state.input_phase("att-1", "msg-2"), "applied")
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertEqual(client.completion()["text"], "the first answer\n\nthe follow-up's answer")
+        reply = "the follow-up's answer"
+        self.assertEqual((client.completion()["tokens_in"], client.completion()["tokens_out"]),
+                         (40 + 100, 2 + len(reply)))           # both turns, not just the last
+        self.assertNotIn("undelivered", client.completion())
+
+    def refused_follow_up(self, client, refuse, run):
+        """Run one attempt whose single inputs poll returns a follow-up the host refuses with `refuse`."""
+        runner = self.runner(client)
+        self.host.hold_next_turn()
+        post, polls = client.post, []
+
+        def inputs_once(path, body=None, key=None):
+            if path.endswith("/inputs") and self.host.turn_of and not polls:
+                polls.append(path)
+                return {"messages": [{"id": "msg-2", "kind": "chat", "body": "one more thing",
+                                      "from_actor": "human:ana"}]}
+            return post(path, body, key)
+
+        with mock.patch.object(client, "post", side_effect=inputs_once), \
+                mock.patch.object(self.host, "steer", side_effect=refuse):
+            runner.execute(run)
+        return runner
+
+    def test_a_follow_up_refused_by_a_failing_turn_is_handed_back_undelivered(self):
+        def refuse(thread_id, turn_id, text):
+            self.host.turn_of.pop(thread_id, None)
+            self.host.emit("turn_failed", thread_id, turn_id, error="the turn failed", limit=False, auth_retry=False)
+            raise service.SteerRefused("turn is ending")
+
+        client = FakeClient()
+        self.refused_follow_up(client, refuse, attempt())
+        self.assertEqual(len(self.host.prompts), 1)            # no turn for it on a failed run
+        self.assertEqual(client.completion()["outcome"], "failed")
+        self.assertEqual(client.completion()["undelivered"], ["msg-2"])
+        self.assertNotIn(("attempts/att-1/inputs/msg-2/ack", {}), client.posts)
+
+    def test_a_goal_sent_back_too_often_is_paused_and_cleared(self):
+        goal = {"id": "goal-1", "status": "active", "updated_at": "r1", "objective": "Ship it"}
+        host = self.host
+
+        def looping_goal(thread_id, action, objective, effort=None):
+            if action == "pause":
+                return FakeHost.start_goal(host, thread_id, action, objective, effort)
+            host.prompts.append((thread_id, "/goal " + objective))
+            host.turn_of[thread_id] = "goal-turn"
+            host.emit("message", thread_id, "goal-turn", text="PR 888 is still open.", final=False)
+            for n in range(goals.MAX_GOAL_TRIES):
+                host.emit("goal", thread_id, None, status="active", objective=objective,
+                          note=f"Not live: PR 888 is open ({n})", tried=True, record=f"r{n}")
+            return "goal-turn"
+
+        def interrupt(thread_id, turn_id):
+            FakeHost.interrupt(host, thread_id, turn_id)
+            host.emit("turn_completed", thread_id, turn_id, status="interrupted")
+
+        client = FakeClient()
+        client.get = lambda path, **query: {"goal": goal}
+        run = {**attempt(), "chat_goal": goal,
+               "message": {"id": "msg-1", "body": "/goal Ship it", "from_actor": "human:ana",
+                           "refs": {"goal_action": "set", "goal_id": "goal-1", "goal_revision": "r1",
+                                    "goal_objective": "Ship it"}}}
+        with mock.patch.object(host, "start_goal", side_effect=looping_goal), \
+                mock.patch.object(host, "interrupt", side_effect=interrupt):
+            self.runner(client).execute(run)
+        self.assertEqual(host.prompts[0][1], "/goal Ship it " + goals.WAITING_CLAUSE)
+        self.assertEqual(host.prompts[-1][1], "/goal clear")
+        sent = [e["payload"] for path, body in client.posts if path.endswith("/events")
+                for e in body["events"] if e["kind"] == "goal"]
+        self.assertEqual({e.get("objective") for e in sent if e.get("objective")}, {"Ship it"})
+        paused = next(e for e in sent if e["status"] == "paused")
+        self.assertEqual((paused["goal_id"], paused["revision"]), ("goal-1", "r1"))
+        note = f"Goal paused after {goals.MAX_GOAL_TRIES} tries without progress: Not live: PR 888 is open ({goals.MAX_GOAL_TRIES - 1})"
+        self.assertEqual(paused["note"], note)
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertTrue(client.completion()["text"].endswith(note))
+
+    def test_only_a_persons_message_resets_the_goal_tries(self):
+        client = FakeClient()
+        runner = self.runner(client)
+        runner.goal_tries["coo"] = [goals.MAX_GOAL_TRIES - 1, "PR 888 is open"]
+        bot_wake = {**attempt("att-1"), "message": {"id": "msg-1", "body": "hourly check", "from_actor": "bot:ops"}}
+        runner.execute(bot_wake)
+        self.assertEqual(runner.goal_tries["coo"][0], goals.MAX_GOAL_TRIES - 1)
+        runner.execute(attempt("att-2"))
+        self.assertNotIn("coo", runner.goal_tries)
+
+    def test_a_follow_up_refused_before_a_goal_control_is_handed_back_undelivered(self):
+        goal = {"id": "goal-1", "status": "active", "updated_at": "r1", "objective": "ship it"}
+        client = FakeClient()
+        refused = threading.Event()
+        # The goal is unchanged until the steer was refused; then a person pauses it.
+        client.get = lambda path, **query: ({"goal": goal} if not refused.is_set() else {"goal": None})
+
+        def refuse(thread_id, turn_id, text):
+            refused.set()
+            raise service.SteerRefused("turn is ending")
+
+        self.refused_follow_up(client, refuse, {**attempt(), "chat_goal": goal})
+        self.assertEqual(client.completion()["outcome"], "completed")
+        self.assertEqual(client.completion()["undelivered"], ["msg-2"])
+        self.assertEqual(len(self.host.prompts), 1)
+
+    def test_a_server_from_before_undelivered_still_gets_the_result(self):
+        client = FakeClient()
+        sent = []
+
+        def older_server(path, body=None, key=None):
+            sent.append(dict(body))
+            if "undelivered" in body:
+                raise APIError("validation", "body.undelivered: Extra inputs are not permitted", 422)
+            return {}
+
+        client.post = older_server
+        self.runner(client).complete("att-1", {"outcome": "failed", "text": "", "last_seq": 0,
+                                               "undelivered": ["msg-2"]})
+        self.assertEqual([("undelivered" in body) for body in sent], [True, False])
+
     def test_a_definite_refusal_to_renew_interrupts_the_turn(self):
         client = FakeClient(renew_error=GONE)
         runner = self.runner(client)
@@ -288,11 +438,38 @@ class Pushing(unittest.TestCase):
     def head(self, path, ref="HEAD"):
         return git(path, "rev-parse", ref, env=self.env).stdout.strip()
 
-    def test_a_diverged_origin_is_left_for_a_person_and_said_once(self):
+    def test_a_branch_tracking_main_is_rebased_over_a_moved_origin_and_pushed(self):
+        # bot-engineering-lead worked on `review-243` tracking origin/main: a bare `git push` refused it
+        # ("... see push.default in 'git help config'."), and the remote had moved on meanwhile.
         other = Path(self.tmp.name) / "other"
         git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
         self.commit("elsewhere", other)
         git(other, "push", "-q", "origin", "main", env=self.env)
+        git(self.repo, "checkout", "-q", "-b", "review-243", "--track", "origin/main", env=self.env)
+        git(self.repo, "cherry-pick", "main", env=self.env)
+        with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
+            self.assertTrue(self.runner.push(self.repo))
+        log.assert_not_called()
+        self.assertEqual(self.head(self.origin, "main"), self.head(self.repo))
+        self.assertTrue((self.repo / "elsewhere").exists() and (self.repo / "memory").exists())
+
+    def test_a_branch_tracking_a_local_branch_is_not_counted_as_pushed(self):
+        git(self.repo, "checkout", "-q", "-b", "draft", "--track", "main", env=self.env)
+        self.commit("draft-note")
+        before = self.head(self.origin, "main")
+        with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
+            self.assertFalse(self.runner.push(self.repo))
+        self.assertIn("tracks the local branch main, not a remote", log.call_args.args[0])
+        self.assertEqual(self.head(self.origin, "main"), before)
+
+    def test_a_conflicting_origin_is_left_for_a_person_and_said_once(self):
+        other = Path(self.tmp.name) / "other"
+        git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
+        (other / "memory").write_text("written elsewhere")
+        git(other, "add", "memory", env=self.env)
+        git(other, "commit", "-q", "-m", "elsewhere", env=self.env)
+        git(other, "push", "-q", "origin", "main", env=self.env)
+        mine = self.head(self.repo)
         before = self.head(self.origin, "main")
         with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.log") as log:
             self.runner.execute(attempt())
@@ -301,7 +478,11 @@ class Pushing(unittest.TestCase):
         self.assertEqual(self.head(self.origin, "main"), before)
         messages = [call.args[0] for call in log.call_args_list]
         self.assertTrue(any("pull before coo turn failed" in m and "using the local tree" in m for m in messages), messages)
-        self.assertEqual(messages[-1], "Tico runner: emp-coo has 1 unpushed commits and push failed (non-fast-forward); leaving it for a person")
+        self.assertEqual(messages[-1], "Tico runner: emp-coo has 1 unpushed commits and push failed (origin/main has 1 "
+                         "commits this checkout doesn't, and they conflict with its unpushed commits in memory; in "
+                         f"{self.repo}, run `git pull --rebase`, resolve the conflict, and push); leaving it for a person")
+        self.assertEqual(self.head(self.repo), mine, "the conflicting rebase is undone; nothing is lost")
+        self.assertFalse((self.repo / ".git" / "rebase-merge").exists())
         # Placement says once that the diverged copy was kept; the pull and push failures follow.
         self.assertTrue(messages[0].startswith("Tico runner: coo: kept this computer's copy as it is"), messages)
         self.assertEqual(len(messages), 3)
@@ -354,38 +535,40 @@ class RefusedReplies(unittest.TestCase):
              "See emp-legal/reports/a.md, emp-coo/knowledge/needs.md and ../secrets/_shared.env. "
              "PR https://github.com/acme/emp-legal/pull/3.")
 
-    def test_the_scrubbed_reply_passes_the_hubs_own_rule_and_keeps_the_rest(self):
-        from backend import hubdb
-        self.assertEqual(hubdb.classify(self.CODEX, where="message", actor="bot:coo"), "escape")
+    def test_the_scrubbed_reply_drops_local_links_and_keeps_paths_as_written(self):
         clean = service.scrub_reply(self.CODEX, "coo")
-        self.assertNotEqual(hubdb.classify(clean, where="message", actor="bot:coo"), "escape")
         self.assertIn("Task `1b874fee` is open", clean)
-        self.assertIn("emp-coo/knowledge/needs.md", clean, "its own repository is not an escape")
-        self.assertIn("(a file in legal's repository), emp-coo", clean, "the comma survives")
+        self.assertIn("See emp-legal/reports/a.md, emp-coo/knowledge/needs.md and ../secrets/_shared.env.", clean,
+                      "a path written as text is the bot's words, not an escape")
         self.assertNotIn("file://", clean)
         self.assertEqual(service.scrub_reply("All clear.", "coo"), "All clear.")
 
     def test_a_refused_reply_settles_the_attempt_instead_of_letting_the_lease_lapse(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        (Path(tmp.name) / "emp-coo").mkdir()
-        client = FakeClient()
-        plain = client.post
+        for code, detail in (("escape", "The message includes a secrets path or another bot’s workspace path."),
+                             ("privacy", "Private task content stays with its requester and current owner")):
+            with self.subTest(code=code):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                (Path(tmp.name) / "emp-coo").mkdir()
+                client = FakeClient()
+                plain = client.post
 
-        def post(path, body=None, key=None):
-            if path.endswith("/complete") and body["outcome"] == "completed":
-                client.posts.append((path, body))
-                raise APIError("escape", "The message includes a secrets path or another bot’s workspace path.", 403, False)
-            return plain(path, body, key)
-        client.post = post
-        runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": tmp.name, "capacity": 1},
-                        Path(tmp.name) / "state", host_factory=lambda a, env: FakeHost(replies=["done"]),
-                        client=client, push=lambda path, env=None: (0, ""))
-        with mock.patch("runner.service.log"):
-            runner.execute(attempt())
-        completes = [body for path, body in client.posts if path.endswith("/complete")]
-        self.assertEqual([c["outcome"] for c in completes], ["completed", "failed"])
-        self.assertIn("refused this turn's reply", completes[1]["text"])
+                def post(path, body=None, key=None, client=client, plain=plain, code=code, detail=detail):
+                    if path.endswith("/complete") and body["outcome"] == "completed":
+                        client.posts.append((path, body))
+                        raise APIError(code, detail, 403, False)
+                    return plain(path, body, key)
+                client.post = post
+                runner = Runner({"url": "https://runner.example", "token": "machine", "projects_dir": tmp.name,
+                                 "capacity": 1}, Path(tmp.name) / "state",
+                                host_factory=lambda a, env: FakeHost(replies=["done"]),
+                                client=client, push=lambda path, env=None: (0, ""))
+                with mock.patch("runner.service.log"):
+                    runner.execute(attempt())
+                completes = [body for path, body in client.posts if path.endswith("/complete")]
+                self.assertEqual([c["outcome"] for c in completes], ["completed", "failed"])
+                self.assertIn("refused this turn's reply", completes[1]["text"])
+                self.assertIn(detail, completes[1]["text"])
 
 
 def test_busy_bots_follow_live_turn_processes_until_they_exit(tmp_path):
@@ -494,7 +677,7 @@ def test_startup_backlog_uses_the_bots_scoped_helper(tmp_path, configured):
     runner = SimpleNamespace(stop=threading.Event(), client=client, config_path=None,
                              local_path=lambda *args: path,
                              credential_environment=lambda *args: safe_git.process_environment(),
-                             push=lambda path, env, shared: seen.append((path, env)) or True)
+                             push=lambda path, env, catch_up_remote: seen.append((path, env)) or True)
     Runner.push_backlog(runner)
     assert len(seen) == 1
     env = seen[0][1]
@@ -528,7 +711,7 @@ def test_startup_push_refreshes_through_the_socket_and_revokes_its_capability(tm
         client = Hub({"configured": True, "token": "initial-test-token"})
         client.get = lambda route: [{"bot": "ana", "config": {}}]
         seen = []
-        def push(path, env, shared):
+        def push(path, env, catch_up_remote):
             assert "password=fresh-test-token" in fill(safe_git.environment(env), tmp_path)
             seen.append(env["HUB_TOKEN"])
             return True

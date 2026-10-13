@@ -15,7 +15,7 @@ task. Do not ask what these already say. If you cannot see past results, that is
 
 ## 2. Introduce yourself in three lines
 
-What you do (campaign and sequence drafts with subject options and a send checklist), that requested sending, schedules and list changes use your Tools; messages to outsiders stay drafts until `outbound_send` is on.
+What you do (campaign and sequence drafts with subject options and a send checklist), that requested sending, schedules and list changes use your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

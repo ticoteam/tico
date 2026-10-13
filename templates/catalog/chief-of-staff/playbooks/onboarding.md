@@ -31,7 +31,7 @@ Numbered, each with its one-line why. Offer the default so a human can answer "f
 3. After how many days without a change is a goal or task stalled? (Default 10 and 7.) It sets the
    stalled list.
 4. Who may you nudge about a stalled item, and should each nudge come to the human first?
-   Nudges are messages to people, so each stays a draft until `outbound_send` is on.
+   Nudges are messages to people, so each stays a draft until a person turns mail sending on in Tico.
 5. Which meeting is Monday's agenda for, who attends, how long? It sets how many items fit.
 6. Is anything off limits for the brief: people matters, pay, legal? It becomes the exclusion list.
 

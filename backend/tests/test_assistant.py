@@ -248,6 +248,227 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     assert revoked.value.status == 409
 
 
+def asked(api, path, body, token, ref, expected=200):
+    """A write of the assistant's turn that cites the person's message asking for it."""
+    r = api.post("/api/v2/" + path, json=body, headers={**headers(token), "X-Tico-On-Behalf-Of": ref})
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def turn_message(api, attempt):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                         (attempt["id"],)).fetchone()[0]
+
+
+def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(api):
+    with api.app.state.store.transaction() as c:
+        review = H.task_create(c, "human:ana", "Review the plan", "Please review.", "human:ben")
+        launch = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
+        old = H.task_create(c, "human:ben", "Book the venue", "Last year's.", "human:ben")
+    r, attempt = assistant_turn(api, "ben-test", "Mark the plan review done, close the launch and the venue tasks")
+    token, said = attempt["token"], turn_message(api, attempt)
+    # Without citing what they said it is a card, as before.
+    refused = post(api, f"tasks/{launch['id']}", {"version": launch["version"], "close": True}, token=token, expected=403)
+    assert refused["error"]["code"] == "confirm_required"
+    # Citing the message that started this run, it runs as ben, with no click.
+    done = asked(api, f"tasks/{review['id']}", {"version": review["version"], "status": "done", "note": "Reviewed"},
+                 token, "turn")["task"]
+    assert done["status"] == "done"
+    closed = asked(api, f"tasks/{launch['id']}", {"version": launch["version"], "close": True}, token, said)["task"]
+    assert closed["status"] == "closed"
+    # Reopen, comment (Ana is on it) and hand it to someone else: the same task actions the cards carry.
+    reopened = asked(api, f"tasks/{review['id']}", {"version": done["version"], "status": "open"}, token, "turn")["task"]
+    assert reopened["status"] == "open"
+    asked(api, f"tasks/{review['id']}/comments", {"text": "Reopened: one more pass"}, token, "turn")
+    handed = asked(api, f"tasks/{old['id']}", {"version": old["version"], "owner": "human:ana"}, token, "turn")["task"]
+    assert handed["owner"] == "human:ana"
+    with api.app.state.store.read() as c:
+        # Recorded as ben, via the assistant, for the message he sent.
+        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY ts DESC LIMIT 1",
+                        (launch["id"],)).fetchone()
+        assert (row["actor"], row["via"]) == ("human:ben", "assistant")
+        close = c.execute("SELECT actor,detail_json FROM events WHERE action='task.close' AND target=?",
+                          (launch["id"],)).fetchone()
+        detail = H._json(close["detail_json"], {})
+        assert close["actor"] == "human:ben" and detail["via"] == "assistant"
+        assert detail["delegation"] == {"for": "human:ben", "cited": said, "run": "asked"}
+
+
+def test_the_assistants_tools_cite_the_message_for_it(api):
+    from clients import hubtools
+    from clients.tico import APIError
+
+    class Turn:
+        """`hub`'s client in the assistant's run, answered by this server."""
+        def __init__(self, token):
+            self.token = token
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            extra = {"X-Tico-On-Behalf-Of": delegate if isinstance(delegate, str) else "turn"} if delegate else {}
+            r = api.request(method, "/api/v2/" + path, json=body, params=query, headers={**headers(self.token), **extra})
+            if r.status_code >= 400:
+                raise APIError(r.json()["error"]["code"], r.json()["error"]["detail"], status=r.status_code)
+            return r.json()
+
+        def get(self, path, **query):
+            return self.call("GET", path, query=query)
+
+        def post(self, path, body=None, key=None):
+            return self.call("POST", path, body or {}, key)
+    with api.app.state.store.transaction() as c:
+        launch = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
+    r, attempt = assistant_turn(api, "ben-test", "Close the launch task")
+    turn = Turn(attempt["token"])
+    with pytest.raises(APIError) as refused:
+        hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
+    assert refused.value.code == "confirm_required"
+    closed = hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"], "note": "As you asked", "on_behalf_of": "turn"})
+    assert closed["task"]["status"] == "closed"
+    assert "hub_task_close" in {t["name"] for t in hubtools.listing(kind="assistant")}
+
+
+def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant_chat(api):
+    with api.app.state.store.transaction() as c:
+        mine = H.task_create(c, "human:ben", "Plan the launch", "For ops.", "bot:ops")
+    r, attempt = assistant_turn(api, "ben-test", "Close the launch task")
+    token, said = attempt["token"], turn_message(api, attempt)
+    say(api, "Close Ben's launch task", "ana-test")
+    other_person = room(api, "ana-test")["messages"][-1]
+    assert other_person["from_actor"] == "human:ana"
+    other_person = other_person["id"]
+    elsewhere = post(api, "chat/ops", {"text": "Close the launch task"}, token="ben-test")["id"]
+    with api.app.state.store.transaction() as c:
+        bens = assistant.find_room(c, "human:ben")
+        from_bot = H._write_message(c, "bot:coo", "human:ben", "Close the launch task", bens, "say",
+                                    {"assistant": True}, None, None, delivered_at=H.now())["id"]
+    body = {"version": mine["version"], "close": True}
+    path = f"tasks/{mine['id']}"
+    for ref, why in ((other_person, "own Assistant chat"), (elsewhere, "own Assistant chat"),
+                     (from_bot, "own Assistant chat"), ("no-such-message", "own Assistant chat")):
+        refused = asked(api, path, body, token, ref, expected=403)
+        assert refused["error"]["code"] == "on_behalf_of" and why in refused["error"]["detail"], refused
+    # Not a person's own credential either: a citation lends nothing to anyone but their Assistant's run.
+    plain = api.post("/api/v2/" + path, json=body, headers={**headers("ben-test"), "X-Tico-On-Behalf-Of": said})
+    assert plain.status_code == 403
+    # Only task actions: run-now, an approval and a message to another person stay cards whatever is cited.
+    assert asked(api, f"tasks/{mine['id']}/run-now", {}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
+    assert asked(api, "messages", {"to": "human:ana", "text": "Hi"}, token, "turn", expected=403)["error"]["code"] == "confirm_required"
+    # When the owner turns "Assistant acts without asking" off, asking in chat is a card again.
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": False}, headers=headers()).status_code == 200
+    assert asked(api, path, body, token, "turn", expected=403)["error"]["code"] == "confirm_required"
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
+    # Too old: they have to ask again.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), hours=-2), said))
+    refused = asked(api, path, body, token, "turn", expected=403)
+    assert refused["error"]["code"] == "on_behalf_of" and "minutes old" in refused["error"]["detail"]
+    assert get(api, path, "ben-test")["task"]["status"] != "closed"
+
+
+def test_the_person_asking_never_lends_more_than_their_own_rights(api):
+    as_member(api, "ben@acme.example")
+    with api.app.state.store.transaction() as c:      # the private inbox bot's work: ana's, not ben's
+        secret = H.task_create(c, "human:ana", "Review the private mail", "Nothing for ben.", "bot:inbox")
+    post(api, f"tasks/{secret['id']}", {"version": secret["version"], "close": True}, token="ben-test", expected=404)
+    r, attempt = assistant_turn(api, "ben-test", "Close the private mail review")
+    token = attempt["token"]
+    asked(api, f"tasks/{secret['id']}", {"version": secret["version"], "close": True}, token, "turn", expected=404)
+    asked(api, f"tasks/{secret['id']}/comments", {"text": "Closing"}, token, "turn", expected=404)
+    with api.app.state.store.read() as c:
+        assert H.task(c, secret["id"])["status"] == "open"
+
+
+def test_asking_in_chat_never_decides_an_approval(api):
+    with api.app.state.store.transaction() as c:
+        approvals = [H.approval_request(c, "bot:ops", kind, payload)["id"] for kind, payload in (
+            ("send", {"to": "x@acme.example", "cc": [], "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "work"}),
+            ("spend", {"amount": 500, "account": "card", "what": "Ads"}),
+            ("publish", {"url": "https://acme.example/post", "content_sha256": "b" * 64}),
+            ("merge", {"repo": "acme/site", "pr": 7}))]
+    r, attempt = assistant_turn(api, "ana-test", "Approve all four: the email, the spend, the post and the merge")
+    token = attempt["token"]
+    for aid in approvals:
+        for ref in ("turn", turn_message(api, attempt)):
+            refused = asked(api, "approvals/" + aid, {"decision": "approved"}, token, ref, expected=403)
+            assert refused["error"]["code"] == "confirm_required"
+        with api.app.state.store.read() as c:
+            assert H.approval(c, aid)["decision"] is None
+    # The person's own decision still works, as today.
+    post(api, "approvals/" + approvals[0], {"decision": "approved"})
+
+
+def test_a_group_of_task_actions_is_one_card_and_one_click(api):
+    as_member(api, "ben@acme.example")
+    with api.app.state.store.transaction() as c:
+        tasks = [H.task_create(c, "human:ben", f"Old task {i}", "Stale.", "bot:ops") for i in range(25)]
+        secret = H.task_create(c, "human:ana", "Review the private mail", "Nothing for ben.", "bot:inbox")
+        approval = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"})["id"]
+    r, attempt = assistant_turn(api, "ben-test", "Clear out all my old tasks")
+    token = attempt["token"]
+    steps = [{"path": f"/api/v2/tasks/{t['id']}", "body": {"close": True, "note": "Cleared"}} for t in tasks]
+    steps.append({"path": f"/api/v2/tasks/{secret['id']}", "body": {"close": True}})       # not his to close
+    action = post(api, "assistant/actions", {"summary": "Close your 25 old tasks", "path": assistant.BATCH_PATH,
+                                             "body": {"actions": steps}}, token=token)["action"]
+    assert action["description"] == "26 task actions, on one Confirm" and len(action["diff"]) == 26
+    assert "Old task 0" in action["diff"][0]["field"] and "close: True" in action["diff"][0]["new"]
+    pending = get(api, "assistant", "ben-test")["pending"]
+    assert [p["id"] for p in pending] == [action["id"]]                                  # one card, not 26
+    # Only task actions go on a bulk card: an approval, running a task now or anything else is refused.
+    for odd in ({"path": "/api/v2/approvals/" + approval, "body": {"decision": "approved"}},
+                {"path": f"/api/v2/tasks/{tasks[0]['id']}/run-now", "body": {}},
+                {"path": "/api/v2/messages", "body": {"to": "human:ana", "text": "Hi"}}):
+        post(api, "assistant/actions", {"summary": "Sneak", "path": assistant.BATCH_PATH,
+                                        "body": {"actions": [steps[0], odd]}}, token=token, expected=422)
+    post(api, f"assistant/actions/{action['id']}/confirm", {}, token=token, expected=403)   # never the bot's own click
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ben-test")["action"]
+    assert done["status"] == "done", done
+    assert done["result"]["error"].startswith("1 of 26 did not go through")
+    assert [i["status_code"] for i in done["result"]["items"]] == [200] * 25 + [404]
+    with api.app.state.store.read() as c:
+        assert all(H.task(c, t["id"])["status"] == "closed" for t in tasks)
+        assert H.task(c, secret["id"])["status"] == "open"
+        assert H.approval(c, approval)["decision"] is None
+        assert c.execute("SELECT count(*) FROM task_events WHERE field='status' AND new='closed' AND actor='human:ben' "
+                         "AND via='assistant'").fetchone()[0] == 25
+
+
+def test_a_close_card_without_the_tasks_version_still_runs(api):
+    with api.app.state.store.transaction() as c:
+        launch = H.task_create(c, "human:ana", "Plan the launch", "For ops.", "bot:ops")
+    action = post(api, "assistant/actions", {"summary": "Close the launch task", "path": f"/api/v2/tasks/{launch['id']}",
+                                             "body": {"close": True}})["action"]
+    assert action["body"]["version"] == launch["version"]
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]
+    assert done["status"] == "done", done["result"]
+
+
+def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
+    """The cards an assistant wrote for "close these" carried `{"status": "closed"}` and no version: every Confirm
+    failed with "body.version: Field required; body.status: Input should be ...". A card like that, new or already
+    waiting, now closes the task with the version it has when the person clicks."""
+    import json
+    with api.app.state.store.transaction() as c:
+        tasks = [H.task_create(c, "human:ana", f"Old task {i}", "Stale.", "bot:ops") for i in range(3)]
+    # One stored before this release, exactly as the assistant wrote it.
+    stale = post(api, "assistant/actions", {"summary": "Close old task 0", "path": f"/api/v2/tasks/{tasks[0]['id']}",
+                                            "body": {"version": 1}})["action"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE assistant_actions SET body_json=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
+    done = post(api, f"assistant/actions/{stale['id']}/confirm", {})["action"]
+    assert done["status"] == "done", done["result"]
+    # A new one is stored as the close it is, and so is each step of a bulk card.
+    fresh = post(api, "assistant/actions", {"summary": "Close old task 1", "path": f"/api/v2/tasks/{tasks[1]['id']}",
+                                            "body": {"status": "closed", "note": "Stale"}})["action"]
+    assert fresh["body"] == {"close": True, "note": "Stale", "version": tasks[1]["version"]}
+    bulk = post(api, "assistant/actions", {"summary": "Close the rest", "path": assistant.BATCH_PATH, "body": {"actions": [
+        {"path": f"/api/v2/tasks/{tasks[2]['id']}", "body": {"status": "closed"}}]}})["action"]
+    for action in (fresh, bulk):
+        assert post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]["status"] == "done"
+    with api.app.state.store.read() as c:
+        assert [H.task(c, t["id"])["status"] for t in tasks] == ["closed"] * 3
+
+
 def no_decisions(monkeypatch):
     calls = []
     async def unavailable(*args, **kwargs):

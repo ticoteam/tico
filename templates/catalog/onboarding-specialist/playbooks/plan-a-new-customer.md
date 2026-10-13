@@ -27,7 +27,7 @@ at the kickoff, not a guess.
 
 Thirty to forty-five minutes: their goals first (read back in their words), the plan and dates, what
 we need from them and by when, how updates will reach them, and questions. Attach it to the task for
-whoever runs the call. Send requested invitations with your Tools when `outbound_send` is on; otherwise keep drafts.
+whoever runs the call. Send requested invitations with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## 5. Hand over
 

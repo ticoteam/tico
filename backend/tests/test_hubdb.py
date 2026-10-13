@@ -3,7 +3,9 @@
 Every test runs against a fresh database in a temp directory with a small fake registry, so
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
+import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -227,6 +229,48 @@ class Rule5Tasks(HubCase):
         self.assertEqual(len(told), 1)
         self.assertIn("all changed scripts pass", told[0]["body"])
 
+    def finished(self, row, to):
+        return [m for m in H.messages(self.conn, row["conversation_id"])
+                if m["to_actor"] == to and m["body"].startswith("Finished:")]
+
+    def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
+        from backend.store import SCHEMA
+        self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
+        self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
+                          (json.dumps({"bot_contact": "tasks"}),))
+        parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
+        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
+        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
+        H.task_comment(self.conn, COO, row["id"], "Which image?", ask={"questions": [
+            {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
+             "multi": False, "other": True}], "who": ANA})
+        H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
+        for bot in (CMO, SEO, COO, ANALYTICS):
+            told = self.finished(row, bot)
+            self.assertEqual(len(told), 1, bot)
+            self.assertIn("Use B.", told[0]["body"])
+        self.assertFalse(self.finished(row, ANA))
+        quiet = {m["to_actor"]: bool(json.loads(m["refs_json"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
+                 if m["body"].startswith("Finished:")}
+        self.assertEqual(quiet, {CMO: True, SEO: False, COO: False, ANALYTICS: False}, "tasks-only bots hear it quietly")
+        # A private task tells only its parties: the parent's owner cannot read it.
+        secret = H.task_create(self.conn, ANA, "Review the settlement", "Read it.", SEO, parent_id=parent["id"], private=True)
+        H.task_update(self.conn, ANA, secret["id"], status="done", note="Signed.")
+        self.assertEqual(len(self.finished(secret, SEO)), 1)
+        self.assertFalse(self.finished(secret, ANALYTICS))
+
+    def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
+        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)
+        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
+        asked = H.task_comment(self.conn, CMO, row["id"], "Which image?", ask={"questions": [
+            {"id": "pick", "header": "", "question": "Which image?", "options": [{"label": "A"}, {"label": "B"}],
+             "multi": False, "other": True}], "who": ANA})
+        said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"])
+        self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
+        self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
+        self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")
+
 # ----------------------------------------------------------------------------- rule 6
 class Rule6Approvals(HubCase):
     SEND = {"to": "ops@acme.com", "cc": "", "subject": "Your September invoice",
@@ -254,6 +298,64 @@ class Rule6Approvals(HubCase):
         self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
         H.approval_decide(self.conn, ANA, appr["id"], "declined")
         self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
+
+    @staticmethod
+    def publish(text, digest=None):
+        return {"url": "hq-ticket:TK-0000AAAA", "text": text,
+                "content_sha256": digest or hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+    def test_a_publish_text_that_matches_its_hash_is_requested(self):
+        body = self.publish("Thanks, the fix is in 0.3.41.")
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish", body)["kind"], "publish")
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+
+    def test_an_upper_case_publish_hash_is_refused_because_the_publisher_compares_it_exactly(self):
+        upper = self.publish("Upgrade to 0.3.41 and it works.")
+        upper["content_sha256"] = upper["content_sha256"].upper()
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish", upper)
+        self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_hash_that_is_not_lower_case_hex_is_refused_without_text_too(self):
+        digest = hashlib.sha256(b"Upgrade to 0.3.41 and it works.").hexdigest()
+        for given in (digest.upper(), digest[:63], " " + digest, "z" * 64, 42):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": given})
+            self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish",
+                                            {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest})["kind"], "publish")
+
+    def test_a_publish_text_that_is_not_a_string_is_refused_as_such(self):
+        digest = hashlib.sha256(b"Thanks, the fix is in 0.3.41.").hexdigest()
+        for text in (None, 42, ["Thanks"]):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest, "text": text})
+            self.assertEqual("text must be a string", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_text_that_does_not_match_its_hash_is_refused(self):
+        other = hashlib.sha256(b"A different reply that would really be posted.").hexdigest()
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                         self.publish("Thanks, the fix is in 0.3.41.", other))
+        self.assertIn("the text doesn't match content_sha256; send the exact text that will be published", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_with_no_text_is_not_checked(self):
+        appr = H.approval_request(self.conn, CMO, "publish", {"url": "https://acme.example/notes",
+                                                               "content_sha256": "b" * 64})
+        self.assertIsNone(appr["decision"])
+
+    def test_a_unicode_reply_with_a_trailing_newline_matches_the_file_bytes_hq_tickets_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reply.md"
+            path.write_bytes("Merci, Zoë: café ✓ fixed in 0.3.41 \u2014 see you.\r\nLine two.\n".encode("utf-8"))
+            data = path.read_bytes()                    # what hq-tickets hashes
+            sent = json.loads(json.dumps({"url": "hq-ticket:TK-0000AAAA", "text": data.decode("utf-8"),
+                                          "content_sha256": hashlib.sha256(data).hexdigest()}))
+        self.assertTrue(sent["text"].endswith("\n"))
+        H.approval_request(self.conn, CMO, "publish", sent)
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
 
 # ----------------------------------------------------------------------------- rule 7
@@ -316,20 +418,11 @@ class Rule8Counting(HubCase):
         self.assertTrue(H.say(self.conn, ANA, CMO, "are you stuck?"), "a person's message is kept for when it is back")
         self.refused("reach", H.say, self.conn, SEO, CMO, "are you stuck?")      # rule 2: a bot still cannot
 
-    def test_an_escape_quarantines_the_bot_and_only_a_human_clears_it(self):
-        payload = {"to": "ops@acme.com", "cc": "", "subject": "the keys",
-                   "body_sha256": "c" * 64, "mailbox": "secrets/mail.env"}
-        for _ in range(H.ESCAPE_QUARANTINE_AT - 1):
-            self.refused("escape", H.approval_request, self.conn, CMO, "send", payload)
-            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
-        e = self.refused("escape", H.approval_request, self.conn, CMO, "send", payload)
-        self.assertEqual(e.severity, "escape")
-        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
+    def test_an_escape_quarantine_holds_until_a_human_clears_it(self):
+        H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         focus = H.status(self.conn, "cmo")["focus"]
-        self.assertIn("escape", focus)
         H.status_set(self.conn, H.KEEPER, "cmo", state="crashed", focus="Runner disconnected")
-        self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.status(self.conn, "cmo")["focus"], focus)
         self.refused("quarantined", H.say, self.conn, CMO, SEO, "still here?")
         self.refused("quarantined", H.status_set, self.conn, H.KEEPER, "cmo", state="active")
@@ -370,19 +463,18 @@ class Rule8Counting(HubCase):
         self.assertEqual(task["body"], body)
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
-    def test_an_escape_quarantines_on_the_third_try_in_a_day(self):
-        body = "Read secrets/mail.env"
-        for i in range(H.ESCAPE_QUARANTINE_AT - 1):
-            self.refused("escape", H.task_create, self.conn, CMO, f"Check the mail file {i}", body, SEO)
-            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
-        self.refused("escape", H.task_create, self.conn, CMO, "Check the mail file again", body, SEO)
-        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
-        self.assertTrue(H.quarantine_is_escape(self.conn, "cmo"), "only a person clears it")
-
-    def test_another_bots_repo_path_counts_as_an_escape(self):
-        self.assertEqual(H.classify("read emp-legal/knowledge/notes.md"), "escape")
-        self.assertEqual(H.classify("look at secrets/mail.env"), "escape")
-        self.assertEqual(H.classify("the blog is at https://acme.example/blog"), "normal")
+    def test_naming_a_path_is_written_as_is_and_never_counts(self):
+        """Another bot's folder or secrets/ in a bot's words reaches nothing: accepted, recorded, never refused."""
+        named = "See emp-legal/knowledge/notes.md and secrets/mail.env"
+        for i in range(H.QUARANTINE_AT + 2):
+            made = H.task_create(self.conn, CMO, f"Check the mail file {i}", named, SEO)
+            self.assertEqual(made["body"], named)
+            H.task_update(self.conn, SEO, made["id"], note=named)
+            H.say(self.conn, CMO, SEO, named + f" ({i})")
+        H.approval_request(self.conn, CMO, "merge", {"repo": "emp-cmo/", "pr": 4})
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.assertTrue(self.conn.execute("SELECT 1 FROM events WHERE action='path.mentioned' AND actor=?", (CMO,)).fetchone())
         self.assertEqual(H.classify("{}", kind="spend"), "sensitive")
 
 # ----------------------------------------------------------------------------- rule 9
@@ -488,6 +580,21 @@ class WaitingWithDependency(HubCase):
         TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
         H.task_update(self.conn, CMO, blocker['id'], status='done')
         self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
+        # A note naming what it waits on parks it, with a hint on recording the wait.
+        parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
+        self.assertEqual(parked['status'], 'waiting')
+        self.assertIn('goes back to open', parked['warnings'][0])
+
+    def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
+        parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
+        child = H.task_create(self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA,
+                              parent_id=parent['id'])
+        done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
+        self.assertEqual(done['status'], 'done')
+        self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
+        said = [e['new'] for e in H._rows(self.conn.execute(
+            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
+        self.assertEqual(said, ['Still open: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
@@ -523,6 +630,55 @@ class WaitingWithDependency(HubCase):
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')
 
+    def test_a_waiting_note_for_a_person_is_linted_as_their_ask(self):
+        lints = lambda tid: [e[0] for e in self.conn.execute(
+            "SELECT new FROM task_events WHERE task_id=? AND field='lint' ORDER BY ts", (tid,))]
+        task = H.task_create(self.conn, CMO, 'Coordinate the external agent scenario', '', CMO, private=False)
+        # The bot's working notes as the ask: ids, a page of status. Saved, waiting on Ana, with warnings.
+        notes = ('Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static '
+                 'Larkspur. Docs task Doing; no sample edit/deploy or duplicate human question. Waiting on a call.')
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=notes)
+        self.assertEqual((after['waiting_on'], after['note']), (ANA, notes))
+        self.assertTrue(any('"db14c907"' in w for w in after['warnings']), after['warnings'])
+        self.assertTrue(any('working notes' in w for w in after['warnings']), after['warnings'])
+        self.assertEqual(len(lints(task['id'])), 1)
+        # One plain sentence to the person passes.
+        plain = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                              note='Tell me whether the public example should show the agent demo.')
+        self.assertNotIn('warnings', plain)
+        # No note at all says nothing to them, unless a question to them on the task already asks.
+        bare = H.task_create(self.conn, CMO, 'Renew the domain', '', CMO, private=False)
+        self.assertIn('say in one plain sentence', H.task_update(
+            self.conn, CMO, bare['id'], status='waiting', waiting_on='ana')['warnings'][0])
+        asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
+        H.task_ask(self.conn, CMO, asked['id'], 'Which date should it go out?')
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana'))
+        # A note on a task that waits on nobody is not an ask.
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, bare['id'], status='doing', note=notes))
+        self.assertEqual(H.lint_waiting_note('Restart the build host; it refuses SSH', ANA), [])
+
+    def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
+        flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]
+        sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
+        for note, ident in [('Approve the fix in db14c907.', 'db14c907'), (f'Approve the fix in {sha}.', sha),
+                            ('Approve the fix in 3f2a9c1.', '3f2a9c1'), ('Review #388 before Friday.', '#388'),
+                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f')]:
+            self.assertEqual(flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note)
+        for note in ['Approve the $250000 budget.', 'Approve the £1500000 offer.', 'Approve the €250000 and ¥9000000 quotes.',
+                     'Name the deadbeef test host.', 'Pick a date after 2026-10-11 for the launch.',
+                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.']:
+            self.assertEqual(flagged(note), [], note)
+        # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
+        self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))
+        self.assertTrue(H.lint_title('Approve the $250000 budget'))
+        self.assertEqual(H.lint_title('Fix the db14c907 crash'), [], 'lowercase hex is a waiting-note check, not a title one')
+        # A colon that opens a plain clause is prose; a status code is still jargon.
+        self.assertEqual(H.lint_waiting_note('Check the order status: it says pending.', ANA), [])
+        self.assertEqual(H.lint_waiting_note('Approve the release; status: doing.', ANA),
+                         ['internal jargon in the note for ana: "status: doing."'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nowner: bot:cmo'), ['internal codes: "owner: bot:cmo"'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nThe owner: the CMO, who signs it.'), [])
+
     def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
         H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
         H.status_set(self.conn, H.KEEPER, "seo", state="idle")
@@ -532,8 +688,6 @@ class WaitingWithDependency(HubCase):
                                           note='Restart it', **kw)
         self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
         self.refused('kind', wait, owner='seo')
-        self.refused('escape', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
-                     note='Read secrets/mail.env')
         self.refused('private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben',
                      private=True)
         wait()

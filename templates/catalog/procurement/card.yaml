@@ -8,7 +8,7 @@ pack: operations
 icon: shopping_cart
 suggest: common
 tags: [purchasing, vendors, software, rfq, security-review, smb]
-summary: "Compares three to five vendors for each purchase request using weighted criteria and total cost. Makes requested purchases with its Tools; vendor messages stay drafts until `outbound_send` is on."
+summary: "Compares three to five vendors for each purchase request using weighted criteria and total cost. Makes requested purchases with its Tools; vendor messages stay drafts until a person turns mail sending on in Tico."
 when: "A team where software and service purchases are chosen by whoever asked, with no shared way to compare them."
 pains:
   - "we buy tools without comparing alternatives"
@@ -18,7 +18,7 @@ pains:
   - "purchase requests sit with nobody owning them"
 owns:
   - "The vendor comparison for each purchase request: must-haves, weighted scores, total cost, claims with their sources, references to check, and a labelled suggestion"
-  - "The questions, quote requests and reference requests to vendors, sent only when `outbound_send` is on"
+  - "The questions, quote requests and reference requests to vendors, sent only when a person has turned mail sending on in Tico"
   - "The open purchase requests list and the weekly digest of where each stands"
   - "The criteria and weights the team agreed, and the standing security questions (knowledge/criteria.md, knowledge/security-questions.md)"
 never:

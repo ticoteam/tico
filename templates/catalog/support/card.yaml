@@ -16,7 +16,7 @@ pains:
   - "we can't tell which problems are actually product bugs"
   - "only one human knows how to reply"
 owns:
-  - "Each ticket from arrival to a reviewed reply: the triage, the answer researched through the Librarian and a reply ready on the task ready to send when `outbound_send` is on"
+  - "Each ticket from arrival to a reviewed reply: the triage, the answer researched through the Librarian and a reply ready on the task ready to send when a person has turned mail sending on in Tico"
   - "The follow-up list: what waits on a customer, a colleague or a fix, and when it is next due (knowledge/follow-ups.md)"
   - "The doc gaps it reports to the Librarian, and what is broken often enough to be a product problem (knowledge/known-issues.md)"
 never:
@@ -49,7 +49,7 @@ onboarding:
   - ask: "Who owns fixing product problems, so a repeated bug goes to one human?"
     why: "When the same problem arrives three times it becomes one task for that human, not three escalations."
   - ask: "How long should a ticket wait on a customer before I draft a nudge, and how many nudges before I stop? (Default: 3 days, then 7, then stop.)"
-    why: "Sets the follow-up list. Send requested nudges with the available Tools; messages to outsiders stay drafts until `outbound_send` is on."
+    why: "Sets the follow-up list. Send requested nudges with the available Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico."
 first_routine:
   title: "Daily support queue"
   cadence: "Weekdays at 09:00 team time"

@@ -71,13 +71,33 @@ server_environment() {
 # tunnel has none. docs/install.md, "Cloudflare Tunnel".
 TUNNEL_DIR=${TICO_TUNNEL_DIR:-/tunnel}
 
+# The host of TICO_RUNNER_URL when the tunnel should serve it too: a plain hostname other than TICO_DOMAIN.
+# A loopback or IP address never reaches the tunnel, so it adds nothing.
+runner_host() {
+  local host=${TICO_RUNNER_URL:-}
+  host=${host#*://}; host=${host%%/*}; host=${host##*@}; host=${host%%:*}
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  case "$host" in *[!a-z0-9.-]*|.*|*.|''|localhost) return 0 ;; esac
+  case "$host" in *[!0-9.]*) ;; *) return 0 ;; esac
+  [ "$host" = "$(printf '%s' "$TICO_DOMAIN" | tr '[:upper:]' '[:lower:]')" ] || printf '%s' "$host"
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
+  local runner
+  runner=$(runner_host)
   {
     echo "ingress:"
     echo "  - hostname: $TICO_DOMAIN"
     echo "    service: http://server:8765"
+    if [ -n "$runner" ]; then
+      # A separate runner hostname has no sign-in page in front of it, so it serves only what runners and
+      # external agents call: the API (which checks their tokens) and the runner download.
+      echo "  - hostname: $runner"
+      echo "    path: '^/(?:api/v2|download)(?:/.*)?\$'"
+      echo "    service: http://server:8765"
+    fi
     echo "  - service: http_status:404"
   } > "$TUNNEL_DIR/cloudflared.yml.new"
   chmod 0644 "$TUNNEL_DIR/cloudflared.yml.new"
@@ -143,8 +163,9 @@ seed() {
     fi
     if [ -s "$TICO_DB" ]; then
       python -m backend.replication restore-blobs || log "could not restore attachments; run: docker compose run --rm server restore --force"
-      # The key that decrypts the stored credentials (docs/credential-vault.md); a database without it cannot.
-      python -m backend.replication restore-credential-key || log "could not restore the credential key; see docs/credential-vault.md"
+      # The key files that decrypt the stored secrets (credential.key, github-app.key, slack.key; docs/install.md); a
+      # database without them cannot.
+      python -m backend.replication restore-credential-key || log "could not restore every key file; see docs/install.md#backups-and-restore"
     else
       python -m backend.replication check-new-company "$DATA" ${restore_failed[@]+"${restore_failed[@]}"} ${guard[@]+"${guard[@]}"} \
         || die "refusing to start with an empty data volume (see above)"
@@ -186,11 +207,21 @@ PY
   export TICO_ENVIRONMENT_ID
 }
 
+# TICO_EXPECTED_AWS_ACCOUNT (and TICO_EXPECTED_AWS_ROLE): refuse to start as any other AWS identity, before anything
+# reads a backup, bucket, key or secret with it (backend/aws_identity.py). Unset, nothing is checked or called.
+aws_identity() {
+  [ -n "${TICO_EXPECTED_AWS_ACCOUNT:-}${TICO_EXPECTED_AWS_ROLE:-}" ] || return 0
+  local confirmed
+  confirmed="$(python -m backend.aws_identity check)" || die "refusing to start: ${confirmed:-could not confirm the AWS identity}"
+  log "$confirmed"
+}
+
 prepare() {  # everything `server` does before it starts serving: also what the tests run
   server_environment
   for arg in "$@"; do
     case "$arg" in --initialize-empty) export TICO_INITIALIZE_EMPTY=1 ;; *) die "unknown option $arg" ;; esac
   done
+  aws_identity
   seed
   environment_identity
   tunnel_config
@@ -227,6 +258,7 @@ slack_gateway() {
     exec sleep infinity
   fi
   server_environment
+  aws_identity
   local waited=0
   until [ -s "$TICO_DB" ]; do
     [ "$waited" -lt 120 ] || die "the server has not created $TICO_DB; is it running?"
@@ -256,6 +288,7 @@ PY
 restore() {
   local force=0
   case "${1:-}" in --force) force=1 ;; '') ;; *) die "usage: restore [--force]" ;; esac
+  aws_identity  # before the backup or the credential key is read, or a database is moved aside
   export TICO_DB=$DATA/hub.sqlite TICO_BLOB_DIR=$DATA/blobs
   if ! python -m backend.replication is-empty "$DATA"; then
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
@@ -272,10 +305,10 @@ restore() {
   litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB"
   [ -s "$TICO_DB" ] || die "the backup holds no database"
   python -m backend.replication restore-blobs
-  # With --force the database above was kept aside; the key that goes with it is put back too (a different one already
-  # here is kept aside as credential.key.before-restore.*).
+  # With --force the database above was kept aside; the key files that go with it are put back too (a different one
+  # already here is kept aside as <name>.before-restore.*).
   python -m backend.replication restore-credential-key $([ "$force" = 1 ] && echo --replace) \
-    || log "could not restore the credential key; see docs/credential-vault.md"
+    || log "could not restore every key file; see docs/install.md#backups-and-restore"
   python - <<'PY'
 import os, sqlite3
 if sqlite3.connect(os.environ["TICO_DB"]).execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -296,6 +329,7 @@ case "${1:-server}" in
   server) shift; server "$@" ;;
   prepare) shift; prepare "$@" ;;
   tunnel-config) tunnel_config ;;
+  aws-identity) aws_identity ;;
   demo) demo "$@" ;;
   restore) shift; restore "$@" ;;
   slack-gateway) slack_gateway ;;

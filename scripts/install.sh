@@ -2,7 +2,7 @@
 # Installs Tico on this Linux server: Docker if missing, the compose bundle of one exact release, then the
 # `tico setup` wizard. Safe to run again: it upgrades or repairs and never rewrites an existing .env.
 #
-#   curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh
+#   curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh
 #   sh install.sh --local [--owner-email you@example.com] [--team-name Acme]   # quick start: no domain, no sign-in setup
 #   sh install.sh [--version vX.Y.Z] [--dir /opt/tico] [--yes] [--tunnel] [--docker-only] [-- wizard flags]
 #   sh install.sh --runner --url https://tico.example.com --code <code> --label "Build box" [--version vX.Y.Z]

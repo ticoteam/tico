@@ -9,7 +9,7 @@ icon: podium
 suggest: niche
 tags: [developer-tools, api, saas, community, content, open-source]
 when: "Offer to a team whose customers are developers: a public API, an SDK, a developer tool or an open-source project."
-summary: "Speaks for the developers who build on the product: answers their public questions, writes runnable samples and tutorials, and keeps a ranked friction log for engineering and product. Public replies stay drafts until `outbound_send` is on."
+summary: "Speaks for the developers who build on the product: answers their public questions, writes runnable samples and tutorials, and keeps a ranked friction log for engineering and product. Public replies stay drafts until a person turns mail sending on in Tico."
 pains:
   - "developers ask the same API questions on our forum and nobody answers"
   - "our SDK has no working examples"
@@ -39,7 +39,7 @@ onboarding:
   - ask: "Who are the developers you serve (what they build, which language), and what is the first thing they try to do with the product?"
     why: "Sets the reader for every answer and tutorial, and the path the friction log follows."
   - ask: "Where do developers ask questions today: GitHub Discussions, a forum, a public chat, a Q&A site tag? Links, please."
-    why: "Becomes the channel map I sweep each week. Public replies stay drafts until `outbound_send` is on."
+    why: "Becomes the channel map I sweep each week. Public replies stay drafts until a person turns mail sending on in Tico."
   - ask: "Which repositories hold the SDKs and the examples, and which repository checks apply to merges?"
     why: "Requested sample changes use those repositories, checks and Tools."
   - ask: "What may never be said in public: roadmap, pricing, security issues, named customers?"

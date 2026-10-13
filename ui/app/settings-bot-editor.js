@@ -11,12 +11,40 @@ function settingsBotEditorRows(e) {
   return `${manage ? `<div class="sb-row"><span>Instructions</span><button class="ghost" type="button" data-edit-instructions="${esc(e.name)}">Edit Instructions</button></div>` : ''}<div class="sb-row"><span>Access</span><span data-access-summary>${esc(accessSummary(e.access_policy))}</span>${change('data-edit-access', 'access')}</div>
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
+    ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
+    ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
     <div class="sb-row" data-bot-sub-row hidden><span>Subscription</span><select class="settings-inline-select" data-bot-sub="${esc(e.name)}" aria-label="Subscription for ${esc(e.display_name)}"></select><span></span></div>`}`;
+}
+// Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only Claude Code and Codex take it,
+// and it saves on its own without a fresh session, like the computer.
+const SETTINGS_COMPACT_AT = [[150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
+const SETTINGS_COMPACT_DEFAULT = 250000;
+function settingsCompactRow(e) {
+  const runtime = settingsHarness(e.harness)?.runtime || e.runtime || e.resolved_runtime;
+  if (runtime && !['claude', 'codex'].includes(runtime)) return '';
+  const current = Number(e.compact_at) || SETTINGS_COMPACT_DEFAULT;
+  const options = SETTINGS_COMPACT_AT.some(([value]) => value === current) ? SETTINGS_COMPACT_AT : [...SETTINGS_COMPACT_AT, [current, `${Math.round(current / 1000)}k`]];
+  return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.name)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+      ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
+    </select><span></span></div>`;
+}
+async function settingsSetCompact(select) {
+  const slug = select.dataset.botCompact, e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === select.dataset.current) return;
+  select.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: Number(select.value), expected_revision: e.revision});
+    await loadSettings();
+    toast(`${e.display_name} compacts at ${select.selectedOptions[0]?.textContent || select.value}`);
+  } catch (error) {
+    select.value = select.dataset.current;
+    toast(error.message, true);
+  } finally { if (select.isConnected) select.disabled = false; }
 }
 function settingsEditBot(slug = '') {
   const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
@@ -72,7 +100,7 @@ function settingsEditBot(slug = '') {
   let rev = e?.revision, touched = false;
   const rows = dialog.querySelector('[data-bot-people]');
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); };
     const refresh = () => { if (!dialog.open) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
@@ -83,6 +111,8 @@ function settingsEditBot(slug = '') {
       if (access) void settingsEditAccess(access.dataset.editAccess);
       if (owners) settingsEditOwners(owners.dataset.editOwners);
       if (botOwners) void settingsEditBotOwners(botOwners.dataset.editBotOwners);
+      const mail = event.target.closest('[data-edit-mail]');
+      if (mail) void settingsEditMail(mail.dataset.editMail, () => settingsMailSummary(rows, slug));
       const credential = event.target.closest('[data-agent-credential]'), revoke = event.target.closest('[data-agent-revoke]'), pairing = event.target.closest('[data-agent-pair]');
       if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
       if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
@@ -91,6 +121,8 @@ function settingsEditBot(slug = '') {
     rows.addEventListener('change', event => {
       const machine = event.target.closest('[data-bot-machine]');
       if (machine) { touched = true; void settingsMoveBot(machine); }
+      const compact = event.target.closest('[data-bot-compact]');
+      if (compact) { touched = true; void settingsSetCompact(compact); }
     });
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js

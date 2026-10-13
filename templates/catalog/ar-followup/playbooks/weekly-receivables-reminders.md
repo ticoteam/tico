@@ -41,7 +41,7 @@ aging, needs you now, drafts, held back, could not read, sources. Then:
 
     hub file publish reports/YYYY-MM-DD-ar-followup.md
 
-Attach the drafts to the task. Send requested reminders with their exact text and recipients when `outbound_send` is on; otherwise keep drafts.
+Attach the drafts to the task. Send requested reminders with their exact text and recipients when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## 6. Finish
 

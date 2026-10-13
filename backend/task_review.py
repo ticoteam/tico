@@ -136,6 +136,9 @@ def answer_task(c, auth, who, task_id, body, wake):
     privacy.require_message(c, who, asked)
     if asked["from_actor"] == who.actor:
         raise Problem("forbidden", "The asker cannot answer their own question", 403)
+    # A bot's question answered by the person it was put to (or its task waits on) is that bot's next move: it wakes.
+    wake = wake or H.is_bot(asked["from_actor"]) and (
+        asked["to_actor"] == who.actor or H.task(c, task_id).get("waiting_on") == who.actor)
     questions = {q["id"]: q for q in asked["refs"]["questions"]}
     if body.dismiss:
         if body.answers or body.other:

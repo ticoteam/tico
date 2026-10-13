@@ -79,6 +79,42 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
     assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
+    // Bots search: it filters as typed, keeps the box and the cursor through a reload, and a bot it hides
+    // drops out of the selection, so a bulk change never reaches a bot that is not on screen.
+    const botSearch = page.locator('[data-bots-search]');
+    await page.locator('[data-bot-pick=helper]').check();
+    await botSearch.pressSequentially('HELP');
+    assert.equal(await page.locator('[data-bots-count]').innerText(), '1 bot');
+    await botSearch.press('x');
+    await page.evaluate(() => loadSettings());
+    assert.equal(await botSearch.inputValue(), 'HELPx', 'Search survives loadSettings');
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-bots-search]')), true);
+    assert.equal(await page.locator('#set-bots .empty').innerText(), 'No bots match “HELPx”.');
+    assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0, 'a hidden bot leaves the selection');
+    await page.locator('[data-bots-search-clear]').click();
+    assert.equal(await page.locator('[data-settings-bot]').count(), 1);
+    assert.equal(await botSearch.inputValue(), '');
+    // Escape empties the box and keeps the cursor there.
+    await botSearch.fill('zzz');
+    await botSearch.press('Escape');
+    assert.equal(await botSearch.inputValue(), '');
+    assert.equal(await page.locator('[data-settings-bot]').count(), 1);
+    const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.dataset.botsFiltersToggle !== undefined ? 'filters' : a?.dataset.botsPicking !== undefined ? a.textContent : a?.dataset.botsSearch !== undefined ? 'search' : a?.tagName; });
+    assert.equal(await focused(), 'search', 'Escape keeps the cursor in the search box');
+    // On a phone, Filters, Select and Done redraw the list and keep the keyboard on the same control.
+    await page.setViewportSize({width: 390, height: 844});
+    await page.locator('[data-bots-filters-toggle]').press('Enter');
+    assert.equal(await focused(), 'filters');
+    assert.equal(await page.locator('[data-bots-filter=model]').isVisible(), true);
+    await page.locator('[data-bots-picking]').press('Enter');
+    assert.equal(await focused(), 'Done');
+    await page.locator('[data-bots-pick-all]').press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.botsPickAll !== undefined), true);
+    await page.locator('[data-bots-picking]').press('Enter');
+    assert.equal(await focused(), 'Select');
+    assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
+    assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').getAttribute('aria-label'), 'Access: You: See · Read · Write');
+    await page.setViewportSize({width: 1440, height: 900});
     await page.locator('#settings-more > summary').click();
     await page.locator('[data-settings-tab=recurring]').click();
     await page.locator('#set-recurring [data-new-routine]').click();

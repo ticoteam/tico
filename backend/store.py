@@ -87,14 +87,16 @@ CREATE TABLE IF NOT EXISTS agents(
  model TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '', revoked_at TEXT, revoked_by TEXT);
 -- A Hermes profile asking to be connected to a bot (backend/agents.py): the code a person
--- reads out, the hash of the secret only the profile knows, and, from approval until the
--- profile collects it once, the minted credential.
+-- reads out, the hash of the secret only the profile knows, the public key that secret derives
+-- (token_key), and, from approval until the profile collects it once, the minted credential
+-- sealed to that key: only the profile's secret opens it.
 CREATE TABLE IF NOT EXISTS agent_pairings(
  id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, secret_hash TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', host TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '',
  harness TEXT NOT NULL DEFAULT 'hermes', client_hash TEXT NOT NULL DEFAULT '',
  state TEXT NOT NULL DEFAULT 'pending', bot TEXT, token TEXT,
- created TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT);
+ created TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT,
+ token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created);
 CREATE TABLE IF NOT EXISTS runners(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, operator TEXT NOT NULL REFERENCES humans(id),
@@ -122,6 +124,15 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used TEXT, expires_at TEXT, revoked_at TEXT);
+-- OAuth sign-in for the MCP server (backend/mcp_oauth.py): registered agents, and each person's approval of one,
+-- which ends in a human_tokens row whose secret a refresh rotates in place.
+CREATE TABLE IF NOT EXISTS oauth_clients(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris_json TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_grants(
+ id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES oauth_clients(id), human TEXT NOT NULL,
+ redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+ code_hash TEXT UNIQUE, code_expires TEXT, token_id TEXT REFERENCES human_tokens(id),
+ refresh_hash TEXT UNIQUE, refresh_expires TEXT, denied_at TEXT);
 -- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
@@ -256,7 +267,7 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL,
- updated_by TEXT NOT NULL);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -397,6 +408,20 @@ def is_poll(operation, result):
 
 def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+# Health rows nothing writes any more. The old snapshot backup timers (backend/operations.py) are
+# replaced by Litestream wherever the container entrypoint sets TICO_BACKUP_MODE, and Health reads
+# that from backend/replication.py; `processing:<runner>` has no writer at all.
+SNAPSHOT_BACKUP_ROWS = ("backup", "backup-daily", "backup-monthly", "restore-check")
+
+
+def retire_health_rows(c):
+    """Delete health rows from retired mechanisms so they are neither shown nor alerted on. Idempotent."""
+    c.execute("DELETE FROM service_health WHERE service LIKE 'processing:%'")
+    if os.environ.get("TICO_BACKUP_MODE"):
+        c.execute(f"DELETE FROM service_health WHERE service IN ({','.join('?' * len(SNAPSHOT_BACKUP_ROWS))})",
+                  SNAPSHOT_BACKUP_ROWS)
 
 
 def sweep_idempotency(store, now=None, batch=5000):
@@ -625,8 +650,12 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
+            from . import doc_sources as _doc_sources
+            _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
+            from . import mail_settings as _mail_settings
+            c.executescript(_mail_settings.SCHEMA)
             from . import support as _support
             c.executescript(_support.SCHEMA)
             from . import credential_cards as _credential_cards
@@ -656,6 +685,22 @@ class Store:
                 H.add_column(c, "tasks", "request_id", "TEXT")
                 # When an archived bot's agent last used its still-valid credential (backend/agents.py).
                 H.add_column(c, "agents", "archived_seen", "TEXT")
+                # The pairing secret's public key: a held agent credential is sealed to it (backend/agents.py). A
+                # credential held in plaintext by the release before that, and no longer collectable, goes now.
+                H.add_column(c, "agent_pairings", "token_key", "TEXT NOT NULL DEFAULT ''")
+                from .agents import wipe_unclaimable
+                wipe_unclaimable(c)
+                # Who added each credential, for the record. Older rows take it from their audit event once, when the
+                # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
+                if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
+                    H.add_column(c, "credentials", "created_by", "TEXT")
+                    c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
+                                  [(r[0], r[1]) for r in c.execute(
+                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY ts")])
+                # A credential a member stored for their own bot (`Vault.write`'s member path). Every row already here
+                # starts at 0: on a server that ran the backfill above, `created_by` named every admin who ever added a
+                # company credential as its owner, and nothing recorded which rows a member stored, so none stay theirs.
+                H.add_column(c, "credentials", "member_stored", "INTEGER NOT NULL DEFAULT 0")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=1").fetchone():
                     H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
                     H.add_column(c, "tasks", "acceptance_json", "TEXT NOT NULL DEFAULT '[]'")
@@ -1083,6 +1128,7 @@ class Store:
                     from . import task_relations as _task_relations
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
+                H.ensure_market_reads(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
@@ -1112,6 +1158,8 @@ class Store:
                 # action and target (quarantines, drains, who opened a conversation). Idempotent,
                 # so no migration number to collide with another branch's.
                 for name, spec in (("tasks_goal", "tasks(goal_id, status)"),
+                                   # History replay reads the tasks made in a window (backend/replay.py).
+                                   ("tasks_created", "tasks(created)"),
                                    ("task_links_repo_kind", "task_links(repo COLLATE NOCASE, kind)"),
                                    ("task_links_repo_url", "task_links(kind, state, url COLLATE NOCASE)"),
                                    ("attempts_bot_created", "attempts(bot, created)"),
@@ -1137,6 +1185,7 @@ class Store:
                 # finished with what it has (backend/meetings.py). Idempotent, no migration number.
                 from .meetings import retire_capture
                 retire_capture(c)
+                retire_health_rows(c)
                 # The queue trigger names the external harnesses it skips. When one is added
                 # the stored trigger is rebuilt; no migration number, so no
                 # collision with another branch's.

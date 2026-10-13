@@ -1,6 +1,7 @@
 """Can this bot run this runtime on this computer: the one check behind a model change, a move and Health.
 
     can_run(c, bot, runtime, runner=None, harness="", model="") -> dict
+    own_harness(c, bot, runtime) -> str       the bot's own harness for `runtime`, to pass as `harness`
 
 `runner` is a computer id (default: the computer the bot is on). The answer is judged from that computer's last
 heartbeat **for this bot**: its own subscription profile's sign-in when it has one, its own API-key Credential for the
@@ -20,7 +21,7 @@ Callers refuse only on can_run False; None never blocks.
 """
 import json
 
-from .harnesses import EXTERNAL_HARNESSES, resolve_harness
+from .harnesses import EXTERNAL_HARNESSES, resolve_harness, runtime_of
 from .store import H, readiness_document
 
 ONLINE_SECONDS = 60
@@ -32,6 +33,14 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 def _config(c, bot):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return H._json(row["config_json"], {}) or {} if row else {}
+
+
+def own_harness(c, bot, runtime):
+    """The bot's own harness when it runs `runtime`, else '': what a check of the runtime the bot already runs passes
+    as `harness`, the way the model picker passes the harness it offers. Without it an Antigravity bot is judged as
+    Gemini CLI and gets a Gemini sign-in hint that is not its own."""
+    harness = resolve_harness(_config(c, bot), runtime)
+    return harness if runtime and runtime_of(harness) == runtime else ""
 
 
 def _held(c, bot):
@@ -76,8 +85,10 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
                         and (not model or str(detail.get("model") or "") == str(model)))}
     state = (readiness.get("runtimes") or {}).get(runtime) or {}
 
-    def verdict(can, problem="", fix="", link="#/settings"):
+    def verdict(can, problem="", fix="", link="#/settings", sign_in=False):
         out.update(can_run=can)
+        if sign_in:
+            out["sign_in"] = True     # the model is not signed in on this computer: Settings > Computers fixes it
         if can is not True:
             out["problem"] = problem
         if can is False:
@@ -110,7 +121,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             return verdict(None, "The " + profile + " subscription has not reported " + str(runtime) + " on " + label)
         return verdict(True) if signed else verdict(
             False, "The " + profile + " subscription is not signed in to " + str(runtime) + " on " + label,
-            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers")
+            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers", sign_in=True)
     shared = (state.get("profiles") or {}).get("") or state
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
@@ -118,7 +129,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     if signed in SIGNED_OUT:
         return verdict(False, shared.get("detail") or (str(runtime) + " is not signed in on " + label),
                        "Sign in " + str(runtime) + " on " + label + " in Settings > Computers, or choose a model it "
-                       "already runs")
+                       "already runs", sign_in=True)
     return verdict(None, label + " has not checked the " + str(runtime) + " sign-in yet")
 
 

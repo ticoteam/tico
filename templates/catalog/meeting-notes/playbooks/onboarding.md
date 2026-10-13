@@ -47,7 +47,7 @@ draft, not yet reviewed". Nothing is posted or assigned.
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; outside messages stay drafts until outbound_send is on." They
+`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; outside messages stay drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a

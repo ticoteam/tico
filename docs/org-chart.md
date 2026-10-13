@@ -10,7 +10,8 @@ the Goal Manager is reached from Goals and the Librarian from Docs and Market. S
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
 A message bot's mailboxes and Slack channels are listed under it in the sidebar; any other bot's Slack channels are
 under Slack in its Tools on the bot's page.
-A human's synced Grok Bots ([Grok Bot sync](grok-bot-sync.md)) are chips beside their name rather than rows under them. Your
+A human's synced Grok Bots ([External agent sync](external-agent-sync.md)) sit in one framed **Grok Bot** cluster under them,
+with Grok's own sections (Pinned and the ones made there) nested inside; their Dots is an ordinary row under them. Your
 own row shows **Connect** until an external agent of yours has reached Tico ([Connect an external agent](connect-an-agent.md)).
 Bots read the same chart through `hub team show` / the `hub_team_show` MCP tool (`GET /api/v2/org`): the humans, and every bot the caller
 may see (see [permissions.md](permissions.md)) with its `reports_to`, its `team` (its group's id), its `department` (its group's name)
@@ -25,6 +26,12 @@ Groups and reporting are two things. `reports_to` says who a human or bot works 
 one never changes the other.
 
 ## Groups
+
+The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
+**Add section** opens the inline group-name field. **Add bot > From template** opens the template picker;
+**Ask BotOps** opens its chat with an editable request, preserving any draft already there. Describe a custom bot or
+share an existing agent's folder path and computer, or its GitHub URL. Nothing is sent until you send the message;
+BotOps helps work out the setup rather than automatically importing an arbitrary folder.
 
 A group is an id, a name, an optional parent group, and its teammates. A teammate is in one group at a time: putting a human or bot in a
 group takes it out of the one it was in. Groups are stored with the roster (`org_groups` in `registry/people.yaml` seeds them; from then on
@@ -43,7 +50,7 @@ manager's; giving it an empty `team` takes it out of every group.
 
 Owners and admins change groups; everyone else reads them.
 
-- **In the app**, the **+** beside **Team** adds a group, and the **+** on a group adds one inside it. The pencil renames a group in place.
+- **In the app**, **Team > + > Add section** adds a group, and the **+** on a group adds one inside it. The pencil renames a group in place.
   The delete button removes a group after confirmation: its people, bots and child groups move to its parent, or **No group** at the top.
   Teammates, their histories and reporting lines stay; subscriptions assigned to that group are unassigned.
   Drag a human or a bot onto a group to put it there, onto **No group** (it appears while you drag) to take it out, and drag a group onto
@@ -121,7 +128,8 @@ when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting t
 
 ## Adding a human
 
-Open **Settings > Humans > Add manually** and enter their name and email. Owners and admins can add humans outside the team's domain;
+Choose **Team > + > Add human** for an email and optional name, or open **Settings > Humans > Add manually**. No email is sent.
+Owners and admins can add humans outside the team's domain;
 members with **Can add humans** can add coworkers in the domain. See [Humans](people.md) for sign-in and directory sync.
 
 ### First-boot seed files

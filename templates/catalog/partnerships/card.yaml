@@ -8,7 +8,7 @@ pack: sales
 icon: partner_exchange
 suggest: niche
 tags: [b2b, partners, channel, resellers, referrals, integrations, co-selling, agencies]
-summary: "Runs the partner channel: finds partners that fit, checks every deal registration against the rules of engagement, follows partner-sourced deals to close and lists referral fees owed. Requested payouts use Tools; outside messages stay drafts until outbound_send is on."
+summary: "Runs the partner channel: finds partners that fit, checks every deal registration against the rules of engagement, follows partner-sourced deals to close and lists referral fees owed. Requested payouts use Tools; outside messages stay drafts until a person turns mail sending on in Tico."
 when: "A team that sells with or through agencies, resellers, referral partners or integration partners and wants that channel run, not remembered."
 pains:
   - "partners send leads and nobody follows up"

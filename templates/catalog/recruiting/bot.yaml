@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 45
 
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every draft on the task and drafts until outbound_send is on.
+# the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
 outbound_send: false
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
@@ -33,4 +33,4 @@ tools: []
 #     identity: "jobs@example.com"
 #     can: [read, draft]          # never send: outbound_send stays false
 #     env: GOOGLE_SA_KEY
-#     note: "reads applications and leaves each candidate reply as a draft until outbound_send is on; requested actions use the granted Tools"
+#     note: "reads applications and leaves each candidate reply as a draft until a person turns mail sending on in Tico; requested actions use the granted Tools"

@@ -13,11 +13,13 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from connectors.mail import policy as mail_policy
 from hq.app import create_app
 from hq.db import Database
 from hq.releases import Latest
 from hq.support import Tickets
 
+ON = {"bot": "support", "set": True, "outbound_send": True, "forward_to": [], "updated_by": "human:ana"}
 SCRIPT = Path(__file__).resolve().parents[2] / "templates/catalog/support/software/hq-tickets"
 STAFF = "k" * 32
 URL = "https://hq.example"
@@ -75,8 +77,12 @@ def hq(tmp_path):
 def rig(hq, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "bot.yaml").write_text("outbound_send: true\n")
+    # The server-held mail setting (backend/mail_settings.py), as the mail connector reads it: a person turned it on.
+    server = {"row": dict(ON)}
+    monkeypatch.setattr(mail_policy, "SERVER_GET", lambda slug: server["row"])
     class Rig:
-        env = {"HQ_STAFF_KEY": STAFF, "HQ_URL": URL, "TICO_WATCHER_STATE": str(tmp_path / "state")}
+        env = {"HQ_STAFF_KEY": STAFF, "HQ_URL": URL, "TICO_WATCHER_STATE": str(tmp_path / "state"), "HUB_BOT": "support"}
+        setting = server
         events, lines = [], []
 
         def __init__(self):
@@ -197,27 +203,47 @@ def test_an_optional_approval_must_match_exactly_that_text_and_ticket(rig, hq, t
     assert tickets_cli.main(["reply", tid, str(reply)], rig.env, out=rig.lines.append, opener=rig.opener) == 1
 
 
-@pytest.mark.parametrize("manifest", ["outbound_send: false\n", "[invalid"])
-def test_sending_off_keeps_a_reply_a_draft_even_with_an_approval(rig, hq, tmp_path, manifest):
+def reply_with(rig, tid, reply, *extra, digest=None):
+    rig.lines.clear()
+    code = tickets_cli.main(["reply", tid, str(reply), *extra], rig.env, out=rig.lines.append, opener=rig.opener,
+                            run=approval("approved", "hq-ticket:" + tid, digest or ""))
+    return code, "\n".join(rig.lines)
+
+
+@pytest.mark.parametrize("server", [None, {"bot": "support", "set": False, "outbound_send": False, "forward_to": []},
+                                    {**ON, "outbound_send": False}])
+def test_bot_yaml_alone_never_turns_sending_on_even_with_an_approval(rig, hq, tmp_path, server):
+    # bot.yaml says outbound_send: true, but no person turned sending on in Tico, Tico is out of reach, or a person
+    # turned it off: the reply stays a draft.
+    rig.setting["row"] = server
     tid, mine = rig.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
-    (tmp_path / "bot.yaml").write_text(manifest)
     digest = hashlib.sha256(reply.read_bytes()).hexdigest()
     for extra in ([], ["--approval", "a1"]):
-        code = tickets_cli.main(["reply", tid, str(reply), *extra], rig.env, out=rig.lines.append,
-                                opener=rig.opener, run=approval("approved", "hq-ticket:" + tid, digest))
-        assert code == 1
+        code, text = reply_with(rig, tid, reply, *extra, digest=digest)
+        assert code == 1 and "outbound_send is off for support" in text and "Mail sending" in text, text
     assert hq.get(f"/v1/support/{tid}", headers=mine).json()["messages"] == []
 
 
-def test_sending_on_posts_without_a_separate_approval_and_reads_the_legacy_manifest(rig, hq, tmp_path):
+def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):
+    tid, mine = rig.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
-    for legacy in (False, True):
-        if legacy:
-            (tmp_path / "bot.yaml").rename(tmp_path / "employee.yaml")
-        tid, mine = rig.file("The board will not load")
-        code, text = rig.cli("reply", tid, str(reply))
-        assert code == 0 and "posted reply" in text and tid in text
-        assert hq.get(f"/v1/support/{tid}", headers=mine).json()["messages"][0]["body"] == reply.read_text().strip()
+    code, text = rig.cli("reply", tid, str(reply), HUB_BOT="")
+    assert code == 1 and "HUB_BOT" in text
+    assert hq.get(f"/v1/support/{tid}", headers=mine).json()["messages"] == []
+
+
+@pytest.mark.parametrize("manifest", ["outbound_send: true\n", "outbound_send: false\n", "[invalid", None])
+def test_the_person_set_switch_posts_without_a_separate_approval_whatever_bot_yaml_says(rig, hq, tmp_path, manifest):
+    if manifest is None:
+        (tmp_path / "bot.yaml").unlink()
+    else:
+        (tmp_path / "bot.yaml").write_text(manifest)
+    reply = tmp_path / "reply.md"
+    reply.write_text("Try the latest release.\n")
+    tid, mine = rig.file("The board will not load")
+    code, text = rig.cli("reply", tid, str(reply))
+    assert code == 0 and "posted reply" in text and tid in text
+    assert hq.get(f"/v1/support/{tid}", headers=mine).json()["messages"][0]["body"] == reply.read_text().strip()

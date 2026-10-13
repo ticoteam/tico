@@ -29,7 +29,7 @@ needs one leaves a marked gap. Include the recipient, subject and the source tha
 
 ## 4. Hand over
 
-Attach the draft to the task. Send the requested text to its recipient with your Tools when `outbound_send` is on; otherwise keep the draft.
+Attach the draft to the task. Send the requested text to its recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
 
 ## 5. Record
 

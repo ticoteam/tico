@@ -13,6 +13,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):                          # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import s3links  # noqa: E402
 from clients.tico import APIError, Client  # noqa: E402
 
 
@@ -58,7 +59,7 @@ def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 15)
     fn = args.fn
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -118,7 +119,7 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn in ("task child create", "task tree"):
         return via_tool(client, args)
-    if args.cmd == "chat":
+    if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
     if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
         return botops_tools(client, args)
@@ -146,6 +147,10 @@ def run(args, who=None):
         from clients import hubtools
         body = json.loads(Path(args.file).read_text())
         return hubtools.BY_NAME["hub_grokbot_sync"]["fn"](client, body)
+    if args.cmd == "external":
+        from clients import hubtools
+        body = json.loads(Path(args.file).read_text())
+        return hubtools.BY_NAME["hub_external_sync"]["fn"](client, {**body, "provider": args.provider})
     if args.cmd == "file":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
@@ -187,8 +192,10 @@ def run(args, who=None):
     actor = identity["actor"]
     key = os.environ.get("HUB_OPERATION_ID")
 
-    def post(path, body, suffix=""):
-        result = client.post(path, body, key=(key + suffix) if key else None)
+    def post(path, body, suffix="", delegate=False):
+        # `delegate`: the person's message the Assistant cites for a task action they asked for (`--on-behalf-of`).
+        result = (client.call("POST", path, body, (key + suffix) if key else None, delegate=delegate) if delegate
+                  else client.post(path, body, key=(key + suffix) if key else None))
         return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
 
     def target(value):
@@ -243,7 +250,9 @@ def run(args, who=None):
         return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
-        return post("notes", {"to": target(args.to), "text": text})["note"]
+        payload = {"to": target(args.to), "text": text}
+        links = s3links.apply(client, payload, ("text",))
+        return s3links.annotate(post("notes", payload)["note"], links)
     if fn == "note list":
         since = args.since
         m = re.fullmatch(r"(\d+)([hd])", since or "")
@@ -256,6 +265,7 @@ def run(args, who=None):
     if fn == "note delete":
         return post(f"notes/{args.id}/cancel", {})["note"]
     if cmd == "task":
+        asked = getattr(args, "on_behalf_of", None) or False
         if sub == "type":
             if args.type_sub == "delete":
                 return post("task-types/" + args.id + "/delete", {})
@@ -303,7 +313,8 @@ def run(args, who=None):
                 payload["next_run"] = True
             if getattr(args, "request_id", None):
                 payload["request_id"] = args.request_id
-            return post("tasks", payload)
+            links = s3links.apply(client, payload, ("body",))
+            return s3links.annotate(post("tasks", payload), links)
         if sub == "show":
             ids = args.id if isinstance(args.id, list) else [args.id]
             if len(ids) > 1:                       # one read for several (hub_task_show_many), not one GET each
@@ -316,6 +327,8 @@ def run(args, who=None):
             return via_tool(client, args)
         if sub == "ask":
             return post(f"tasks/{args.id}/ask", {"text": args.text})
+        if sub == "question":
+            return via_tool(client, args)
         if sub == "comment":
             from clients.task_review import ask_from_args, attachment
             ask = ask_from_args(args)
@@ -328,11 +341,14 @@ def run(args, who=None):
                 body["attachments"] = references
             if ask is not None:
                 body["ask"] = ask
-            return post(f"tasks/{args.id}/comments", body)
+            links = s3links.apply(client, body, ("text",))
+            return s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
         if sub == "answers":
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
-            return post(f"tasks/{args.id}/comments/{args.comment_id}", {"text": args.text})
+            body = {"text": args.text}
+            links = s3links.apply(client, body, ("text",))
+            return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
             return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
         if sub == "delete":
@@ -342,7 +358,7 @@ def run(args, who=None):
         if sub == "restore":
             return post(f"tasks/{args.id}/restore", {})
         if sub == "link":
-            return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title})
+            return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title}, delegate=asked)
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "label":
@@ -355,7 +371,7 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels})
+            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args
@@ -398,7 +414,8 @@ def run(args, who=None):
                         body[field] = getattr(args, field)
                 if getattr(args, "waiting_on", None) is not None:
                     body["waiting_on"] = args.waiting_on
-            return post("tasks/" + args.id, body)
+            links = s3links.apply(client, body, ("note",))
+            return s3links.annotate(post("tasks/" + args.id, body, delegate=asked), links)
     if cmd == "goal":
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
@@ -449,9 +466,15 @@ def run(args, who=None):
             if args.edge_src and args.edge_rel and args.edge_dst:
                 body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
             return post(f"market/insights/{args.id}/apply", body)
+        if sub == "import":
+            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8-sig")
+            return post("market/import", {"name": "" if args.file == "-" else Path(args.file).name, "lines": text,
+                                          "note": args.note or "", "dry_run": bool(args.preview)})
         if sub == "refresh":
             return post("market/delta/refresh", {"today": args.today})
         if sub == "page":
+            if not args.body_file:
+                return client.get("market/pages/" + args.name)
             text = sys.stdin.read() if args.body_file == "-" else open(args.body_file).read()
             return post("market/pages/" + args.name, {"body": text})
         unverified = []
@@ -625,7 +648,7 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot owners", "bot setup-done", "bot place", "bot go-live", "bot model", "bot pause",
+    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot place", "bot go-live", "bot model", "bot pause",
                    "bot resume", "bot restore", "bot archive") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()
@@ -635,7 +658,8 @@ def bots(client, args):
         if getattr(args, "no_setup", False):
             fields["setup"] = False
         if getattr(args, "routines_file", None):
-            fields["routines"] = json.loads(Path(args.routines_file).read_text())
+            from clients.hubcli import read_routines_file
+            fields["routines"] = read_routines_file(args.routines_file)
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
@@ -651,9 +675,33 @@ def bots(client, args):
                                record.get("answers") or {},
                                display_name=args.name or chosen.get("display_name"),
                                instructions=chosen.get("instructions"))
-    return {"path": str(path), "template": args.template, "slug": args.slug,
-            "committed": catalog.committed(path), "routines": seed_routines(client, args.slug, path),
-            **({"registered": registered} if registered else {})}
+    result = {"path": str(path), "template": args.template, "slug": args.slug,
+              "committed": catalog.committed(path), "routines": seed_routines(client, args.slug, path),
+              **({"registered": registered} if registered else {})}
+    result["github"] = github_repository(client, args.slug, path)
+    return result
+
+
+def github_repository(client, slug, path):
+    """Give the new bot its empty private `<org>/bot-<slug>` on GitHub; its runner publishes the local history into
+    it. No GitHub connected (or a rehearsal) leaves the bot on its computer, as before. When the GitHub App may not
+    create repositories, the build is not finished: the command fails (non-zero) and says a person must act. The
+    server has put one Needs-you task in front of the owner and finishes the repository on its own once they do; the
+    bot stays planned with its files here."""
+    try:
+        return client.post("github/repos", {"slug": slug, "empty": True})
+    except APIError as exc:
+        if exc.code in ("github_not_connected", "rehearsal"):
+            return {"skipped": exc.detail}
+        if exc.code in ("forbidden", "not_found"):
+            # A bot the server has not registered stays on this computer, as before.
+            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
+        if exc.code == "github_repo_exists":
+            return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
+        if exc.code == "github_permission_missing":
+            raise APIError(exc.code, f"Not finished: {exc.detail} The bot stays planned and its files are in {path}; "
+                           "finish and commit them there as usual.", exc.status, False, exc.operation_id) from None
+        raise
 
 
 def register_for_requester(client, args, chosen):
@@ -863,12 +911,21 @@ def main(args, who=None):
             print(integration_text(result))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
+        elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
+            # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
+            print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "
+                  "Tico finishes going live (turns it on and starts its setup) when "
+                  f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
         return 0
     except APIError as exc:
+        if exc.code == "repository_waiting_for_permission":
+            # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
+            print(f"{exc.detail}.")
+            return 2
         print(json.dumps({"error": exc.code, "detail": exc.detail, "retryable": exc.retryable,
                           "operation_id": exc.operation_id}, indent=2))
         return 1 if exc.retryable else 2

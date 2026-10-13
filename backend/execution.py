@@ -70,6 +70,35 @@ def limit_cooldown(c, bot):
     return LIMIT_COOLDOWN_LONG if limit_streak(c, bot) >= LIMIT_STRIKES else LIMIT_COOLDOWN
 
 
+def person_wrote_since(c, bot, since):
+    """Whether a person's message to the bot is queued from after its latest usage limit. A person
+    who writes to a limited bot has often just renewed the plan, so the bot tries once now; a
+    run that hits the limit again finishes after the message and the cooldown holds."""
+    last = c.execute("SELECT max(finished) FROM attempts WHERE bot=?", (bot,)).fetchone()[0]
+    return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
+                     "AND m.from_actor LIKE 'human:%' AND m.kind<>'notice' AND m.created>? LIMIT 1",
+                     (bot, max(since, last or ""))).fetchone() is not None
+
+
+def clear_limits(c, settings, actor, bot):
+    """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
+    runtime on the same computer, since they share the subscription a person has just renewed.
+    Returns how many bots it cleared."""
+    def runtime(slug):
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
+    mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    bots = [bot]
+    if place and place["runner_id"] and mine:
+        bots += [r[0] for r in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                                         "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
+                                         (place["runner_id"], bot)) if runtime(r[0]) == mine]
+    for slug in bots:
+        H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
+        H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
+    return len(bots)
+
+
 def _github_app(c):
     try:
         return c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
@@ -156,6 +185,9 @@ class Execution:
         self.booted = H.now()
         # Set by create_app: onboarding gives a newly enrolled machine the bots nobody placed.
         self.runner_enrolled = None
+        # Set by create_app: a readiness report finishes the go-lives that were waiting for this computer to get a
+        # bot's repository (backend/app.py finish_pending_go_live).
+        self.readiness_reported = None
         self.served_at = None   # when this process last answered a runner (heartbeat, claim, attempt call)
 
     def runner(self, c, who):
@@ -268,6 +300,8 @@ class Execution:
                 row.pop('published', None)
             if not row.get('tools'):
                 row.pop('tools', None)
+            if not row.get('mail_request'):
+                row.pop('mail_request', None)
         for row in readiness.get('runtimes', {}).values():
             if not row.get('profiles'):
                 row.pop('profiles', None)
@@ -291,6 +325,8 @@ class Execution:
                    encode(readiness), encode(sorted(set(body.capabilities))), who.runner_id))
         from . import bot_tools
         bot_tools.reconcile(c, {bot: row.get('tools') for bot, row in readiness.get('bots', {}).items()})
+        if self.readiness_reported:
+            self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
         if body.checkout:
@@ -607,7 +643,8 @@ class Execution:
                 continue
             status = H.status(c, bot) or {}
             if (status.get("state") == "limited" and status.get("since")
-                    and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))):
+                    and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))
+                    and not person_wrote_since(c, bot, status["since"])):
                 continue
             bots.append(bot)
         if not bots:
@@ -672,9 +709,12 @@ class Execution:
         if (awake_since != runner["awake_since"] or not runner["last_seen"]
                 or runner["last_seen"] <= H.shift(now, seconds=-CONTACT_EVERY)):
             return None
-        if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN assignments x ON x.bot=j.bot "
-                     "WHERE x.runner_id=? AND j.state='queued' AND m.from_actor=? AND m.kind='notice' "
-                     "AND m.body LIKE 'New task from %' LIMIT 1", (who.runner_id, H.KEEPER)).fetchone():
+        # From this computer's bots to their queued jobs (jobs_queue): left to itself SQLite starts from
+        # every keeper notice ever sent, tens of milliseconds on each of a runner's frequent claims.
+        if c.execute("SELECT 1 FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
+                     "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
+                     "AND m.from_actor=? AND m.kind='notice' AND m.body LIKE 'New task from %' LIMIT 1",
+                     (who.runner_id, H.KEEPER)).fetchone():
             return None
         why = runner_versions.paused(c, who.runner_id)
         if why:
@@ -730,10 +770,11 @@ class Execution:
         awake_since = self.stamp(c, who, runner, now)
         # An initial task notice can sit in the queue while another turn finishes
         # that task. Suppress only this obsolete wake, never a later human follow-up.
-        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM jobs j "
-            "JOIN assignments x ON x.bot=j.bot JOIN messages m ON m.id=j.message_id "
+        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "
+            "CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
-            "WHERE x.runner_id=? AND j.state='queued' AND m.from_actor=? AND m.kind='notice' "
+            "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
+            "AND m.from_actor=? AND m.kind='notice' "
             "AND m.body LIKE 'New task from %' AND t.status IN ('done','closed') "
             "AND m.to_actor=t.owner AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
             "AND r.attempt_id=j.attempt_id AND r.decision='resume')", (who.runner_id,H.KEEPER)).fetchall()
@@ -1105,6 +1146,20 @@ class Execution:
         return {"attempt_id": aid, "messages": [m for row in ids if (m := H.message(c, row[0]))
                              and privacy.message_readable(c, "bot:" + attempt["bot"], m)]}
 
+    def release_undelivered(self, c, aid, ids):
+        """Put inputs the runner says it never gave the runtime back in the queue, before anything below
+        settles this run's inputs with its outcome (a goal control's "completed" would mark them answered,
+        a failure "uncertain"). Only this run's own unacknowledged inputs: an acknowledged one did reach
+        the runtime. Its input row goes too, so the reply does not list it as answered and the next poll
+        or claim treats it as new."""
+        for mid in dict.fromkeys(ids or ()):
+            if not c.execute("SELECT 1 FROM attempt_inputs WHERE attempt_id=? AND message_id=? AND acked_at IS NULL",
+                             (aid, mid)).fetchone():
+                continue
+            c.execute("DELETE FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid))
+            c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
+            H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})
+
     def acknowledge_input(self, c, who, aid, mid):
         self.attempt(c, who, aid)
         row = c.execute("SELECT * FROM attempt_inputs WHERE attempt_id=? AND message_id=?", (aid, mid)).fetchone()
@@ -1152,6 +1207,7 @@ class Execution:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
         if late and not self.settleable(c, who, row):
             return self.file_result(c, row, body)
+        self.release_undelivered(c, aid, body.undelivered)
         msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0])
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
@@ -1186,10 +1242,22 @@ class Execution:
                 if target not in (H.KEEPER, actor) and replyable:
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
-                    privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
-                    reply = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
-                        c, actor, target, text, conversation_id=conv["id"],
-                        in_reply_to=msg["id"], refs=refs)
+                    try:
+                        privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
+                    except Problem as refused:
+                        if refused.code != "privacy":
+                            raise
+                        # The run is done; only its reply may not go here. The result stays on the
+                        # run, which only the private task's own parties can read, and the person
+                        # who expected the reply is told, with nothing from the task named.
+                        if H.is_human(target):
+                            H._write_message(c, H.KEEPER, target, f"{row['bot']} finished, but its reply drew on "
+                                             "a private task you can't read, so it was not posted here.",
+                                             conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
+                    else:
+                        reply = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
+                            c, actor, target, text, conversation_id=conv["id"],
+                            in_reply_to=msg["id"], refs=refs)
         if reply:
             # Which run wrote this and which messages it took in (the one it was started for and
             # what was folded into it), kept in the reply's refs for the frontends to show.
@@ -1448,9 +1516,10 @@ class Execution:
         """
         newest, held = {}, []
         for row in c.execute(
-                "SELECT j.id,j.bot,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.state='queued' AND m.kind='notice' "
-                "AND NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=j.bot) "
+                # From the unassigned bots to their queued jobs (jobs_queue), not from every message.
+                "SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j CROSS JOIN messages m "
+                "WHERE NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=b.slug) "
+                "AND j.bot=b.slug AND j.state='queued' AND m.id=j.message_id AND m.kind='notice' "
                 "ORDER BY j.created DESC, j.id DESC").fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 # A chat room carries notices for many tasks: one kept per task, not per room.

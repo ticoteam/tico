@@ -5,6 +5,7 @@ import pytest
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, restrict  # noqa: F401
 from backend.tests.test_runner import live  # noqa: F401
+from runner import goals
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -54,7 +55,7 @@ def test_goal_roundtrip_from_real_http_runner_and_completion_notice(api, live, t
         service.execute(claim(api, machine))
         met = get(api, f'conversations/{cid}/goal')['goal']
         assert met['status'] == 'met' and met['ended_at'] and met['note'] == 'The condition holds.'
-        assert hosts[0].prompts[0][1] == '/goal Produce the Acme summary'
+        assert hosts[0].prompts[0][1] == '/goal ' + goals.native_objective('Produce the Acme summary')
         messages = get(api, f'conversations/{cid}/messages')
         notices = [m for m in messages if m['refs'].get('goal_status') == 'met']
         assert len(notices) == 1 and notices[0]['body'].startswith('Goal met: ')

@@ -154,12 +154,28 @@ function botRecurringPaint(e, slug) {
 function botAlertHTML(slug) {
   const e = S.emps.find(x => x.name === slug) || {}, s = v2StatusOf(slug);
   let word = '', why = '';
-  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) { word = V2_WORD[s.state]; why = s.focus || ''; }
+  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) { word = V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || ''; }
   else if (!s && stateOf(slug) === 'failed') word = 'Last run failed';
   else if (e.agent?.synced && !e.online) { word = agentPresenceLabel(e.agent, false); why = 'Imported history needs a sync.'; }
   else if (e.agent?.credential && !e.online && ((S.status?.queued || []).some(q => (q.bot || q.employee) === slug) || s?.open_tasks))
     word = 'Offline with work waiting';
-  return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>` : '';
+  // The way out sits beside the warning, for a person who may take it.
+  const resume = s?.bot_state === 'quarantined' && settingsCanManageBot(e) ? '<button class="primary bot-alert-resume" type="button" data-quarantine-resume>Resume bot</button>' : limitRetryButton(slug, 'primary bot-alert-resume');
+  return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>${resume}` : '';
+}
+// Under More for a person who manages a quarantined bot: why, the refused words and the task they were on.
+function botQuarantineCard(slug) {
+  const s = v2StatusOf(slug), e = S.emps.find(x => x.name === slug);
+  if (s?.bot_state !== 'quarantined' || !e || botLimited(e) || !settingsCanManageBot(e)) return '';
+  const r = s.quarantine?.review || {};
+  return `
+    <section class="card" id="bot-quarantine"><header><h2>Paused for review</h2>
+        <button class="primary" type="button" data-quarantine-resume>Resume bot</button></header>
+      <p>${esc(quarantineWhy(slug))} ${esc(QUARANTINE_RESUME_NOTE)}</p>
+      ${r.preview ? `<blockquote class="bot-quarantine-text">${esc(r.preview)}</blockquote>` : ''}
+      ${r.task ? `<p>Task: <a href="#/task/${encodeURIComponent(r.task.id)}">${esc(r.task.title)}</a></p>` : ''}
+      <p class="muted" id="bot-quarantine-result"></p>
+    </section>`;
 }
 // The banner at the top of a bot's page while it is over its spend limit; Usage is where a limit is raised.
 function botLimitHTML(slug) {
@@ -170,8 +186,9 @@ function botLimitHTML(slug) {
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
   if (!BOT) return;
-  const alert = $('#bot-alert'), limit = $('#bot-limit-host');
+  const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
   if (alert) alert.innerHTML = botAlertHTML(BOT.slug);
+  if (held) held.innerHTML = botQuarantineCard(BOT.slug);
   if (limit) limit.innerHTML = botLimitHTML(BOT.slug);
 }
 // Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
@@ -253,7 +270,6 @@ async function pageBot(slug, tab) {
     <section class="card conv" id="conv"><div class="conv-top"><span class="sub" id="conv-state">Loading…</span><span class="spacer" style="flex:1"></span><span class="sub" id="conv-access"></span></div>
       <div class="conv-older" id="conv-older"></div>
       <div id="conv-thread"><div class="empty">Loading the thread…</div></div>
-      <div id="conv-bots" class="conv-bots"></div>
       <button type="button" class="conv-jump" id="conv-jump" hidden></button>
     </section>
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
@@ -303,12 +319,7 @@ async function pageBot(slug, tab) {
         ${botRepoHTML(e) ? `<dt>Repository</dt><dd>${botRepoHTML(e).replace(/^Repository /, '')}</dd>` : ''}
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
-    ${keeper && v2StatusOf(slug)?.bot_state === 'quarantined' && settingsCanManageBot(e) ? `
-    <section class="card" id="bot-quarantine"><header><h2>Paused</h2>
-        <button class="primary" type="button" id="bot-quarantine-resume">Resume</button></header>
-      <p>${esc(v2StatusOf(slug)?.focus || 'Paused after refused actions.')}${v2StatusOf(slug)?.quarantine?.resumes_at ? ` It resumes by itself at ${esc(clockTime(v2StatusOf(slug).quarantine.resumes_at))}.` : /(refused writes|repeated refusals|refusals) today$/.test(v2StatusOf(slug)?.focus || '') ? ' It resumes by itself within an hour.' : ''}</p>
-      <p class="muted" id="bot-quarantine-result"></p>
-    </section>` : ''}
+    <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
     <section class="card" id="bot-updates-card"><header><h2>Updates</h2><a class="linkish" href="${UPDATES}">See updates</a></header>
       <div id="bot-updates"><div class="empty">Loading…</div></div></section>
     <section class="card" id="bot-goals-card"><header><h2>Goals</h2>
@@ -378,25 +389,33 @@ async function pageBot(slug, tab) {
     if (!SETTINGS_DATA.people.length) await loadSettings();
     settingsEditBot(slug);
   };
-  // One click. Stopped runs settle on their own; nothing to write or review.
-  const resumeButton = $('#bot-quarantine-resume');
-  if (resumeButton) resumeButton.onclick = async () => {
-    const button = resumeButton;
+  // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
+  // nothing to write or review.
+  const resumeClick = async ev => {
+    const retry = ev.target.closest('[data-limit-retry]');
+    if (retry && !retry.disabled) {
+      retry.disabled = true;
+      try { await limitRetry(slug); botAlertDraw(); if (typeof pausedRender === 'function') pausedRender(); }
+      catch (error) { toast(error.message, true); retry.disabled = false; }
+      return;
+    }
+    const button = ev.target.closest('[data-quarantine-resume]');
+    if (!button || button.disabled) return;
     const result = $('#bot-quarantine-result');
     button.disabled = true;
-    result.textContent = 'Resuming…';
+    if (result) result.textContent = 'Resuming…';
     try {
-      await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
-      await v2Refresh();
+      const tab = BOT.tab;
+      await quarantineResume(slug);
       await refresh(true);
       BOT = null;
-      await pageBot(slug, 'more');
-      toast(`${empName(slug)} resumed`);
+      await pageBot(slug, tab || 'more');
     } catch (error) {
-      result.textContent = error.message;
+      if (result) result.textContent = error.message; else toast(error.message, true);
       button.disabled = false;
     }
   };
+  for (const host of [$('#bot-alert'), $('#bot-quarantine-host')]) if (host) host.onclick = resumeClick;
   // An external agent's credential is issued here, on the bot it runs (the Settings bots
   // table that held these buttons is gone).
   $('#pane-more')?.querySelectorAll('[data-agent-credential],[data-agent-revoke],[data-agent-pair]').forEach(button => {
@@ -499,6 +518,11 @@ function showBotTab(tab) {
   if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
   if (view === 'history') void botHistoryLoad(BOT.slug);
   placeBotHead();
+  if (chat && BOT_PILL?.focusOnOpen) {
+    delete BOT_PILL.focusOnOpen;
+    const box = pq(BOT_PILL, '.p-text');
+    box.focus(); box.setSelectionRange(box.value.length, box.value.length);
+  }
   if (!chat) convStop(); // the thread and microphone stop off-screen
   else if (isKeeper(BOT.slug)) {
     if (!V2C || V2C.slug !== BOT.slug) v2ChatLoad(BOT.slug);

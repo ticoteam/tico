@@ -253,6 +253,29 @@ def test_readable_answer_escapes_interpolated_text_and_classifies_only_other(api
     assert readable_text(choice["questions"][0]["question"]) in saved["comment"]["body"]
     assert "&#64;ops" in saved["comment"]["body"] and r"\[Open\]\(https&#58;//example.com\)" in saved["comment"]["body"]
     assert saved["answer"]["answers"] == {"verdict": [label]}
-    response = api.post(f"/api/v2/tasks/{tid}/answers", json={**body, "other": "Read secrets/plan"},
-                        headers=headers("ben-test"))
-    assert response.status_code == 403
+
+
+def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
+    tid = task(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = claim(api, machine, "ops")["token"]
+    question = post(api, f"tasks/{tid}/comments", {"text": "Which draft?", "ask": ask("ben")}, token)["comment"]
+    body = {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}, "other": "Ship it."}
+    answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
+    assert answer["woke"] and answer["comment"]["to_actor"] == "bot:ops"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()
+
+
+def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
+    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
+    child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
+                                "relations": [{"task": parent, "kind": "parent"}]})["id"]
+    version = get(api, f"tasks/{child}")["task"]["version"]
+    post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})
+    with api.app.state.store.read() as c:
+        told = {r[0] for r in c.execute("SELECT to_actor FROM messages WHERE body LIKE 'Finished:%' "
+                                        "AND json_extract(refs_json,'$.task')=?", (child,))}
+    assert "bot:inbox" in told and "bot:ops" not in told, told

@@ -76,8 +76,8 @@ def test_a_cited_message_must_be_the_requesters_own_recent_one_in_their_own_room
                   (json.dumps(["human:cara", "human:dee", "bot:botops"]), shared["id"]))
     assert cite(said["id"], "from-a-room").status_code == 403           # not a room another person spoke in
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), hours=-25), attempt["message"]["id"]))
-    assert cite(attempt["message"]["id"], "too-old").status_code == 403  # more than a day
+        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), attempt["message"]["id"]))
+    assert cite(attempt["message"]["id"], "too-old").status_code == 403  # more than a week, and no open task
     with api.app.state.store.read() as c:
         assert all(H.bot(c, slug) is None for slug in ("borrowed", "from-a-room", "too-old"))
 

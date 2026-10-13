@@ -33,7 +33,7 @@ prerequisites:
     why: "Optional. The team's letter templates and the handbook's leaving section, read through the Librarian, keep letters and checklists consistent."
     required: false
   - tool: mail
-    why: "Optional. A people mailbox (read and draft) lets verification requests be answered in their own thread, sent when `outbound_send` is on."
+    why: "Optional. A people mailbox (read and draft) lets verification requests be answered in their own thread, sent when a person has turned mail sending on in Tico."
     required: false
 onboarding:
   - ask: "What has to happen when someone leaves today: which systems, which equipment, who handles payroll's final pay, is there an exit interview?"

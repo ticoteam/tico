@@ -16,7 +16,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (read open pull requests and write evidence-backed reviews), that requested GitHub actions use your Tools and outside comments stay drafts until outbound_send is on, and that you say what you could not check.
+What you do (read open pull requests and write evidence-backed reviews), that requested GitHub actions use your Tools and outside comments stay drafts until a person turns mail sending on in Tico, and that you say what you could not check.
 
 ## 3. Ask, in one message
 
@@ -40,7 +40,7 @@ Take the ten newest open pull requests and follow `playbooks/review-a-pull-reque
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you the review queue every weekday at 09:00, with a review for each pull request; public comments stay drafts until outbound_send is on." They
+`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you the review queue every weekday at 09:00, with a review for each pull request; public comments stay drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a

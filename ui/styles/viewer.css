@@ -35,6 +35,19 @@
 .inline-thumb img{display:block;max-width:100%;max-height:220px;object-fit:cover;background:linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 0 0/16px 16px,linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 8px 8px/16px 16px,#fff}
 .media-link::before{content:attr(data-media);font-size:var(--t-2xs);font-weight:700;letter-spacing:.04em;padding:1px 5px;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);margin-right:5px;vertical-align:1px}
 .md img{max-width:100%;border-radius:8px;cursor:zoom-in}
+/* a link to a document (ui/app/markdown.js fileCard): type mark, name, host; never wider than its column */
+.md-card{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;box-sizing:border-box;vertical-align:middle;margin:2px 0;padding:5px 12px 5px 5px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);color:var(--ink);text-decoration:none;line-height:var(--lh-tight)}
+.md-card:hover,.md-card:focus-visible{border-color:var(--accent)}
+.md-card-icon{flex:none;min-width:36px;padding:7px 4px;border-radius:7px;text-align:center;font-size:var(--t-2xs);font-weight:700;letter-spacing:.04em;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+.md-card-text{display:flex;flex-direction:column;min-width:0}
+.md-card-name,.md-card-host,.s3-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-card-name{font-weight:600}
+.md-card-host{font-size:var(--t-xs);color:var(--muted)}
+/* an s3:// object with no view URL: its name and a Copy button, the full URI in the tooltip */
+.s3-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;min-width:0;box-sizing:border-box;vertical-align:middle;padding:1px 2px 1px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);font-size:.92em;line-height:var(--lh-tight)}
+.s3-chip-name{min-width:0}
+.s3-chip-copy{flex:none;border:0;border-radius:999px;padding:2px 8px;background:transparent;color:var(--accent);font:inherit;font-size:var(--t-xs);cursor:pointer}
+.s3-chip-copy:hover,.s3-chip-copy:focus-visible{background:var(--hover)}
 @media (max-width:760px){
   .doc-viewer,.doc-viewer.viewer-media{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}
   .doc-viewer[open]{display:flex}

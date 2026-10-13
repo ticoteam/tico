@@ -36,6 +36,7 @@ function pageTasks(forced, openId = '') {
         <span class="spacer"></span>
         <div class="tl-type-search"><div class="tl-types" id="task-type" role="group" aria-label="Task type"></div>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div></div>
+        <a class="tl-decide tl-decide-head" href="${DECIDE}" hidden></a>
         <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
       </header>
       <div class="tl-bar" id="task-bar">
@@ -43,6 +44,7 @@ function pageTasks(forced, openId = '') {
           <button type="button" class="tl-addf" id="task-filter" aria-haspopup="true">${TL_ICON.filter}<span>Filter</span></button>
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
         <span class="spacer"></span>
+        <a class="tl-decide tl-decide-bar" href="${DECIDE}" hidden></a>
         ${S.me?.role === 'bot' ? '' : `<button type="button" class="tl-addf" id="task-stats" aria-label="Task stats" title="Task stats">${TL_ICON.chart}<span>Stats</span></button>`}
         <button type="button" class="tl-addf tl-pin" id="task-pin" aria-pressed="false">Pin</button>
         <button type="button" class="tl-addf tl-selmode" id="task-select-mode" aria-pressed="false" hidden>Select</button>
@@ -508,6 +510,7 @@ function tasksRender(state) {
     : active.matches('[data-open-task]') ? '[data-open-task]' : active.dataset.groupToggle ? `[data-group-toggle="${CSS.escape(active.dataset.groupToggle)}"]`
     : active.dataset.groupAdd ? `[data-group-add="${CSS.escape(active.dataset.groupAdd)}"]` : active.matches('.tl-gchat') ? `.tl-gchat[href="${CSS.escape(active.getAttribute('href'))}"]`
     : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
+  decidePaintButton();
   el.dataset.view = state.view;
   el.setAttribute('role', 'tabpanel'); el.setAttribute('aria-labelledby', 'task-tab-' + state.view);
   let html;

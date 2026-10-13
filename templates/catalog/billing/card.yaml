@@ -8,7 +8,7 @@ pack: basics
 icon: receipt
 suggest: common
 tags: [invoicing, b2b, services, agency, saas, usage-based, contracts]
-summary: "Gets every invoice out on time and right the first time: each invoice built from the signed contract, the usage or the hours, checked against terms, PO numbers and tax before it goes. Issue requested batches with your Tools; customer messages stay drafts until `outbound_send` is on."
+summary: "Gets every invoice out on time and right the first time: each invoice built from the signed contract, the usage or the hours, checked against terms, PO numbers and tax before it goes. Issue requested batches with your Tools; customer messages stay drafts until a person turns mail sending on in Tico."
 when: "A team that invoices customers from contracts, timesheets or usage, and loses days or payments to invoices that go out late or wrong."
 pains:
   - "invoices go out late every month"
@@ -45,7 +45,7 @@ onboarding:
   - ask: "Where do usage figures or recorded hours come from, and by which day are they final?"
     why: "I build from final numbers only; a missing input holds that invoice, it is never estimated."
   - ask: "Who owns invoice runs and credit notes? (Default: you for both.)"
-    why: "Sets who receives each batch. Send requested customer messages only when `outbound_send` is on."
+    why: "Sets who receives each batch. Send requested customer messages only when a person has turned mail sending on in Tico."
 first_routine:
   title: "Invoice run check"
   cadence: "The 25th of each month at 09:00 team time, ahead of month-end invoicing"

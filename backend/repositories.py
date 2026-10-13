@@ -369,6 +369,13 @@ def queue_sync(service, refresh=False):
                     service.repository_sync_failures += 1
                     service.repository_sync_attempt = time.time()
                     logging.getLogger('tico.repositories').warning('Repository refresh failed; retrying later')
+                if refresh_now:
+                    # An installation change (a permission accepted, a repository added) can finish a waiting bot.
+                    try:
+                        from .repo_waits import tick
+                        tick(service, force=True)
+                    except Exception:
+                        logging.getLogger('tico.repositories').warning('Waiting bot repositories could not be checked')
         service.repository_running = True
         service.repository_worker = threading.Thread(target=work, daemon=True)
         service.repository_worker.start()
@@ -502,18 +509,25 @@ def install(app, store, service):
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
         return after
 
+    def botops(request, bot):
+        """BotOps in its own run manages every bot's repositories (`Auth.botops_manages`); None for anyone else."""
+        who = request.state.identity
+        with store.read() as c:
+            validate_identity(c, who)
+            return who if app.state.auth.botops_manages(c, who, bot) else None
+
     @app.get('/api/v2/bots/{bot}/repositories')
     def bot_get(request: Request, bot: str):
-        who = human(request)
+        who = botops(request, bot) or human(request)
         with store.read() as c:
-            if not app.state.auth.bot_access(c, who, bot)['see']:
+            if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
                 raise Problem('forbidden', 'This bot is not visible to you', 403)
             row = service.row(c)
             return access(c, bot, row['org'] if row else store.settings.github_owner)
 
     @app.put('/api/v2/bots/{bot}/repositories')
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
-        who = human(request, True)
+        who = botops(request, bot) or human(request, True)
         if app.state.auth.system_bot(bot) and who.role != 'owner':
             raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
         with store.transaction() as c:

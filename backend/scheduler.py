@@ -29,6 +29,7 @@ class Scheduler:
         self.stranded = None
         self.stall_checked = None
         self.goals_checked = None
+        self.go_lives_checked = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -152,6 +153,8 @@ class Scheduler:
             self.swept = at
             with self.store.transaction() as c:
                 c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
+                # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
+                c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
             sweep_idempotency(self.store, stamp(at))
             sweep_mail(self.store, stamp(at))
             from . import events
@@ -167,6 +170,15 @@ class Scheduler:
                     G.refresh(c)
             except Exception as exc:
                 failures.append({"goals": type(exc).__name__})
+        if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
+            # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
+            self.go_lives_checked = at
+            try:
+                from . import go_live
+                with self.store.transaction() as c:
+                    go_live.expire(c, at)
+            except Exception as exc:
+                failures.append({"go_live": type(exc).__name__})
         if self.stall_checked is None or at - self.stall_checked >= timedelta(minutes=1):
             # Every minute: bot tasks nothing is going to move (H.wake_stalled).
             self.stall_checked = at

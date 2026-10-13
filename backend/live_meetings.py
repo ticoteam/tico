@@ -12,7 +12,7 @@ from pydantic import Field, StrictStr, model_validator
 from clients import judge as J
 from . import providers
 from .auth import Identity
-from .judge import DAILY_CALLS, fallback_engine, used_today
+from .judge import daily_cap, fallback_engine, used_today
 from .imports import MeetingImport
 from .models import Contract
 from .store import H, Problem, encode
@@ -521,7 +521,7 @@ def _decision(app, decision_input, bots, threshold, owner_actor, *, label="live-
         with app.state.store.read() as c:
             who = app.state.auth.identity_for_actor(c, owner_actor)
             used = used_today(c, owner_actor)
-            if used >= DAILY_CALLS[who.role]:
+            if used >= daily_cap(app.state.store.settings, who.role):
                 return {"outcome": "pass", "targets": [],
                         "trace": {"reason": "daily_decision_budget", "answers": {},
                                   "threshold": threshold, "decision_input": state}}

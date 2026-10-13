@@ -22,6 +22,108 @@ def request_task(c, auth, who, title, body):
         H.event(c, who.actor, "botops.task_requested", task["id"], {})
     return task
 
+
+# Message refs that mean words someone else wrote started the run: a comment, the Assistant, Slack, a live meeting.
+OTHERS_WORDS = ("comment", "via", "assistant", "slack", "routing", "live_meeting")
+# How long a person's request lends their rights after they last spoke on its task (created it, sent the message it
+# carries, commented on it), however long the task stays open.
+LEND_MAX_DAYS = 30
+TERMINAL = ("done", "closed", "declined")
+
+
+def own_run(c, auth, attempt_id):
+    """Whether this BotOps run is its own work, with its own wider rights (`Auth.botops_manages`): only a keeper wake
+    from BotOps' own schedule, the daily update or a timed routine only the owner (or the product) wrote. Everything
+    else the keeper wakes it with carries words someone else wrote: a service key's or a watcher's task, a stopped job's
+    request, a routine BotOps set itself while it worked for someone, a task someone commented on."""
+    from .store import H
+    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
+                     (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
+    msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
+    if not msg or msg["from_actor"] != H.KEEPER:
+        return False
+    refs = msg.get("refs") or {}
+    if any(refs.get(key) for key in OTHERS_WORDS):
+        return False
+    task_id = H.message_task_id(msg)
+    if not task_id:
+        return msg["kind"] == "notice" and refs.get("wake") == "update"
+    return _owners_routine_task(c, auth, H.task(c, task_id))
+
+
+def _owners_routine_task(c, auth, task):
+    """A task the keeper opened for one of BotOps' timed routines, whose every word the owner or the product wrote:
+    the routine (created and since changed only by them), the task itself, and anything said on it."""
+    from .store import H
+    keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
+    if not task or task["requester"] != keeper or task["owner"] != botops:
+        return False
+    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+                     (task["id"],)).fetchone()
+    if not made or made["actor"] != keeper:
+        return False
+    # An event routine's task carries the event's content (a meeting's notes, say), so only timed and manual runs.
+    schedule = c.execute("SELECT o.schedule_id FROM schedule_occurrences o JOIN schedules s ON s.id=o.schedule_id "
+                         "WHERE o.task_id=? AND o.outcome<>'event' AND s.bot=? LIMIT 1",
+                         (task["id"], H.FLEET_MAINTAINER)).fetchone()
+    if not schedule:
+        return False
+    writers = c.execute("SELECT action,actor,detail_json FROM events WHERE target=? "
+                        "AND action IN ('routine.created','routine.updated')", (schedule["schedule_id"],)).fetchall()
+    if not any(w["action"] == "routine.created" for w in writers):
+        return False                # a routine from a bot.yaml: whoever pushed that file wrote it
+    for w in writers:
+        if w["actor"] == keeper:
+            continue
+        if H._json(w["detail_json"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
+            return False
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor<>? LIMIT 1",
+                 (task["id"], keeper)).fetchone():
+        return False
+    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?) "
+                     "LIMIT 1", (task["id"], keeper, botops)).fetchone()
+    return not said
+
+
+def _is_owner(c, auth, actor):
+    from .store import H, Problem
+    if not H.is_human(actor):
+        return False
+    try:
+        return auth.identity_for_actor(c, actor).role == "owner"
+    except Problem:
+        return False
+
+
+def lend_lapsed(c, task):
+    """Why a person's task no longer lends their rights, whatever its status says, or "" while it does: someone other
+    than the requester moved it back from done, closed or declined (the request it carried was finished), or the
+    requester last spoke on it more than LEND_MAX_DAYS ago."""
+    from .store import H
+    requester = task["requester"]
+    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
+                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+        if row["actor"] != requester or dict(row).get("via"):
+            return "That task was finished and has been reopened; ask the person again"
+    spoke = []
+    made = c.execute("SELECT actor,detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+                     (task["id"],)).fetchone()
+    if made and made["actor"] == requester and H._json(made["detail_json"], {}).get("via") != "assistant":
+        spoke.append(task["created"])
+    origin = H.message(c, task["request_id"]) if task.get("request_id") else None
+    if origin and origin["from_actor"] == requester:
+        spoke.append(origin["created"])
+    comment = c.execute("SELECT max(m.created) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
+                        "AND m.from_actor=? AND json_extract(m.refs_json,'$.comment') IS NOT NULL "
+                        "AND json_extract(m.refs_json,'$.via') IS NULL AND json_extract(m.refs_json,'$.assistant') IS NULL",
+                        (task["id"], requester)).fetchone()[0]
+    if comment:
+        spoke.append(comment)
+    if not spoke or max(spoke) < H.shift(H.now(), days=-LEND_MAX_DAYS):
+        return f"The person last spoke on that task more than {LEND_MAX_DAYS} days ago; ask them again"
+    return ""
+
+
 HEADER = "x-tico-on-behalf-of"
 API = "/api/v2/"
 _S = r"[^/]+"
@@ -33,12 +135,12 @@ def _routes(*rows):
 
 # Runs at once, as the person. Some of these keep their own "always a click" rule inside the route (adding someone
 # a role, a Computer that does not take members' bots): the route answers with the card.
-# A credential grant to a bot runs at once when the person is a credential administrator and is refused, with who to
-# ask, when they are not; only a grant to a person or to every computer is a card (backend/credentials.py).
+# A credential grant to a bot runs at once when the person is a credential administrator (or stored it, for a bot they
+# manage) and is refused, with who to ask, when they are not; only a grant to a person or to every computer is a card (backend/credentials.py).
 DO = _routes(
     ("POST", r"bots"), ("POST", r"bots/register"),
     ("POST", rf"bots/{_S}/(definition|assignment|placement|place|go-live|model|fallback|transitions|control|owners|co-owners|"
-             rf"onboarded|goals|updates|routines|tools|quarantine/clear)"),
+             rf"onboarded|goals|updates|routines|tools|quarantine/clear|limit/retry)"),
     ("POST", rf"bots/{_S}/tools/{_S}/(delete|update)"), ("DELETE", rf"bots/{_S}/tools/{_S}"),
     # Copying a bot or a skill, bringing a copy up to date and suggesting its changes back: each is checked with the requester's own
     # rights on the bots it names (backend/bot_copy.py).
@@ -230,6 +332,13 @@ def _place(path):
     return "#/settings", "", "Settings"
 
 
+def mail_settings_hint(bot, slug=""):
+    """Where a person turns a bot's mail sending on: the only fix for a refused write to its mail setting. `bot` is
+    the name the app shows, `slug` the one `hub` takes."""
+    return ("A person who manages " + bot + " turns its mail sending on in Settings > Bots > " + bot
+            + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
+
+
 def fix(path, code, status, acting, names, base=""):
     """`{"fix", "link"}` for a refusal of a BotOps call, or None. `acting` is the identity the route checked;
     `names` maps actor ids to display names."""
@@ -242,6 +351,11 @@ def fix(path, code, status, acting, names, base=""):
         link = "#/settings"
     elif status != 403:
         return None
+    elif slug and re.fullmatch(API + rf"bots/{_S}/mail-settings", normalize(path) or ""):
+        # Mail sending is a person's switch (backend/mail_settings.py): no request lends it to BotOps, so "go ahead"
+        # in chat would not help. Say who sets it and where.
+        text = mail_settings_hint(bot, slug)
+        link = "#/settings"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

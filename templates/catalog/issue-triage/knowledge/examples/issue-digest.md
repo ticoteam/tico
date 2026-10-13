@@ -30,7 +30,7 @@ Apply the requested label changes with the GitHub Tool. Only existing labels are
 | #1433 | feature request, area/billing | Asks for annual invoices |
 
 ## Waiting on the reporter
-- #1418 no version, no steps. Waiting 6 days. Drafted comment (draft until `outbound_send` is on):
+- #1418 no version, no steps. Waiting 6 days. Drafted comment (draft until a person turns mail sending on in Tico):
   "Thanks for the report. To look into this we need the app version and the steps that led to the
   error. Could you add them here? Once we can reproduce it we will pick it up."
 - #1422 no logs. Waiting 2 days. Comment drafted the same way.

@@ -51,6 +51,10 @@ When decisions (or Slack routing) are on, it sends the text of each question to 
 Someone who takes over the server in that case can read the stored provider key and use it, and can see the
 questions as they are sent. It does hold the sign-in
 credentials (OIDC client secret, session secret) and, if you connect GitHub, the GitHub App's private key.
+Stored secrets are sealed at rest, never kept in plaintext in the database: credentials and support ticket secrets with
+the vault's data key; the GitHub App, directory sync and Slack secrets with the vault's KMS-wrapped key, or without KMS
+with `github-app.key` and `slack.key`; and an agent credential waiting for a paired profile to collect it, with a key
+only that profile's pairing secret opens ([Shared credentials](docs/credential-vault.md#other-secrets-the-vault-seals)).
 Someone who takes over the server can read and change team data and can mint GitHub tokens, so
 treat it like any internal application server: patch it, keep the data volume private, and restrict
 SSH.
@@ -160,8 +164,9 @@ With a GitHub App connected, Tico stores no long-lived personal token. For each 
 requests an installation token that expires within the hour and is limited to that bot's own repository
 plus any extra repositories the owner granted it. Installing the app on "All repositories" is the
 recommended setup (new bot repositories work without a change) and does not widen a bot's reach, because
-the token is scoped per bot. The app is private, has no webhook, and asks for no workflow permission by
-default. See [docs/github-app.md](docs/github-app.md).
+the token is scoped per bot. The app is private and asks for no workflow permission by default. Its webhook
+(`POST /api/v2/github/webhook`) receives installation, pull request, review, check and push events and is checked
+against the app's webhook secret; a request that fails the signature is refused. See [docs/github-app.md](docs/github-app.md).
 
 ### The updater and the Docker socket
 
@@ -176,8 +181,12 @@ it out if the server host runs anything else you care about.
 Litestream replicates the SQLite database continuously to a bucket you choose, and the data volume can
 be snapshotted. A backup contains everything the server holds, including the encrypted credential store
 and sign-in credentials, so give the bucket a private policy, encrypt it and restrict who can read it.
-In local-key mode, protect the copied key too: automatic backups include `credential-key/credential.key` in the same
-destination as the database. Anyone who reads both can decrypt vault credentials. A restore without the key cannot decrypt them.
+In local-key mode, protect the copied keys too: automatic backups include `credential-key/credential.key`,
+`credential-key/github-app.key` (GitHub App and directory sync secrets) and `credential-key/slack.key` (Slack tokens) in the
+same destination as the database, and hand-run and scheduled bundle backups carry them beside their database copy, so
+read access to the backup bucket opens those secrets unless KMS is on: keep backups in a separate bucket or prefix with
+its own access.
+Anyone who reads both can decrypt those secrets. A restore without the keys cannot decrypt them.
 Separate key storage requires a custom backup/restore process; with `TICO_CREDENTIAL_KMS_KEY`, protect access to the KMS key instead
 ([Shared credentials](docs/credential-vault.md)). Bot repositories and computer workspaces are not part of the
 server backup; they live in Git and on the computers.

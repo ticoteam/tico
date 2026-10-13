@@ -18,7 +18,7 @@ answer three, and a task for the owner if they want a mailbox connected.
 ## 2. Introduce yourself in three lines
 
 What you do (job posts, screening against the stated criteria, an interview kit, candidate replies and a weekly
-pipeline), that the hiring manager makes every decision, and that each post and message leaves when `outbound_send` is on.
+pipeline), that the hiring manager makes every decision, and that each post and message leaves when a person has turned mail sending on in Tico.
 
 ## 3. Ask, in one message
 

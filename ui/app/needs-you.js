@@ -19,9 +19,9 @@ function needsV2Item(it, folded, showName = true) {
     acts.push(`<button class="ghost danger" type="button" data-v2-task="${esc(it.id)}" data-v2-close="1">Close</button>`);
   }
   if (it.conversation_id) acts.push(`<button class="ghost" type="button" data-v2-reply="${esc(it.conversation_id)}">Reply</button>`);
-  const payload = it.payload && typeof it.payload === 'object'
-    ? `<div class="req-next"><span>Exactly this</span><div class="md"><pre>${esc(JSON.stringify(it.payload, null, 2))}</pre></div></div>` : '';
-  return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${folded ? ' hidden data-folded' : ''}>
+  const payload = it.payload && typeof it.payload === 'object' ? approvalPayloadNode(it).outerHTML : '';
+  const keep = kind === 'approval' ? ` data-patch-key="approval:${esc(it.id)}"` : '';
+  return `<details class="req v2" data-v2-id="${esc(it.id)}" data-task-version="${esc(it.version || '')}"${keep}${folded ? ' hidden data-folded' : ''}>
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
@@ -38,6 +38,134 @@ function needsV2Item(it, folded, showName = true) {
       <div class="issue-compose" hidden></div>
     </div>
   </details>`;
+}
+// What an approval asks for, built as elements with every payload value set as text; the markup the list
+// redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
+// recipients, subject, draft and files readably; a publish where it goes and its full text; a spend or merge
+// its fields. Each keeps the exact payload folded underneath; any other kind shows the raw payload, wrapped.
+const APPROVAL_FILE_ID = /^[A-Za-z0-9-]{8,80}$/;   // the ids the file viewer opens (fileLinkId)
+function approvalFileIcon() {
+  const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
+  for (const [k, v] of Object.entries({viewBox: '0 0 14 14', width: '13', height: '13', class: 'approval-file-icon', 'aria-hidden': 'true', focusable: 'false'})) svg.setAttribute(k, v);
+  for (const [k, v] of Object.entries({d: 'M3.5 1.5h4.5l2.5 2.5v8.5h-7z M8 1.5V4h2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linejoin': 'round'})) path.setAttribute(k, v);
+  svg.append(path);
+  return svg;
+}
+// Where a publish goes: a Support ticket by its number, a web address as a link, anything else as text.
+function approvalWhere(url) {
+  const u = String(url ?? '').trim(), ticket = /^hq-ticket:(TK-[A-Za-z0-9]+)$/.exec(u);
+  if (ticket) return 'Support ticket ' + ticket[1];
+  if (/^https?:\/\//i.test(u)) {
+    try {
+      const href = new URL(u);
+      if (href.protocol === 'http:' || href.protocol === 'https:') {
+        const a = document.createElement('a');
+        a.href = href.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = u;
+        return a;
+      }
+    } catch { /* not a web address: shown as text */ }
+  }
+  return u;
+}
+// The readable rows for a publish, spend or merge: the fields APPROVAL_FIELDS requires by name, then one row per other
+// key (labelled with the key; the content hash stays in the exact payload). A string or number shows as is, anything
+// else as its JSON. A row is [label, value, class, keep]; a named row with no value is left out, a `keep` row never is.
+// Null for any other kind.
+function approvalFacts(what, p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
+  const plain = v => typeof v === 'string' || typeof v === 'number';
+  let rows, named;
+  if (what === 'publish') {
+    const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
+    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
+      text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
+                   : ['Text', shown(text), 'approval-text']];
+    named = ['url', 'text', 'content_sha256'];
+  } else if (what === 'spend') {
+    rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
+    named = ['amount', 'account', 'what'];
+  } else if (what === 'merge') {
+    rows = [['Repository', shown(p.repo)], ['Pull request', plain(p.pr) && p.pr !== '' ? '#' + String(p.pr).replace(/^#/, '') : shown(p.pr)]];
+    named = ['repo', 'pr'];
+  } else return null;
+  for (const key of Object.keys(p)) if (!named.includes(key) && key !== 'content_sha256') rows.push([key, plain(p[key]) ? String(p[key]) : JSON.stringify(p[key]), '', true]);
+  return rows;
+}
+function approvalPayloadNode(it) {
+  const p = it.payload, el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = String(text);
+    return node;
+  };
+  const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
+  box.append(el('span', '', 'Exactly this'), main);
+  const raw = el('pre', '', JSON.stringify(p, null, 2));
+  if (it.what !== 'send') {
+    const rows = approvalFacts(it.what, p);
+    if (!rows) { main.append(raw); return box; }
+    const facts = el('dl', 'approval-facts');
+    for (const [label, value, cls, keep] of rows) {
+      if (!keep && (value == null || value === '')) continue;
+      const dd = el('dd', cls || '');
+      if (value instanceof Node) dd.append(value); else dd.textContent = String(value);
+      facts.append(el('dt', '', label), dd);
+    }
+    const details = el('details', 'approval-raw');
+    details.append(el('summary', '', 'Exact payload'), raw);
+    main.append(facts, details);
+    return box;
+  }
+  const list = v => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(String).join(', ');
+  const facts = el('dl', 'approval-facts');
+  for (const [label, value] of [['From', p.mailbox], ['To', list(p.to)], ['Cc', list(p.cc)],
+                                ['Subject', p.subject], ['Draft', p.draft]]) {
+    if (value == null || value === '') continue;
+    facts.append(el('dt', '', label), el('dd', label === 'Draft' ? 'mono' : '', value));
+  }
+  main.append(facts);
+  const files = Array.isArray(p.attachments) ? p.attachments.filter(f => f && typeof f === 'object') : [];
+  if (files.length) {
+    const ul = el('ul', 'approval-files');
+    ul.setAttribute('aria-label', 'Attached files');
+    const verified = Array.isArray(it.attachment_files) ? it.attachment_files : [];
+    files.forEach((f, i) => {
+      const li = el('li'), name = String(f.name ?? 'file'), size = Number(f.size), hash = String(f.sha256 ?? '');
+      li.append(approvalFileIcon());
+      // A link only to the version the server found with the approved sha256 and size; the payload's own
+      // file_id is the requester's word and never becomes a link.
+      const ok = verified[i], id = String(ok?.file_id ?? ''), version = Number(ok?.version);
+      if (APPROVAL_FILE_ID.test(id) && Number.isInteger(version) && version > 0) {
+        const a = el('a', 'approval-file-name', name);
+        a.href = `/api/v2/files/${encodeURIComponent(id)}?v=${version}`;
+        a.dataset.name = name;
+        li.append(a);
+      } else li.append(el('span', 'approval-file-name', name));
+      if (Number.isFinite(size) && size >= 0) li.append(el('span', 'approval-file-size', bytes(size)));
+      if (hash) {
+        const code = el('code', 'approval-file-hash', hash.slice(0, 12));
+        code.title = 'sha256 ' + hash;
+        li.append(code);
+      }
+      if (f.file_id != null && f.file_id !== '' && !li.querySelector('a'))
+        li.append(el('span', 'approval-file-warn', "Not openable: the file on the task doesn't match the approved file"));
+      ul.append(li);
+    });
+    main.append(ul);
+  }
+  const details = el('details', 'approval-raw');
+  details.append(el('summary', '', 'Details'), raw);
+  main.append(details);
+  return box;
+}
+// Approvals waiting on the person lead Needs you, decided in place with Approve or Decline.
+const pendingApprovals = () => (S.v2?.needs || []).filter(it => it.kind === 'approval');
+function approvalsHTML() {
+  const items = pendingApprovals();
+  if (!items.length) return '';
+  return `<section class="tl-group" data-group="approvals"><header class="tl-ghead"><span class="tl-gname">Approvals</span><span class="tl-gcount tnum">${items.length}</span></header>
+    <div class="tl-rows" role="list" aria-label="Approvals">${items.map(it => needsV2Item(it, false)).join('')}</div></section>`;
 }
 // A question a bot asked the person outside any task: no task row carries it, so Needs you lists it on its own,
 // answered in place. `data-patch-key` keeps an opened row (and a half-written answer) through the list's redraws.

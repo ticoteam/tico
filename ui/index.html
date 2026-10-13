@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/tokens.css">
 <link rel="stylesheet" href="/tico/ui/styles/base.css">
 <link rel="stylesheet" href="/tico/ui/styles/sidebar.css">
+<link rel="stylesheet" href="/tico/ui/styles/team-add.css">
 <link rel="stylesheet" href="/tico/ui/styles/avatars.css">
 <link rel="stylesheet" href="/tico/ui/styles/layout.css">
 <link rel="stylesheet" href="/tico/ui/styles/help.css">
@@ -47,6 +48,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/task-pipelines.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-code.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-list.css">
+<link rel="stylesheet" href="/tico/ui/styles/decide.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-stats.css">
 <link rel="stylesheet" href="/tico/ui/styles/hub-v2.css">
 <link rel="stylesheet" href="/tico/ui/styles/first-run.css">
@@ -55,6 +57,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/updates.css">
 <link rel="stylesheet" href="/tico/ui/styles/overview.css">
 <link rel="stylesheet" href="/tico/ui/styles/usage.css">
+<link rel="stylesheet" href="/tico/ui/styles/replay.css">
 <link rel="stylesheet" href="/tico/ui/styles/rails.css">
 <link rel="stylesheet" href="/tico/ui/styles/skeleton.css">
 <!-- bundle:css:end -->
@@ -69,7 +72,7 @@
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
   <!-- The rail is Tasks, the Assistant, BotOps, Goals, Docs, Market and Meetings, then the team and
-       the message bots. Tools, Runs, Usage, Changelog and Settings sit in the account menu below.
+       the message bots. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
        The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
@@ -95,7 +98,7 @@
         <button class="section-toggle" type="button" data-section-toggle="organisation" aria-expanded="true" aria-controls="nav-organisation">
           <span>Team</span><span class="section-chev" aria-hidden="true">›</span>
         </button>
-        <button class="org-history" id="org-add-group" type="button" title="Add group" aria-label="Add group" hidden><span class="org-plus" aria-hidden="true">+</span></button>
+        <button class="org-history" id="org-add-group" type="button" title="Add to team" aria-label="Add to team" aria-haspopup="menu" aria-expanded="false" aria-controls="team-add-menu" hidden><span class="org-plus" aria-hidden="true">+</span></button>
         <button class="org-history" id="org-mine" type="button" aria-pressed="false" title="Only bots I can read or write" aria-label="Only bots I can read or write"><span class="nav-icon" aria-hidden="true">person</span></button>
         <button class="org-history" id="org-history" type="button" aria-pressed="false" title="Most recently viewed first" aria-label="Sort teammates by most recently viewed"><span class="nav-icon" aria-hidden="true">history</span></button>
       </div>
@@ -127,6 +130,7 @@
         <nav id="account-menu" aria-label="Account navigation" hidden>
           <a class="nav-link" href="#/integrations" data-nav="integrations" id="nav-integrations"><span class="nav-icon" aria-hidden="true">api</span>Tools</a>
           <a class="nav-link" href="#/runs" data-nav="runs"><span class="nav-icon" aria-hidden="true">replay</span>Runs</a>
+          <a class="nav-link" href="#/replay" data-nav="replay"><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
           <a class="nav-link" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
@@ -187,6 +191,7 @@
 <script src="/tico/ui/assistant.js"></script>
 <script src="/tico/ui/credential-card.js"></script>
 <script src="/tico/ui/support.js"></script>
+<script src="/tico/ui/replay-player.js"></script>
 <script src="/tico/ui/app/rails.js"></script>
 <script src="/tico/ui/app/core.js"></script>
 <script src="/tico/ui/app/markdown.js"></script>
@@ -228,6 +233,7 @@
 <script src="/tico/ui/app/task-props.js"></script>
 <script src="/tico/ui/app/task-list.js"></script>
 <script src="/tico/ui/app/tasks-page.js"></script>
+<script src="/tico/ui/app/decide.js"></script>
 <script src="/tico/ui/app/task-stats.js"></script>
 <script src="/tico/ui/app/recurring.js"></script>
 <script src="/tico/ui/app/credentials.js"></script>
@@ -255,9 +261,11 @@
 <script src="/tico/ui/app/updates.js"></script>
 <script src="/tico/ui/app/goals.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
+<script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/overview.js"></script>
 <script src="/tico/ui/app/router.js"></script>
 <script src="/tico/ui/app/drawer.js"></script>
+<script src="/tico/ui/app/team-add.js"></script>
 <script src="/tico/ui/app/search.js"></script>
 <script src="/tico/ui/app/org-fan.js"></script>
 <script src="/tico/ui/app/nav-events.js"></script>

@@ -123,3 +123,39 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     assert "Fixture task result" not in result.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND body='Fixture task result'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("notice", ["current", "listed-private"])
+def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_task(api, notice):
+    # A routine's task lands in the person's room with the bot while the bot holds a private
+    # task from the keeper (nightly learnings). The new-task notice used to list that private
+    # task as related work, which made the whole run private and refused its reply.
+    runner, origin, attempt = setup_attempt(api)
+    start(api, runner, attempt)
+    finish(api, runner, attempt)
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, H.KEEPER, "Nightly learnings", "Read the day's runs", "bot:ops", private=True)
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        task = H.task_create(c, H.KEEPER, "Refresh the map of the docs", "Refresh it", "bot:ops",
+                             deduplicate=False, conversation_id=origin["conversation_id"])
+        wake = c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchone()
+        assert hidden["id"] not in (wake["refs_json"] or "")
+        if notice == "listed-private":
+            # What the server wrote before: the private task listed in the room's notice.
+            refs = {**H._json(wake["refs_json"], {}), "reconcile": {"active": [{"id": hidden["id"]}]}}
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), wake["id"]))
+    ready(api, runner, ["ops"])
+    attempt = claim(api, runner)
+    start(api, runner, attempt)
+    reply = finish(api, runner, attempt, "Map refreshed.")
+    with api.app.state.store.read() as c:
+        assert tuple(c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == ("completed", "Map refreshed.")
+        shown = [m for m in get(api, f"conversations/{origin['conversation_id']}/messages") if m["created"] > task["created"]]
+    if notice == "current":
+        assert reply and reply["to_actor"] == "human:ana" and reply["body"] == "Map refreshed."
+    else:
+        # The reply stays off the room; the person is told, and nothing of the private task is shown.
+        assert reply is None
+        told = [m for m in shown if m["from_actor"] == H.KEEPER and (m.get("refs") or {}).get("withheld")]
+        assert len(told) == 1 and told[0]["to_actor"] == "human:ana"
+        assert not any("Map refreshed." in m["body"] or "Nightly" in m["body"] for m in shown)

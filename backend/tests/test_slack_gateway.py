@@ -576,3 +576,41 @@ def test_task_result_skips(gateway, hub, skip):
     gateway.mirror()
     assert rows(hub, 'SELECT * FROM slack_posts') == []
     assert gateway.slack.posts == []
+
+
+def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_gets_the_message(gateway, hub):
+    hub.settings.decisions_daily_calls_human = 1
+    first = send(gateway, "please review the vendor terms", judge_answer=answers(legal=0.9), channel=DM,
+                 kind="message", user="U2")
+    assert first["state"] == "routed"
+    audit = rows(hub, "SELECT actor,target,detail_json FROM events WHERE action='judge.call'")
+    assert [(r["actor"], r["target"]) for r in audit] == [("human:ben", G.JUDGE_LABEL)]
+    assert json.loads(audit[0]["detail_json"])["via"] == "slack" and "vendor" not in audit[0]["detail_json"]
+    calls = len(gateway.engine.calls)
+    second = send(gateway, "and the NDA too", channel=DM, kind="message", user="U2")
+    assert len(gateway.engine.calls) == calls, "over the cap the decision model is not asked"
+    assert second["state"] == "routed" and second["decision"]["routed_by"] == "budget"
+    assert [r["bot"] for r in second["decision"]["recipients"]] == ["coo"]
+
+
+def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, monkeypatch):
+    from backend import judge as B
+    attempts = []
+
+    def opener(request, timeout=None):
+        attempts.append(timeout)
+        raise TimeoutError()
+
+    monkeypatch.setattr("urllib.request.urlopen", opener)
+    hub.settings.typesafe_api_key = "synthetic"
+    gw = G.Gateway(hub, FakeSlack(), clock=Clock())
+    gw.verify_app()
+    assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
+    assert gw.tick()["events"][-1]["state"] == "received"
+    assert attempts == [B.JEV_TIMEOUT], "the gateway's own minute-by-minute retry is the only retry"
+    gw.clock.advance(G.RETRY_SECONDS)
+    gw.tick()
+    gw.clock.advance(G.ROUTE_GIVE_UP_SECONDS)
+    assert gw.tick()["events"][-1]["state"] == "failed"
+    assert len(attempts) == 3
+    assert rows(hub, "SELECT count(*) AS n FROM events WHERE action='judge.call'")[0]["n"] == 1

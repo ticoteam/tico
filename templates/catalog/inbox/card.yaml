@@ -8,7 +8,7 @@ bootstrap: false
 kind: helper
 icon: inbox
 tags: [email, executive, founder, calendar, inbox]
-summary: "Runs one human's mailbox: sorts it every morning, prepares replies that stay drafts until `outbound_send` is on, and flags only what needs them. Filing follows the requested mailbox rules."
+summary: "Runs one human's mailbox: sorts it every morning, prepares replies that stay drafts until a person turns mail sending on in Tico, and flags only what needs them. Filing follows the requested mailbox rules."
 pains:
   - "too much email"
   - "important messages get buried"
@@ -48,7 +48,7 @@ onboarding:
 first_routine:
   title: "Morning mail brief"
   cadence: "Weekdays at 07:30 team time"
-  output: "One brief on the task: what needs you and why, replies drafted, what I would file, and what is waiting on others. Filing follows the requested rules; outside replies stay drafts until outbound_send is on"
+  output: "One brief on the task: what needs you and why, replies drafted, what I would file, and what is waiting on others. Filing follows the requested rules; outside replies stay drafts until a person turns mail sending on in Tico"
   draft_only: true
 example_output: knowledge/examples/mail-brief.md
 reasoning_effort: medium

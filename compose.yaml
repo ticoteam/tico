@@ -66,6 +66,7 @@ services:
       TICO_BLOB_ACCESS_KEY_ID:
       TICO_BLOB_SECRET_ACCESS_KEY:
       TICO_UPLOAD_MAX_BYTES:
+      TICO_S3_VIEW_URLS:
       OPENAI_API_KEY:
       ANTHROPIC_API_KEY:
       GEMINI_API_KEY:
@@ -73,6 +74,9 @@ services:
       OPENROUTER_API_KEY:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
+      TICO_DECISIONS_DAILY_CALLS_OWNER:
+      TICO_DECISIONS_DAILY_CALLS_HUMAN:
+      TICO_DECISIONS_DAILY_CALLS_BOT:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -80,12 +84,17 @@ services:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:
       TICO_HQ_URL:
-      # Naming, a mounted integrations folder and the AWS region (KMS, Secrets Manager, S3). Unset keeps the defaults.
+      TICO_GITHUB_REVIEW_ROLE:
+      TICO_TITLE_LINT:
+      # Naming, a mounted integrations folder, the AWS region (KMS, Secrets Manager, S3) and the AWS identity the server
+      # must run as. Unset keeps the defaults.
       TICO_APP_NAME:
       TICO_ASSISTANT_NAME:
       TICO_INTEGRATIONS_DIR:
       AWS_REGION:
       AWS_DEFAULT_REGION:
+      TICO_EXPECTED_AWS_ACCOUNT:
+      TICO_EXPECTED_AWS_ROLE:
     volumes:
       - tico-data:/data
       - tico-control:/control
@@ -145,6 +154,9 @@ services:
       OPENROUTER_API_KEY:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
+      TICO_DECISIONS_DAILY_CALLS_OWNER:
+      TICO_DECISIONS_DAILY_CALLS_HUMAN:
+      TICO_DECISIONS_DAILY_CALLS_BOT:
       SLACK_TEAM_ID:
       SLACK_APP_ID:
       TICO_SLACK_ROUTE_THRESHOLD:
@@ -153,11 +165,15 @@ services:
       TICO_SLACK_DIGEST_MINUTES:
       TICO_SLACK_DIGEST_CAP:
       TICO_SLACK_SECRET_ARN:
+      TICO_TELEMETRY:
+      DO_NOT_TRACK:
       TICO_APP_NAME:
       TICO_ASSISTANT_NAME:
       TICO_INTEGRATIONS_DIR:
       AWS_REGION:
       AWS_DEFAULT_REGION:
+      TICO_EXPECTED_AWS_ACCOUNT:
+      TICO_EXPECTED_AWS_ROLE:
     volumes:
       - tico-data:/data
     depends_on:

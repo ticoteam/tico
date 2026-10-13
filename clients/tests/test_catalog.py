@@ -174,5 +174,36 @@ class StarterBots(unittest.TestCase):
                 self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
 
 
+class BotOpsStopsOnARefusal(unittest.TestCase):
+    """Building a bot for a company whose GitHub App may not create repositories: BotOps asks once for the exact fix
+    and ends the run. No retry loop, no `sleep`, no repository copied onto a computer by hand; a Tico fault is reported."""
+
+    folder = catalog.ROOT / "templates/catalog/botops"
+
+    def text(self, name):
+        return " ".join((self.folder / name).read_text().split())
+
+    def test_the_instructions_stop_ask_once_and_report_tico_bugs(self):
+        agent = self.text("AGENT.md")
+        for rule in ("`retryable: false` means stop", "never `sleep` and call again", "ask once", "then end the run",
+                     "Never hand-edit a computer", "remove or change a git remote", "hub support file",
+                     "operation_id", "Blocked on a Tico bug, reported as"):
+            self.assertIn(rule, agent)
+
+    def test_build_checks_create_names_the_refusal_and_waits_without_copying(self):
+        build = self.text("playbooks/build-me-a-bot.md")
+        for rule in ("`hub bot create`'s exit status", "`github_permission_missing`", "ask the person once",
+                     "waiting for a computer to get the repository is not a failure", "do not copy the repository"):
+            self.assertIn(rule, build)
+
+    def test_no_playbook_suggests_a_sleep_retry_or_a_hand_copy(self):
+        for path in [self.folder / "AGENT.md", *sorted((self.folder / "playbooks").glob("*.md"))]:
+            for line in path.read_text().splitlines():
+                self.assertNotRegex(line, r"sleep \d|retry until|git clone \S*/projects|git remote (remove|rm)\b",
+                                    f"{path.name}: {line}")
+                if "sleep" in line.lower():
+                    self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
+
+
 if __name__ == "__main__":
     unittest.main()

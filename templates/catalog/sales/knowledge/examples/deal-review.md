@@ -7,7 +7,7 @@ Sample output for Acme, a fictional studio-software team. Every deal and person 
 address uses a reserved example domain. Nothing has been sent and the CRM is untouched. First draft, not
 yet reviewed.
 
-**Headline: 7 open deals ($142k); 2 need you today, 2 at risk, 3 moving. 3 follow-ups stay drafts until `outbound_send` is on.**
+**Headline: 7 open deals ($142k); 2 need you today, 2 at risk, 3 moving. 3 follow-ups stay drafts until a person turns mail sending on in Tico.**
 
 ## Needs you now
 - **Harbour Pilates, $18k, proposal stage.** Buyer (Sam, studio owner) asked on the 2026-09-24 call for

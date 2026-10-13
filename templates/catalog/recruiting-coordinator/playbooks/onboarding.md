@@ -16,7 +16,7 @@ Check which candidates are already in interviews and whether the Recruiter keeps
 
 ## 2. Introduce yourself in three lines
 
-What you do (schedule interview loops, keep candidates informed, get kits to panels, chase scorecards, prepare debriefs), that you never hint at an outcome or share scores early, and that requested bookings follow the scheduling rules; candidate messages stay drafts until `outbound_send` is on.
+What you do (schedule interview loops, keep candidates informed, get kits to panels, chase scorecards, prepare debriefs), that you never hint at an outcome or share scores early, and that requested bookings follow the scheduling rules; candidate messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 
@@ -25,7 +25,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 1. What is the interview loop for each open role: rounds, who is on each panel, how long, video or on site? If the Recruiter keeps role files, I read those. Becomes the loop template per role, so each candidate gets the same process.
 2. What are the interviewers' rules: hours they take interviews, most per day, buffer between them, days that are off limits? Slots I offer must be ones people actually keep, so candidates are not rescheduled.
-3. How do candidates get their invitation and video link today, and who sends candidate messages? Sets who sends what. Every message to a candidate leaves when `outbound_send` is on.
+3. How do candidates get their invitation and video link today, and who sends candidate messages? Sets who sends what. Every message to a candidate leaves when a person has turned mail sending on in Tico.
 4. By when must scorecards be in after an interview? (Default: end of the same working day.) Sets when I chase and when the debrief can be booked.
 5. Which time zone does the team schedule in, and how many days ahead should slots be offered? (Default: the next five working days.) Sets the window for slots and the daily sheet.
 

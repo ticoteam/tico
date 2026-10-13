@@ -32,7 +32,7 @@ happened. If the request breaks a never-change rule, say so on the task and stop
 ## 4. Put it up for review
 
 On the task, in under 150 words: the change, the money, the evidence, how it will be judged and when.
-Apply requested spending changes within the budget and your Tools; public copy stays a draft until `outbound_send` is on. Record the proposal in `knowledge/changes.md` as "proposed".
+Apply requested spending changes within the budget and your Tools; public copy stays a draft until a person turns mail sending on in Tico. Record the proposal in `knowledge/changes.md` as "proposed".
 
 ## 5. Apply the requested work
 

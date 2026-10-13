@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 60
 
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every prepared item on the task and drafts until outbound_send is on.
+# the bot puts every prepared item on the task and drafts until a person turns mail sending on in Tico.
 outbound_send: false
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup

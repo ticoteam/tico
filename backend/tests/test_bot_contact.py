@@ -83,4 +83,14 @@ def test_another_bot_may_file_work_and_do_nothing_else(api):
          token=stranger, expected=403)
 
 
+def test_its_manager_and_botops_still_leave_notes_and_another_bot_may_not(api):
+    boss, _, stranger = tasks_only(api)
+    bot(api, "botops", "BotOps")
+    botops = token(api, "botops")
+    for sender in (boss, botops):
+        assert post(api, "notes", {"to": "analyst", "text": "The feed moved to v2."}, token=sender)["note"]
+    refused = post(api, "notes", {"to": "analyst", "text": "The feed moved to v2."}, token=stranger, expected=403)
+    assert refused["error"]["code"] == "bot_contact"
+
+
 # ---------- news lands in the room; it does not cost a run ----------

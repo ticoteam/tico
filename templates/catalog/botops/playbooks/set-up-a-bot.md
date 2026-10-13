@@ -94,22 +94,25 @@ send the human to a settings page, never ask them to paste it in words.
 Commit the new repository with a one line message that says what it is, for example
 `Set up <slug> from the <template> template`. Nothing in the commit may contain a credential value.
 
-## 5b. Give it a GitHub repository, if GitHub is connected
+## 5b. Its GitHub repository, if GitHub is connected
 
-Skip this when the team has not connected GitHub; the bot stays on its computer. Otherwise the
-repository you just committed exists only locally, so create an empty private one:
+`hub bot create` already asked for the bot's empty private repository `<org>/bot-<slug>` (its answer says
+so under `github`); with no GitHub connected it skips this and the bot stays on its computer. For a bot set
+up some other way, create it with:
 
     hub bot repo-create <slug> --empty
 
-Do not push it yourself. Your run's token is for your own repository only, so a push of another
-bot's history fails. Instead the bot's repository link (Settings, Bots) has to be `<org>/bot-<slug>`
+Do not push it yourself: the bot publishes its own history. The bot's repository link (Settings, Bots) has to be `<org>/bot-<slug>`
 (a bare `bot-<slug>` also resolves to the connected organization). Its owner sets it there, or you set it
 for the human who asked in chat with `hub bot update <slug>` (it takes their rights); say so in the task note. On the bot's next turn Tico sets `origin` to that
 repository and publishes the history with the bot's own token, and never forces: if the repository
 already holds different history it stops and Health says so. You do not push other bots'
-repositories. If the command says the app was not given permission to create repositories, do not
-work around it: say so in the note and leave it local. Never create a repository for a slug the
-task did not name.
+repositories. If `hub bot create` failed with `github_permission_missing`, a person must act: the app
+was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 11). Finish
+steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
+GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
+once, and do not file another ask. Tico finishes the repository on its own once the owner acts, and the bot
+stays local until then. Never create a repository for a slug the task did not name.
 
 ## 5c. Close what you filed for a human
 

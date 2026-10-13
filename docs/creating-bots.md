@@ -68,7 +68,7 @@ New tasks and chats addressed to the original go to your active branch while bra
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, session mode and fallback. Its editor changes only its status;
+A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status;
 change the original to change its definition. `session: task` gives each task its own provider session, and chat keeps its own session.
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -288,7 +288,7 @@ These are invented examples, in the shape that repeats in real repositories.
 | Bad | Good |
 |---|---|
 | "Be thorough and helpful when reviewing invoices." | "Match every invoice to the purchase order for the same supplier and total. A gap over 2 percent goes on the task; you never pay." |
-| "Use your judgement about what to send." | "Draft on the task while `outbound_send` is off. Once sending is on, send the requested reply with the granted mail Tool; ask if the recipient or terms are unclear." |
+| "Use your judgement about what to send." | "Draft on the task until a person turns mail sending on in Tico. Once it is on, send the requested reply with the granted mail Tool; ask if the recipient or terms are unclear." |
 | "On the 2nd we moved to the new sheet, then on the 11th the folder moved, so read the new one now." | "Counts come from `knowledge/counting.md`. The old spreadsheet is not a source." (The dates go in `memory/decisions.md`.) |
 | "Check the chat tool, the mailbox, the CRM, the dashboard and the forum each run." | "Each pass reads the two sources named in the playbook. Anything else is a separate task." |
 | "Escalate anything important." | "Escalate a deadline, a regulator, a termination, or money. Everything else you handle or archive." |
@@ -375,7 +375,7 @@ that fires daily, is either perfect or unread.
 
 **Say what the bot may do.** A playbook carries out the authorized request with its granted Tools;
 spending, publishing, merging, record changes and deletion have no blanket approval step.
-`outbound_send: false` keeps messages to outsiders as drafts until the owner turns sending on.
+Messages to outsiders stay drafts until a person who manages the bot turns mail sending on in Tico (Settings → Bots → Mail sending, or `hub bot mail <slug> --send`). `outbound_send` in bot.yaml only asks for it.
 An approval can still be requested for an uncertain action, with the exact action attached;
 it is optional, decided by a human and used once. See [Permissions](permissions.md).
 
@@ -395,7 +395,7 @@ A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
 `enabled: false`); `hub bot create` seeds the new bot's routines from it once, and from then on
 Tico's rows are the routines. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Start setup**, go-live),
+it exists and is visible under Settings → Routines, and is switched on when the bot's setup starts (**Set up**, go-live),
 so nobody approves it separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 
@@ -434,11 +434,11 @@ is shown on the bot's page, it is what the shared tools check, and it is what pr
 resolves against the computer before a bot goes active.
 
 ```yaml
-outbound_send: false           # no email, DM, post or invite leaves the team
+outbound_send: false           # a request only: a person turns sending on in Tico
 tools:
   - service: gmail
     identity: "desk@example.com"
-    can: [read, draft]         # send only with outbound_send: true
+    can: [read, draft]         # sends need the Tico mail switch on
     env: GOOGLE_SA_KEY
     note: "reads and drafts on its own mailbox; never files or sends"
   - service: warehouse-api
@@ -556,11 +556,13 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
   the runtime refused). **None (fail)** is the default. The hop starts a fresh session. OpenRouter
   is not a bot harness.
+- **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
+  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in
   Settings and never dispatched to. Model, effort, fallback and computer do not apply to it.
-  [Hermes agents](hermes-agents.md) connects one in 2 minutes and covers the rest.
+  [Hermes agents](hermes-agents.md) and [OpenClaw agents](openclaw-agents.md) connect one in 2 minutes and cover the rest.
 
 Effort is where the budget goes. A useful split:
 
@@ -627,6 +629,12 @@ Drawn from real bot reviews, stated generically.
   window every bot shares.
 - **A dirty or unpushed checkout on the runner's computer.** The bot's commits and a human's edits
   collide, and what runs is not what you pushed. Keep the tree clean and do not edit it mid-run.
+
+After each turn the runner pushes the bot's commits to the branch its checkout tracks, by name: a bot
+that works on a branch of its own that still tracks `main` lands its commits on `main`. When the remote
+moved ahead, the runner rebases the unpushed commits onto it (merges when they include a merge) and
+pushes again. It never forces and never drops a commit; a conflict is undone and reported with the
+files and what to run. A branch that tracks another local branch is not pushed and is reported.
 
 ## 9. More than one environment
 

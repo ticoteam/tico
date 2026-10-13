@@ -48,7 +48,7 @@ Then `hub file publish reports/YYYY-MM-DD-engineering-summary.md`.
 ## 6. Propose routing, do not act
 
 For any unowned request or stuck item, write a routing proposal in the summary using
-`playbooks/route-a-request.md`. Nothing is assigned. Share with the intended audience within the requested work and Tools; messages to outsiders stay drafts until `outbound_send` is on.
+`playbooks/route-a-request.md`. Nothing is assigned. Share with the intended audience within the requested work and Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 7. Finish
 

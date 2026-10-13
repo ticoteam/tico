@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
-from fastapi import Request
+from fastapi import Query, Request
 
 from . import hubdb as H
 from . import models as M
@@ -184,10 +184,12 @@ def _need_evidence(conn, actor, ids):
 def _cite(conn, actor, kind, claim_id, evidence_ids, insight_id=None):
     if kind not in CLAIM_KINDS:
         H.refuse(conn, actor, "kind", f"a citation is {'|'.join(CLAIM_KINDS)}, not {kind}")
+    events = []
     for eid in evidence_ids:
         conn.execute("INSERT OR IGNORE INTO market_citations (claim_kind, claim_id, evidence_id) VALUES (?,?,?)",
                      (kind, claim_id, eid))
-        _event(conn, kind, claim_id, actor, "evidence", None, eid, insight_id)
+        events.append(_event(conn, kind, claim_id, actor, "evidence", None, eid, insight_id))
+    return events
 
 
 # ----------------------------------------------------------------------------- reads
@@ -219,18 +221,65 @@ def edges_of(conn, *, src=None, dst=None, rel=None, as_of=None):
     return [_edge_row(r) for r in H._rows(conn.execute(sql + " ORDER BY rel, src, dst", args))]
 
 
-def _evidence_for(conn, entity_id, edges):
-    ids = []
-    claims = [("entity", entity_id)] + [("edge", e["id"]) for e in edges]
-    for kind, cid in claims:
-        for row in conn.execute("SELECT evidence_id FROM market_citations WHERE claim_kind=? AND claim_id=?", (kind, cid)):
-            if row[0] not in ids:
-                ids.append(row[0])
+def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include=None):
+    """Rank a one-hop neighborhood in SQL; only bounded drawing rows leave SQLite."""
+    if not fill and not include and not conn.execute("SELECT 1 FROM market_entities WHERE id=? AND status='active'", (focus,)).fetchone():
+        return {"entities": [], "edges": [], "focus": focus, "edges_truncated": False}
+    limit = max(1, min(300, limit))
+    day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
+    args = {"focus": focus, "limit": limit, "day": day, "fill": int(fill), "include": dumps((include or [])[:20])}
+    current = "(since IS NULL OR substr(since,1,10)<=:day) AND (until IS NULL OR substr(until,1,10)>=:day)"
+    rows = H._rows(conn.execute(f"""
+        WITH wanted AS (SELECT value AS id FROM json_each(:include)),
+        live AS MATERIALIZED (SELECT id FROM market_entities WHERE status='active'),
+        degrees AS (
+            SELECT id, count(*) AS degree FROM (
+                SELECT src AS id FROM market_edges WHERE {current}
+                    AND src IN live AND dst IN live
+                UNION ALL
+                SELECT dst AS id FROM market_edges WHERE {current}
+                    AND src IN live AND dst IN live
+            ) GROUP BY id
+        ), neighbors AS (
+            SELECT dst AS id FROM market_edges WHERE src=:focus AND {current}
+            UNION SELECT src FROM market_edges WHERE dst=:focus AND {current}
+        )
+        SELECT e.id, e.name, e.type, e.tier, coalesce(d.degree,0) AS degree
+        FROM market_entities e LEFT JOIN degrees d ON d.id=e.id
+        WHERE e.status='active' AND (e.id=:focus OR e.id IN wanted OR e.id IN neighbors OR :fill)
+        ORDER BY CASE WHEN e.id=:focus THEN 0 WHEN e.id IN wanted THEN 1 WHEN e.id IN neighbors THEN 2 ELSE 3 END,
+            degree DESC, e.name, e.id LIMIT :limit
+    """, args))
+    ids = [row["id"] for row in rows]
     if not ids:
-        return []
-    marks = ",".join("?" * len(ids))
-    rows = {r["id"]: r for r in H._rows(conn.execute(f"SELECT * FROM market_evidence WHERE id IN ({marks})", ids))}
-    return [rows[i] for i in ids if i in rows]
+        return {"entities": [], "edges": [], "focus": focus, "edges_truncated": False}
+    marks = ",".join("?" for _ in ids)
+    # Dense neighborhoods also need a drawing bound; degrees still count every live edge.
+    edge_limit = limit * 8
+    edges = H._rows(conn.execute(f"""
+        SELECT id, src, dst, rel FROM market_edges
+        WHERE src IN ({marks}) AND dst IN ({marks})
+            AND (since IS NULL OR substr(since,1,10)<=?)
+            AND (until IS NULL OR substr(until,1,10)>=?)
+        ORDER BY CASE WHEN src=? OR dst=? THEN 0 ELSE 1 END, id LIMIT ?
+    """, (*ids, *ids, day, day, focus, focus, edge_limit + 1)))
+    return {"entities": rows, "edges": edges[:edge_limit], "focus": focus,
+            "edges_truncated": len(edges) > edge_limit}
+
+
+def _evidence_for(conn, entity_id, edges):
+    claims = [("entity", entity_id)] + [("edge", e["id"]) for e in edges]
+    return H._rows(conn.execute("""
+        WITH cited AS (
+            SELECT c.evidence_id, min(CAST(claim.key AS INTEGER)) AS position
+            FROM json_each(?) claim JOIN market_citations c
+                ON c.claim_kind=json_extract(claim.value,'$[0]')
+                AND c.claim_id=json_extract(claim.value,'$[1]')
+            GROUP BY c.evidence_id
+        )
+        SELECT e.* FROM cited JOIN market_evidence e ON e.id=cited.evidence_id
+        ORDER BY cited.position, e.id
+    """, (dumps(claims),)))
 
 
 def _current(edge, today):
@@ -264,9 +313,9 @@ def show(conn, entity_id, today=None):
         return None
     today = today or datetime.now(timezone.utc).date().isoformat()
     # Current edges only. Symmetric relations are stored once and read from either end.
-    touching = [item for item in edges_of(conn, src=entity_id) if _current(item, today)]
-    incoming = [item for item in edges_of(conn, dst=entity_id)
-                if item["rel"] not in SYMMETRIC and _current(item, today)]
+    touching = edges_of(conn, src=entity_id, as_of=today)
+    incoming = [item for item in edges_of(conn, dst=entity_id, as_of=today)
+                if item["rel"] not in SYMMETRIC]
     seen, edges, pairs = set(), [], set()
     for item in touching + incoming:
         if item["id"] in seen:
@@ -384,6 +433,10 @@ def retrieve(conn, question, limit=8):
     return excerpts[: limit + 9]
 
 
+# The model the ask calls, with the server's Gemini key (clients/docs_qa.py).
+ASK_MODEL = "gemini-3.7-flash"
+
+
 def complete(question, excerpts):
     """One model call over the excerpts. Tests patch this; the retrieval above is real."""
     from clients.docs_qa import request
@@ -391,7 +444,7 @@ def complete(question, excerpts):
              "You are the market librarian. Answer in a few sentences from these excerpts only. "
              "Do not invent facts and do not mention excerpts or citation brackets.\n\nQuestion: "
              + question + "\n\n" + "\n\n".join(f"[{e['kind']}:{e['id']}] {e['text']}" for e in excerpts)}]}]}
-    with request("models/gemini-3.7-flash:generateContent", body) as response:
+    with request(f"models/{ASK_MODEL}:generateContent", body) as response:
         payload = json.load(response)
     parts = payload["candidates"][0]["content"]["parts"]
     return "".join(part.get("text", "") for part in parts).strip()
@@ -406,21 +459,33 @@ def _pulled(excerpts):
     return "Pulled from the market graph.\n\n" + "\n\n".join(lines[:8])
 
 
-def ask(conn, question):
-    """Answer from the graph as it is right now. The model writes the sentence; if it is down,
-    the rows that were just pulled are the answer.
+def ask(conn, question, use_model=True):
+    """Answer from the graph as it is right now. The model writes the sentence; if it is down, has no key,
+    or `use_model` is off, the rows that were just pulled are the answer.
+
+    Returns (result, call): `call` is what the audit keeps of the model call (model, latency, sizes, the
+    error's kind), or None when no call was made. Never the question or the excerpts.
     """
+    from clients.docs_qa import NoKey
     excerpts = retrieve(conn, question)
     citations = [{"kind": row["kind"], "id": row["id"]} for row in excerpts if row["kind"] in ("entity", "evidence")]
     if not excerpts:
-        return {"answer": "Nothing in the market graph matches that question.", "citations": [], "excerpts": []}
-    try:
-        answer = complete(question, excerpts)
-    except Exception:
-        answer = ""
+        return {"answer": "Nothing in the market graph matches that question.", "citations": [], "excerpts": []}, None
+    answer, call = "", None
+    if use_model:
+        started = datetime.now(timezone.utc)
+        call = {"model": ASK_MODEL, "excerpts": len(excerpts), "question_chars": len(question)}
+        try:
+            answer = complete(question, excerpts)
+        except NoKey:
+            call = None
+        except Exception as exc:
+            call["error"] = type(exc).__name__
+        if call is not None:
+            call["ms"] = round((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     if not answer:
         answer = _pulled(excerpts)
-    return {"answer": answer, "citations": citations, "excerpts": excerpts}
+    return {"answer": answer, "citations": citations, "excerpts": excerpts}, call
 
 
 # ----------------------------------------------------------------------------- writes
@@ -446,23 +511,27 @@ def create_evidence(conn, actor, *, source_url="", source_kind="other", captured
     return evidence(conn, eid), [event_id]
 
 
+def _keys(name, aliases, external_ids):
+    """What an entity resolves by: its name, aliases and domain, lower case."""
+    keys = {str(name or "").strip().lower(), str((external_ids or {}).get("domain") or "").strip().lower()}
+    keys.update(str(a).strip().lower() for a in aliases or [])
+    keys.discard("")
+    return keys
+
+
 def _resolve_existing(conn, name, aliases, external_ids):
     """Entities whose name, alias or domain is one of these, active or merged."""
-    keys = {str(name or "").strip().lower()}
-    keys.update(str(a).strip().lower() for a in aliases or [] if str(a).strip())
-    domain = str((external_ids or {}).get("domain") or "").strip().lower()
-    if domain:
-        keys.add(domain)
-    keys.discard("")
-    found = []
-    for row in conn.execute("SELECT * FROM market_entities"):
-        item = _entity_row(row)
-        names = {item["name"].strip().lower()} | {str(a).strip().lower() for a in item["aliases"]}
-        if item["external_ids"].get("domain"):
-            names.add(str(item["external_ids"]["domain"]).strip().lower())
-        if names & keys:
-            found.append(item)
-    return found
+    keys = _keys(name, aliases, external_ids)
+    if not keys:
+        return []
+    marks = ",".join("?" for _ in keys)
+    # SQLite lower()/trim() cover ASCII names. The partial index also brings in Unicode
+    # and control-character keys for Python's original case and whitespace normalization.
+    rows = conn.execute(f"SELECT * FROM market_entities WHERE id IN "
+                        f"(SELECT entity_id FROM market_entity_keys WHERE key IN ({marks}) "
+                        "UNION SELECT entity_id FROM market_entity_keys WHERE key GLOB '*[^ -~]*')", list(keys))
+    return [item for row in rows if (item := _entity_row(row))
+            and _keys(item["name"], item["aliases"], item["external_ids"]) & keys]
 
 
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
@@ -482,8 +551,8 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     eid = entity_id or f"{type}/{slug(name)}"
     if entity(conn, eid):
         H.refuse(conn, actor, "duplicate", f"{eid} already exists")
-    clash = [row for row in _resolve_existing(conn, name, aliases, external_ids) if row["id"] != eid]
-    if clash and not force:
+    clash = [] if force else [row for row in _resolve_existing(conn, name, aliases, external_ids) if row["id"] != eid]
+    if clash:
         H.refuse(conn, actor, "duplicate", f"{name} matches {clash[0]['id']}; pass force to create it anyway")
     ids = []
     if actor != SEED_ACTOR:
@@ -785,6 +854,157 @@ def apply_insight(conn, actor, insight_id, evidence_fields, *, entity_fields=Non
     return {"insight": resolved, "evidence": ev, "events": events}
 
 
+# ----------------------------------------------------------------------------- bulk import
+IMPORT_OUTCOMES = ("created", "updated", "skipped", "needs_human", "refused")
+# Lines per request: the batch holds the write lock while it applies, so a larger one is split.
+IMPORT_MAX_LINES = 2000
+
+
+def _filled(mapping):
+    """A merge never overwrites a value with an empty one."""
+    return {k: v for k, v in (mapping or {}).items() if v not in (None, "", [], {})}
+
+
+def _import_evidence(conn, actor, items, insight_id):
+    """One evidence row per item. The key is the source and its words, so importing a file again reuses them."""
+    ids, events = [], []
+    for item in items or []:
+        url, quote, read = str(item.get("url") or ""), str(item.get("quote") or ""), str(item.get("our_read") or "")
+        row, made = create_evidence(conn, actor, source_url=url, source_kind=item.get("source_kind") or "other",
+                                    captured_at=item.get("captured_at"), quote=quote, our_read=read,
+                                    insight_id=insight_id, evidence_key=evidence_id("\n".join((url, quote, read))))
+        ids.append(row["id"])
+        events.extend(made)
+    return ids, events
+
+
+def _import_entity_line(conn, actor, item, index, insight_id):
+    name = str(item.get("name") or "").strip()
+    aliases = [str(a).strip() for a in item.get("aliases") or [] if str(a).strip()]
+    external, properties = _filled(item.get("external_ids")), _filled(item.get("properties"))
+    explicit = str(item.get("id") or "").strip()
+    given = explicit or f"{item.get('type')}/{slug(name)}"
+    if explicit and entity(conn, given):
+        matches = {given}
+    else:
+        matches = set().union(*(index.get((item.get("type"), k), set()) for k in _keys(name, aliases, external)))
+        matches |= {given} if entity(conn, given) else set()
+    targets = set()
+    for found in (entity(conn, mid) for mid in matches):
+        targets.add(found["merged_into"] if found["status"] == "merged" and found["merged_into"] else found["id"])
+    if len(targets) > 1:
+        return "needs_human", f"{name or given} matches {', '.join(sorted(targets))}", [], None
+    ev_ids, events = _import_evidence(conn, actor, item.get("evidence"), insight_id)
+    if not targets:
+        row, more = create_entity(conn, actor, type=item.get("type"), name=name, aliases=aliases, external_ids=external,
+                                  tier=item.get("tier"), summary=item.get("summary") or "", properties=properties,
+                                  evidence_ids=ev_ids, force=True, insight_id=insight_id, entity_id=given)
+        return "created", f"created {row['id']}", events + more, row
+    row = entity(conn, targets.pop())
+    merged_aliases, seen = list(row["aliases"]), {a.lower() for a in row["aliases"]} | {row["name"].lower()}
+    for alias in [name, *aliases]:
+        if alias and alias.lower() not in seen:
+            merged_aliases.append(alias)
+            seen.add(alias.lower())
+    row, more = update_entity(conn, actor, row["id"], aliases=merged_aliases,
+                              external_ids={**row["external_ids"], **external}, tier=item.get("tier") or None,
+                              summary=str(item.get("summary") or "").strip() or None,
+                              properties={**row["properties"], **properties}, evidence_ids=ev_ids, insight_id=insight_id)
+    if more:
+        return "updated", f"updated {row['id']}", events + more, row
+    events += _cite(conn, actor, "entity", row["id"], ev_ids, insight_id)
+    return "skipped", f"{row['id']} already says this" + ("; evidence cited" if ev_ids else ""), events, row
+
+
+def _import_edge_line(conn, actor, item, ids, insight_id, today):
+    rel = item.get("rel")
+    src, dst = ids.get(item.get("src"), item.get("src")), ids.get(item.get("dst"), item.get("dst"))
+    same = [e for e in _same_pair(conn, rel, src, dst)
+            if (rel in SYMMETRIC or (e["src"], e["dst"]) == (src, dst)) and _current(e, today)]
+    ev_ids, events = _import_evidence(conn, actor, item.get("evidence"), insight_id)
+    if same:
+        row, more = same[0], []
+    else:
+        row, more = create_edge(conn, actor, src=src, rel=rel, dst=dst, since=item.get("since"),
+                                until=item.get("until"), confidence=item.get("confidence") or "medium",
+                                properties=item.get("properties") or {}, evidence_ids=ev_ids, insight_id=insight_id)
+    if more:
+        return "created", f"created edge {src} {rel} {dst}", events + more
+    events += _cite(conn, actor, "edge", row["id"], ev_ids, insight_id)
+    return "skipped", f"duplicate of edge {row['id']}" + ("; evidence cited" if ev_ids else ""), events
+
+
+def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=None):
+    """A verified batch, one JSON object per line: entities first, then edges, each line's evidence before the
+    write that cites it. A line that fails is rolled back and reported; the rest still apply. The whole import
+    is one market insight, applied with every event it produced. A dry run reports the same and keeps nothing."""
+    H._writer(conn, actor)
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    result = {"dry_run": bool(dry_run), "insight": None, **{k: 0 for k in IMPORT_OUTCOMES}, "lines": []}
+
+    def record(number, outcome, reason):
+        result[outcome] += 1
+        result["lines"].append({"line": number, "outcome": outcome, "reason": reason})
+
+    count = sum(1 for raw in str(text or "").splitlines() if raw.strip())
+    if count > IMPORT_MAX_LINES:
+        raise Problem("too_many_lines", f"This batch has {count} lines; an import takes at most {IMPORT_MAX_LINES}. "
+                      f"Split the file into batches of {IMPORT_MAX_LINES} lines or fewer and import each.", 413)
+    lines = []
+    for number, raw in enumerate(str(text or "").splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            item = json.loads(raw)
+        except ValueError:
+            item = None
+        if not isinstance(item, dict) or item.get("kind") not in ("entity", "edge"):
+            record(number, "refused", 'not a JSON object with kind "entity" or "edge"')
+        else:
+            lines.append((number, item))
+    lines.sort(key=lambda pair: pair[1]["kind"] != "entity")
+    about = Path(str(source or "")).name or "market import"
+    conn.execute("SAVEPOINT market_import")
+    insight_id = report(conn, actor, kind="other", about=about,
+                        claim=str(note or "").strip() or f"Imported {about}.")["id"]
+    index, ids, applied = {}, {}, []
+    # Keyed by type too: a product that shares its company's domain is its own entity.
+    for row in conn.execute("SELECT id, type, name, aliases, external_ids FROM market_entities"):
+        for key in _keys(row["name"], loads(row["aliases"], []), loads(row["external_ids"], {})):
+            index.setdefault((row["type"], key), set()).add(row["id"])
+    for number, item in lines:
+        conn.execute("SAVEPOINT market_line")
+        try:
+            if item["kind"] == "entity":
+                outcome, reason, events, row = _import_entity_line(conn, actor, item, index, insight_id)
+            else:
+                (outcome, reason, events), row = _import_edge_line(conn, actor, item, ids, insight_id, today), None
+            conn.execute("RELEASE market_line")
+        except Exception as exc:
+            conn.execute("ROLLBACK TO market_line")
+            conn.execute("RELEASE market_line")
+            outcome, reason, events, row = "refused", exc.detail if isinstance(exc, H.Refused) else str(exc), [], None
+        if row:
+            for key in _keys(row["name"], row["aliases"], row["external_ids"]):
+                index.setdefault((row["type"], key), set()).add(row["id"])
+            if str(item.get("id") or "").strip():
+                ids[str(item["id"]).strip()] = row["id"]
+        applied.extend(events)
+        record(number, outcome, reason)
+    counts = ", ".join(f"{result[k]} {k.replace('_', '-')}" for k in IMPORT_OUTCOMES)
+    if applied:
+        resolve(conn, actor, insight_id, "applied", f"Imported {about}: {counts}.", applied)
+    else:
+        resolve(conn, actor, insight_id, "rejected", f"Nothing in {about} changed the graph: {counts}.")
+    if dry_run:
+        conn.execute("ROLLBACK TO market_import")
+    else:
+        result["insight"] = insight_id
+    conn.execute("RELEASE market_import")
+    result["lines"].sort(key=lambda line: line["line"])
+    return result
+
+
 def is_stale(row, today):
     """Past last_verified plus 60 days, or 30 for a core company. No date is not stale by itself."""
     raw = row.get("last_verified") if isinstance(row, dict) else None
@@ -942,7 +1162,7 @@ def delta_body(conn, today):
     """The weekly delta page, from market_events. Seed writes this; Monday refresh writes it again."""
     start = (today - timedelta(days=7)).isoformat()
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE substr(ts,1,10)>=? ORDER BY ts, id", (start,)))
+        "SELECT * FROM market_events WHERE ts>=? ORDER BY ts, id", (start,)))
     lines = ["# Weekly delta", "", f"Changes since {start}.", ""]
     if not events:
         lines.append("No market changes in this week.")
@@ -1368,21 +1588,27 @@ def ensure_curator(conn):
 
 # ----------------------------------------------------------------------------- HTTP
 def install(app, store, auth, mutate):
-    def _show(conn, entity_id):
+    def _show(conn, entity_id, names=False):
         body = show(conn, entity_id)
         if not body:
             raise Problem("not_found", "Unknown entity", 404)
+        if names:
+            ids = {end for bucket in body["edges"].values() for e in bucket["out"] + bucket["in"]
+                   for end in (e["src"], e["dst"])}
+            body["neighbors"] = [dict(row) for row in conn.execute(
+                "SELECT id, name FROM market_entities WHERE id IN (SELECT value FROM json_each(?))", (dumps(list(ids)),))]
         return body
 
     @app.get("/api/v2/market/entities")
     def entities(request: Request, type: str | None = None, tier: str | None = None, q: str | None = None,
-                 status: str | None = None, id: str | None = None):
+                 status: str | None = None, id: str | None = None,
+                 limit: int | None = Query(None, ge=1, le=500), offset: int = Query(0, ge=0)):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             if id:
                 return _show(c, id)
-            if q:
+            if q and limit is None:
                 return find(c, q)
             where, args = [], []
             if type:
@@ -1394,15 +1620,38 @@ def install(app, store, auth, mutate):
             if status:
                 where.append("status=?")
                 args.append(status)
-            sql = "SELECT * FROM market_entities" + (" WHERE " + " AND ".join(where) if where else "")
-            return {"entities": [_entity_row(r) for r in H._rows(c.execute(sql + " ORDER BY name", args))]}
+            if q:
+                search = "instr(lower(name),?) OR instr(lower(id),?) OR instr(lower(aliases),?)"
+                args.extend([q.strip().lower()] * 3)
+                tokens = re.findall(r"\w+", q, re.UNICODE)[:8]
+                if tokens:
+                    # FTS folds Unicode names and accents; substring matches still cover partial ids.
+                    search += " OR id IN (SELECT ref FROM market_fts WHERE market_fts MATCH ? AND kind='entity')"
+                    args.append(" AND ".join('"' + token + '"*' for token in tokens))
+                where.append("(" + search + ")")
+            clause = " WHERE " + " AND ".join(where) if where else ""
+            sql = "SELECT * FROM market_entities" + clause + " ORDER BY name, id"
+            if limit is None:
+                return {"entities": [_entity_row(r) for r in H._rows(c.execute(sql, args))]}
+            total = c.execute("SELECT count(*) FROM market_entities" + clause, args).fetchone()[0]
+            rows = [_entity_row(r) for r in c.execute(sql + " LIMIT ? OFFSET ?", (*args, limit, offset))]
+            return {"entities": rows, "total": total,
+                    "next_offset": offset + limit if offset + limit < total else None}
+
+    @app.get("/api/v2/market/graph")
+    def graph_view(request: Request, focus: str = OWN_COMPANY_ID,
+                   limit: int = Query(250, ge=1, le=300), as_of: str | None = None, fill: bool | None = None,
+                   include: list[str] | None = Query(None)):
+        auth.domain(request.state.identity)
+        with store.read() as c:
+            return graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
 
     @app.get("/api/v2/market/entities/{rest:path}")
-    def entity_show(rest: str, request: Request):
+    def entity_show(rest: str, request: Request, names: bool = False):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return _show(c, rest)
+            return _show(c, rest, names)
 
     @app.get("/api/v2/market/edges")
     def edge_list(request: Request, src: str | None = None, dst: str | None = None, rel: str | None = None,
@@ -1447,13 +1696,25 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/market/ask")
     def market_ask(request: Request, body: M.MarketAsk):
+        # Each model call spends the server's Gemini key: a `market.ask` event, counted per person per day
+        # under the decision caps (backend/judge.py). Rehearsal sends nothing out and answers from the rows.
+        from .judge import daily_cap, used_today
         who = request.state.identity
         auth.domain(who)
+        cap = daily_cap(store.settings, who.role)
         with store.read() as c:
+            used = used_today(c, who.actor, action="market.ask")
+            if used >= cap:
+                raise Problem("budget", f"{who.actor} has made {used} market asks today; the cap is {cap} "
+                              "until midnight UTC", 429)
             try:
-                return ask(c, body.question)
+                result, call = ask(c, body.question, use_model=not store.settings.rehearsal)
             except Exception as exc:
                 raise Problem("market_ask", f"The market model call failed: {exc}", 503, True) from exc
+        if call is not None:
+            with store.transaction() as c:
+                H.event(c, who.actor, "market.ask", "", call)
+        return result
 
     @app.post("/api/v2/market/evidence")
     def evidence_create(request: Request, body: M.MarketEvidenceCreate):
@@ -1585,6 +1846,16 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/market/import")
+    def market_import(request: Request, body: M.MarketImport):
+        who = request.state.identity
+
+        def work(c):
+            require_writer(who)
+            return import_batch(c, who.actor, body.lines, source=body.name, note=body.note, dry_run=body.dry_run)
+
+        return mutate(request, body, work)
+
     @app.post("/api/v2/market/curator/sweep")
     def curator_sweep(request: Request, body: M.MarketSweep):
         who = request.state.identity
@@ -1595,6 +1866,19 @@ def install(app, store, auth, mutate):
                          owner_email=store.settings.owner_email)
 
         return mutate(request, body, work)
+
+    @app.get("/api/v2/market/pages/{name}")
+    def page_read(request: Request, name: str):
+        """One market page as it reads now, for a curator about to add to it (`hub market page <name>`)."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            row = c.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'",
+                            ("market/" + name,)).fetchone()
+        if not row:
+            raise Problem("not_found", f"There is no market page {name}", 404)
+        page = json.loads(row["payload_json"])
+        return {"name": name, "title": page.get("title") or name, "body": page.get("content") or ""}
 
     @app.post("/api/v2/market/pages/{name}")
     def page_write(request: Request, name: str, body: M.MarketPage):

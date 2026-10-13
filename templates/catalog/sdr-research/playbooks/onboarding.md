@@ -18,7 +18,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (qualify inbound, research and score new leads, run the sequence, book first meetings), that messages stay drafts until `outbound_send` is on, and requested CRM changes use your Tools.
+What you do (qualify inbound, research and score new leads, run the sequence, book first meetings), that messages stay drafts until a person turns mail sending on in Tico, and requested CRM changes use your Tools.
 
 ## 3. Ask, in one message
 

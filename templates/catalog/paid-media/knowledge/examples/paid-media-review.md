@@ -27,7 +27,7 @@ account. First draft, not yet reviewed.
 2. **Move $300 a week from "yoga booking app" to "studio scheduling"**, which converts at $55 and
    lost 18% of impressions to budget. Spend draft prepared (no net increase).
 3. **Replace the 71-day social ad** with three variants: the no-show pain, the 10-minute setup, a
-   studio owner's quote (cleared by Dana on 2026-09-18). Copy on the task drafted until `outbound_send` is on.
+   studio owner's quote (cleared by Dana on 2026-09-18). Copy on the task drafted until a person turns mail sending on in Tico.
 
 ## Last fortnight's changes
 - 2026-09-08 exclusions on "studio scheduling": cost per trial $67 to $55. Kept.

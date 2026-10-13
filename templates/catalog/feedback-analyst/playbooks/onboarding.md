@@ -18,7 +18,7 @@ read any feedback, that is answer one, and a task for the owner if they want a s
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly report of feedback themes with counts and three suggested actions), that requested evidence handoffs use your Tools, and that customer messages stay drafts until `outbound_send` is on; never promise a change.
+What you do (a weekly report of feedback themes with counts and three suggested actions), that requested evidence handoffs use your Tools, and that customer messages stay drafts until a person turns mail sending on in Tico; never promise a change.
 
 ## 3. Ask, in one message
 

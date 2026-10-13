@@ -1,6 +1,7 @@
 """Authenticated, deterministic API. No runtime launch or local-machine dependency."""
 
 import asyncio
+import logging
 import time
 import json
 from dataclasses import replace
@@ -19,7 +20,9 @@ from fastapi.exceptions import RequestValidationError
 
 from clients.agent_skill import WHO_NEEDS_ME
 
-from . import agents, batch, grokbot, inbox_isolation, harness_actions, model_login, oidc, personal_tokens, views
+from . import go_live as pending_go_lives
+from . import repo_waits
+from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import team_rules, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -32,7 +35,7 @@ from . import models as M
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name
-from .execution import Execution, bot_repository
+from .execution import Execution, bot_repository, clear_limits
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -48,7 +51,7 @@ from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
 from .providers import MODEL_BY_ID, MODEL_CATALOG
-from .settings_admin import SettingsAdmin, repository_present
+from .settings_admin import SettingsAdmin, compact_at as compact_at_of, repository_present
 from .readiness import absolute as absolute_link, can_run
 from . import fleet_check as fleet_check_module
 from .getting_started import _online_runners
@@ -158,6 +161,9 @@ def create_app(settings=None):
                     await asyncio.to_thread(releases.notice)
                     from .repositories import daily
                     daily(app.state.github_app)
+                    # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
+                    from . import repo_waits
+                    await asyncio.to_thread(repo_waits.tick, app.state.github_app)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -181,6 +187,7 @@ def create_app(settings=None):
         scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
         directory_task = asyncio.create_task(directory_loop()) if timers else None
         granola_task = asyncio.create_task(app.state.granola.loop(stop)) if timers else None
+        docs_task = asyncio.create_task(app.state.doc_sources.loop(stop)) if timers and not settings.demo else None
         # A demo runs no scheduler: nothing fires, and nothing waits for a bot that will never run.
         import threading
         copy_stop = threading.Event()
@@ -194,6 +201,7 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            app.state.doc_sources.stop.set()
             copy_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
@@ -209,6 +217,8 @@ def create_app(settings=None):
                 await timing_task
             except asyncio.CancelledError:
                 pass
+            if docs_task:
+                await docs_task
             if scheduler_task:
                 await scheduler_task
             if directory_task:
@@ -234,6 +244,8 @@ def create_app(settings=None):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
         detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
                            for error in exc.errors())
+        if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
+            detail += ". routines must be " + M.ROUTINES_SHAPE
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
@@ -295,6 +307,7 @@ def create_app(settings=None):
 
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import describe as describe_action
+    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
     from . import botops_act
 
     def assistant_owns(task_id, actor, shared=False):
@@ -348,6 +361,11 @@ def create_app(settings=None):
             # The repository webhook (backend/github.py) carries its own HMAC signature.
             if request.url.path == GITHUB_WEBHOOK_PATH and request.method == "POST":
                 return await call_next(request)
+            # An agent signing in to the MCP server over OAuth (backend/mcp_oauth.py): the metadata it reads first, and
+            # the registration, token and revocation endpoints, which carry their own codes and secrets.
+            if request.url.path.startswith(("/api/v2/oauth/", "/.well-known/oauth-", "/.well-known/openid-configuration/")) \
+                    and (request.method == "GET" or request.url.path.endswith(("/register", "/token", "/revoke"))):
+                return await call_next(request)
             # SCIM carries its own bearer token, which an identity provider holds (backend/scim.py).
             if request.url.path.startswith("/scim/v2/"):
                 return await call_next(request)
@@ -380,14 +398,14 @@ def create_app(settings=None):
                 if not size.isdigit():
                     raise Problem("content_length", "Invalid Content-Length", 400)
                 upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
-                docs_import = (request.url.path == "/api/v2/docs/import"
+                docs_import = (request.url.path in ("/api/v2/docs/import", "/api/v2/market/import")
                                and request.state.identity.role in ("human", "owner", "bot"))
                 # A bot's computer publishes files up to 25 MB as raw bytes (backend/files.py).
                 published = (request.url.path in ("/api/v2/files/uploads", "/api/v2/files/imports")
                              and request.state.identity.role in ("bot", "runner"))
                 streamed = bool(re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
                                 and request.headers.get("content-type", "").lower().startswith("multipart/form-data"))
-                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) else 27_000_000 if published else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else 27_000_000 if published else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -418,9 +436,19 @@ def create_app(settings=None):
                                                  request.state.identity.actor,
                                                  lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                                                  assistant_direct(), assistant_to_bot)):
-                    raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                  "own. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions); "
-                                  "the person confirms it in " + settings.app_name, 403)
+                    # A task change, comment or link the person asked for in their own Assistant chat: the turn cites
+                    # their message and it runs as them, recorded via assistant for that message (backend/assistant.py).
+                    asked = request.headers.get(botops_act.HEADER)
+                    if not (asked and request.state.identity.via == "assistant" and assistant_direct()
+                            and assistant_instructed(request.method, request.url.path)):
+                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
+                                      "own. A task change, comment or link the person clearly asked for in this chat runs "
+                                      "when you cite their message (`--on-behalf-of turn`). Otherwise propose it with "
+                                      "`hub assistant propose` (or POST /api/v2/assistant/actions), several task actions on "
+                                      "one card (path /api/v2/assistant/batch); the person confirms it in "
+                                      + settings.app_name, 403)
+                    with store.read() as c:
+                        delegation_reset = H.DELEGATION.set(assistant_instruction(c, request.state.identity, asked))
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -428,7 +456,8 @@ def create_app(settings=None):
             if caller and request.method not in ("GET", "HEAD", "OPTIONS"):
                 with store.read() as c:
                     privacy.guard_write(c, caller, request.url.path, auth)
-            on_behalf = request.headers.get(botops_act.HEADER)
+            # The Assistant's citation was checked above; only BotOps borrows a requester's identity here.
+            on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(botops_act.HEADER)
             if (not on_behalf and getattr(request.state, "identity", None) is not None
                     and request.state.identity.actor == "bot:" + BOTOPS
                     and request.url.path.startswith("/api/v2/")
@@ -511,7 +540,11 @@ def create_app(settings=None):
                 back = path + ("?" + request.url.query if request.url.query else "")
                 return RedirectResponse(oidc.LOGIN_PATH + "?" + urlencode({"next": oidc.safe_next(back)}),
                                         status_code=302)
-            return await problem_handler(request, exc)
+            response = await problem_handler(request, exc)
+            if exc.status == 401 and path == mcp_oauth.MCP_PATH:
+                # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
+                response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
+            return response
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
@@ -808,11 +841,14 @@ def create_app(settings=None):
         from .task_review import task_covers
         covers = task_covers(c, ids)
 
+        # From the page's ids, with visibility checked per child: an `IN (SELECT id FROM tasks WHERE ...)`
+        # list made SQLite probe every visible task against the page (1.5 s at 30k tasks).
         parts = {row["parent_id"]: {"total": row["total"] or 0, "done": row["done"] or 0}
                  for row in c.execute(
                      f"SELECT r.to_task parent_id,COUNT(*) total,SUM(t.status IN ('done','closed')) done "
-                     f"FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' "
-                     f"AND r.to_task IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {visible_sql}) "
+                     f"FROM task_relations r INDEXED BY task_relations_to JOIN tasks t ON t.id=r.from_task "
+                     f"WHERE r.to_task IN ({marks}) AND r.kind='parent' "
+                     f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.from_task AND ({visible_sql})) "
                      f"GROUP BY r.to_task", ids)}
         relations = TR.grouped(c, ids, visible_sql)
         roles = TRo.grouped(c, ids)
@@ -832,22 +868,22 @@ def create_app(settings=None):
 
         from .privacy_index import ReadIndex
         provenance = ReadIndex(c, who)
-        c.create_function("task_ask_readable", 4, provenance.message)
         asks, open_counts = {}, {}
+        # Readability is checked here, not by a SQL function: installing one marks the pooled connection
+        # as changed, so it was closed after every task list and the next read paid for a new one.
         for message in c.execute(
-                "SELECT * FROM (SELECT m.*,t.id AS ask_task_id,"
-                "COUNT(*) OVER (PARTITION BY t.id) AS open_count,"
-                "ROW_NUMBER() OVER (PARTITION BY t.id ORDER BY m.rowid DESC) AS ask_rank "
-                "FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
+                "SELECT m.*,t.id AS ask_task_id FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
                 f"JOIN messages m ON m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
                 f"WHERE t.id IN ({marks}) AND m.kind='ask' AND m.deleted_at IS NULL "
-                "AND task_ask_readable(m.id,m.conversation_id,m.refs_json,m.in_reply_to) "
-                f"AND {H.OPEN_ASK_SQL}) "
-                "WHERE ask_rank=1", ids):
+                f"AND {H.OPEN_ASK_SQL} ORDER BY m.rowid DESC", ids).fetchall():
+            if not provenance.message(message["id"], message["conversation_id"], message["refs_json"],
+                                      message["in_reply_to"]):
+                continue
             message = dict(message)
             tid = message.pop("ask_task_id")
-            open_counts[tid] = message.pop("open_count")
-            message.pop("ask_rank")
+            open_counts[tid] = open_counts.get(tid, 0) + 1
+            if tid in asks:
+                continue            # the newest readable open ask is the one shown
             message["refs"] = H._json(message.get("refs_json"), {}) or {}
             message["older"] = H.ask_older(message)
             asks[tid] = message
@@ -1337,6 +1373,7 @@ def create_app(settings=None):
         return response
 
     oidc.register(app, auth)
+    mcp_oauth.register(app, auth, store)
 
     @app.get(LOGOUT_PATH)
     def logout(request: Request):
@@ -1467,6 +1504,7 @@ def create_app(settings=None):
                         "shared": bool(declared.get("shared")),
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
+                        "compact_at": compact_at_of(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
         owner_rows = ([rows.human(owner) for owner in configured] if configured is not None
@@ -2408,7 +2446,9 @@ def create_app(settings=None):
                     "mover": mover(c, request.state.identity),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
-    def task_create(c, who, body, lint=True):
+    def task_create(c, who, body, lint=True, asked=None):
+        """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
+        private they are its requester, so its two parties are the bot and them."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if privacy.private_execution(c, who):
@@ -2417,7 +2457,7 @@ def create_app(settings=None):
             body = body.model_copy(update={"private": True})
         request_id = body.request_id
         if request_id:
-            who = delegated_identity(c, who, request_id)
+            who = delegated_identity(c, who, request_id, new_task=True)
         parents = [r.task for r in body.relations if r.kind == "parent"]
         if len(parents) > 1:
             raise Problem("relations", "A task has one parent", 422)
@@ -2460,7 +2500,14 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
+        if asked and private:
+            if who.role != "bot" or owner != who.actor:
+                raise Problem("identity", "Only a bot's own question names the person asked", 403)
+            if not privacy.question_party(c, who, asked, parent):
+                raise Problem("privacy", f"{H.actor_id(asked)} cannot read this run's private work or the parent task, "
+                              "so a private question cannot go to them", 403)
+            requester_actor = asked
+        elif (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
                 and private):
             origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot=?",
@@ -2501,7 +2548,7 @@ def create_app(settings=None):
                 raise Problem("roles", str(exc), 422)
         note = usage_limits.warning(c, owner)
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
-                **({"warning": note} if note else {})}
+                **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
@@ -2552,11 +2599,13 @@ def create_app(settings=None):
                     H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                     note = ""
                 H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet)
+                warnings = None
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
-                H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None)
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
-            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
+            return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
+                    **({"warnings": warnings} if warnings else {})}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/run-now")
@@ -2894,13 +2943,13 @@ def create_app(settings=None):
                 auth.target(c, who, bot, need="read")
                 from .views import since_time
                 inputs = privacy.status_inputs(c, [bot])[bot]
-                return {"bot": bot, "status": status_line(c, who, bot, default, inputs),
+                return {"bot": bot, "status": status_line(c, who, bot, default, inputs, auth=auth),
                         "history": [privacy.status(c, who, r, **inputs) for r in H.status_history(c, bot, since=since_time(since))]}
             from .views import updating
             readable = auth.bot_accesses(c, who)
             statuses = [s for s in H.status_all(c) if readable.get(s["bot"], auth.FULL)["read"]]
             inputs = privacy.status_inputs(c, [s["bot"] for s in statuses])
-            return {"bots": [status_line(c, who, s["bot"], default, inputs[s["bot"]]) for s in statuses],
+            return {"bots": [status_line(c, who, s["bot"], default, inputs[s["bot"]], auth=auth) for s in statuses],
                     # Tico updating itself, shown beside the status line
                     "updating": updating(c)}
 
@@ -2947,15 +2996,29 @@ def create_app(settings=None):
             return result
         return mutate(request, body, work)
 
-    DELEGATION_DAYS = 7               # the message that started the turn (a queued turn may wait)
-    DELEGATION_CITED_HOURS = 24       # a message cited by id
+    # A person's request lends their rights for as long as the task it created (or that cites it) is open, up to
+    # botops_act.LEND_MAX_DAYS after they last spoke on it, and never again once someone else reopens it. A chat
+    # message with no open task lends them for a week; a new task filed from a message also needs it within the week,
+    # or one open task could renew another for ever.
+    DELEGATION_DAYS = 7
     # Keeper wakes a follow-through run may start from: the daily update, and a task's due, stall or routine notice.
     FOLLOW_THROUGH_WAKES = ("update", "due", "stalled", "occurrence")
 
-    def delegated_identity(c, who, ref):
+    def open_task(task):
+        return bool(task) and task["status"] not in ("done", "closed", "declined")
+
+    def lending_task(c, task):
+        """An open task that still lends its requester's rights (`botops_act.lend_lapsed`)."""
+        return open_task(task) and not botops_act.lend_lapsed(c, task)
+
+    def week_old(created):
+        return created < H.shift(H.now(), days=-DELEGATION_DAYS)
+
+    def delegated_identity(c, who, ref, new_task=False):
         """Resolve the run's requester, never a human named in its text. Human messages and tasks
         carry that human's rights; bot messages and tasks carry only that bot's rights. Fleet work
         with no requester keeps BotOps' own. Explicit message references must belong to this requester.
+        `new_task`: the reference is the request a task is being filed from.
         """
         if who.via == "botops" and who.role == "bot" and not who.attempt_id:
             if ref in ("turn", "default"):
@@ -2998,11 +3061,22 @@ def create_app(settings=None):
                     requester = creator["actor"]
             if task and initial:
                 refs = initial.get("refs") or {}
-                if any(refs.get(key) for key in ("comment", "via", "assistant", "slack", "routing")):
-                    raise Problem("on_behalf_of", "Task comments and routed messages cannot lend requester rights", 403)
+                relayed = any(refs.get(key) for key in ("via", "assistant", "slack", "routing"))
+                if (refs.get("comment") and not relayed and H.is_human(requester) and initial["from_actor"] == requester
+                        and task["owner"] == who.actor and open_task(task)):
+                    # The task's requester commenting on it, in their own words: that is them asking.
+                    auth.conversation(c, who, initial["conversation_id"])
+                    H.VIA.set("botops")
+                    return acting_as(auth.identity_for_actor(c, requester), task_id, "comment")
+                if refs.get("comment") or relayed:
+                    raise Problem("on_behalf_of", "Only the task's requester's own comment lends their rights; "
+                                  "other comments and routed messages lend nothing", 403)
             if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
                 auth.conversation(c, who, initial["conversation_id"])
-                if initial["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
+                lapsed = botops_act.lend_lapsed(c, task) if task and H.is_human(requester) else ""
+                if lapsed:
+                    raise Problem("on_behalf_of", lapsed, 403)
+                if not open_task(task) and week_old(initial["created"]):
                     raise Problem("on_behalf_of", "That request is more than a week old; ask the requester again", 403)
             if str(requester).startswith("bot:") and requester != who.actor:
                 if (H.bot(c, H.actor_id(requester)) or {}).get("state") != "active":
@@ -3057,15 +3131,13 @@ def create_app(settings=None):
             raise Problem("on_behalf_of", "This request arrived through a Slack channel, so BotOps can't act on it for "
                           "the person. They can DM it to the Tico app in Slack or send it in their Tico chat with BotOps",
                           403)
-        if explicit:
-            # A message cited by id: the person's own, in their own room with BotOps (not a room another person
-            # spoke in), and recent.
-            if set(conversation.get("participants") or []) != {msg["from_actor"], "bot:" + BOTOPS}:
-                raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
-            if msg["created"] < H.shift(H.now(), hours=-DELEGATION_CITED_HOURS):
-                raise Problem("on_behalf_of", "That request is more than a day old; ask the person again", 403)
-        elif msg["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
-            raise Problem("on_behalf_of", "That request is more than a week old; ask the person again", 403)
+        if explicit and set(conversation.get("participants") or []) != {msg["from_actor"], "bot:" + BOTOPS}:
+            # A message cited by id: the person's own, in their own room with BotOps (not a room another person spoke in).
+            raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
+        if week_old(msg["created"]) and (new_task or not any(lending_task(c, H.task(c, row["id"])) for row in c.execute(
+                "SELECT id FROM tasks WHERE request_id=? AND requester=?", (message_id, msg["from_actor"])).fetchall())):
+            raise Problem("on_behalf_of", "That request is more than a week old and no open task carries it; "
+                          "ask the person again", 403)
         # Only a request in a conversation this run may read: otherwise any message a bot sends
         # BotOps could borrow the rights of whoever last asked it for something.
         try:
@@ -3088,27 +3160,29 @@ def create_app(settings=None):
     def follow_through(c, who, task):
         """The person whose open request BotOps is following through on, in a later run: a daily-update wake, a retry
         once a busy bot finished, a notice. The run that started it is gone, so BotOps cites the task the person asked
-        for. Only a task BotOps owns, that the person filed themselves (not through the Assistant), still open and at
-        most a week old; and never from a run a bot or another person started, which keeps its own requester's rights."""
+        for. Only a task BotOps owns, that the person filed themselves (not through the Assistant), for as long as it is
+        open; and never from a run a bot or another person started, which keeps its own requester's
+        rights."""
         requester = task["requester"]
         if task["owner"] != who.actor or not H.is_human(requester):
             raise Problem("on_behalf_of", "Cite a task a person asked BotOps for", 403)
         if task["status"] in ("done", "closed", "declined"):
             raise Problem("on_behalf_of", "That task is closed; ask the person again", 403)
+        lapsed = botops_act.lend_lapsed(c, task)
+        if lapsed:
+            raise Problem("on_behalf_of", lapsed, 403)
         made = c.execute("SELECT actor,detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
                          (task["id"],)).fetchone()
         via = H._json(made["detail_json"], {}).get("via") if made else None
         if not made or made["actor"] != requester or via == "assistant":
             raise Problem("on_behalf_of", "That task was not filed by the person who asked for it", 403)
         if via and not task.get("request_id"):
-            # Filed by BotOps as the person: only a continuation of their message (--request-id) counts, dated by that
-            # message, or a follow-through run could file a fresh task as them and so never run out of week.
+            # Filed by BotOps as the person: only a continuation of their message (--request-id) counts, or a
+            # follow-through run could file a fresh task as them and so lend their rights for ever.
             raise Problem("on_behalf_of", "BotOps filed that task without the person's message; ask the person again", 403)
         origin = H.message(c, task["request_id"]) if task.get("request_id") else None
         if task.get("request_id") and (not origin or origin["from_actor"] != requester):
             raise Problem("on_behalf_of", "That task's request is not the person's own", 403)
-        if (origin or task)["created"] < H.shift(H.now(), days=-DELEGATION_DAYS):
-            raise Problem("on_behalf_of", "That request is more than a week old; ask the person again", 403)
         current = delegated_identity(c, who, "turn")
         if current.actor not in (who.actor, requester):
             raise Problem("on_behalf_of", "This run is for " + current.actor + "; it keeps that requester's rights", 403)
@@ -3162,6 +3236,21 @@ def create_app(settings=None):
                 raise Problem("secret_in_request", botops_act.DETAIL_SECRET, 422)
             # The ordinary route checks the requester's rights, including its own outbound send switch.
             return None, acting
+
+    def botops_run_identity(c, attempt_id):
+        """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
+        it acts for, BotOps' own, or None when its start lends nobody's (someone else's comment)."""
+        import contextvars
+        row = c.execute("SELECT runner_id FROM attempts WHERE id=? AND bot=?", (attempt_id, BOTOPS)).fetchone()
+        if not row:
+            return None
+        own = Identity("bot:" + BOTOPS, "bot", runner_id=row["runner_id"], attempt_id=attempt_id)
+        try:
+            # Its own context: resolving the run here records nothing as delegated.
+            return contextvars.copy_context().run(delegated_identity, c, own, "turn")
+        except Problem:
+            return None
+    app.state.botops_run_identity = botops_run_identity
 
     def propose_card(c, acting, method, path, body, summary):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
@@ -3615,25 +3704,165 @@ def create_app(settings=None):
         who = request.state.identity
         return mutate(request, body, lambda c: place_now(c, who, bot, body.computer))
 
+    GO_LIVE_PENDING = pending_go_lives.PREFIX
+
+    def check_routines(c, who, bot, expected):
+        """The live Routines match the schedule the caller asked to go live with (`--routines-file`)."""
+        settings_admin._manager(c, who, bot)
+        live = {r["id"]: r for r in routines.listing(c, bot)}
+        requested = {r.id for r in expected}
+        for want in expected:
+            row = live.get(want.id)
+            if not row or any((row.get(key) if key == "enabled" else row.get(key) or "") != value for key, value in (
+                    ("title", want.title), ("cron", want.cron), ("timezone", want.timezone),
+                    ("enabled", int(want.enabled)), ("event_name", want.on))):
+                raise Problem("routine_mismatch", f"The live Routine {want.id} does not match the requested schedule; "
+                              "verify it before activating", 409)
+        if any(r["enabled"] and rid not in requested for rid, r in live.items()):
+            raise Problem("routine_mismatch", "An unrelated Routine is enabled; disable it before activating", 409)
+
+    def finish_go_live(c, who, bot, setup, expected):
+        """What going live does once the bot's computer has its repository: active, its setup started with the
+        person, and its first routine on (or the requested schedule checked). Shared by the request itself and by
+        the readiness report that completes a go-live that was waiting for the repository."""
+        if expected is not None:
+            check_routines(c, who, bot, expected)
+        row = H.bot(c, bot)
+        if row["state"] == "quarantined":
+            raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
+        activated = row["state"] != "active"
+        if activated:
+            settings_admin.update_bot(c, who, bot, M.BotDefinitionUpdate(
+                status="active", expected_revision=settings_admin._config(c, bot)["revision"]))
+        started = False
+        config = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
+            send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
+            started = True
+        # Going live turns its first routine on too: nobody approves it separately.
+        armed = onboarding.arm_first_routine(c, who, bot) if expected is None else None
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
+        return {"activated": activated, "setup_started": started, "routine_armed": armed}
+
+    def wait_for_repository(c, who, bot, placed, body, github_asked=True):
+        """Keep the placement and remember the go-live: the computer is told about the bot on its next heartbeat,
+        clones the repository, and the readiness report that says it has it finishes the go-live
+        (`finish_pending_go_live`). It expires after backend/go_live.py EXPIRY_DAYS."""
+        computer = placed.get("computer") or "its computer"
+        runner = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                  (GO_LIVE_PENDING + bot, encode({
+                      "bot": bot, "runner_id": runner["runner_id"] if runner else "", "computer": computer,
+                      "actor": who.actor, "role": who.role, "email": who.email, "via": who.via,
+                      "setup": body.setup,
+                      "routines": None if body.routines is None else [r.model_dump() for r in body.routines],
+                      "requested_at": H.now()})))
+        H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
+        message = (f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
+                   f"when {computer} has it; nothing needs to run again")
+        if not github_asked:
+            message += ". GitHub could not be asked; if the repository doesn't exist, this won't finish"
+        return {"bot": bot, "state": "waiting_for_repository", "bot_state": H.bot(c, bot)["state"],
+                "computer": computer, "placed": placed.get("placed", False), "activated": False, "setup_started": False,
+                "github_checked": github_asked,
+                "message": message}
+
+    def finish_pending_go_live(c, runner_id, readiness):
+        """A computer's readiness report completes the go-lives waiting for it to get a bot's repository. Each one
+        finishes once: the record is removed when it completes, so later reports do nothing. One past its deadline
+        is expired; one that can no longer finish is marked failed. Either way the person is told once, and nothing
+        here fails the heartbeat."""
+        from datetime import datetime, timezone
+        from .auth import validate_identity
+        reports = readiness.get("bots") or {}
+        now = datetime.now(timezone.utc)
+        for key, bot, pending in pending_go_lives.rows(c):
+            if pending.get("failed"):
+                continue
+            c.execute("SAVEPOINT go_live_finish")
+            try:
+                if pending_go_lives.expired(pending, now):
+                    pending_go_lives.fail(c, key, bot, pending, "expired", pending_go_lives.expire_notice(bot, pending))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                report = reports.get(bot)
+                if (not isinstance(report, dict) or report.get("repository_present") is not True
+                        or not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?",
+                                         (bot, runner_id)).fetchone()):
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                row = H.bot(c, bot)
+                if not row or row["state"] == "archived":
+                    c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
+                    c.execute("RELEASE go_live_finish")
+                    continue
+                role = pending.get("role") or "human"
+                if role == "owner" and H.actor_id(pending.get("actor") or "") != auth.owner_id(c):
+                    role = "human"
+                who = Identity(pending.get("actor") or "", role, pending.get("email") or "", via=pending.get("via") or "")
+                expected = (None if pending.get("routines") is None
+                            else [M.RoutineExpectation(**r) for r in pending["routines"]])
+                validate_identity(c, who)
+                done = finish_go_live(c, who, bot, bool(pending.get("setup", True)), expected)
+                H.event(c, who.actor, "bot.go_live_finished", bot, {"computer": pending.get("computer") or "", **done})
+                c.execute("RELEASE go_live_finish")
+            except Exception as exc:
+                c.execute("ROLLBACK TO go_live_finish")
+                c.execute("RELEASE go_live_finish")
+                where = pending.get("computer") or "its computer"
+                if isinstance(exc, Problem):
+                    code, notice = exc.code, f"{bot} has its repository on {where}, but going live could not finish: {str(exc.detail).rstrip('.')}."
+                else:
+                    # A fault in Tico, not something the person did: its text stays in the log.
+                    logging.getLogger("tico.go_live").exception("Finishing the go-live of %s failed", bot)
+                    telemetry.capture("go_live_finish", exc, 500)
+                    code, notice = "finish_error", f"Going live for {bot} could not finish because of an error in Tico."
+                c.execute("SAVEPOINT go_live_fail")
+                try:
+                    pending_go_lives.fail(c, key, bot, pending, code, notice)
+                    c.execute("RELEASE go_live_fail")
+                except Exception:
+                    c.execute("ROLLBACK TO go_live_fail")
+                    c.execute("RELEASE go_live_fail")
+                    logging.getLogger("tico.go_live").exception("Recording the failed go-live of %s failed", bot)
+
+    execution.readiness_reported = finish_pending_go_live
+
+    def waiting_for_permission(bot, wait):
+        """The refusal for a bot whose repository could not be created because the GitHub App may not create
+        repositories (backend/repo_waits.py): it points at the owner's Needs-you task with the two fixes, not at
+        `hub bot repo-create`, which would only hit the same missing permission. No placement is kept."""
+        task_id = str(wait.get("task_id") or "")
+        url = f"{settings.public_url}/#/task/{task_id}" if task_id and settings.public_url else ""
+        where = (f"the owner has a Needs you task with the two fixes ({task_id}{', ' + url if url else ''})" if task_id
+                 else "the owner is asked in Needs you to create it or let BotOps create repositories")
+        return Problem("repository_waiting_for_permission",
+                       f"{bot} is waiting for its GitHub repository" + (f" {wait['repository']}" if wait.get("repository") else "") + f": {where}. "
+                       f"Once either fix is in, Tico creates or finds it; then run `hub bot go-live {bot}` again", 409,
+                       extra={"task_id": task_id, **({"task_url": url} if url else {})})
+
+    def repository_on_github(bot):
+        """Before the write (GitHub is never called while holding it): whether GitHub has the bot's repository, for a
+        bot whose computer has not reported it yet. ("unknown", None) when there is nothing to ask."""
+        with store.read() as c:
+            if not H.bot(c, bot) or agents.external_harness(c, bot) or repository_present(c, bot):
+                return "unknown", None
+            repository = bot_repository(c, settings, bot)
+        service = getattr(app.state, "github_app", None)
+        return service.repository_state(repository) if service and repository else ("unknown", None)
+
     @app.post("/api/v2/bots/{bot}/go-live")
     def go_live(request: Request, bot: str, body: M.BotGoLive):
         """Everything between "built" and "working": a computer, active, and its setup started with the person.
-        Each step is the same one the app's own buttons take, checked with the caller's rights."""
+        Each step is the same one the app's own buttons take, checked with the caller's rights. A bot whose
+        computer does not have its repository yet keeps its placement and finishes when the computer reports it
+        (202, state `waiting_for_repository`)."""
         who = request.state.identity
+        github, missing = repository_on_github(bot)
 
         def work(c):
             if body.routines is not None:
-                settings_admin._manager(c, who, bot)
-                live = {r["id"]: r for r in routines.listing(c, bot)}
-                requested = {r.id for r in body.routines}
-                for expected in body.routines:
-                    row = live.get(expected.id)
-                    if not row or any((row.get(key) if key == "enabled" else row.get(key) or "") != value for key, value in (
-                            ("title", expected.title), ("cron", expected.cron), ("timezone", expected.timezone),
-                            ("enabled", int(expected.enabled)), ("event_name", expected.on))):
-                        raise Problem("routine_mismatch", "The live Routine does not match the requested schedule; verify it before activating", 409)
-                if any(r["enabled"] and rid not in requested for rid, r in live.items()):
-                    raise Problem("routine_mismatch", "An unrelated Routine is enabled; disable it before activating", 409)
+                check_routines(c, who, bot, body.routines)
             # An external agent (a Hermes profile) has a credential, not a computer.
             placed = ({"computer": None, "placed": False} if agents.external_harness(c, bot)
                       else place_now(c, who, bot, body.computer))
@@ -3648,6 +3877,10 @@ def create_app(settings=None):
                     declared = onboarding._declared(c, bot)
                     if settings_admin.computer_builds_repository(c, bot):
                         building = True
+                    elif github == "present":
+                        return wait_for_repository(c, who, bot, placed, body)
+                    elif (permission_wait := repo_waits.waits(c).get(bot)):
+                        raise waiting_for_permission(bot, permission_wait)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
                             raise Problem("repository_missing", "Its repository is not built yet. Add BotOps to build it", 409)
@@ -3655,24 +3888,24 @@ def create_app(settings=None):
                                                            declared.get("instructions") or "", queue_build=True)
                         return {"bot": bot, "state": row["state"], **placed, **build, "building": True,
                                 "setup_started": False, "note": "BotOps is building its repository; watch setup_task_id"}
+                    elif missing is not None:
+                        raise Problem("repository_missing", missing.detail.rstrip(".")
+                                      + f". Then run `hub bot go-live {bot}` again", 409)
+                    elif bot_repository(c, settings, bot):
+                        # GitHub could not be asked: the computer tries the clone and says why if it cannot.
+                        return wait_for_repository(c, who, bot, placed, body, github_asked=False)
                     else:
-                        raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
-            activated = row["state"] != "active"
-            if activated:
-                settings_admin.update_bot(c, who, bot, M.BotDefinitionUpdate(
-                    status="active", expected_revision=settings_admin._config(c, bot)["revision"]))
-            setup = False
-            config = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
-            if body.setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
-                send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
-                setup = True
-            # Going live turns its first routine on too: nobody approves it separately.
-            armed = onboarding.arm_first_routine(c, who, bot) if body.routines is None else None
+                        raise Problem("repository_missing", "It has no repository yet. Ask BotOps to build it "
+                                      f"(`hub bot repo-create {bot}`), then run `hub bot go-live {bot}` again", 409)
+            done = finish_go_live(c, who, bot, body.setup, body.routines)
             return {"bot": bot, "state": H.bot(c, bot)["state"], "computer": placed["computer"], "placed": placed["placed"],
-                    "activated": activated, "setup_started": setup, "routine_armed": armed,
+                    **done,
                     **({"building": True, "note": "The computer is building its repository; queued work starts when it is ready"}
                        if building else {})}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        if isinstance(result, dict) and result.get("state") == "waiting_for_repository":
+            return JSONResponse(result, status_code=202)
+        return result
 
     @app.post("/api/v2/runners/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
@@ -3719,15 +3952,24 @@ def create_app(settings=None):
             return agents.revoke_credential(c, who, bot)
         return mutate(request, body, work)
 
-    # A person's Grok Bots, synced in by a routine on their own Grok account with their own
-    # token: created under them on the chart, transcripts copied, instructions kept.
-    @app.post("/api/v2/grokbot/sync")
-    def grokbot_sync(request: Request, body: grokbot.GrokSync):
-        # Images are fetched before the write, never while holding it.
-        grokbot.allowed(auth, request.state.identity)
-        images = grokbot.prefetch_images(store, app.state.blobs, body, person=H.actor_id(request.state.identity.actor))
-        return mutate(request, body, lambda c: grokbot.sync(c, auth, settings_admin,
-                                                            request.state.identity, body, images))
+    # A person's bots on another platform (Grok Bot, Dots), synced in by the agent itself with the
+    # person's own sign-in: created under them on the chart, transcripts copied, instructions kept.
+    def external_sync_run(request, body):
+        # Images are fetched before the write, never while holding it, and only for a sync that would be accepted.
+        with store.read() as c:
+            external_sync.precheck(c, settings_admin, request.state.identity, body)
+        images = external_sync.prefetch_images(store, app.state.blobs, body,
+                                               person=H.actor_id(request.state.identity.actor))
+        return mutate(request, body, lambda c: external_sync.sync(c, auth, settings_admin,
+                                                                  request.state.identity, body, images))
+
+    @app.post("/api/v2/external/sync")
+    def external_agent_sync(request: Request, body: external_sync.ExternalSync):
+        return external_sync_run(request, body)
+
+    @app.post("/api/v2/grokbot/sync")          # older Grok routines
+    def grokbot_sync(request: Request, body: external_sync.ExternalSync):
+        return external_sync_run(request, body.model_copy(update={"provider": "grokbot"}))
 
     @app.post("/api/v2/agents/heartbeat")
     def agent_heartbeat(request: Request, body: M.AgentHeartbeat):
@@ -3974,6 +4216,11 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: settings_admin.set_fallback(
             c, request.state.identity, bot, body))
 
+    @app.post("/api/v2/bots/{bot}/compact-at")
+    def bot_compact_at(request: Request, bot: str, body: M.BotCompactAt):
+        return mutate(request, body, lambda c: settings_admin.set_compact_at(
+            c, request.state.identity, bot, body))
+
     @app.post("/api/v2/bots/{bot}/transitions")
     def begin_transition(request: Request, bot: str, body: M.BotTransitionCreate):
         def work(c):
@@ -4007,6 +4254,18 @@ def create_app(settings=None):
     @app.post("/api/v2/settings/history/{change_id}/undo")
     def undo_setting(request: Request, change_id: str, body: M.SettingsUndo):
         return mutate(request, body, lambda c: settings_admin.undo(c, request.state.identity, change_id, body))
+
+    @app.post("/api/v2/bots/{bot}/limit/retry")
+    def limit_retry(request: Request, bot: str, body: M.LimitRetry):
+        """Try now: a person who renewed a plan need not wait out the usage-limit cooldown."""
+        who = request.state.identity
+        def work(c):
+            if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
+                raise Problem("forbidden", "Only a person who manages this bot can retry it now", 403)
+            if (H.status(c, bot) or {}).get("state") != "limited":
+                raise Problem("not_limited", "This bot is not waiting on a usage limit", 409)
+            return {"cleared": clear_limits(c, settings, who.actor, bot)}
+        return mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/stop")
     def stop_turn(request: Request, bot: str, body: M.StopTurn):
@@ -4200,6 +4459,8 @@ def create_app(settings=None):
     install_librarian(app, store, auth, mutate, onboarding)
     from .goal_routes import install as install_goal_routes
     install_goal_routes(app, store, auth, mutate, settings)
+    from .replay import install as install_replay
+    install_replay(app, store, auth)
     from .usage import install as install_usage
     install_usage(app, store, auth, mutate, settings)
     from .bot_tools import install as install_bot_tools
@@ -4213,6 +4474,8 @@ def create_app(settings=None):
         except Problem:
             return who
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
+    from .mail_settings import install as install_mail_settings
+    install_mail_settings(app, store, auth, mutate)
     from .shared_bots import install as install_branches
     install_branches(app, store, auth, mutate, settings_admin, execution)
     from .assignment_branches import install as install_assignment_branches

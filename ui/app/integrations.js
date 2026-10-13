@@ -61,7 +61,7 @@ function intCredPaint() {
           <div class="muted">${item.stored ? 'Stored encrypted' : 'Not connected'}${item.source ? ` · ${esc(item.source)}` : ''}</div></td>
         <td>${esc(item.username || '')}${item.preview ? `<div class="mono">${esc(item.preview)}</div>` : ''}</td>
         <td>${item.grants.length ? item.grants.map(grant => esc(vaultSubject(grant.subject))).join(', ') : '<span class="muted">Owners only</span>'}</td>
-        <td><div class="row">${item.stored ? `<button class="ghost" data-vault-reveal="${esc(item.id)}" type="button">Reveal / copy</button>` : ''}
+        <td><div class="row">${item.stored && item.can_reveal ? `<button class="ghost" data-vault-reveal="${esc(item.id)}" type="button">Reveal / copy</button>` : ''}
           ${VAULT.can_manage ? `<button class="ghost" data-vault-edit="${esc(item.id)}" type="button">Edit</button>` : ''}
           <button class="ghost" data-vault-share="${esc(item.id)}" type="button">${VAULT.can_manage ? 'Manage access' : 'Use with my bots'}</button></div></td></tr>`).join('')}</tbody></table></div>`
     : `<p class="empty">Nothing stored in Tico for this tool.</p>`;

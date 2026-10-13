@@ -12,7 +12,7 @@ necessary assumption or ask for the missing preference.
 
 ## Sending
 
-Off by default. While `outbound_send` is false, replies and forwards to outsiders stay drafts.
+Off by default. While mail sending is off in Tico (bot.yaml only asks), replies and forwards to outsiders stay drafts.
 When the owner asks BotOps to turn sending on, BotOps sets `outbound_send: true` and records
 `forward_to:` and the mailbox rules in `bot.yaml` and here. With sending on, send within the
 requested work and those rules using your Tools; no approval is required for each message.

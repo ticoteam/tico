@@ -32,8 +32,9 @@ START_HOUR = 5              # the day's queue is built from 05:00 Pacific
 RUN_LIMIT_S = 75 * 60       # a request whose run has not ended in this long is given up on
 PICKUP_LIMIT_S = 20 * 60    # ...and one no computer picked up in this long: move on (it may still post later)
 KINDS = ("daily", "weekly")
-# A linter rejects any update that runs long and sends the bot feedback. The feed is skimmed; a wall of text is refused with how to
-# write it, and the bot posts again. A writing correction, so it never counts toward quarantine.
+# A linter checks the shape of every update. The feed is skimmed, so a wall of text comes back with how to write it, as a
+# warning on the accepted post (refused only when TICO_STYLE_LINT=refuse): rewriting cost bots whole runs. An empty update
+# or a week in review without its slides is still refused. A writing correction never counts toward quarantine.
 # Updates have no title and no sections, just 1-5 bullets, never task ids, only plain English;
 # the word limits are 10% under the old 100 words.
 BULLETS_MAX = 5
@@ -352,17 +353,29 @@ def lint_slides(slides):
     """What is wrong with a week's slides, or None."""
     if not isinstance(slides, dict):
         return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with hub_update_create."
-    problems = []
+    missing, style = slide_problems(slides)
+    return _slides_message(missing + style)
+
+
+def _slides_message(problems):
+    if not problems:
+        return None
+    return "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with hub_update_create."
+
+
+def slide_problems(slides):
+    """(a slide that is missing, so the week is refused; the writing problems, which are warned about)."""
+    missing, problems = [], []
     goal = str(slides.get("goal") or "").strip()
     if not goal:
-        problems.append("the goal slide is empty")
+        missing.append("the goal slide is empty")
     elif _words(goal) > GOAL_WORDS or "\n" in goal:
         problems.append(f"the goal is one sentence of at most {GOAL_WORDS} words (it is {_words(goal)})")
     names = {"done": "done", "focus": "focus", "blockers": "blockers"}
     for key, (low, high, words) in SLIDES.items():
         items = slides.get(key) or []
         if len(items) < low:
-            problems.append(f"{names[key]} needs at least {low} bullet")
+            missing.append(f"{names[key]} needs at least {low} bullet")
         if len(items) > high:
             problems.append(f"{names[key]} has {len(items)} bullets (at most {high})")
         long = [_words(b) for b in items if _words(b) > words]
@@ -376,9 +389,7 @@ def lint_slides(slides):
     ids = TASK_ID.findall(MD_LINK.sub(r"\1", text))
     if ids:
         problems.append("it has a task id or internal code (" + ", ".join(sorted(set(ids))[:3]) + "); say it in plain English")
-    if not problems:
-        return None
-    return "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with hub_update_create."
+    return missing, problems
 
 
 def clean_slides(raw):
@@ -475,17 +486,18 @@ def post(c, bot, body, kind=None, day=None, slides=None):
         if not slides:
             raise H.Refused("lint", lint_slides(None), "normal")
         slides = clean_slides(slides)
-        problem = lint_slides(slides)
-        if problem:
-            raise H.Refused("lint", problem, "normal")
+        missing, style = slide_problems(slides)
+        if missing:
+            raise H.Refused("lint", _slides_message(missing + style), "normal")
+        problem = _style(_slides_message(style))
         stored = json.dumps({**slides, "tracked": kpi_snapshot(c, bot)})
         body = slides_body(slides)
         headline = slides["goal"][:200]
     else:
         body = "\n".join(line.rstrip() for line in str(body or "").strip().splitlines() if line.strip())
-        problem = lint(body, kind)
-        if problem:
-            raise H.Refused("lint", problem, "normal")
+        if not body:
+            raise H.Refused("lint", lint(body, kind), "normal")
+        problem = _style(lint(body, kind))
         first = body.splitlines()[0]
         headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
@@ -508,8 +520,19 @@ def post(c, bot, body, kind=None, day=None, slides=None):
         if not has_newer:
             c.execute("DELETE FROM update_archive_overrides WHERE state='restored' AND update_id IN "
                       "(SELECT id FROM updates WHERE bot=? AND kind=? AND day<?)", (bot, kind, day))
-    H.event(c, H.bot_actor(bot), "update.post", uid, {"kind": kind, "day": day})
-    return one(c, uid)
+    H.event(c, H.bot_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
+    posted = one(c, uid)
+    return {**posted, "warning": problem} if problem else posted
+
+
+def _style(problem):
+    """An update's writing problem as the warning its accepted post carries; refused when TICO_STYLE_LINT=refuse."""
+    if not problem or H.STYLE_LINT == "off":
+        return None
+    if H.STYLE_LINT == "refuse":
+        raise H.Refused("lint", problem, "normal")
+    problem = re.sub(r"^Not (?:an update|a week in review) yet: ", "Posted. Next time fix this: ", problem)
+    return re.sub(r" (?:Rewrite it and post|Post) again with hub_update_create\.$", "", problem)
 
 
 def purge_rejected(c):
@@ -518,7 +541,8 @@ def purge_rejected(c):
     starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue."""
     removed = []
     # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
-    for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall():
+    # Only when the shape is refused: a post accepted with a warning stays.
+    for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
         if not lint(row["body"], row["kind"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))

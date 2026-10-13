@@ -71,7 +71,8 @@ $HUB_DIR/scripts/mail.sh attachments 18f2... --format json           # reference
 $HUB_DIR/scripts/mail.sh attachment 18f2... a1 --out /private/dir/file.pdf
 $HUB_DIR/scripts/mail.sh label add 18f2... hub/needs-owner           # label remove, archive, mark-read, star, triaged
 $HUB_DIR/scripts/mail.sh draft --to person@example.org --subject "..." --body-file out/draft.txt --issue 128
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128
+$HUB_DIR/scripts/mail.sh draft --reply-to 18f2... --body-file out/reply.txt --issue 128 --attach out/letter.pdf   # opt-in by policy; a file in the bot's folder; sending needs --approval-issue
+$HUB_DIR/scripts/mail.sh discard r-882... --issue 128                # only an unsent draft you made
 $HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131]
 $HUB_DIR/scripts/mail.sh reply --thread 18f2... --body-file out/reply.txt --issue 128   # draft, then send if allowed
 $HUB_DIR/scripts/mail.sh lint --body-file out/draft.txt --subject "..." [--to addr]
@@ -107,7 +108,7 @@ policy refused you. Add `--json` for structured output.
   `bot.yaml`), lint, a second model (a different vendor), execution, audit. A gate that
   says no leaves a draft in Gmail with the reason. Read the reason; do not retry the same text
   or look for another route.
-- A send to anyone outside `@example.com` needs `outbound_send: true` and one of: a standing
+- A send to anyone outside `@example.com` needs the bot's mail switch turned on in Tico by a person (bot.yaml's `outbound_send` only asks) and one of: a standing
   allowance in `registry/mail-policy.yaml` that lists the recipient, or a per-message approval
   (`--approval-issue`: a matching GitHub Issue, a decided Tico send approval, or the owner's
   Tico message telling you to send). With the flag false every send is a draft unless that

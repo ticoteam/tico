@@ -2,7 +2,7 @@
 
 Triggered by a task that names a deal and asks for a proposal, a quote, an RFP response or a security
 questionnaire. Budget 60 minutes for a proposal, 90 for fifty questions. The outcome is a finished document
-with a gap list on top. Prices, terms and undocumented answers are gaps with an owner; messages to outsiders stay drafts until `outbound_send` is on.
+with a gap list on top. Prices, terms and undocumented answers are gaps with an owner; messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -36,5 +36,5 @@ gap list at the top: the gap, the human, the day it is needed by.
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms; send the requested final file to the recipient with your Tools when `outbound_send` is on, otherwise keep the draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
+Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms; send the requested final file to the recipient with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
 `hub task update <id> --status done --note`: counts reused, adapted, new; open gaps and owners.

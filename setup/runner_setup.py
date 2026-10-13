@@ -38,9 +38,10 @@ def join_lines(tag: str, env_file: str, rejoin: bool = False) -> list[str]:
     replace = f"docker rm -f {c} >/dev/null 2>&1 || true; rm -f {contract.RUNNER_DIR}/.env; " if rejoin else ""
     return [
         f"if {'false' if rejoin else f'docker ps -a --format {chr(39)}{{{{.Names}}}}{chr(39)} | grep -qx {c}'}; then echo 'runner already joined; leaving it'; else",
-        f"  {replace}set -a; . {env_file}; set +a",
-        f"  curl -fsSL {shlex.quote(installer_url(tag))} | sh -s -- --runner --dir {contract.RUNNER_DIR} "
-        '--url "$TICO_JOIN_URL" --code "$TICO_JOIN_CODE" --label "$TICO_JOIN_LABEL"',
+        # The code leaves the disk once it is in the environment, so a failed install does not leave it behind.
+        f"  {replace}set -a; . {env_file}; set +a; rm -f {env_file}",
+        "  " + remote.fetch_and_run(installer_url(tag), f"--runner --dir {contract.RUNNER_DIR} "
+                                    '--url "$TICO_JOIN_URL" --code "$TICO_JOIN_CODE" --label "$TICO_JOIN_LABEL"'),
         "fi",
         f"rm -f {env_file}",
     ]

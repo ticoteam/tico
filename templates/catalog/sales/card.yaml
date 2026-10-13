@@ -8,7 +8,7 @@ pack: sales
 icon: handshake
 suggest: default
 tags: [b2b, pipeline, proposals, rfp, closing, saas, services, enterprise]
-summary: "Works every open deal from first meeting to signature: call follow-ups with a dated next step, mutual action plans, proposals and RFP answers. Messages to outsiders stay drafts until `outbound_send` is on."
+summary: "Works every open deal from first meeting to signature: call follow-ups with a dated next step, mutual action plans, proposals and RFP answers. Messages to outsiders stay drafts until a person turns mail sending on in Tico."
 when: "A team whose sellers lose deals between meetings: follow-ups go late, proposals are written from scratch and nobody writes down the buyer's next step."
 pains:
   - "follow-ups fall through the cracks"
@@ -18,7 +18,7 @@ pains:
   - "nobody knows the buyer's next step or who signs"
 owns:
   - "The open deals it is given, each with a deal note: the buyer's problem in their words, who decides, who signs, the next step and its date (knowledge/deals/)"
-  - "The follow-up after every sales call: a recap with the agreed next step, ready to send when `outbound_send` is on"
+  - "The follow-up after every sales call: a recap with the agreed next step, ready to send when a person has turned mail sending on in Tico"
   - "A mutual action plan per deal past discovery: each step to signature with a named owner on both sides and a date"
   - "Proposals and RFP or questionnaire answers, built from the documented answer library, with every price drawn from the stated terms"
   - "The weekly deal review: which deals moved, which are quiet, and the next action on each"

@@ -1,4 +1,4 @@
-/* ui/app/core.js — State-free basics: route constants, $, esc, md, s3url
+/* ui/app/core.js — State-free basics: route constants, $, esc, md
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -13,6 +13,7 @@ const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
+const DECIDE = '#/decide';            // what is on my plate, one card at a time (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)
 const BOARD = '#/board';              // the old links still work, each opening its view
@@ -42,8 +43,6 @@ const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([typ
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
 const md = s => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs
-const s3url = key => `${API}/s3?key=${encodeURIComponent(String(key || '').replace(/^s3:\/\/[^/]+\//, ''))}`;
-const mdS3 = md;   // safeMd already routes s3:// images through the hub
 async function copyText(value) {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
   const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0';

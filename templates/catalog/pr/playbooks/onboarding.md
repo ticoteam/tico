@@ -17,7 +17,7 @@ planned. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (the media list, the coverage log, releases and pitches prepared), that requested pitches use your Tools when `outbound_send` is on, and that you never invent a promise.
+What you do (the media list, the coverage log, releases and pitches prepared), that requested pitches use your Tools when a person has turned mail sending on in Tico, and that you never invent a promise.
 
 ## 3. Ask, in one message
 

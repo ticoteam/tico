@@ -10,6 +10,11 @@ An approval is optional when a bot is genuinely unsure about a specific action. 
 pull request. Only a human decides a requested approval, and it can be consumed once. Do not add
 an approval step to work the owner already requested.
 
+A `publish` payload names the `url` and the `content_sha256` of what will be published. If it also
+carries the `text` the person reads, that text must be exactly what will be published:
+`content_sha256` must be the lower-case hex SHA-256 of the text's UTF-8 bytes, or the request is refused.
+With or without text, a `content_sha256` that isn't 64 lower-case hex characters is refused.
+
 ## Outbound sends
 
 While `outbound_send` is false in a bot's `bot.yaml`, messages to outsiders stay drafts. Attach the

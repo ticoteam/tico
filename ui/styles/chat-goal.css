@@ -33,7 +33,7 @@
 .chat-goal-line .chat-time{flex:none;margin-left:auto}
 .chat-goal-line.stopped .cg-icon{color:var(--muted)}
 
-/* The composer's target: filled while a goal is pinned. */
+/* The composer's target: filled in goal mode, gone while a goal is pinned. */
 .p-goal[hidden]{display:none}
 .p-goal{width:34px;padding:0;justify-content:center}
 .p-goal .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}

@@ -47,7 +47,7 @@ stop. Keep it as internal work and say so. Do not ask a human to rewrite it for 
 ## 5. Hand it over
 
 Commit, then `hub task update <id> --status done --note`: what the piece says in one line, the path
-to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule requested content at the named destination with your Tools when `outbound_send` is on; otherwise keep the draft.
+to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule requested content at the named destination with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
 
 ## 6. Keep the plan honest
 

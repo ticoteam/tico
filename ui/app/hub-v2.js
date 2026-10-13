@@ -9,7 +9,7 @@
 // and every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
 const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
                  waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
-                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Quarantined'};
+                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
 // A bot the server has registered but not switched on yet. People read "Setting up"; the API value stays `planned`.
 const statusWord = status => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
@@ -90,18 +90,40 @@ async function v2Refresh() {
 // work continues. Redrawn from the 30 s refresh, never its own poll.
 const PAUSED_WHY = {limited: 'usage limit'};
 const clockTime = at => new Date(at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+// Why a quarantined bot is paused, in plain words. An escape says what the safety check matched in the
+// bot's own words, never that something was read or edited: the check reads only the text it refused.
+function quarantineWhy(slug) {
+  const q = v2StatusOf(slug)?.quarantine || {}, r = q.review || {};
+  if (q.auto) return `It hit repeated refused actions and resumes by itself ${q.resumes_at ? `at ${clockTime(q.resumes_at)}` : 'within an hour'}.`;
+  const found = r.found === 'secrets/' ? 'a secrets/ path' : r.found ? `another bot's folder (${r.found})` : "a secrets path or another bot's folder";
+  const what = r.what ? `${/^[aeiou]/i.test(r.what) ? 'an' : 'a'} ${r.what}` : 'repeated writes';
+  return `The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
+}
+const QUARANTINE_RESUME_NOTE = 'Resume releases this pause; the checks stay on.';
+async function quarantineResume(slug) {
+  await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
+  await v2Refresh();
+  toast(`${empName(slug)} resumed`);
+}
+// Try now: a person who renewed the plan clears the usage-limit cooldown for this bot and the others
+// limited on the same runtime and computer (backend/execution.py `clear_limits`).
+async function limitRetry(slug) {
+  await post(`/v2/bots/${encodeURIComponent(slug)}/limit/retry`, {});
+  await v2Refresh();
+  toast(`${empName(slug)} will try again now`);
+}
+const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(S.emps.find(x => x.name === slug))
+  ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
 function pausedNotice(slug) {
   const s = v2StatusOf(slug) || {};
   const when = since => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
     const q = s.quarantine || {}, e = S.emps.find(x => x.name === slug);
-    const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume now</button>' : '';
-    const at = q.since || s.since, paused = at ? ` paused at ${clockTime(at)}` : ' is paused';
-    const why = q.auto
-      ? `after repeated refused actions; it resumes by itself${q.resumes_at ? ` at ${clockTime(q.resumes_at)}` : ' within an hour'}`
-      : 'for review; a person who manages it must check and resume it';
-    return `${empName(slug)}${esc(paused)} ${esc(why)}. Your messages are saved and run when it's back.${resume}`;
+    const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
+    const at = q.since || s.since, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
+    const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
+    return `${empName(slug)}${esc(paused)}. ${esc(quarantineWhy(slug) + who)} Your messages are saved and run when it's back.${resume}`;
   }
   let why = PAUSED_WHY[s.state], since = s.since;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
@@ -112,7 +134,7 @@ function pausedNotice(slug) {
     if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }
   }
   if (!why) return '';
-  return `${empName(slug)} is paused${esc(when(since))} — ${esc(why)}; your messages are saved and will run when it's back`;
+  return `${empName(slug)} is paused${esc(when(since))} — ${esc(why)}; your messages will run when it's back${limitRetryButton(slug)}`;
 }
 // A bot run by an external agent (a Hermes profile) is never dispatched to: the line says the
 // message waits for it, and whether the agent has been reporting in.
@@ -121,9 +143,9 @@ function pausedNotice(slug) {
 function agentNotice(slug) {
   const e = S.emps.find(x => x.name === slug); if (!e?.agent) return '';
   const a = e.agent, name = agentKind(a);
-  // A Grok Bot is synced in by its person's own Grok routine (docs/grok-bot-sync.md): its
-  // history is copied here, but nothing written here reaches it yet.
-  if (a.synced) return `${empName(slug)} is a Grok Bot synced from Grok${a.last_seen ? ` · last synced ${ago(a.last_seen)}` : ''} — its Grok history is copied here; messages sent here are stored in Tico and are not relayed back to Grok`;
+  // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
+  // here, and what its person writes here goes to it with the next sync.
+  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen ? ` · last synced ${ago(a.last_seen)}` : ''} — your messages reach it at the next sync`;
   const issue = (S.status?.health_issues || []).find(i => i.kind === 'agent' && i.bot === slug);
   if (issue ? /no agent credential/.test(issue.title) : !a.credential)
     return `${empName(slug)} is a ${name} with no credential yet — messages wait until one is created in Settings and installed on its computer`;
@@ -145,11 +167,19 @@ function pausedRender() {
   if (resume) resume.onclick = async () => {
     resume.disabled = true;
     try {
-      await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
-      await v2Refresh();
+      await quarantineResume(slug);
       pausedRender();
-      toast(`${empName(slug)} resumed`);
+      if (typeof botAlertDraw === 'function') botAlertDraw();
     } catch (error) { resume.disabled = false; toast(error.message, true); }
+  };
+  const retry = el.querySelector('[data-limit-retry]');
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true;
+    try {
+      await limitRetry(slug);
+      pausedRender();
+      if (typeof botAlertDraw === 'function') botAlertDraw();
+    } catch (error) { retry.disabled = false; toast(error.message, true); }
   };
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.

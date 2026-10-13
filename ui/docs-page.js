@@ -1,5 +1,4 @@
-/* The Docs page (docs/docs.md): internal docs, written or imported in Tico with history and locks,
-   and linked docs, which are only links. Search covers both. Ask the Librarian is ui/docs-ask.js. */
+/* Internal documents and external sources share Docs search. Ask the Librarian is ui/docs-ask.js. */
 'use strict';
 let DOC_DATA = {docs: [], linked: []};
 let DOC_QUERY = '';
@@ -24,7 +23,14 @@ async function docsLoadAll(archived = false) {
     docs.push(...(page.docs || []));
     cursor = page.next_cursor || '';
   } while (cursor && docs.length < 5000);
-  const linked = archived ? [] : (await get('/v2/linked-docs')).linked || [];
+  const linked = [];
+  if (!archived) {
+    let after = '';
+    do {
+      const page = await get('/v2/doc-sources?limit=100' + (after ? '&cursor=' + encodeURIComponent(after) : ''));
+      linked.push(...(page.sources || [])); after = page.next_cursor || '';
+    } while (after && linked.length < 500);
+  }
   return {docs, linked};
 }
 
@@ -61,9 +67,9 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   $('#main').innerHTML = `<div class="docs-heading"><h1>Docs</h1>
     <div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>
     <button class="docs-ask" id="docs-ask" type="button" data-librarian-open aria-label="Ask the Librarian" title="Ask the Librarian"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask the Librarian</span></button>
-    <div class="docs-actions"><a class="docs-new" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>
+    <div class="docs-actions"><button class="docs-new" id="docs-add-source" type="button">Add source</button><a class="docs-new" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>
       <button class="docs-settings" id="docs-more" type="button" popovertarget="docs-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></div>
-    <div id="docs-menu" class="docs-pop" popover aria-label="Docs actions"><button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add a link…</button>
+    <div id="docs-menu" class="docs-pop" popover aria-label="Docs actions"><button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>
       <a id="docs-archived" href="${docsHref('', archived ? {} : {archived: 1})}">${archived ? 'Active' : 'Archived'}</a></div>
     <p class="docs-feedback" id="docs-feedback" role="status" hidden></p>
     <div class="docs-workspace${selected ? ' has-selection' : ''}"><aside class="docs-browser" aria-label="Docs" id="docs-browser"><p class="docs-loading">Loading…</p></aside>
@@ -73,7 +79,11 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   const reload = () => { if (S.route.startsWith(DOCS)) pageCompanyDocs(); };
   docsMenu($('#docs-menu'), $('#docs-more'));
   const openImport = () => DocsEditor.importDialog({onDone: doc => { location.hash = docsHref(doc.id); }});
-  const openLink = link => DocsEditor.linkDialog({link, onDone: reload});
+  const openLink = link => DocsEditor.linkDialog({link, onDone: source => {
+    const target = docsHref(source ? 'source:' + source.id : 'sources');
+    if (location.hash === target) reload(); else location.hash = target;
+  }});
+  $('#docs-add-source').onclick = () => openLink(null);
   $('#docs-import').onclick = () => openImport();
   $('#docs-link').onclick = () => openLink(null);
   // The Librarian's panel (ui/docs-ask.js) registers this; without it the button says so.
@@ -96,11 +106,20 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   // ---------------------------------------------------------------- the list
   const canEditLink = link => admin || (!!mineId && link.added_by === mineId);
   const docItem = d => `<a class="docs-item${d.id === selected ? ' selected' : ''}" ${d.id === selected ? 'aria-current="page"' : ''} href="${docsHref(d.id, archived ? {archived: 1} : {})}" title="${esc(d.path)}"><span>${esc(d.title)}</span>${d.locked ? docsLockMark() : ''}</a>`;
+  const sourceStatus = source => {
+    if (['queued', 'preparing'].includes(source.status)) return 'Preparing…';
+    if (source.status === 'updating') return 'Updating…';
+    if (source.status === 'failed') return "Couldn't update · Retry";
+    if (source.status === 'access_needed') return 'GitHub access needed';
+    if (source.status === 'empty') return `No docs found${source.skipped ? ' · ' + source.skipped + ' skipped' : ''}`;
+    if (source.status !== 'ready') return 'Link only';
+    return `${source.doc_count} ${source.doc_count === 1 ? 'doc' : 'docs'}${source.skipped ? ' · ' + source.skipped + ' skipped' : ''}${source.last_checked ? ' · ' + ago(source.last_checked) : ''}`;
+  };
   const linkRow = link => {
-    const kind = DocsSearch.kind(link.kind);
-    return `<div class="docs-link"><a class="docs-link-main" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" title="Opens ${esc(link.url)}">
+    const kind = DocsSearch.kind(link.provider || link.kind);
+    return `<div class="docs-link"><a class="docs-link-main" href="${docsHref('source:' + link.id)}" title="${esc(link.repo || DocsSearch.hostOf(link.url))}">
         <span class="docs-kind" data-kind="${esc(link.kind)}">${kind.icon}</span>
-        <span class="docs-link-text"><strong>${esc(link.title)}<span class="docs-ext" aria-hidden="true">↗</span></strong><small>${esc(link.host)} · ${esc(kind.label)}</small>${link.description ? `<span>${esc(link.description)}</span>` : ''}</span></a>
+        <span class="docs-link-text"><strong>${esc(link.title)}</strong><small>${esc(link.repo || DocsSearch.hostOf(link.url))} · ${esc(sourceStatus(link))}</small>${link.description ? `<span>${esc(link.description)}</span>` : ''}</span></a>
       ${canEditLink(link) ? `<button class="docs-link-edit" type="button" data-link-edit="${esc(link.id)}" aria-label="Edit ${esc(link.title)}">Edit</button>` : ''}</div>`;
   };
   const renderList = () => {
@@ -113,11 +132,14 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
       : `<div class="docs-empty-note"><p>No docs yet.</p>
           <div class="docs-empty-actions"><a class="docs-new" href="${docsHref('new')}" role="button">Write a doc</a><button class="docs-new" type="button" data-docs-import>Import a file</button></div></div>`;
     const links = linked.length ? linked.map(linkRow).join('')
-      : `<div class="docs-empty-note"><p>Link a help site, a Drive folder, a Notion page or a repository. Tico stores only the link.</p></div>`;
-    browser.innerHTML = `<section class="docs-section" aria-labelledby="docs-h-internal"><header class="docs-section-head"><h2 id="docs-h-internal">${archived ? 'Archived docs' : 'Internal docs'} <span class="muted">${docs.length}</span></h2>
-</header>${internal}</section>
-      ${archived ? '' : `<section class="docs-section" aria-labelledby="docs-h-linked"><header class="docs-section-head"><h2 id="docs-h-linked">Linked docs <span class="muted">${linked.length}</span></h2>
-        <button class="docs-mini" type="button" data-docs-link aria-label="Add a link">+ Add link</button></header>${links}</section>`}`;
+      : '<div class="docs-empty-note"><p>No sources yet.</p></div>';
+    browser.innerHTML = `<details class="docs-section docs-internal-section" data-docs-group="internal" open><summary class="docs-section-head"><h2 id="docs-h-internal">${archived ? 'Archived docs' : 'Internal docs'} <span class="muted">${docs.length}</span></h2></summary><div class="docs-group-scroll">${internal}</div></details>
+      ${archived ? '' : `<details class="docs-section docs-external-section" data-docs-group="external" open><summary class="docs-section-head"><h2 id="docs-h-linked">External sources <span class="muted">${linked.length}</span></h2></summary><div class="docs-group-scroll"><a class="docs-source-all" href="${docsHref('sources')}">All sources</a>${links}</div></details>`}`;
+    browser.querySelectorAll('[data-docs-group]').forEach(el => {
+      const key = 'docs.group.' + (S.me?.id || '') + '.' + el.dataset.docsGroup;
+      try { el.open = localStorage.getItem(key) !== '1'; } catch { /* open by default */ }
+      el.ontoggle = () => { try { localStorage.setItem(key, el.open ? '0' : '1'); } catch { /* not remembered */ } };
+    });
     browser.querySelectorAll('details[data-docs-folder]').forEach(el => {
       const key = 'docs.collapse.' + el.dataset.docsFolder;
       try { el.open = localStorage.getItem(key) !== '1' || !!el.querySelector('.selected'); } catch { /* the folder stays open */ }
@@ -127,6 +149,8 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   const renderResults = ({results}) => {
     browser.innerHTML = `<div class="docs-results" aria-label="Search results">${results.map(r => r.type === 'internal'
       ? `<a class="docs-item docs-result${r.id === selected ? ' selected' : ''}" href="${docsHref(r.id)}"><span class="docs-badge internal">Internal</span><strong>${esc(r.title)}</strong><small>${esc(r.path)}</small>${r.excerpt ? `<span class="docs-excerpt">${esc(r.excerpt)}</span>` : ''}</a>`
+      : r.type === 'external'
+      ? `<a class="docs-item docs-result" href="${docsHref(r.id, {revision: r.commit})}"><span class="docs-badge linked">External · GitHub</span><strong>${esc(r.title)}</strong><small>${esc(r.source_title)} · ${esc(r.path)}</small>${r.excerpt ? `<span class="docs-excerpt">${esc(r.excerpt)}</span>` : ''}</a>`
       : `<a class="docs-item docs-result" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><span class="docs-badge linked">Linked · ${esc(DocsSearch.kind(r.kind).label)}</span><strong>${esc(r.title)} <span aria-hidden="true">↗</span></strong><small>${esc(DocsSearch.hostOf(r.url))}</small>${r.description ? `<span class="docs-excerpt">${esc(r.description)}</span>` : ''}</a>`).join('')
       || '<p class="empty">No docs match. Try fewer words, or ask AI.</p>'}</div>`;
   };
@@ -142,7 +166,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
       .catch(error => { if (current()) say('Search failed: ' + error.message); });
   };
   browser.onclick = event => {
-    const item = event.target.closest('a.docs-item');
+    const item = event.target.closest('a.docs-item, a.docs-link-main, a.docs-source-all');
     if (item && docsDirty() && !confirm('Discard your changes to this doc?')) { event.preventDefault(); return; }
     if (event.target.closest('[data-docs-import]')) openImport();
     const add = event.target.closest('[data-docs-link]'); if (add) openLink(null);
@@ -171,6 +195,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
     ({docs, linked} = data);
     if (!DocsSearch.terms(DOC_QUERY).length) { const top = browser.scrollTop; renderList(); browser.scrollTop = top; }
     if (!selected) drawLanding();
+    if (selected === 'sources') drawSources();
   }, () => { /* the cached list stays */ });
 
   // ---------------------------------------------------------------- the reader
@@ -192,7 +217,56 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
         <span class="docs-recent-when" title="${esc(fmt(d.updated))}">${esc(ago(d.updated))}${d.updated_by_name ? ' · ' + esc(d.updated_by_name) : ''}</span></a>`).join('')
       || '<p class="muted">Nothing here.</p>'}</div>`;
   }
+  const pollSources = () => {
+    if (linked.some(source => ['queued', 'preparing', 'updating'].includes(source.status)))
+      setTimeout(() => { if (current() && !docsDirty() && !DOC_QUERY && !document.querySelector('dialog[open]')) reload(); }, 5000);
+  };
+  const drawSources = () => {
+    reader.innerHTML = back + `<header class="docs-reader-head"><h2>External sources</h2></header><div class="docs-source-list">${linked.map(linkRow).join('') || '<p class="muted">No sources yet.</p>'}</div>`;
+    reader.querySelectorAll('[data-link-edit]').forEach(button => { button.onclick = () => openLink(linked.find(source => source.id === button.dataset.linkEdit)); });
+    pollSources();
+  };
   if (!selected) { drawLanding(); return; }
+  if (selected === 'sources') { drawSources(); return; }
+  if (selected.startsWith('source:')) {
+    const sourceId = selected.slice(7);
+    let source = linked.find(row => row.id === sourceId);
+    try {
+      let after = '', documents = [];
+      do {
+        const page = await get('/v2/doc-sources/' + encodeURIComponent(sourceId) + '/documents?limit=100' + (after ? '&cursor=' + encodeURIComponent(after) : ''));
+        source = page.source; documents.push(...page.documents); after = page.next_cursor || '';
+      } while (after && documents.length < 500);
+      if (!current()) return;
+      reader.innerHTML = back + `<header class="docs-reader-head"><div class="docs-reader-title"><h2>${esc(source.title)}</h2><p class="docs-meta">${esc(source.repo || DocsSearch.hostOf(source.url))}${source.reference ? ' · ' + esc(source.reference) : ''}${source.path ? ' · ' + esc(source.path) : ''}</p><p class="docs-meta">${esc(sourceStatus(source))}</p></div><div class="docs-tools"><a class="docs-tool" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">Open original</a>${source.repo ? '<button class="docs-tool" id="source-refresh">' + (source.status === 'failed' ? 'Retry' : 'Refresh now') + '</button>' : ''}${canEditLink(source) ? '<button class="docs-tool" id="source-edit">Edit</button>' : ''}</div></header>
+        <div class="docs-source-files">${documents.map(doc => `<a class="docs-recent-row" href="${docsHref(doc.id, {revision: doc.commit})}"><span class="docs-recent-title">${esc(doc.title)}</span><span class="docs-recent-folder">${esc(doc.path)}</span></a>`).join('')}</div>`;
+      $('#source-edit')?.addEventListener('click', () => openLink(source));
+      $('#source-refresh')?.addEventListener('click', async event => {
+        event.target.disabled = true;
+        try { await post('/v2/doc-sources/' + encodeURIComponent(sourceId) + '/refresh', {}); reload(); }
+        catch (error) { say(error.message); event.target.disabled = false; }
+      });
+      if (['queued', 'preparing', 'updating'].includes(source.status))
+        setTimeout(() => { if (current() && !document.querySelector('dialog[open]')) reload(); }, 5000);
+    } catch (error) { if (current()) reader.innerHTML = back + `<p class="err">${esc(error.message)}</p>`; }
+    return;
+  }
+  if (selected.startsWith('external:')) {
+    try {
+      const {doc} = await get('/v2/docs/external/' + encodeURIComponent(selected.slice(9)) + (params.get('revision') ? '?revision=' + encodeURIComponent(params.get('revision')) : ''));
+      if (!current()) return;
+      const markdown = /\.(md|markdown)$/i.test(doc.path);
+      reader.innerHTML = back + `<header class="docs-reader-head"><div class="docs-reader-title"><p class="docs-crumb muted">${esc(doc.source_title)} · ${esc(doc.path)}</p><h2>${esc(doc.title)}</h2><p class="docs-meta">${esc(doc.commit.slice(0, 7))}${doc.last_checked ? ' · ' + esc(ago(doc.last_checked)) : ''}</p></div><a class="docs-tool" href="${esc(doc.citation_url)}" target="_blank" rel="noopener noreferrer">Open original</a></header><div class="md docs-content">${markdown ? safeMd(doc.content) : '<pre>' + esc(doc.content) + '</pre>'}</div>`;
+      reader.querySelectorAll('.docs-content a[href]').forEach(a => {
+        const raw = a.getAttribute('href');
+        if (raw && !/^[a-z][a-z0-9+.-]*:|^#|^\/\//i.test(raw)) {
+          a.href = new URL(raw, doc.citation_url.split('?')[0].split('#')[0]).href;
+          a.target = '_blank'; a.rel = 'noopener noreferrer';
+        }
+      });
+    } catch (error) { if (current()) reader.innerHTML = back + `<p class="err">${esc(error.message)}</p>`; }
+    return;
+  }
   if (creating) {
     const folder = params.get('folder') || '';
     reader.innerHTML = back + '<header class="docs-reader-head docs-edit-head"><div class="docs-reader-title"><h2>New doc</h2></div></header>';
@@ -224,7 +298,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
       <p class="docs-meta" title="${esc(fmt(doc.updated))}">${meta}</p></div>
       <div class="docs-tools"><a class="docs-tool" id="doc-edit" role="button" href="${docsHref(doc.id, {edit: 1})}"${canChange ? ' title="Edit (e)"' : ' aria-disabled="true" tabindex="-1" title="Locked: only an owner or bot administrator can change this doc"'}>Edit</a>
         <button class="docs-tool docs-tool-icon" id="doc-more" type="button" popovertarget="doc-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></header>
-    <div id="doc-menu" class="docs-pop" popover aria-label="Doc actions"><button id="doc-history" type="button">History</button>
+    <div id="doc-menu" class="docs-pop" popover aria-label="Doc actions">${canChange ? '<button id="doc-research" type="button">Research…</button>' : ''}<button id="doc-history" type="button">History</button>
       ${admin ? `<button id="doc-lock" type="button" aria-pressed="${doc.locked}">${doc.locked ? 'Unlock' : 'Lock'}</button>` : ''}
       ${canChange ? `<button class="docs-danger" id="doc-archive" type="button">${doc.archived ? 'Restore' : 'Archive'}</button>` : ''}</div>
     ${doc.locked ? `<p class="hint docs-locked-note">${canChange ? 'Locked: only owners and bot administrators can change it.' : 'Locked. Only an owner or bot administrator can change it.'}</p>` : ''}
@@ -233,6 +307,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   docsMenu($('#doc-menu'), $('#doc-more'));
   const editLink = $('#doc-edit');
   if (!canChange) editLink.onclick = event => event.preventDefault();
+  $('#doc-research')?.addEventListener('click', () => DocsEditor.researchDialog({target: doc.id, body: doc.body}));
   $('#doc-history').onclick = () => DocsEditor.history(doc, {canRestore: canChange, onRestored: saved => { location.hash === docsHref(saved.id) ? reload() : location.hash = docsHref(saved.id); }});
   $('#doc-lock')?.addEventListener('click', async event => {
     event.target.disabled = true;

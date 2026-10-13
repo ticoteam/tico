@@ -351,6 +351,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
 def _stuck(c, rows, online_ids, who, full):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers."""
+    from .readiness import own_harness
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
@@ -359,6 +360,7 @@ def _stuck(c, rows, online_ids, who, full):
     for row in rows:
         label, reason = row["computer"], row["reason"]
         runtime = row["runtime"] or configured.get(row["bot"], "")
+        harness = own_harness(c, row["bot"], runtime)     # an Antigravity bot is not judged as Gemini CLI
         fix, move = None, None
         if reason == "no_computer":
             text = "No computer"
@@ -368,9 +370,9 @@ def _stuck(c, rows, online_ids, who, full):
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
                 move = next(({"id": rid, "label": name} for rid, name in computers if rid != row["runner_id"] and
-                                     _can(c, row["bot"], runtime, rid)), None)
+                                     _can(c, row["bot"], runtime, rid, harness)), None)
         elif reason == "not_ready":
-            choice = runtime_choice(c, row["bot"], runtime, who, computers) if runtime else {}
+            choice = runtime_choice(c, row["bot"], runtime, who, computers, harness=harness) if runtime else {}
             problem = str(choice.get("problem") or row["problem"]) if choice.get("can_run") is False else row["problem"]
             text = problem if label and label in problem else f"{problem} on {label}"
             if choice.get("can_run") is False:
@@ -397,9 +399,9 @@ def _stuck(c, rows, online_ids, who, full):
     return out
 
 
-def _can(c, bot, runtime, runner):
+def _can(c, bot, runtime, runner, harness=""):
     from .readiness import can_run
-    return can_run(c, bot, runtime, runner=runner)["can_run"] is True
+    return can_run(c, bot, runtime, runner=runner, harness=harness)["can_run"] is True
 
 
 TOKEN_CACHE_SECONDS = 300
@@ -471,6 +473,28 @@ def _github(c, github):
     return _check("github", "GitHub", "ok", f"Connected to {row['org']}.")
 
 
+def _github_repo_create(c, github):
+    """An App without Administration (write) cannot create bot repositories, so every new bot stops for a person.
+    The stored flag follows the installation's live permission whenever Tico asks GitHub, so this reads no network."""
+    row = github.row(c) if github else None
+    if not row or row["administration"]:
+        return None
+    from .repo_waits import fixes, waits
+    waiting = waits(c)
+    named = sorted(waiting)
+    fix = fixes(c, row, named[0] if len(named) == 1 else "")
+    summary = ("Bots BotOps builds cannot get a GitHub repository: the GitHub App lacks Administration (write). "
+               "Let BotOps create repositories (turn on Administration for the app, then accept it for the organisation), "
+               "or create each bot's repository yourself as an empty private repository.")
+    if named:
+        summary += " Waiting: " + ", ".join((waiting[bot].get("repository") or bot) for bot in named[:3]) \
+                   + ("." if len(named) <= 3 else f"; and {len(named) - 3} more.")
+    return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
+                  [_fix("Let BotOps create repositories", fix["permissions_url"]),
+                   _fix("Create " + fix["repository"] if fix["repository"] else "Create a repository", fix["create_url"]),
+                   _fix("Open GitHub settings", "#/integrations")])
+
+
 def _slack(c):
     """Only once the owner has pasted tokens: the gateway reports its own state (backend/slack_app.py)."""
     from . import slack_app
@@ -497,6 +521,10 @@ def _backups(config, settings):
     key = backup.get("credential_key") if isinstance(backup.get("credential_key"), dict) else {}
     key_here = bool(key.get("present"))                  # a local credential key (/data/credential.key) is in use
     key_copied = bool(key.get("current"))
+    files = backup.get("key_files") if isinstance(backup.get("key_files"), dict) else {}
+    # github-app.key and slack.key (backend/replication.py): present ones that the backup does not hold as they are now
+    uncopied = sorted(name for name, state in files.items() if isinstance(state, dict) and state.get("present")
+                      and not state.get("current"))
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
@@ -505,8 +533,10 @@ def _backups(config, settings):
                 if key_here else "")
         if key_here and not key_copied:
             note += " It has not been copied to the backup volume yet."
+        if uncopied:
+            note += " " + _key_files_words(uncopied) + " not been copied to the backup volume yet."
         if settings.loopback:
-            return _check("backups", "Backups", "warn" if key_here and not key_copied else "info",
+            return _check("backups", "Backups", "warn" if (key_here and not key_copied) or uncopied else "info",
                           "Copies stay on this computer. Set a backup bucket in .env to keep copies elsewhere." + note,
                           [fix])
         return _check("backups", "Backups", "warn",
@@ -519,7 +549,112 @@ def _backups(config, settings):
         return _check("backups", "Backups", "warn",
                       f"The database is copied to {target or 'a remote'}, but the credential key has not been. A database restored "
                       "without it cannot open any saved credential. Check the server log for the backup warning.", [fix])
+    if uncopied:
+        return _check("backups", "Backups", "warn",
+                      f"The database is copied to {target or 'a remote'}, but {_key_files_words(uncopied)} not been. A "
+                      "database restored without them cannot open the GitHub App, directory sync or Slack secrets. Check "
+                      "the server log for the backup warning.", [fix])
     return _check("backups", "Backups", "ok", f"Copied to {target or 'a remote'}.")
+
+
+def _key_files_words(names):
+    return " and ".join(names) + (" has" if len(names) == 1 else " have")
+
+
+SEALED_FIX = ("Copy {file} from the backup location (credential-key/{file}) into the data volume beside hub.sqlite, mode "
+              "0600, and restart the server: `docker compose run --rm server restore --force` does it with the database. "
+              "If no backup has it, {redo}.")
+
+
+def _sealed_secrets(c, settings, github):
+    """Secrets sealed with a key file beside the database (the GitHub App and directory sync credentials with
+    github-app.key, the Slack tokens with slack.key, every credential with credential.key) that this server cannot
+    open: a restore or a move that left a key file behind. Read only: nothing here creates a key."""
+    import hashlib
+    import hmac
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from . import credentials, directory, slack_app
+
+    still_needs = {}         # {key file: rows only it opens}, under KMS
+
+    def opens(key, row, aad, legacy=None):
+        # Under KMS a row sealed before TICO_CREDENTIAL_KMS_KEY was set still opens with its key file (`legacy`),
+        # and the next read re-seals it with the vault key (credentials.open_or_reseal). Health only looks, and counts
+        # such rows so nobody deletes the file while it is still needed.
+        for candidate in (key, credentials.legacy_key(legacy) if legacy else None):
+            try:
+                AESGCM(candidate).decrypt(row["nonce"], row["ciphertext"], aad)
+            except Exception:
+                continue
+            if candidate is not key:
+                still_needs[legacy.name] = still_needs.get(legacy.name, 0) + 1
+            return True
+        return False
+
+    def table(name):
+        return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+
+    problems, fixes = [], []
+    try:
+        app = github.row(c) if github else None
+        sources = list(c.execute("SELECT * FROM directory_credentials")) if github and table("directory_credentials") else []
+        kms = bool(settings.credential_kms_key and github and github.vault is not None)
+        vault = c.execute("SELECT kms_key,wrapped_key FROM credential_keys WHERE id='v1'").fetchone()
+        if kms and not vault:
+            return None      # the first save makes the vault's key; a Health read must not ask KMS for one
+        if app or sources:
+            key = github.secret_key(c, create=False)
+            lost = []
+            legacy = github.key_file() if kms else None
+            if app and not (key and opens(key, app, b"tico-github-app:v1", legacy)):
+                lost.append("The GitHub App's private key and webhook secret")
+            if sources and not (key and all([opens(key, r, directory.AAD + r["source"].encode(), legacy) for r in sources])):
+                lost.append("the directory sync credentials" if lost else "The directory sync credentials")
+            if lost:
+                problems.append(" and ".join(lost) + " cannot be decrypted: " + (
+                    "github-app.key is missing." if key is None else
+                    "they were sealed with another key (github-app.key from before TICO_CREDENTIAL_KMS_KEY was set, "
+                    "which is no longer on the data volume?)." if kms else
+                    "github-app.key does not open them."))
+                fixes.append(SEALED_FIX.format(file="github-app.key", redo="disconnect GitHub and connect it again, or save "
+                                               "the directory sync credentials again, and confirm replacing the lost key: "
+                                               "Tico drops the GitHub App and every directory source's credentials sealed "
+                                               "with it, and you enter them again" if key is None else
+                                               "disconnect GitHub and connect it again, and save the directory sync "
+                                               "credentials again"))
+        slack = c.execute("SELECT * FROM slack_credentials WHERE id='app'").fetchone() if table("slack_credentials") else None
+        if slack:
+            # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
+            key = slack_app._key(settings, github.vault if kms else None, c, create=False)
+            if not (key and opens(key, slack, slack_app.AAD, slack_app.key_file(settings) if kms else None)):
+                problems.append("The Slack tokens cannot be decrypted: " + (
+                    "slack.key is missing." if key is None else "the key they were sealed with is not this server's."))
+                fixes.append(SEALED_FIX.format(file="slack.key", redo="paste the Slack tokens again (Settings > Slack)"))
+        if vault and vault["kms_key"] == credentials.LOCAL and not settings.credential_kms_key:
+            path = settings.db_path.parent / credentials.KEY_FILE
+            data = path.read_bytes() if path.is_file() else None
+            if data is None or not hmac.compare_digest(hmac.new(data, credentials.KEY_CHECK, hashlib.sha256).digest(),
+                                                       bytes(vault["wrapped_key"])):
+                problems.append("Saved credentials cannot be decrypted: credential.key "
+                                + ("is missing." if data is None else "does not belong to this database."))
+                fixes.append(SEALED_FIX.format(file="credential.key", redo="add each credential again (Credentials)"))
+    except Problem:
+        return None          # a KMS key that cannot be reached is the credential_kms check's to report
+    fix = [_fix("Restore the key files", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")]
+    needed = ""
+    if still_needs:
+        counts = []
+        for name, n in sorted(still_needs.items()):     # "2 secrets still need github-app.key and 1 still needs slack.key"
+            noun = ("secret " if n == 1 else "secrets ") if not counts else ""
+            counts.append(f"{n} {noun}still {'needs' if n == 1 else 'need'} {name}")
+        needed = (" and ".join(counts) + ": sealed before TICO_CREDENTIAL_KMS_KEY was set, each is re-sealed with the KMS "
+                  "key the first time it is used. Keep " + (" and ".join(sorted(still_needs))) + " (and the backup's copy) "
+                  "until this clears.")
+    if not problems:
+        return _check("sealed_secrets", "Stored secrets", "info", needed, fix) if needed else None
+    return _check("sealed_secrets", "Stored secrets", "warn", " ".join(problems + fixes + ([needed] if needed else [])), fix)
 
 
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."
@@ -690,6 +825,31 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("bot_access", "Bot access", "info", str(notice.get("message") or ""),
                              [_fix("Open bots", "#/settings", "bots")]))
 
+    # A bot.yaml asking to send without approval, or to forward to new addresses, has no effect until a person turns
+    # it on in Tico (backend/mail_settings.py); the request itself is worth a look, since a bot or BotOps may write it.
+    # Whoever may turn it on sees it: the owner and admins for every bot, a person who manages a bot for that bot only.
+    from .mail_settings import alert_text, alerts as mail_alerts
+    asking = mail_alerts(c) if full or who.role == "human" else []
+    if not full:
+        asking = [(bot, extra) for bot, extra in asking if auth.bot_manager(c, who, bot)]
+    if asking:
+        checks.append(_check("mail_sending", "Mail sending", "warn",
+                             "; ".join(alert_text(bot, extra) for bot, extra in asking[:3])
+                             + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
+                             [_fix("Open bots", "#/settings", "bots"),
+                              _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
+    # A go-live waiting for its computer to get the repository finishes by itself (backend/go_live.py); until then
+    # the bot is placed but not on. Seen by the owner and admins, and by a person who manages that bot.
+    from .go_live import EXPIRY_DAYS, waiting as waiting_go_lives
+    pending = waiting_go_lives(c, who, auth, full)
+    if pending:
+        checks.append(_check("go_live_waiting", "Going live", "info",
+                             "; ".join(f"{bot} is waiting for {computer} to get its repository (since {since})"
+                                       for bot, computer, since in pending[:3])
+                             + ("" if len(pending) <= 3 else f"; and {len(pending) - 3} more")
+                             + f". Tico turns each on when its computer has the repository; after {EXPIRY_DAYS} days "
+                             "it stops and tells the person who asked.",
+                             [_fix("Open bots", "#/settings", "bots")]))
     unpublished = _unpublished(c) if full else []
     if unpublished:
         checks.append(_check("publish", "Bot history", "warn",
@@ -914,9 +1074,13 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Computers", "#/settings", "devices")]))
     if full:
         checks.append(_github(c, github))
+        if repo_create := _github_repo_create(c, github):
+            checks.append(repo_create)
         slack = _slack(c)
         if slack:
             checks.append(slack)
+        if sealed := _sealed_secrets(c, settings, github):
+            checks.append(sealed)
         checks.append(_check("backups", "Backups", "ok", "Demo data: there is nothing to back up.")
                       if settings.demo else
                       _check("backups", "Backups", "ok", "Rehearsal: backups are off on purpose.")
@@ -945,7 +1109,7 @@ def note_github_token(store, error=None, action=""):
         if error:
             if current and current["last_error"] == error and current["detail_json"] == detail:
                 return
-        elif not current or not current["last_error"]:
+        elif not current or not current["last_error"] and (current["detail_json"] or "{}") in ("{}", ""):
             return
     with store.transaction() as c:
         if error:
@@ -953,8 +1117,9 @@ def note_github_token(store, error=None, action=""):
                       "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
                       (GITHUB_HEALTH, error, detail))
         else:   # only a recovery is written, so a healthy turn costs no extra write
-            c.execute("UPDATE service_health SET last_success=?,last_error=NULL WHERE service=? AND last_error IS NOT NULL",
-                      (now, GITHUB_HEALTH))
+            # The failure's message goes too, so nothing reads an old failure after a recovery.
+            c.execute("UPDATE service_health SET last_success=?,last_error=NULL,detail_json='{}' WHERE service=? "
+                      "AND (last_error IS NOT NULL OR detail_json<>'{}')", (now, GITHUB_HEALTH))
 
 
 def install(app, store, auth, settings):

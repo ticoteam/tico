@@ -47,7 +47,7 @@ onboarding:
   - ask: "Who should receive findings, and should anything reach them other than the digest?"
     why: "Findings go to one named human or the content bot. Nobody else is told until you say so."
   - ask: "Which accounts do you post from, how often on each, and who owns each posting account?"
-    why: "Sets knowledge/social-calendar.md and the owner for every post. Public messages stay drafts until `outbound_send` is on."
+    why: "Sets knowledge/social-calendar.md and the owner for every post. Public messages stay drafts until a person turns mail sending on in Tico."
 first_routine:
   title: "Weekday morning sweep"
   cadence: "Weekdays at 08:00 team time"

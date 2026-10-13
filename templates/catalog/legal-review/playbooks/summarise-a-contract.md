@@ -55,7 +55,7 @@ advice. Have counsel review anything that matters before you sign or rely on it.
 ## 6. Finish
 
 Add the contract to `knowledge/contracts.md`. `hub task update <id> --status done --note`: the five lines,
-the path, and any deadline inside 14 days first. Reply to the counterparty within the requested work and your Tools when `outbound_send` is on; otherwise keep the draft on the task.
+the path, and any deadline inside 14 days first. Reply to the counterparty within the requested work and your Tools when a person has turned mail sending on in Tico; otherwise keep the draft on the task.
 
 ## When a source fails
 

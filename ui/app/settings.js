@@ -59,7 +59,7 @@ function pageSettings() {
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
-      <section class="card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled>Add from template</button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
     <div class="settings-pane" id="settings-repos" role="tabpanel" hidden><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
@@ -102,6 +102,8 @@ function pageSettings() {
     if (button) settingsShow(button.dataset.settingsTab);
   };
   $('#settings-chat-bots').onclick = () => settingsShow('bots');
+  // Opening More on a phone shows its tabs at the end of the scrolling row.
+  $('#settings-more').addEventListener('toggle', event => { if (event.target.open) settingsTabIntoView(event.target.lastElementChild); });
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -139,6 +141,7 @@ function settingsShow(tab) {
     const selected = button.dataset.settingsTab === SETTINGS_TAB;
     button.classList.toggle('cur', selected); button.setAttribute('aria-selected', String(selected));
   });
+  settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
@@ -161,6 +164,15 @@ function settingsShow(tab) {
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const recurring = $('#settings-recurring');
   if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring' && !formBusy(recurring)) renderSettingsRecurring(); }
+}
+// On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
+// Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.
+function settingsTabIntoView(target) {
+  const bar = $('#settings-tabs'), cur = target || bar?.querySelector('[data-settings-tab].cur');
+  if (!cur || bar.scrollWidth <= bar.clientWidth) return;
+  const box = bar.getBoundingClientRect(), tab = cur.getBoundingClientRect(), pad = 24;
+  if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
+  else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
 }
 function settingsTeamIconBind() {
   const input = $('#settings-team-icon-file'), button = $('#settings-team-icon-change');

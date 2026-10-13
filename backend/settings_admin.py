@@ -38,6 +38,17 @@ def repository_present(c, bot):
     return bool(report.get("repository_present"))
 
 
+# Where a bot's conversation compacts, in tokens (runner/hosts/base.py DEFAULT_COMPACT_AT): the choices offered,
+# and what a bot that never chose one gets.
+COMPACT_AT = (150_000, 250_000, 400_000, 600_000, 1_000_000)
+DEFAULT_COMPACT_AT = 250_000
+
+
+def compact_at(config):
+    value = (config or {}).get("compact_at")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else DEFAULT_COMPACT_AT
+
+
 class SettingsAdmin:
     def __init__(self, store, auth, execution, models, reset_sessions):
         self.store, self.auth, self.execution = store, auth, execution
@@ -71,10 +82,12 @@ class SettingsAdmin:
                          "WHERE bc.created_by=? AND b.state<>'archived' AND bc.bot<>? "
                          "AND COALESCE(bc.onboarding_state,'') NOT IN " + PARKED_SQL, (actor, excluding)).fetchone()[0]
 
-    def _manager(self, c, who, bot):
+    def _manager(self, c, who, bot, botops=False):
         """The one "may manage this bot" check (`Auth.bot_manager`): the owner, an Admin, one of the bot's
-        owners, or a person it reports up to. They are also the people who always have full access to it."""
-        if who.role == "owner" or self.auth.bot_manager(c, who, bot):
+        owners, or a person it reports up to. They are also the people who always have full access to it.
+        `botops`: BotOps in its own run may also make this change (`Auth.botops_manages`)."""
+        if (who.role == "owner" or self.auth.bot_manager(c, who, bot)
+                or (botops and self.auth.botops_manages(c, who, bot))):
             return
         raise Problem("forbidden", "You may change only bots you own or that report up to you", 403)
 
@@ -174,6 +187,7 @@ class SettingsAdmin:
                 "operator": config["operator"], "revision": config["revision"],
                 "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
                 "effort": effective.get("reasoning_effort") or row["effort"],
+                "compact_at": compact_at(effective),
                 "session": effective.get("session"),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
                 "fallback": normalize_fallback(effective.get("fallback"))}
@@ -459,8 +473,19 @@ class SettingsAdmin:
         if not branch and not repository_present(c, bot) and not self.computer_builds_repository(c, bot):
             raise Problem("repository_missing", "Its repository is not built yet. Ask BotOps to build it", 409)
 
+    # What BotOps' own run changes in another bot's definition (docs/permissions.md): its contact. Who it reports to,
+    # its repository, its status and its template stay with the people who manage it: `reports_to` makes a person its
+    # manager, and `repo` decides what the bot's token writes.
+    BOTOPS_OWN_DEFINITION = {"bot_contact"}
+
     def update_bot(self, c, who, bot, body):
-        self._manager(c, who, bot)
+        own_run = not (who.role == "owner" or self.auth.bot_manager(c, who, bot))
+        self._manager(c, who, bot, botops=True)
+        changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
+        if own_run and changed - self.BOTOPS_OWN_DEFINITION:
+            raise Problem("forbidden", "BotOps' own run changes only another bot's contact; "
+                          + ", ".join(sorted(changed - self.BOTOPS_OWN_DEFINITION))
+                          + " is for the people who manage it", 403)
         source = shared_bots.source_of(shared_bots.declared(c, bot))
         if source and (H.bot(c, source) or {}).get("state") == "archived":
             raise Problem("original_archived", "Restore the original before changing its branch's status", 409)
@@ -481,7 +506,8 @@ class SettingsAdmin:
         if before.get("status") == "quarantined" and values.get("status") != "quarantined":
             raise Problem("quarantined", "This bot is quarantined; clear the quarantine first", 409)
         self._parent(c, bot, values.get("reports_to"))
-        if who.role != "owner" and values.get("reports_to") and not str(values["reports_to"]).startswith("human:"):
+        if (not own_run and who.role != "owner" and values.get("reports_to")
+                and not str(values["reports_to"]).startswith("human:")):
             parent = self._config(c, values["reports_to"])
             if parent["operator"] != H.actor_id(who.actor) and not self.auth.manages(c, who, "bot", values["reports_to"]):
                 raise Problem("forbidden", "The parent bot belongs to a different operator", 403)
@@ -539,6 +565,8 @@ class SettingsAdmin:
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == "fallback":
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
+        if field == "compact_at":
+            return compact_at(_json(config["config_json"], {}))
         if field == "placement":
             row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator AS runner_operator "
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
@@ -947,6 +975,22 @@ class SettingsAdmin:
                       (who.actor, H.now(), undo_change_id))
         H.event(c, who.actor, "bot.fallback_changed", bot, {"before": before, "after": after})
         return {"bot": bot, "fallback": after, "revision": config["revision"] + 1}
+
+    def set_compact_at(self, c, who, bot, body):
+        """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
+        session is kept: the next turn simply compacts at the new size."""
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        before = self.snapshot(c, bot, "compact_at")
+        declared = _json(config["config_json"], {}) or {}
+        declared["compact_at"] = body.compact_at
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
+        H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
+        return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
 
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):

@@ -272,6 +272,15 @@ def message_from_raw(raw, mid, thread_id="", labels=("DRAFT",)):
     s = str(raw or "").replace("-", "+").replace("_", "/")
     parsed = email.message_from_bytes(base64.b64decode(s + "=" * (-len(s) % 4)))
     headers = {k: v for k, v in parsed.items()}
+    if parsed.is_multipart():                           # a draft with --attach files
+        parts = []
+        for sub in parsed.get_payload():
+            data = sub.get_payload(decode=True) or b""
+            parts.append({"mimeType": sub.get_content_type(), "filename": sub.get_filename() or "",
+                          "headers": [{"name": k, "value": v} for k, v in sub.items()],
+                          "body": {"data": base64.urlsafe_b64encode(data).decode(),
+                                   "size": len(data)}})
+        return message(mid, thread_id or ("t-" + mid), headers, parts=parts, labels=list(labels))
     body = parsed.get_payload(decode=True) or b""
     m = message(mid, thread_id or ("t-" + mid), headers, body=body.decode("utf-8", "replace"),
                 labels=list(labels))

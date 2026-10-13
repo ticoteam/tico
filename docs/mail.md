@@ -99,16 +99,50 @@ with the reason. Read the reason. Do not retry the same text, and do not look fo
 ```bash
 $HUB_DIR/scripts/mail.sh draft --to ava@creator.example \
   --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt --issue 128 [--dry-run]
-$HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128
+$HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128 \
+  --attach out/response-letter.pdf
+$HUB_DIR/scripts/mail.sh discard r-882... --issue 128
 ```
 
 `--reply-to <thread>` fills in the recipient and the subject from the thread and keeps
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
 new one. `--cc` takes internal addresses only. `--dry-run` lints and reviews and writes nothing.
 
-The draft is keyed on (you, the task, the recipient, the subject, the body): running the same
+The draft is keyed on (you, the task, the recipient, the subject, the body, and the hashes of any
+attached files): running the same
 command twice **updates the same Gmail draft** instead of leaving two. Change a word and it is a
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
+
+`--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
+from the file sizes before anything is read). Attachments are off unless the mail policy sets
+`defaults.allow_attachments: true`. A file must be inside your own folder (`bot-<slug>`, or an
+older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
+refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
+`*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
+`credentials*`, `*secret*`, `*token*`, and anything under `secrets/`, `private keys/`, `.ssh/`,
+`.aws/`, `.gnupg/` or `.config/gh/`. The type comes from the file's extension. Lint and the
+reviewer read the text, and the reviewer is told each file's name, type and size, not its
+contents. Attaching lifts nothing, and sending an attached draft always needs `--approval-issue`,
+even to a recipient who needs none without files (the sender of the thread, a forward target,
+an internal address or an allowance).
+
+That approval must name the files. `mail draft --attach` prints a ready request (and returns it
+as `approval_request` with `--json`): recipients, subject, draft id, and each file's name, size
+and sha256, as `hub approval request --kind send --payload '...'`. The send approval's payload
+carries `draft` and `attachments: [{name, size, sha256}]`. At send time the connector hashes the
+files as they are in the Gmail draft and sends only if they are exactly the approved set for
+that draft; a changed, added, removed or swapped file needs a new approval. A GitHub Issue
+counts only when its `Send to:` line matches and it names each file and its sha256 (and no
+other hash). The owner's message telling the bot to send does not cover attachments. When the draft
+belongs to a Tico task (`--issue <task id>`, or the task the run is for), `mail draft` first attaches
+each file to it and adds its `file_id` to the request, so the approver can open the file from the
+approval card; the send ignores `file_id` and matches on name, size and sha256. The card links a
+file only to the version on the task whose stored sha256 and size are the approved ones. Attached
+files become readable by everyone who can read the task.
+
+`discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
+draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
+the `draft` verb and is audited.
 
 ```json
 { "ok": true, "draft": "r-882...", "thread": "18f2c9a3b4d5e6f7", "to": ["ava@creator.example"],
@@ -123,28 +157,28 @@ new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 $HUB_DIR/scripts/mail.sh send --draft r-882... --issue 128 [--approval-issue 131] [--dry-run]
 ```
 
-**Once the owner has turned sending on (`outbound_send: true` in the bot's `bot.yaml`), the bot follows its rules without
+**Once a person has turned sending on for the bot in Tico (see "Turning sending on"), the bot follows its rules without
 asking for each message, to three kinds of recipient:**
 
 1. **Anyone in the team's own domain** (`@acme.example` here).
 2. **The sender of the thread it is replying to**: `reply --thread <id>`, to that one person, with nobody added. A
    message that also copies someone outside, or goes to a second outside address, is not covered.
-3. **The addresses the owner lists as forward targets**: `forward_to:` in the bot's `bot.yaml`, usually the owner's other
-   email. BotOps sets it when the owner asks.
+3. **The forward addresses a person approved in Tico**, usually the owner's other email. An address that is only in
+   `forward_to:` in the bot's `bot.yaml` is a request and still needs an approval for each message.
 
 Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
 table is one), or `--approval-issue N` where N is a **closed** task in Tico with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. With `outbound_send: false` a send is always a draft. The
+whose title or body names that address or the thread. With sending off in Tico a send is always a draft. The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
-to every send, the three kinds above included. `mail policy show` says which of these you have, what `forward_to`
-holds, and which policy it is reading.
+to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
+Tico holds, what bot.yaml asks, and which policy it is reading.
 
 `send` always answers in JSON and always exits 0 for a policy refusal. A refusal is a
 **downgrade**, not an error:
 
 ```json
 { "ok": true, "sent": false, "downgraded": "draft", "gate": "outbound_send",
-  "reason": "outbound_send is false in bot-influencer/bot.yaml",
+  "reason": "outbound_send is false for influencer: no person has turned sending on for influencer in Tico yet; ...",
   "draft": "r-882...", "to": ["ava@creator.example"],
   "note": "the draft is still in ana@acme.example Drafts; Ana can send it, or close the gate
            that refused it." }
@@ -246,7 +280,7 @@ lines you can paste straight into a draft - `Tue Sep 8, 1:00–1:20pm PT` - and
 `{"slots": [{"start": "...", "end": "...", "human": "Tue Sep 8, 1:00–1:20pm PT"}]}` with `--json`.
 
 `schedule` creates the event and sends the confirmation, or does neither: if the send fails the
-event is deleted again. While your `outbound_send` is false it puts **nothing** on the calendar
+event is deleted again. While your sending is off in Tico it puts **nothing** on the calendar
 and answers with the draft plus `"would_schedule": {...}` so Ana can do it in one click.
 
 ## Verbs, and the one thing that is implied
@@ -258,8 +292,8 @@ mailbox**. Moving a message between folders is not a send: nothing leaves the te
 change is visible in Gmail, and Ana undoes it by relabelling.
 
 `draft` is needed for `draft`, `reply` and `schedule`. `send` is needed on top of that for
-anything to leave, and `send` also needs `outbound_send: true` in your `bot.yaml`. With the
-flag false, every send is a draft, whatever an older instruction says.
+anything to leave, and `send` also needs sending turned on for you in Tico by a person. Until then every send
+is a draft, whatever your `bot.yaml` or an older instruction says.
 
 Anything you are not granted is refused with exit code 2 and a line telling you what to ask
 for. Do not work around a refusal: open a task with `owner:ana` and `type:decision` naming
@@ -453,13 +487,37 @@ in it. What stays Mac-only is launchd (`scripts/tico install`; Linux uses the ru
 
 ## Turning sending on
 
-A message bot starts with sending off: everything it writes is a draft for the human. The owner turns it on by asking
-BotOps in chat, in plain words: "let my Inbox Manager reply to support senders that support has it, and forward job,
-partnership, investor and press mail to me at <address> with the subject `🔔 Tico inbound: <subject>`, plus a
-Needs you task". BotOps does it as that person (they must own the bot or manage it, and the server says so if they do not):
-it sets `outbound_send: true` and `forward_to:` in the bot's `bot.yaml`, writes the rules into the bot's
-`playbooks/inbox-preferences.md` under `## Sending`, and answers with one message naming the three kinds of recipient that
-now go without an approval. BotOps never turns sending on by itself; the owner asks, and can ask for it to be turned off.
+A message bot starts with sending off: everything it writes is a draft for the human. Whether it sends without a
+per-message approval, and to which forward addresses, is a switch held on the Tico server that only a person sets: the
+owner, or a human who manages the bot (its owner, a co-owner, an admin, or someone it reports up to). A bot cannot set
+it, and neither can BotOps, in its own runs or acting for a person, nor the Assistant. Set it in **Settings > Bots >
+the bot > Edit > Mail sending**, or with your own token:
+
+```bash
+hub bot mail <slug>                                  # show it, and what the bot's bot.yaml asks
+hub bot mail <slug> --send --forward-to me@personal.example
+hub bot mail <slug> --no-send                        # off again
+hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yaml asks, after reading it
+```
+
+The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
+
+`outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
+repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an
+approval for each message and the refusal names the setting. The bot's computer reports what bot.yaml asks, and
+Settings > Health shows "<bot> asks to send mail without approval; a person must turn this on" (or names the new
+forward addresses) until a person turns it on or the request goes away. The owner and admins see it for every bot;
+a person who manages a bot sees it for that bot only. The Support Agent's `software/hq-tickets reply` reads the same
+switch before it posts a reply to an HQ ticket.
+
+To have the rules written down, ask BotOps in chat in plain words: "let my Inbox Manager reply to support senders that
+support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
+inbound: <subject>`, plus a Needs you task". BotOps writes the rules into the bot's `playbooks/inbox-preferences.md`
+under `## Sending` and tells you which addresses to type in the switch; it never edits `outbound_send` or `forward_to`.
+
+**After upgrading.** Bots that sent with `outbound_send: true` in bot.yaml send drafts until a person confirms mail
+sending per bot: Health lists each one, and `hub bot mail <slug> --from-bot-yaml` (or the Mail sending row) turns on
+exactly what its bot.yaml asks.
 
 **Computers with no registry (Docker).** A Docker computer has no `registry/` folder, so nothing gives the mail tool a
 `mail-policy.yaml`. Its policy is built in: sending on globally, the team's own domains as internal (from the bot's mailbox

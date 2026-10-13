@@ -14,6 +14,7 @@ day that is not Monday, stop at once.
 2. Resolve each name: `hub market find` over names, aliases and domains, then judgment. Record the alias you matched so the next mention is a lookup.
 3. Decide the shape. An insight may become a new entity, an edge, a property change, an `until` on an edge it contradicts, an alias, or nothing.
 4. Write the evidence row first, then the entity or edge that cites it. `hub market apply` does that and closes the insight as applied.
+   A verified batch from research is one `hub market import <file.jsonl> --note "<where it came from>"`: one entity or edge per line with its evidence, matched by id, name, alias or domain, recorded as one applied insight; run it with `--dry-run` first and send each needs-human line to the owner.
 5. Otherwise close it: `merged` into another insight, `rejected` with one sentence, or `needs-human` when two credible sources disagree and it matters.
 6. Close the listening items you filed: an insight you applied or merged resolves its listening item
    `accepted` with `--ref <insight id>`; one you rejected resolves it `rejected` with the same

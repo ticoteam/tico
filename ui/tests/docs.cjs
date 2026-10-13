@@ -52,6 +52,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const view = doc => ({...doc, updated_by_name: NAMES[doc.updated_by] || doc.updated_by, created_by_name: NAMES[doc.created_by] || doc.created_by});
     const row = doc => ({id: doc.id, path: doc.path, title: doc.title, updated: doc.updated, updated_by: doc.updated_by, updated_by_name: NAMES[doc.updated_by], locked: doc.locked, version: doc.version});
     const linkView = l => ({...l, added_by_name: NAMES[l.added_by]});
+    const sourceView = l => ({...linkView(l), provider: l.kind, repo: '', reference: '', reference_override: '', path: '', status: 'link_only', last_checked: null, doc_count: 0, skipped: 0, error_code: ''});
     const kindOf = raw => { const host = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw).hostname; return /notion\.so$/.test(host) ? 'notion' : /github\.com$/.test(host) ? 'github' : 'website'; };
     const titleOf = raw => { const u = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); };
     let started = {empty: {docs: false}, cards: []};
@@ -61,7 +62,8 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       {id: 'docs-earlier', title: 'Who helps new hires?', created: ago(90), closed_at: ago(60)},
       {id: 'docs-archived', title: 'How do refunds work?', created: ago(300), closed_at: ago(200)},
     ];
-    const answer = 'See [Internal doc · Refund policy](doc:doc-000000000001).';
+    const externalCitation = 'https://github.com/acme/handbook/blob/' + 'a'.repeat(40) + '/docs/refunds.md?plain=1#L3-L4';
+    const answer = 'See [Internal doc · Refund policy](doc:doc-000000000001). [External · Refunds — Policy](' + externalCitation + ')';
     const chatMessages = new Map([
       ['docs-earlier', [{id: 'earlier-question', from_actor: 'human:ana', body: 'Who helps new hires?'}]],
       ['docs-archived', [{id: 'old-question', from_actor: 'human:ana', body: 'How do refunds work?'},
@@ -99,6 +101,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         chats.forEach(chat => { chat.closed_at = chat.id === reopen[1] ? null : chat.closed_at || ago(0); });
         return json({conversation_id: reopen[1]});
       }
+      if (p === '/api/v2/librarian/research') {
+        const body = req.postDataJSON(); requests.push({api: 'librarian/research', body});
+        return json({task_id: 'task-research', bot: 'librarian', kind: 'doc', target: body.target});
+      }
       if (p === '/api/v2/docs/ask') {
         const body = req.postDataJSON(); requests.push({api: 'docs/ask', body});
         const id = body.conversation_id || 'librarian-chat-' + (++chatSequence);
@@ -123,7 +129,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       // A one-row market, so the Market page draws and Ask the Librarian answers from its graph.
       if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', status: 'active'}]});
       if (p === '/api/v2/market/entities/company/rival') return json({entity: {id: 'company/rival', type: 'company', name: 'Rival', summary: 'Sells to studios.'}, edges: [], evidence: []});
-      if (p === '/api/v2/market/edges') return json({edges: []});
+      if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/rival', type: 'company', name: 'Rival', degree: 0}], edges: []});
       if (p === '/api/company-docs') return json({documents: []});
       if (p === '/api/v2/market/ask') {
         requests.push({api: 'market/ask', body: req.postDataJSON()});
@@ -184,6 +190,23 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
           return json({doc: view(doc)});
         }
       }
+      if (api === 'doc-sources' && method === 'GET') return json({sources: linked.map(sourceView), next_cursor: null});
+      if (api === 'doc-sources' && method === 'POST') {
+        const link = addLinked(body.url, body.title || titleOf(body.url), kindOf(body.url), body.description);
+        return json({source: sourceView(link)});
+      }
+      const sourceFiles = /^doc-sources\/([^/]+)\/documents$/.exec(api);
+      if (sourceFiles) {
+        const link = linked.find(l => l.id === sourceFiles[1]);
+        return link ? json({source: sourceView(link), documents: [], next_cursor: null}) : problem('not_found', 'Source not found', 404);
+      }
+      const sourceEdit = /^doc-sources\/([^/]+)$/.exec(api);
+      if (sourceEdit && method === 'PATCH') {
+        const link = linked.find(l => l.id === sourceEdit[1]);
+        if (body.archived) { linked.splice(linked.indexOf(link), 1); return json({linked: linkView(link)}); }
+        Object.assign(link, {title: body.title ?? link.title, description: body.description ?? link.description, url: body.url ?? link.url});
+        return json({source: sourceView(link)});
+      }
       if (api === 'linked-docs' && method === 'GET') return json({linked: linked.map(linkView)});
       if (api === 'linked-docs' && method === 'POST') {
         const link = addLinked(body.url, body.title || titleOf(body.url), kindOf(body.url), body.description);
@@ -213,14 +236,13 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
     // ---- the page: two sections, internal docs by folder, linked docs as a list
     let page = await open('#/docs');
-    assert.deepEqual(await page.locator('.docs-section-head h2').allInnerTexts(), ['INTERNAL DOCS 2', 'LINKED DOCS 2']);
+    assert.deepEqual(await page.locator('.docs-section-head h2').allInnerTexts(), ['INTERNAL DOCS 2', 'EXTERNAL SOURCES 2']);
     assert.deepEqual(await items(page), ['Pricing and plans', 'Refund policy']);
     assert.equal(await page.locator('details[data-docs-folder="support"] .docs-item').count(), 1);
     const links = page.locator('.docs-link-main');
     assert.equal(await links.count(), 2);
-    assert.match(await links.first().textContent(), /Help centre[\s\S]*help\.acme\.example · Website[\s\S]*What customers read/);
-    assert.equal(await links.first().getAttribute('target'), '_blank');
-    assert.match(await links.first().getAttribute('rel'), /noopener/);
+    assert.match(await links.first().textContent(), /Help centre[\s\S]*Link only[\s\S]*What customers read/);
+    assert.match(await links.first().getAttribute('href'), /#\/docs\/source%3Alink-/);
     assert.equal(await links.nth(1).locator('.docs-kind').getAttribute('data-kind'), 'google_drive');
     assert.equal(await page.locator('.docs-welcome').count(), 1);
     await shot(page, 'list');
@@ -232,8 +254,10 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert(mainBox.x + mainBox.width <= railBox.x + 1, 'rail has its own space');
     await page.locator('.dask-form textarea').fill('What is the refund policy?');
     await page.locator('.dask-form button').click();
-    await page.locator('.dask-cite').waitFor();
-    assert.equal(await page.locator('.dask-cite').getAttribute('href'), '#/docs/doc-000000000001');
+    await page.locator('.dask-cite').first().waitFor();
+    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
+    assert.equal(await page.locator('.dask-cite', {hasText: 'External · Refunds'}).getAttribute('href'), externalCitation);
+    assert.equal(await page.locator('.dask-a .md-card').count(), 0);
     assert.equal(await page.locator('.dask-results a').textContent(), 'Refund policy');
     await shot(page, 'rail-desktop');
     // Archived personal conversations survive reload, restore sanitized answers and keep follow-ups in the same room.
@@ -257,7 +281,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await oldChat.click();
     await page.locator('[data-docs-ask] [data-answer]', {hasText: 'Refunds take 30 days'}).waitFor();
     assert.equal(await page.locator('.dask-q').innerText(), 'How do refunds work?');
-    assert.equal(await page.locator('.dask-cite').getAttribute('href'), '#/docs/doc-000000000001');
+    assert.equal(await page.locator('.dask-cite').first().getAttribute('href'), '#/docs/doc-000000000001');
     assert.equal(await page.evaluate(() => window.docsUnsafe), undefined);
     assert.equal(await page.locator('.dask-form button').isDisabled(), false);
     await page.locator('.dask-form textarea').fill('And gift cards?');
@@ -298,6 +322,20 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('.docs-reader-head h2', {hasText: 'Refund policy'}).waitFor();
     await shot(page, 'doc');
 
+    // Research: the Librarian adds what it finds on the web to the section chosen.
+    await page.locator('#doc-more').click();
+    await page.locator('#doc-research').click();
+    const research = page.locator('form[data-research-form]');
+    await research.locator('textarea[name=instructions]').fill('Add how other stores handle refunds');
+    await shot(page, 'research');
+    await research.locator('[type=submit]').click();
+    await research.locator('a', {hasText: 'View task'}).waitFor();
+    const asked = requests.findLast(r => r.api === 'librarian/research').body;
+    assert.equal(asked.instructions, 'Add how other stores handle refunds');
+    assert.equal(asked.section, '');
+    assert.equal(await research.locator('a', {hasText: 'View task'}).getAttribute('href'), '#/task/task-research');
+    await research.locator('button', {hasText: 'Close'}).click();
+
     // Market: the same rail, its own thread, answered from the market graph; what it drew on opens the note.
     const docsAsks = requests.filter(r => r.api === 'docs/ask').length;
     await page.evaluate(() => { location.hash = '#/market'; });
@@ -314,6 +352,12 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert.equal(await page.locator('[data-docs-ask] [data-answer]').innerText(), 'Rival competes on price.');
     await page.locator('.dask-cites .dask-cite').click();
     await page.waitForFunction(() => location.hash === '#/market?note=company%2Frival');
+    await page.locator('#market-read [data-market-research="company/rival"]').click();
+    await page.locator('form[data-research-form] textarea').fill('Find their pricing');
+    await page.locator('form[data-research-form] [type=submit]').click();
+    await page.locator('form[data-research-form] a', {hasText: 'View task'}).waitFor();
+    assert.equal(requests.findLast(r => r.api === 'librarian/research').body.target, 'company/rival');
+    await page.locator('form[data-research-form] button', {hasText: 'Close'}).click();
     assert.equal(await page.locator('[data-docs-ask]').count(), 1, 'a citation opens the note beside the rail');
     await page.evaluate(() => { location.hash = '#/docs'; });
     await page.locator('.docs-heading').waitFor();
@@ -407,24 +451,25 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
     // ---- linked docs: add (kind detected), open at the source, edit, remove
     page = await open('#/docs');
-    await page.locator('#docs-browser [data-docs-link]').first().click();
+    await page.locator('#docs-add-source').click();
     await page.locator('form[data-link-form] input[name=url]').fill('www.notion.so/Acme-Handbook');
-    assert.match(await page.locator('[data-detected]').textContent(), /Filed as Notion · notion\.so/);
+    assert.match(await page.locator('[data-detected]').textContent(), /Link only/);
     await page.locator('form[data-link-form] input[name=description]').fill('The company handbook');
     await page.locator('form[data-link-form] [type=submit]').click();
     await page.locator('.docs-link-main', {hasText: 'Acme-Handbook'}).waitFor();
-    assert.deepEqual(requests.findLast(r => r.api === 'linked-docs').body, {url: 'www.notion.so/Acme-Handbook', title: '', description: 'The company handbook'});
-    assert.equal(await page.locator('.docs-link', {hasText: 'Acme-Handbook'}).locator('.docs-kind').getAttribute('data-kind'), 'notion');
-    const [popup] = await Promise.all([page.waitForEvent('popup'), page.locator('.docs-link-main', {hasText: 'Help centre'}).click()]);
+    assert.deepEqual(requests.findLast(r => r.api === 'doc-sources').body, {url: 'www.notion.so/Acme-Handbook', title: '', description: 'The company handbook', reference: ''});
+    assert.equal(await page.locator('#docs-browser .docs-link', {hasText: 'Acme-Handbook'}).locator('.docs-kind').getAttribute('data-kind'), 'notion');
+    await page.locator('#docs-browser .docs-link-main', {hasText: 'Help centre'}).click();
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.getByRole('link', {name: 'Open original'}).click()]);
     await popup.waitForURL('https://help.acme.example/refunds', {timeout: t(5000), waitUntil: 'commit'});
     assert.equal(popup.url(), 'https://help.acme.example/refunds');
     await popup.close();
-    await page.locator('.docs-link', {hasText: 'Help centre'}).hover();
-    await page.locator('.docs-link', {hasText: 'Help centre'}).locator('[data-link-edit]').click();
+    await page.locator('#docs-browser .docs-link', {hasText: 'Help centre'}).hover();
+    await page.locator('#docs-browser .docs-link', {hasText: 'Help centre'}).locator('[data-link-edit]').click();
     await page.locator('form[data-link-form] input[name=title]').fill('Public help centre');
     await page.locator('form[data-link-form] [type=submit]').click();
     await page.locator('.docs-link-main', {hasText: 'Public help centre'}).waitFor();
-    await page.locator('.docs-link', {hasText: 'Brand assets'}).locator('[data-link-edit]').click();
+    await page.locator('#docs-browser .docs-link', {hasText: 'Brand assets'}).locator('[data-link-edit]').click();
     await page.locator('[data-remove]').click();
     await page.waitForFunction(() => !document.body.textContent.includes('Brand assets'));
     assert.deepEqual(linked.map(l => l.title), ['Public help centre', 'notion.so/Acme-Handbook']);
@@ -508,6 +553,14 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('#doc-archive').filter({hasText: 'Restore'}).click();
     await page.locator('#doc-archive').filter({hasText: 'Archive'}).waitFor({state: 'attached'});
     assert.equal(docs.get('doc-000000000002').archived, false);
+    // Hundreds of internal docs cannot push the external-source heading out of reach.
+    for (let i = 0; i < 300; i++) add('long-doc-' + i, `guides/guide-${i}.md`, 'Guide ' + i, 'Team procedures.');
+    await page.goto('https://tico-ui.test/#/docs');
+    await page.locator('#docs-h-internal', {hasText: '302'}).waitFor();
+    const scroll = await page.locator('.docs-internal-section .docs-group-scroll').evaluate(el => ({height: el.clientHeight, total: el.scrollHeight}));
+    assert(scroll.height > 0 && scroll.total > scroll.height);
+    const sourceHeading = await page.locator('#docs-h-linked').boundingBox();
+    assert(sourceHeading.y + sourceHeading.height < page.viewportSize().height);
     await page.close();
 
     assert.deepEqual(errors, []);

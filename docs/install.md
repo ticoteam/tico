@@ -26,10 +26,11 @@ first; on Linux the installer installs Docker for you.
 Run the installer with `--local` (a Mac or Linux; it asks for your email when you leave `--owner-email` out):
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
-That installs the newest release; to pin one, use `releases/download/vX.Y.Z/install.sh` instead of `releases/latest/download/install.sh`.
+The line saves the installer as `install.sh` in the current folder (replacing one already there), so it stops with an error when `curl` is missing or the download fails; on a bare Ubuntu or Debian,
+run `sudo apt-get install -y curl` first. That installs the newest release; to pin one, use `releases/download/vX.Y.Z/install.sh` instead of `releases/latest/download/install.sh`.
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
@@ -40,7 +41,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > AI providers adds it.
-2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group.
+2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
+   below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
@@ -50,14 +52,39 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
    profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > AI providers** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
-6. **Set up one starter.** Select **Content Marketer** (`content`) in the **Marketing** group, open its page and press **Set up**.
-   It needs only Tico; no GitHub or outside Tool is required. Tell it the readers, publishing plans, voice, topics and privacy rules
-   using the sample answers below. Answer any remaining questions and review its first draft in the same chat. Outbound
-   sending stays off until you turn it on for that bot.
-7. **Finish one task.** On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+
+### Your first result
+
+One bot, one fictional input, one reviewed draft: **Content Marketer** writes a short blog post about a made-up product, a
+person reviews it, and the person who asked closes the task. [Demo mode](demo.md) does not run bots, so do this on an install
+like the one above.
+
+**You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
+a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
+
+1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
+   in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
+   [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
+   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
+   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
+   and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
+   Outbound sending stays off until you turn it on for that bot.
+3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” Open the task to read its result, then close it. Success is a reviewed draft and a
-   completed task, with the computer online and no blocking Health issue.
+   no claims. Return a draft on this task.”
+4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
+   `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
+5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
+   press **Close** on the task (or **Close task** in its menu).
+
+Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
+Health issue.
+
+**Next: meeting notes.** Once this works, add **Project Coordinator** (`meeting-notes`, in **Operations**, or **Settings > Bots >
+Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
+summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Marketer
 
@@ -164,7 +191,7 @@ Open a shell on the server and run the installer of the release you want (see
 software it installs always match):
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh
 ```
 
 It asks for `sudo` if you are not root, and it prints each step. In order it:
@@ -177,7 +204,7 @@ It asks for `sudo` if you are not root, and it prints each step. In order it:
    `SHA256SUMS`. A bundle that does not match is refused and nothing is installed.
 4. **Runs the `tico setup` wizard** on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
 
-Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh` or `sh -s --` when piping:
+Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh install.sh`:
 
 | Flag | Meaning |
 |---|---|
@@ -325,6 +352,10 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
 2. Nothing to route by hand: the compose file runs cloudflared with a small config that sends `TICO_DOMAIN` to
    `http://server:8765` and answers anything else with a 404. The server writes it at every start. Only the DNS
    record is yours: a proxied CNAME for the hostname to `<tunnel id>.cfargotunnel.com` (the wizard creates it).
+   With Access in front, the wizard also gives the tunnel a runner hostname without Access (`--runner-hostname`; default
+   `runner.<domain>`, or `tico-runner.example.com` for `tico.example.com`, which Cloudflare's universal certificate covers;
+   `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
+   external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
    Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag.
 4. In `.env`: `COMPOSE_PROFILES=cloudflared,updater`, `TICO_DOMAIN=<hostname>`, `CLOUDFLARE_TUNNEL_TOKEN=<token>`,
@@ -339,7 +370,16 @@ it. Before this was shipped such a tunnel logged `No ingress rules ... cloudflar
 request with a 503 while its container showed as running. `python3 -m setup doctor` now fails on that 503 and on that log
 line, and says what to run: `docker compose pull && docker compose up -d` in `/opt/tico`.
 
-Computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
+**A runner hostname without Access.** To keep Access on the team hostname and let computers and external agents in
+without a bypass, add a second proxied CNAME, `runner.<domain>`, to the same tunnel (`<tunnel id>.cfargotunnel.com`),
+create no Access application for it, and set `TICO_RUNNER_URL=https://runner.<domain>` in `.env`. The server then also
+routes that hostname in the config it writes, for `/api/v2/...` and `/download/...` only (both check their own tokens);
+anything else on it gets the 404. A remotely managed tunnel needs the same route added in the dashboard.
+That hostname has no Access in front of it: it exposes every `/api/v2` route, each of which checks its own token, and
+the few that need none: the team icon (public), and agent pairing and setup, runner enrollment, the GitHub webhook and
+local sign-in, each protected by its own one-time code, an HMAC or a long secret.
+
+Otherwise computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
 service token for `/api/v2/runners/*` (the runner authenticates itself with its own token), and give `/api/v2/mcp` a
 Bypass policy so humans' own external agents can connect with their tokens ([Connect an external agent](connect-an-agent.md)).
 
@@ -347,7 +387,7 @@ Or run the bots' computer on the server itself and skip Access altogether: the r
 network and talks to it directly. With a one-time code from Settings > Computers > Add computer, on the server:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner \
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner \
   --url http://server:8765 --server-network tico_default --code <code> --label "Server computer"
 ```
 
@@ -389,8 +429,8 @@ On any Linux computer, run the line the app shows. It downloads the installer of
 runner and its updater start on that same release:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | \
-  sh -s -- --runner --url https://tico.example.com --code <code> --label "Build computer"
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && \
+  sh install.sh --runner --url https://tico.example.com --code <code> --label "Build computer"
 ```
 
 `vX.Y.Z` is your server's release (Settings and Settings > Health show it); `--runner` exists from v0.2.1.
@@ -412,7 +452,7 @@ existing `/opt/tico-runner/.env` (it says which), and every other setting stays;
 is no `.env` yet. Run with none of them, the installer keeps the `.env` as it is and only repairs and updates.
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner --code <new code>
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner --code <new code>
 ```
 
 **A computer on the same host as a local server (the quick start).** A server that answers on this computer only cannot be
@@ -420,8 +460,8 @@ reached at `127.0.0.1` from inside the runner's container, so the runner joins t
 this line when the server is local:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | \
-  sh -s -- --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && \
+  sh install.sh --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
 ```
 
 **Add a second computer on the same host (for a message bot).** A message bot must have a computer of its
@@ -429,7 +469,7 @@ own, so a second one on the same host is the usual next step ([mail](mail.md)). 
 a new code from Settings > Computers > Add computer; the first computer is not touched:
 
 ```
-curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh | sh -s -- --runner --name mail \
+curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh --runner --name mail \
   --url http://server:8765 --server-network tico_default --code <code> --label "Mail computer"
 ```
 
@@ -667,15 +707,26 @@ limited to it, on Cloudflare an R2 bucket (with an API token that has Workers R2
 already have. Turn on bucket versioning yourself if you make one by hand; a deleted or overwritten backup is then
 still recoverable. With `TICO_BLOB_BUCKET` set, attachments already live in S3 and are not copied again.
 
-**The credential key is copied too.** When no `TICO_CREDENTIAL_KMS_KEY` is set, the stored credentials are encrypted with
-a local key in `/data/credential.key` ([Credentials](credential-vault.md)); Litestream carries the database, not that file, and a
-database restored without it cannot decrypt a credential. The backup loop copies the key to the same place as the rest
-(the bucket and prefix in `TICO_BACKUP_URL`, else the `tico-backups` volume), as `credential-key/credential.key`, when it
-first appears and whenever it changes. It is stored as the bucket stores everything: encrypted at rest by the bucket (S3
-and R2 encrypt every object by default), which also means anyone who can read the bucket can read the key and the database
-together, so keep the bucket private and its access key to that bucket alone. The key is never logged or sent anywhere else,
-and Health warns while a local key exists and has not been copied yet. `GET /api/v2/config` carries
-`backup.credential_key: {present, copied_at, current}`.
+**The key files are copied too.** Litestream carries the database, not the files beside it that decrypt what the
+database stores. A database restored without them cannot open those secrets:
+
+| File in `/data` | Opens | When it exists |
+|---|---|---|
+| `credential.key` | every saved credential ([Credentials](credential-vault.md)) | no `TICO_CREDENTIAL_KMS_KEY` |
+| `github-app.key` | the GitHub App's private key, client secret and webhook secret, and the directory sync credentials | no `TICO_CREDENTIAL_KMS_KEY` (or GitHub connected, or directory sync saved, before it was set) |
+| `slack.key` | the Slack tokens pasted in Settings > Slack | no `TICO_CREDENTIAL_KMS_KEY` (or Slack tokens saved before it was set) |
+
+The backup loop copies each to the same place as the rest (the bucket and prefix in `TICO_BACKUP_URL`, else the
+`tico-backups` volume), as `credential-key/<file>`, when it first appears and whenever it changes. A different copy already there (the key that
+opens a restored database, when a new key was made after the file was lost) is kept as `credential-key/<file>.replaced-<time>`,
+never overwritten. They are stored as the
+bucket stores everything: encrypted at rest by the bucket (S3 and R2 encrypt every object by default), which also means
+anyone who can read the bucket can read the keys and the database together, so keep the bucket private and its access
+key to that bucket alone. The keys are never logged or sent anywhere else, and Health warns while one exists and has not
+been copied yet. `GET /api/v2/config` carries `backup.credential_key: {present, copied_at, current}` and
+`backup.key_files: {<file>: {present, copied_at, current}}`. `tico-session-secret`, which only signs the few minutes of an
+OpenID Connect sign-in, is not copied: a new one is made on the new volume and nobody's session ends (sessions are in the
+database).
 
 **A lost volume never becomes a blank team.** The server records that it is an existing team outside the
 database: a `.tico-environment` file in the data volume and an `environment.json` object beside the backup. When it
@@ -690,20 +741,59 @@ team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `
 
 ```
 docker compose stop server
-docker compose run --rm --no-deps server restore    # database, attachments and the credential key
+docker compose run --rm --no-deps server restore    # database, attachments and the key files
 docker compose up -d
 ```
 
-**The credential key is backed up with the database.** Credentials are encrypted with a key in `/data/credential.key`
-(docs/credential-vault.md). The backup copies it beside the database whenever it changes, and Health warns if it has not been
-copied. `restore` puts the key back at `/data/credential.key` (mode 0600) when the backup has one. A key already on the
-volume is left alone (with `--force` it is kept beside the restored one as `credential.key.before-restore.<time>`). If
-the database was restored by itself on first start, or from a bucket that has no key, run `restore` again or copy the
-object `credential-key/credential.key` from the backup location to `/data/credential.key` by hand, then restart. With
-`TICO_CREDENTIAL_KMS_KEY` set there is no file to keep.
+**The key files are backed up with the database.** `restore` puts `credential.key`, `github-app.key` and `slack.key` back
+in `/data` (mode 0600) when the backup has them, and says which it does not have. A key already on the volume is left
+alone (with `--force` it is kept beside the restored one as `<file>.before-restore.<time>`). If the database was restored
+by itself on first start, or from a backup made before a file was copied, run `restore` again or copy the object
+`credential-key/<file>` from the backup location to `/data/<file>` by hand (32 bytes, mode 0600, owned by the server's
+user), then restart. Health's **Stored secrets** check names any secret a missing or wrong key file cannot open, and the
+file to put back. A backup made before a key was copied cannot bring it back: copy it from the old server's volume if it
+still exists. Else paste the Slack tokens again, and disconnect and reconnect GitHub or save the directory sync
+credentials again: Tico asks you to confirm replacing the lost key, then drops the GitHub App and every directory source's
+credentials sealed with it (recorded as `github.lost_key_replaced`), and you enter them again (in the API: `POST
+/api/v2/github/app/replace-lost-key`, or `replace_lost_key` on `PUT /api/v2/directory`; never through a proposal card). With
+`TICO_CREDENTIAL_KMS_KEY` set, credentials, the GitHub App and Slack use the KMS-wrapped key in the database, and only a
+`github-app.key` or `slack.key` from before KMS was set needs keeping.
+
+**Setting `TICO_CREDENTIAL_KMS_KEY` after GitHub, directory sync or Slack were connected** needs nothing else: a secret
+sealed with `github-app.key` or `slack.key` before then still opens with that file, and the first time the server reads
+it (a GitHub token, a webhook, a directory sync, the Slack gateway starting) it is re-sealed with the KMS-wrapped key, once,
+and the server log says which (`Re-sealed github_app app ...`, never a secret). Until every one has been re-sealed,
+Health's **Stored secrets** says how many still need each file ("2 secrets still need github-app.key and 1 still needs
+slack.key"): keep the files until that line clears, and keep them in the backup after that too, since a backup from
+before KMS still needs them. Reading never makes a new one. If a file is gone, **Stored secrets** warns and names what
+it sealed; enter those again.
+
+**Hand-run and scheduled bundle backups carry the key files too.** The bundle that `python -m backend.manage backup`
+uploads, and the scheduled AWS backup (`backups/<tier>/...`, the same bundle code), holds the database at its key, its
+manifest and the attachments, and also each of `credential.key`, `github-app.key` and
+`slack.key` present beside the database, as `<key>.keys/<file>`, each read back after upload; a key file that is not 32
+bytes stops the backup before its manifest is published. `python -m backend.backup --bucket ... --key ... --database
+<new path> ...` restores them beside the new database (mode 0600) after checking each against the manifest, and refuses,
+before restoring anything, when a different key of that name is already in the target directory. A bundle made before
+this release has no key files: copy them from `credential-key/` in the automatic backup, or from the old volume. The
+scheduled restore check reads them too, into its temporary copy, which it removes.
+
+**Anyone who can read the backup bucket can open the stored secrets, unless `TICO_CREDENTIAL_KMS_KEY` is set.** Every
+backup above (Litestream's `credential-key/`, hand-run and scheduled bundles) puts the database and the key files that
+decrypt it in the same bucket, so read access to the bucket is read access to every credential, the GitHub App's private
+key, the directory sync credentials and the Slack tokens. With KMS, the credentials and anything sealed after KMS was set
+also need `kms:Decrypt` on the key, which the bucket does not grant. To harden a local-key install, keep the backups in a
+separate bucket (or at least a separate prefix) whose access key or role is used only by the backup and the restore, with
+no other reader; turn on versioning, and never share it with the attachment bucket's or an application's credentials.
+
+**`manage.py restore` is in place, on the same machine.** `python -m backend.manage restore <snapshot> <new database>`
+restores a local snapshot file next to the key files already on this computer; it does not read or move key files. To
+restore on another machine, use the bundle restore (`python -m backend.backup`, which brings the key files back) or
+`docker compose run --rm server restore`, or copy `credential.key`, `github-app.key` and `slack.key` across yourself
+(32 bytes each, mode 0600, owned by the server's user).
 
 **Restore an existing install.** `restore` refuses a volume that already holds data. Stop the server and add `--force`
-to restore the database, attachments and Credential key together:
+to restore the database, attachments and key files together:
 
 ```
 docker compose stop server
@@ -711,8 +801,8 @@ docker compose run --rm --no-deps server restore --force
 docker compose up -d
 ```
 
-Tico keeps the current database as `hub.sqlite.before-restore.<time>` and the current key as
-`credential.key.before-restore.<time>` beside the restored files. The install's permanent id
+Tico keeps the current database as `hub.sqlite.before-restore.<time>` and each different key file as
+`<file>.before-restore.<time>` beside the restored files. The install's permanent id
 (`TICO_ENVIRONMENT_ID`) is stored in the database, so it comes back with the restore and the Macs and runners
 already enrolled keep working.
 
@@ -726,11 +816,28 @@ docker compose up -d
 
 and point the domain at the new computer (Cloudflare tunnel: run the same tunnel token there). Stop the old server
 first; two servers writing to one bucket corrupt the replica. A fresh volume that finds a backup also restores the
-database by itself on first start, but run `restore` so attachments and any error are visible. This needs the
-bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason to set
-`TICO_BACKUP_URL`.
+database by itself on first start, but run `restore` so attachments, the key files and any error are visible. This
+needs the bucket, so with the default local-only backups you can only rebuild on the same computer; that is the reason
+to set `TICO_BACKUP_URL`. Moving the volume by hand instead (a `docker cp` or a disk copy) needs every file in `/data`,
+not only `hub.sqlite`: `credential.key`, `github-app.key` and `slack.key` with it, or the secrets they seal are lost.
 
 Runners hold no team data that is not in a git remote, but back up their volume if bots keep local work.
+
+### Check the AWS identity
+
+On AWS, the server's default AWS credentials (an instance or task role, usually) decide which account its KMS key,
+Secrets Manager secrets and attachments bucket are used in. To make sure a start never runs with another account's
+credentials (a changed role, a copied server), set the account it must run as:
+
+```
+TICO_EXPECTED_AWS_ACCOUNT=123456789012
+TICO_EXPECTED_AWS_ROLE=tico-server        # optional: a role name, or arn:aws:iam::123456789012:role/path/tico-server
+```
+
+Before the server and the Slack gateway start, and before `restore` reads the backup, each asks AWS STS who it is
+(`GetCallerIdentity`, which needs no IAM permission). It refuses, with one line in the log naming the expected and the
+actual account or role, when the account differs, the caller is not that role, no credentials are found, or STS does not answer (about
+10 seconds a try, two tries). A rehearsal checks too. Unset, nothing is checked and nothing is called.
 
 ### Rehearse a migration
 
@@ -793,7 +900,7 @@ docker compose -f compose.yaml -f rehearsal.yaml exec server cat /data/local-own
 ```
 
 Open `http://127.0.0.1:8877/api/v2/local-signin?token=<token>` with that token. The backup is mounted read-only:
-restore reads the database, attachments and credential key; rehearsal does not write backups or call a decision provider.
+restore reads the database, attachments and key files; rehearsal does not write backups or call a decision provider.
 Restart the source from its original directory with `docker compose start server`. Remove the rehearsal when finished with
 `docker compose -f compose.yaml -f rehearsal.yaml down -v`; its external source backup volume is kept.
 

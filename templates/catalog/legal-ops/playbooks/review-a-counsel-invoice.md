@@ -28,9 +28,9 @@ Check the arithmetic of every line and the total.
 
 `reports/invoices/<firm>-<invoice>.md`: two lines first (billed, in question, the main reason), the lines to question
 in a table with the rule each breaks, budget position after this invoice, then a draft query to the firm in plain
-words to send with Tools when outbound_send is on, then **Summary for a human, not legal advice.** `hub file publish` it.
+words to send with Tools when a person has turned mail sending on in Tico, then **Summary for a human, not legal advice.** `hub file publish` it.
 
 ## 4. Hand over
 
-Put it on the task for the owner named at setup. Process requested payments or queries within the stated terms and your Tools; messages to the firm stay drafts until `outbound_send` is on. Update the
+Put it on the task for the owner named at setup. Process requested payments or queries within the stated terms and your Tools; messages to the firm stay drafts until a person turns mail sending on in Tico. Update the
 matter's spend to date in `knowledge/matters.md`, commit, and `hub task update <id> --status done --note`.

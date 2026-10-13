@@ -24,7 +24,7 @@ def test_codex_native_set_pause_resume_clear_and_completion():
     host.start_goal('thread', 'clear', 'Acme summary')
     assert host.request.call_args.args == ('thread/goal/clear', {'threadId': 'thread'})
     host.drain()
-    for status, expected in [('active', 'active'), ('complete', 'met'), ('blocked', 'stopped'),
+    for status, expected in [('active', 'active'), ('complete', 'met'), ('blocked', 'paused'),
                              ('budgetLimited', 'stopped'), ('usageLimited', 'stopped')]:
         host._on_notification('thread/goal/updated', {'threadId': 'thread',
             'goal': {'objective': 'Acme summary', 'status': status}})
@@ -150,7 +150,7 @@ def test_codex_real_clear_and_stopped_states_are_not_hidden():
     snapshot = {"kind": "goal", "status": "cleared"}
     host.request.return_value = {"goal": None}
     assert goals.reconcile_codex_clear(host, "thread", snapshot, "Acme summary") == snapshot
-    for native, status in [("paused", "paused"), ("complete", "met"), ("blocked", "stopped")]:
+    for native, status in [("paused", "paused"), ("complete", "met"), ("blocked", "paused"), ("usageLimited", "stopped")]:
         host.request.return_value = {"goal": {"objective": "Acme summary", "status": native}}
         assert goals.reconcile_codex_clear(host, "thread", snapshot, "Acme summary")["status"] == status
     host.request.return_value = {"goal": {"objective": "Different goal", "status": "active"}}

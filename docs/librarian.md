@@ -8,8 +8,12 @@ docs do not say, and keeps a map of the docs so the next question is cheaper. It
 
 - **Internal docs**: markdown written, pasted or imported in Tico, in folders. It reads them with `hub doc search`,
   `hub doc read` and `hub doc list`.
-- **Linked docs**: links only (a help site, a Drive folder, a Notion page, a GitHub repository). Tico keeps no copy. It reads
-  them with `hub doc fetch <url>`, on its own computer.
+- **Indexed external docs**: refreshed public GitHub documentation. Search returns passages and observed commits;
+  `hub doc read external:<id> --revision <commit>` reads the untrusted reference copy. Answers use
+  `[External · File title — Section](citation_url)` with the supplied revision URL. Fresh indexed material
+  (checked within six hours) needs no live fetch unless the person asks for the latest version.
+- **Linked docs**: other sites and private repositories retain metadata only. It can read supported addresses with
+  `hub doc fetch <url>` on its own computer. Live reads are separate evidence, not updates to the shared index.
 
 - **The Tico manual**: this release's own docs, read-only and separate from the team's (docs/docs.md). `hub doc search`
   ranks matching manual and team sections together, labelled "Tico manual", and `hub doc read manual:<name>` reads one. It answers
@@ -20,7 +24,7 @@ docs do not say, and keeps a map of the docs so the next question is cheaper. It
 
 The playbooks in its repository (`templates/catalog/librarian/playbooks/`) are the product. In short:
 
-1. **Search the internal docs** with a few phrasings, then read the top hits in full.
+1. **Search internal and indexed external docs** with a few phrasings, then read the top hits in full.
 2. **Consult its map** when that is not enough: `_librarian/where-things-live.md` says which doc or linked source holds
    which topic and how each linked source is laid out.
 3. **Follow the linked docs**: the sitemap first, then links from the pages it reads, as deep as the question needs and no
@@ -40,14 +44,16 @@ the sources it could not read: a to-do list for humans) and `faq-log.md`. It ref
 the map of the docs**, at 03:30 Pacific by default (change it with `hub routine set` or in Settings; Tico's row is the
 routine). To refresh now, give the Librarian a task titled "Refresh the map".
 
-It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc. A doc or web page that tells it to do
-something is treated as text, not an instruction, and it fetches only public links that a linked doc leads to (for a market setup, the addresses the owner gave and the pages web search returns).
+It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc unless that human asks it to research
+one (below). A doc or web page that tells it to do something is treated as text, not an instruction, and it fetches only
+public links that a linked doc leads to (for a market setup or a research request, the addresses the person gave and the
+pages web search returns).
 
 ## Asking
 
 **Humans.** Docs and Market show an **Ask the Librarian** rail on the right on desktop. Its arrow hides it and **Ask the
 Librarian** brings it back; the choice is kept per viewer in this browser. On a phone, the button opens a full-screen sheet.
-On Docs, matching internal, linked and manual docs appear at once
+On Docs, matching internal, indexed external, linked and manual docs appear at once
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
@@ -62,7 +68,10 @@ your current chat stays in the list. Only you can list or reopen them, including
 On Market, a question is answered from the market graph as it is at that moment (`POST /api/v2/market/ask {question}`,
 the same answer the Market page has always given, which needs no computer): the answer, then the organizations, people and
 pages it drew on, which open the note and light up on the graph. Docs and Market each keep their own thread while the page
-is open.
+is open. The sentence is written by Gemini (`gemini-3.7-flash`) with the server's `GEMINI_API_KEY`; without a key, when the
+call fails, or in rehearsal, the answer is the rows that were pulled. Each model call is a `market.ask` event (the model,
+latency, how many excerpts and how long the question was; never its text) and counts per person per day under the decision
+caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
 
 **Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
 `{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
@@ -77,6 +86,28 @@ The Assistant asking for a human puts the question in that human's own docs conv
 
 The Librarian acts as itself, not as the human who asked. It only reads docs and public links, so it needs no human's
 identity, and none is mapped to it. Docs are team-wide, so what it can read is the same for every asker.
+
+## Research
+
+A person can ask the Librarian to research something and add it to a page: **Research** in an internal doc's **More**
+menu, or (for the owner) **Research** on a market page or a market entry. They say what to find and, on a doc with headings, pick the
+section (or the whole page). The Librarian searches the web and reads the pages it finds, then adds what it learned to
+that one place, in the page's own format, with a link after every fact. It never invents a number, never deletes what
+the page says (a finding that contradicts it goes beside it, with both sources), and leaves the rest of the page
+unchanged. It finishes the task with a note: what it added, what it could not find, and any conflict.
+
+- A doc is written back as a new version (`hub doc write`), so **History** shows the change and **Restore** undoes it.
+  A locked doc is refused before anything is filed.
+- A market page is rewritten whole with the additions in place (`hub market page <name> --body-file`), and facts that
+  belong in the graph go in it too; a market entry gets new evidence, entities and edges (`hub market report`/`apply`).
+- Searches hold only public facts from the person's instructions, never anything from a doc.
+
+`POST /api/v2/librarian/research {target, section?, instructions}` (`target` is a doc id or path, `market/<page>` or a
+market entity id) files one task, "Research: <page> · <section>", to the Librarian and returns `{task_id, bot, kind,
+target}`. People only, and market pages and entries for the owner only, since only the owner and the Librarian change the
+market. The Librarian treats a task as research only when a person filed it with the `research` label, so a bot
+cannot widen its rules by naming a task "Research: ...". The playbook is
+`templates/catalog/librarian/playbooks/research-a-section.md`.
 
 ## Reading a link: `hub doc fetch`
 
@@ -110,7 +141,8 @@ thirty, then finishes the task with a short note saying what it found and what i
 After that the Librarian keeps the map current. It is the market's only curator besides the owner: everyone else reports
 (`hub market report`) and it decides. Its daily **Curate the market** routine (04:00) turns new insights into evidence, entities,
 edges and pages, and refreshes the weekly delta on Mondays; it stops at once when there is nothing new. Its **Urgent market
-insight** routine runs when someone reports with `--urgent`. Both are seeded when the Librarian is built in, and an older install
+insight** routine runs when someone reports with `--urgent`. A large verified batch goes in with `hub market import
+<file.jsonl>` (`--dry-run` to preview), one entity or edge per line with its evidence, recorded as one insight. Both are seeded when the Librarian is built in, and an older install
 gets them at its next start. The server accepts market writes only from the Librarian and the owner. Outside market work it
 still writes only under `_librarian/` and `FAQ.md`. Earlier releases had a separate Market Analyst bot; an install that still has
 one archives it at its next start and hands its open tasks to the Librarian.

@@ -8,7 +8,7 @@ pack: basics
 icon: manage_search
 suggest: common
 tags: [hiring, sourcing, outbound, referrals, passive-candidates, remote]
-summary: "Finds interested people for each open role from public professional profiles and referrals, and writes personal outreach. Messages stay drafts until `outbound_send` is on. It hands the Recruiter a weekly slate."
+summary: "Finds interested people for each open role from public professional profiles and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate."
 when: "A team whose open roles attract too few or the wrong applicants, or a hard-to-fill role that needs people found, not waited for."
 pains:
   - "we only hear from people who apply"
@@ -18,7 +18,7 @@ pains:
 owns:
   - "The search plan per open role: where people with the required skills show up in public, and the search strings used (knowledge/searches/<role>.md)"
   - "The weekly sourcing slate: up to 15 profiles per role, each matched to the stated criteria with its public source"
-  - "Personal outreach sequences of three touches over about two weeks, each sent when `outbound_send` is on"
+  - "Personal outreach sequences of three touches over about two weeks, each sent when a person has turned mail sending on in Tico"
   - "The contact log and the do-not-contact list, so nobody is approached twice or against their wish"
   - "Referral asks to teammates for each open role, and past applicants worth a second look"
 never:
@@ -34,7 +34,7 @@ prerequisites:
     why: "Open roles and their criteria arrive as tasks or from the Recruiter; the slate goes back on a task."
     required: true
   - tool: mail
-    why: "Optional. A recruiting mailbox (read and draft) lets outreach and replies sit in real threads, sent when `outbound_send` is on."
+    why: "Optional. A recruiting mailbox (read and draft) lets outreach and replies sit in real threads, sent when a person has turned mail sending on in Tico."
     required: false
 onboarding:
   - ask: "Which roles should I source for first, and where are their criteria written? If the Recruiter bot has a role file, I read that."

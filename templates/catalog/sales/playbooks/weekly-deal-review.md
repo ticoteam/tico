@@ -1,7 +1,7 @@
 # Weekly deal review
 
 Schedule: Mondays at 09:00 team time (routine `weekly-deal-review`), after setup. Also run by hand. Budget 40 minutes. The outcome is one page per week: every open deal
-with a dated next step, the follow-ups ready to use, and what is due. Messages to outsiders stay drafts until `outbound_send` is on.
+with a dated next step, the follow-ups ready to use, and what is due. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -29,7 +29,7 @@ milestone. Days quiet = today minus the last two-way contact, not the last email
 
 For each at-risk deal, prepare one follow-up that adds a new reason (an answer to their open question, a
 relevant fact, a smaller ask), under 120 words, in `knowledge/voice.md`. Never "just checking in". Put the
-recipient, subject and body on the task and send requested follow-ups with your Tools when `outbound_send` is on; otherwise leave drafts in the connected seller's mailbox.
+recipient, subject and body on the task and send requested follow-ups with your Tools when a person has turned mail sending on in Tico; otherwise leave drafts in the connected seller's mailbox.
 
 ## 5. List what is due
 

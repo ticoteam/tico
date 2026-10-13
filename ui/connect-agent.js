@@ -28,11 +28,11 @@
         'Ask it “who needs me”.'],
       blocks: (url, token) => [['For a Grok Bot', `Add a custom MCP server:\nName: tico\nURL: ${url}\nHeader: ${header(token)}`],
         ['Grok Build', `grok mcp add --transport http tico ${url} --header "${header(token)}"`]]},
-    {id: 'dots', name: 'Dots', logo: '', alias: /^dots\b/i,
-      steps: ['In Dots, add a <b>remote MCP server</b> (Streamable HTTP) with the URL and the header below.',
-        'If it offers only OAuth sign-in, it can’t use a token yet.',
+    {id: 'dots', name: 'Dots', logo: '', alias: /^dots\b/i, oauth: true,
+      steps: ['In Dots, add a <b>connector</b> (remote MCP server) with the URL below. No token needed.',
+        'When it asks, sign in to Tico and press <b>Allow</b>.',
         'Ask it “who needs me”.'],
-      blocks: (url, token) => [['Header', header(token)]]},
+      blocks: () => []},
     {id: 'muse', name: 'Muse', logo: '', alias: /^muse\b|^meta-muse|^meta muse/i,
       steps: ['In <b>Muse</b>, ask it to make a custom connector for the MCP server at the URL, with the header below.',
         '<b>Muse Code</b>: add the JSON below to <code>~/.config/muse/settings.json</code>.',
@@ -42,7 +42,7 @@
           headers: {Authorization: 'Bearer ' + token}}}}, null, 2)]]},
     {id: 'claude', name: 'Claude', logo: '', alias: /^claude/i,
       steps: ['<b>Claude Code</b>: run the command below.',
-        '<b>Claude app</b>: <b>Customize › Connectors › Add custom connector</b>, paste the URL, pick <b>No sign-in</b>, and add the header under <b>Request headers</b> (beta, not on every plan).',
+        '<b>Claude app</b>: <b>Customize › Connectors › Add custom connector</b>, paste the URL, and sign in to Tico when it asks.',
         'Ask it “who needs me”.'],
       blocks: (url, token) => [['Claude Code', `claude mcp add --transport http tico ${url} --header "${header(token)}"`],
         ['Header', header(token)]]},
@@ -219,14 +219,16 @@
         <div class="ca-section"><h4 class="ca-label">MCP server URL</h4>
           <div class="ca-row"><code data-url>${esc(url)}</code><button class="ghost" type="button" data-copy-url>Copy</button></div>
           ${bypass ? '<p class="ca-note" data-access-note>Cloudflare Access must let <code>/api/v2/mcp</code> through: give that path a Bypass policy. Tico checks the token itself.</p>' : ''}</div>
-        <div class="ca-section" data-token-section><h4 class="ca-label">Token</h4>
+        ${agent.oauth ? '' : `<div class="ca-section" data-token-section><h4 class="ca-label">Token</h4>
           ${agent.other ? `<div class="ca-row"><input type="text" data-other maxlength="40" placeholder="External agent name" aria-label="External agent name" autocomplete="off"></div>` : ''}
-          <div class="ca-actions"><button class="primary" type="button" data-create>Create token</button></div></div>
+          <div class="ca-actions"><button class="primary" type="button" data-create>Create token</button></div></div>`}
         <ol class="ca-steps">${agent.steps.map(step => `<li><span>${step}</span></li>`).join('')}</ol>
         <div data-after></div>`;
       body.querySelector('[data-back]').onclick = () => void showPicker();
       copyButton(body.querySelector('[data-copy-url]'), () => url);
-      body.querySelector('[data-create]').onclick = event => void createToken(agent, url, event.currentTarget);
+      // An agent that signs in with OAuth (backend/mcp_oauth.py) gets its token from the person's Allow; it is
+      // listed under Connected once it has called.
+      if (!agent.oauth) body.querySelector('[data-create]').onclick = event => void createToken(agent, url, event.currentTarget);
     }
 
     async function createToken(agent, url, button) {

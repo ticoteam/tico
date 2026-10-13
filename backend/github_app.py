@@ -16,6 +16,7 @@ import secrets
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,8 @@ log = logging.getLogger("tico.github_app")
 API = "https://api.github.com"
 STATE_TTL = 3600
 LIVE_TTL = 60                 # how long the installation's live permissions are trusted
+# Token requests sit on the request thread pool, so GitHub failing to answer must fail fast, not hold a thread.
+TIMEOUT = httpx.Timeout(10, connect=3)
 # Start-of-turn tokens seed `GH_TOKEN` and may be used throughout a turn, so keep at least 45 minutes
 # remaining. The git credential helper can ask again per call, so its explicit purpose needs only ten.
 TURN_START_REFRESH_MARGIN = 45 * 60
@@ -87,7 +90,7 @@ CREATE TABLE IF NOT EXISTS github_product_repo_operations(
 
 
 def _client():
-    return httpx.Client(base_url=API, timeout=15, transport=TRANSPORT,
+    return httpx.Client(base_url=API, timeout=TIMEOUT, transport=TRANSPORT,
                         headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                                  "User-Agent": "Tico-GitHub-App"})
 
@@ -120,6 +123,15 @@ def validate_product_repo_name(name):
     return name
 
 
+KEY_FILE = "github-app.key"
+MISSING_KEY = ("The GitHub App key file (github-app.key) is missing from the data volume: restore it from the backup "
+               "made with this database (docs/install.md, Backups and restore)")
+LOST_KEY = ("The key for the saved GitHub App and directory sync secrets (github-app.key) is missing from the data volume, "
+            "so they cannot be opened. Restore it from the backup (credential-key/github-app.key) and restart; or, if no "
+            "backup has it, confirm replacing it (POST /api/v2/github/app/replace-lost-key, or replace_lost_key on the "
+            "directory save) to drop those secrets and enter them again.")
+
+
 class GitHubApp:
     """The stored app, its at-rest encryption, and installation-token minting."""
 
@@ -129,6 +141,7 @@ class GitHubApp:
         self.audited_tokens = {}
         self.live = {}
         self.lock = threading.Lock()
+        self.minting = {}             # (cache key, diagnose) -> Future of the one mint in flight for it
         # Serialize confirmed product creates in this process so same-process retries see the
         # completed receipt. The committed operation row is the cross-process/crash fence.
         self.product_repo_create_lock = threading.Lock()
@@ -145,21 +158,80 @@ class GitHubApp:
             c.executescript(SCHEMA)
 
     # -- secret storage ---------------------------------------------------------------------
-    def _key(self, c):
+    def key_file(self):
+        """The local key file: backed up beside credential.key (backend/replication.py), since a restored database
+        without it cannot open the app's secrets or the directory sync credentials."""
+        return Path(self.settings.db_path).parent / KEY_FILE
+
+    def _sealed_elsewhere(self, c, replacing):
+        """Whether anything but what this save replaces is sealed with the local key: a GitHub App row, or directory sync
+        credentials of another source. `replacing` is "app" or "directory:<source>"."""
+        if replacing != "app" and c.execute("SELECT 1 FROM github_app WHERE id='app'").fetchone():
+            return True
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone():
+            return False
+        source = replacing.split(":", 1)[1] if replacing.startswith("directory:") else None
+        return bool(c.execute("SELECT 1 FROM directory_credentials WHERE source IS NOT ?", (source,)).fetchone())
+
+    def _key(self, c, create=True, replacing="app"):
         """The vault's KMS-wrapped key when the deployment has one; otherwise a local key file kept
-        beside the database, so a copy of the database alone does not carry the app's private key."""
+        beside the database, so a copy of the database alone does not carry the app's private key.
+        Only a save makes the file: a read with it missing returns None, so a restore that lost it is not
+        papered over by a new key that opens nothing. A save makes one only when nothing else is sealed with the
+        missing key: a new key would leave that unreadable, and the backup copy of the old key is what opens it."""
         if self.settings.credential_kms_key and self.vault is not None:
             return self.vault.cipher.key(c)
-        path = Path(self.settings.db_path).parent / "github-app.key"
+        path = self.key_file()
         if not path.exists():
+            if not create:
+                return None
+            if self._sealed_elsewhere(c, replacing):
+                raise Problem("github_key_missing", LOST_KEY, 409)
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as out:
                 out.write(os.urandom(32))
         return path.read_bytes()
 
-    def secret_key(self, c):
+    def key_lost(self, c):
+        """No local key file, and secrets sealed with the one that was there: nothing here can open them again."""
+        if self.kms():
+            return False
+        return not self.key_file().exists() and self._sealed_elsewhere(c, "")
+
+    def replace_lost_key(self, c, actor):
+        """The owner's confirmed way out when no copy of github-app.key exists anywhere: drop what only that key opens
+        (the GitHub App row and every directory source's credentials), so the next save makes a new key. Does nothing
+        while the key is there. A copy the backup held is kept there as credential-key/github-app.key.replaced-<time>."""
+        if not self.key_lost(c):
+            return False
+        app = self.row(c)
+        sources = [r["source"] for r in c.execute("SELECT source FROM directory_credentials")] if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='directory_credentials'").fetchone() else []
+        if app:
+            self.forget(c)
+        if sources:
+            c.execute("DELETE FROM directory_credentials")
+        H.event(c, actor, "github.lost_key_replaced", app["slug"] if app else "",
+                {"github_app": bool(app), "directory_sources": sources})
+        return True
+
+    def kms(self):
+        return bool(self.settings.credential_kms_key and self.vault is not None)
+
+    def open_sealed(self, c, row, aad, table="github_app", where="id", value="app"):
+        """A sealed row's plaintext, or None when no key is there to open it. Under KMS a row saved before
+        TICO_CREDENTIAL_KMS_KEY was set opens with github-app.key (if it is still on the data volume) and is
+        re-sealed with the vault key once. Raises when no key opens it."""
+        key = self._key(c, create=False)
+        if key is None:
+            return None
+        from .credentials import open_or_reseal
+        return open_or_reseal(c, key, self.key_file() if self.kms() else None, row["nonce"], row["ciphertext"], aad,
+                              table, where, value, log)
+
+    def secret_key(self, c, create=True, replacing=""):
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
-        return self._key(c)
+        return self._key(c, create, replacing)
 
     def save(self, c, actor, org, administration, conversion):
         secrets_blob = json.dumps({"pem": conversion["pem"], "webhook_secret": conversion.get("webhook_secret") or "",
@@ -167,6 +239,8 @@ class GitHubApp:
         nonce = os.urandom(12)
         sealed = AESGCM(self._key(c)).encrypt(nonce, secrets_blob, b"tico-github-app:v1")
         c.execute("DELETE FROM github_app")
+        from .repo_waits import remember_owner
+        remember_owner(c, conversion)
         c.execute("INSERT INTO github_app VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?)",
                   (int(conversion["id"]), conversion["slug"], conversion["client_id"], org, int(administration),
                    str(conversion.get("html_url") or ""), sealed, nonce, H.now(), actor))
@@ -181,10 +255,14 @@ class GitHubApp:
 
     def private_key(self, c, row):
         try:
-            blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
-            return json.loads(blob)["pem"]
+            blob = self.open_sealed(c, row, b"tico-github-app:v1")
+        except Problem:
+            raise
         except Exception:
             raise Problem("github_unavailable", "The stored GitHub App key could not be decrypted", 503) from None
+        if blob is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
+        return json.loads(blob)["pem"]
 
     def webhook_secret(self):
         with self.store.read() as c:
@@ -192,13 +270,14 @@ class GitHubApp:
             if not row:
                 return ""
             try:
-                blob = AESGCM(self._key(c)).decrypt(row["nonce"], row["ciphertext"], b"tico-github-app:v1")
-                return json.loads(blob).get("webhook_secret") or ""
+                return json.loads(self.open_sealed(c, row, b"tico-github-app:v1")).get("webhook_secret") or ""
             except Exception:
                 return ""
 
     def forget(self, c):
+        from .repo_waits import forget
         c.execute("DELETE FROM github_app")
+        forget(c)
         c.execute("UPDATE repositories SET reachable=0 WHERE reachable<>0")
         c.execute("DELETE FROM github_app_states")
         c.execute("DELETE FROM registry_metadata WHERE key IN ('repositories-reachability-verified','repositories-confirmed-missing')")
@@ -209,9 +288,25 @@ class GitHubApp:
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
         now = int(time.time())
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
+                return hit[2]
         # GitHub rejects an exp more than ten minutes out; iat is backdated for clock drift.
-        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
-                          self.private_key(c, row), algorithm="RS256")
+        token = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])},
+                           self.private_key(c, row), algorithm="RS256")
+        with self.lock:
+            self.live["jwt"] = (row["app_id"], now + 540, token)
+        return token
+
+    def _jwt(self):
+        """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
+        with self.lock:
+            hit = self.live.get("jwt")
+            if hit and hit[1] - 60 > time.time():
+                return hit[2]
+        with self.store.transaction() as c:    # the at-rest key may be written the first time it is read
+            return self.app_jwt(c, self.row(c))
 
     def _call(self, method, path, **kw):
         if self.settings.rehearsal:
@@ -233,13 +328,12 @@ class GitHubApp:
 
     def installation(self, refresh=False):
         """The org's installation id, discovered through the app and remembered."""
-        with self.store.transaction() as c:
-            row = self.row(c)
-            if not row:
-                return None
-            if row["installation_id"] and not refresh:
-                return int(row["installation_id"])
-            token = self.app_jwt(c, row)
+        row = self.row()
+        if not row:
+            return None
+        if row["installation_id"] and not refresh:
+            return int(row["installation_id"])
+        token = self._jwt()
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
@@ -258,9 +352,7 @@ class GitHubApp:
                 return hit[1]
         try:
             installation = self.installation()
-            with self.store.transaction() as c:
-                row = self.row(c)
-                token = self.app_jwt(c, row) if row else None
+            token = self._jwt() if installation else None
             if not installation or not token:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
@@ -315,16 +407,38 @@ class GitHubApp:
         Cached until it has less than `refresh_margin` seconds left."""
         repos = sorted(set(repos or ()))
         key = (tuple(repos), tuple(sorted(permissions.items())))
-        with self.lock:
-            hit = self.cache.get(key)
-            if hit and hit["exp"] - refresh_margin > time.time():
-                result = (hit["token"], hit["expires_at"])
-                return (*result, True) if include_cache_status else result
+        while True:
+            with self.lock:
+                hit = self.cache.get(key)
+                if hit and hit["exp"] - refresh_margin > time.time():
+                    result = (hit["token"], hit["expires_at"])
+                    return (*result, True) if include_cache_status else result
+                flight = self.minting.get((key, diagnose))
+                if flight is None:
+                    flight = self.minting[(key, diagnose)] = Future()
+                    break
+            # Another request is minting this exact scope: share its token (or its refusal), not a second mint.
+            try:
+                flight.result()
+            except Problem as problem:
+                raise Problem(problem.code, problem.detail, problem.status, problem.retryable, problem.extra) from None
+        try:
+            entry = self._mint(key, repos, permissions, diagnose)
+            flight.set_result(None)
+        except BaseException as exc:
+            flight.set_exception(exc)
+            raise
+        finally:
+            with self.lock:
+                self.minting.pop((key, diagnose), None)
+        result = (entry["token"], entry["expires_at"])
+        return (*result, False) if include_cache_status else result
+
+    def _mint(self, key, repos, permissions, diagnose):
         installation = self.installation()
         if not installation:
             raise Problem("github_not_installed", "The GitHub App is not installed on the organization yet", 409)
-        with self.store.transaction() as c:
-            token = self.app_jwt(c, self.row(c))
+        token = self._jwt()
         body = {"permissions": permissions}
         if repos:
             body["repositories"] = [r.split("/", 1)[1] for r in repos]
@@ -351,8 +465,7 @@ class GitHubApp:
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry
-        result = (entry["token"], entry["expires_at"])
-        return (*result, False) if include_cache_status else result
+        return entry
 
     def should_audit_token(self, bot, token):
         """Keep token values out of durable state and audit each bot/token pair at most once."""
@@ -453,8 +566,7 @@ class GitHubApp:
         if status == 403:
             return problem
         try:
-            with self.store.transaction() as c:
-                token = self.app_jwt(c, self.row(c))
+            token = self._jwt()
             info = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             selection = info.json().get("repository_selection") if info.status_code < 300 else ""
             absent = known_absent
@@ -479,18 +591,39 @@ class GitHubApp:
                        f"GitHub answers 404 for {', '.join(absent)}: it does not exist yet, or the app is not installed on it. "
                        f"If it does not exist yet: {create[0].lower() + create[1:]}. If it exists: {access}.", 409)
 
+    def repository_state(self, repository):
+        """Whether GitHub has `repository` (`owner/name`): ("present", None), ("missing", the Problem naming the fix),
+        or ("unknown", None) when it cannot be learned (no app connected, GitHub unreachable or answering oddly)."""
+        if not repository or not self.row():
+            return "unknown", None
+        try:
+            wide, _ = self.mint(None, {"metadata": "read"})
+            r = self._call("GET", "/repos/" + repository, headers={"Authorization": "Bearer " + wide})
+            if r.status_code < 300:
+                return "present", None
+            if r.status_code != 404:
+                return "unknown", None
+            return "missing", self._unreachable(self.installation(), [repository], 404, known_absent=[repository])
+        except Problem:
+            return "unknown", None
+
     def create_repo(self, slug, template, empty=False):
         row = self.row()
         if not row:
             raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
         name = "bot-" + slug.removeprefix("emp-")
         if not self.can_create_repos(refresh=True):
+            from .repo_waits import fixes
+            with self.store.read() as c:
+                found = fixes(c, row, slug)
             how = ("as an empty private repository" if empty else
                    f"from the {template} template (https://github.com/{template} > Use this template)")
             raise Problem(
                 "github_permission_missing",
-                f"The GitHub App was set up without permission to create repositories. Create {row['org']}/{name} "
-                f"yourself {how}, or turn on Administration for the app in GitHub and accept it for the organisation.", 409)
+                f"A person must act: the GitHub App was set up without permission to create repositories, so "
+                f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let BotOps "
+                f"create repositories by turning on Administration for the app ({found['permissions_url']}) and "
+                "accepting it for the organisation.", 409, extra=found)
         token, _ = self.mint(None, CREATE_PERMISSIONS)
         if empty:
             # For a bot whose history already exists on a computer: nothing generated, the runner pushes into it.
@@ -694,29 +827,102 @@ def install_github_app(app, settings, store):
         who = request.state.identity
         if who.role != "owner":
             with store.read() as c:
-                if not app.state.auth.bot_manager(c, who, bot):
+                if not (app.state.auth.bot_manager(c, who, bot) or app.state.auth.botops_manages(c, who, bot)):
                     raise Problem("forbidden", "Only the owner, or someone who manages this bot, sets its repositories", 403)
         return who
+
+    def run_scope(c, attempt_id):
+        """The other bots whose repositories one BotOps run writes, and whose rights decided it (for the audit): every
+        bot but the built-in ones in its own run (team rule `botops_manages_bots`), the bots the person manages in a
+        run carrying their rights, none in a run a bot asked for or one that lends nobody's rights."""
+        from . import botops_act, team_rules
+        auth = app.state.auth
+        acting = app.state.botops_run_identity(c, attempt_id)
+        run = {"attempt": attempt_id, "rights": acting.actor if acting else None}
+        if acting is None:
+            return set(), run
+        bots = [r[0] for r in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                                        "WHERE b.state<>'archived' AND bc.bot<>?", (BOTOPS,))]
+        if acting.actor == "bot:" + BOTOPS:
+            run["own_run"] = bool(team_rules.load(c)["botops_manages_bots"] and botops_act.own_run(c, auth, attempt_id))
+            return ({bot for bot in bots if not auth.system_bot(bot)} if run["own_run"] else set()), run
+        if H.is_human(acting.actor):
+            return {bot for bot in bots if auth.bot_manager(c, acting, bot)}, run
+        return set(), run
+
+    def botops_extra_repos(c, who):
+        """The bots whose repositories BotOps' token also writes, and the runs that decided it. A turn asks for its own
+        run; the computer's git helper gets only what every BotOps run in progress on it may have, and nothing extra
+        when none is."""
+        if who.role == "bot":
+            attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
+        elif who.role == "runner":
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+                                                   "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
+        else:
+            attempts = []
+        found = [run_scope(c, attempt) for attempt in attempts]
+        scopes = [scope for scope, _ in found]
+        return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
+
+    def fixer(c):
+        """Who can change the app's permissions on GitHub: the owner, else an Admin; "" when neither is on the
+        roster (Health still shows the alert)."""
+        auth = app.state.auth
+        if auth.owner_id(c):
+            return auth.owner_id(c)
+        for row in c.execute("SELECT id,email FROM humans ORDER BY rowid"):
+            if str(row["email"] or "").lower() in auth.bot_admins:
+                return row["id"]
+        return ""
+
+    def status_view(refresh=False):
+        from .repo_waits import fixes, waits
+        row = service.row()
+        if not row:
+            return {"connected": False}
+        administration = service.can_create_repos(refresh=refresh)
+        with store.read() as c:
+            fix = fixes(c, row)
+            waiting = [{"bot": bot, "repository": wait.get("repository") or "", "task_id": wait.get("task_id"),
+                        "create_url": fixes(c, row, bot)["create_url"]} for bot, wait in sorted(waits(c).items())]
+        return {"connected": True, "slug": row["slug"], "org": row["org"], "app_id": row["app_id"],
+                "administration": administration, "installed": bool(row["installation_id"]),
+                "install_url": f"https://github.com/apps/{row['slug']}/installations/new",
+                "settings_url": f"https://github.com/organizations/{row['org']}/settings/apps/{row['slug']}",
+                "permissions_url": fix["permissions_url"], "create_url": fix["create_url"], "waiting": waiting,
+                "uninstall_url": f"https://github.com/organizations/{row['org']}/settings/installations"}
 
     @app.get("/api/v2/github/app")
     def status(request: Request):
         owner(request)
-        row = service.row()
-        if not row:
-            return {"connected": False}
-        return {"connected": True, "slug": row["slug"], "org": row["org"], "app_id": row["app_id"],
-                "administration": service.can_create_repos(), "installed": bool(row["installation_id"]),
-                "install_url": f"https://github.com/apps/{row['slug']}/installations/new",
-                "settings_url": f"https://github.com/organizations/{row['org']}/settings/apps/{row['slug']}",
-                "uninstall_url": f"https://github.com/organizations/{row['org']}/settings/installations"}
+        return status_view()
+
+    @app.post("/api/v2/github/app/check-permissions")
+    def check_permissions(request: Request):
+        """After the owner accepts Administration on GitHub: read the installation's permissions again and finish
+        any bot whose repository was waiting for them."""
+        owner(request)
+        from .repo_waits import resume
+        view = status_view(refresh=True)
+        if view.get("connected"):
+            view["resumed"] = resume(service)
+            if view["resumed"]:
+                view = {**status_view(), "resumed": view["resumed"]}
+        return view
 
     @app.get("/api/v2/github/app/manifest")
-    def manifest_form(request: Request, org: str, name: str = "", administration: bool = False, html: bool = False):
+    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
         who = owner(request)
         if not ORG.match(org):
             raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
         if service.row():
             raise Problem("github_connected", "GitHub is already connected; disconnect it first to start over", 409)
+        # Before GitHub makes an app: one it could never be saved for (the key that seals other secrets is lost) is refused
+        # here. This GET never drops anything; the owner's confirmed POST replace-lost-key does.
+        with store.read() as c:
+            if service.key_lost(c):
+                raise Problem("github_key_missing", LOST_KEY, 409)
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created<?", (time.time() - STATE_TTL,))
@@ -730,6 +936,14 @@ def install_github_app(app, settings, store):
                     "<script>document.getElementById('f').submit()</script>")
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
         return {"action": action, "manifest": body, "state": nonce}
+
+    @app.post("/api/v2/github/app/replace-lost-key")
+    def replace_lost_key(request: Request):
+        """The owner confirmed it: github-app.key is lost with no copy, so drop the GitHub App and directory sync
+        secrets only it opened. Not proposable: a person clicks it themselves."""
+        who = owner(request)
+        with store.transaction() as c:
+            return {"replaced": service.replace_lost_key(c, who.actor)}
 
     @app.get("/api/v2/github/app/callback")
     def callback(request: Request, code: str = "", state: str = ""):
@@ -803,6 +1017,16 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
+            extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
+            if extra:
+                # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
+                have = {g['full_name'].lower() for g in grants}
+                for other in c.execute("SELECT bot,repo FROM bot_config ORDER BY bot"):
+                    name = repo_of(other["repo"] or "", row["org"])
+                    if (other["bot"] in extra and name and name.lower() not in have
+                            and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
+                        have.add(name.lower())
+                        grants.append({'full_name': name, 'access': 'write'})
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
         read_repos = [r['full_name'] for r in grants if r['access'] == 'read']
@@ -849,11 +1073,15 @@ def install_github_app(app, settings, store):
             for item in newly_minted:
                 if service.should_audit_token(body.bot, item["token"]):
                     with store.transaction() as c:
+                        # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
                         H.event(c, who.actor, "github.token", body.bot,
-                                {"repository": repo, "repositories": item["repositories"]})
+                                {"repository": repo, "repositories": item["repositories"],
+                                 "attempt": who.attempt_id or None, **({"runs": runs} if body.bot == BOTOPS else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
+        # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
+        # to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
-                "repositories": repos, "tokens": response_tokens}
+                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS}
 
     def bot_repos(c, bot):
         if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone():
@@ -910,9 +1138,8 @@ def install_github_app(app, settings, store):
                                   "create bot repositories. Ask BotOps, or ask an Owner or admin to enable "
                                   "Create bot repositories in this bot's settings.", 403)
                 row, bot = service.row(c), H.bot(c, slug)
-            if not row or not service.can_create_repos(refresh=True):
-                raise Problem("forbidden", "GitHub was connected without permission to create repositories; "
-                              "the owner must turn on Administration for the app in GitHub and accept it for the organisation", 403)
+            if not row:
+                raise Problem("github_not_connected", "GitHub is not connected. Connect it in Tools first.", 409)
             if not bot or bot.get("state") == "archived":
                 raise Problem("forbidden", f"{slug} is not a bot being set up or running, so no repository is created for it", 403)
             if body.slug != slug and body.slug != "emp-" + slug:
@@ -924,7 +1151,22 @@ def install_github_app(app, settings, store):
             raise Problem("github_repo", "An empty repository has no template; give one or the other", 422)
         if not SLUG.match(slug) or not re.match(r"^[\w.-]+/[\w.-]+$", template):
             raise Problem("github_repo", "Use a lowercase bot name (letters, digits, hyphens) and an owner/name template", 422)
-        result = service.create_repo(slug, template, empty=body.empty)
+        try:
+            result = service.create_repo(slug, template, empty=body.empty)
+        except Problem as problem:
+            if problem.code != "github_permission_missing":
+                raise
+            # A person must act. One Needs-you task per bot, however often this is retried; the bot keeps its
+            # local build and finishes on its own once the repository or the permission appears (repo_waits).
+            from .repo_waits import raise_item
+            with store.transaction() as c:
+                bot = H.bot(c, slug)
+                if bot and bot.get("state") != "archived" and service.row(c):
+                    found = raise_item(c, slug, service.row(c), fixer(c), "" if body.empty else template)
+                    problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
+                    problem.detail += (" The owner has a Needs-you task with both fixes; the bot keeps its local "
+                                       "build and finishes on its own once either is done.")
+            raise
         with store.transaction() as c:
             H.event(c, who.actor, "github.repo_created", result["repository"],
                     {"empty": True} if body.empty else {"template": template})

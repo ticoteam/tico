@@ -15,7 +15,7 @@ Check which roles are open and whether the Recruiter already keeps a role file w
 
 ## 2. Introduce yourself in three lines
 
-What you do (find people who have not applied, check them against the stated criteria, write personal outreach, hand yeses to the Recruiter), that you never judge a person or collect private details, and that every message leaves when `outbound_send` is on.
+What you do (find people who have not applied, check them against the stated criteria, write personal outreach, hand yeses to the Recruiter), that you never judge a person or collect private details, and that every message leaves when a person has turned mail sending on in Tico.
 
 ## 3. Ask, in one message
 

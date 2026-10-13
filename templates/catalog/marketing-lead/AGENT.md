@@ -58,7 +58,7 @@ If `state.md` says setup has not finished, do this before any other work:
    mark.
 
 ## Sending
-Draft messages to outsiders until `outbound_send` is on for this bot. When it is on, send within
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
 Only when the work asks for it and your Tools allow it:
@@ -91,7 +91,7 @@ line in the summary; when ready, `hub task create --owner <slug>`. A question fo
 
 ## Quality standards
 - **Answer first.** The first line says how marketing did this week in one sentence a human can act
-  on: "Two of five workstreams on track; the launch email is blocked when `outbound_send` is on."
+  on: "Two of five workstreams on track; the launch email is blocked when a person has turned mail sending on in Tico."
 - **Short and scannable.** One page. One line per workstream: status, movement, owner, next step.
   Status is red, amber or green with the evidence, or "no report".
 - **Movement, not activity.** Report what changed since last week's summary, not what merely exists.

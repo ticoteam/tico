@@ -16,7 +16,7 @@ What it does:
            Linux) that posts one every minute. The bot shows offline after three misses.
         5. installs the `tico-sync` skill in the profile and one scheduled job, named `tico-sync`,
            that makes the agent look at what is waiting (`--sync 15m|1h|daily|'<cron>'|off`, default 1h).
-           OpenClaw has no MCP client, so there the skill calls Tico through this file (`call`).
+           For OpenClaw no MCP entry is added: the skill calls Tico through this file (`call`).
     python3 hermes_agent.py pair --profile scout --url https://tico.example.com
         the same steps with no token to copy: it prints a code and what to tell BotOps,
         waits for a person (or BotOps) to approve it for a bot, and receives the credential itself.
@@ -557,6 +557,16 @@ def tool_command(harness, profile):
     return [exe, "-p" if harness == "hermes" else "--profile", profile]
 
 
+def redact(text):
+    """A harness's message with any credential in it blanked out, so it can be printed and saved."""
+    text = re.sub(r'(?i)(bearer\s+|(?:token|api[_-]?key|password)["\']?\s*[=:]\s*["\']?)[^\s&"\']+', r"\1[redacted]", text)
+    text = re.sub(r"((?:https?|wss?)://)[^/\s:@]+:[^/\s@]+@", r"\1[redacted]@", text)
+    text = re.sub(r"(?i)\b(basic\s+)[A-Za-z0-9+/=]{8,}", r"\1[redacted]", text)
+    text = re.sub(r"\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{8,}", "[redacted]", text)
+    text = re.sub(r"(?<![\w/.-])[A-Za-z0-9_-]{32,}(?![\w/.-])", "[redacted]", text)   # long opaque tokens, Tico's included
+    return re.sub(r"([?&](?:token|key|secret|password)=)[^&\s]+", r"\1[redacted]", text, flags=re.I)
+
+
 def run_tool(command, what, directory=None):
     try:
         env = None
@@ -573,10 +583,7 @@ def run_tool(command, what, directory=None):
             if line and line not in selected:
                 selected.append(line)
         selected = selected or lines[-1:]
-        detail = " · ".join(selected)
-        detail = re.sub(r'(?i)(bearer\s+|(?:token|api[_-]?key|password)["\']?\s*[=:]\s*["\']?)[^\s&"\']+', r"\1[redacted]", detail)
-        detail = re.sub(r"((?:https?|wss?)://)[^/\s:@]+:[^/\s@]+@", r"\1[redacted]@", detail)
-        detail = re.sub(r"([?&](?:token|key|secret|password)=)[^&\s]+", r"\1[redacted]", detail, flags=re.I)
+        detail = redact(" · ".join(selected))
         hint = "; start this profile's Gateway, then run reinstall" if "gateway" in detail.lower() else ""
         raise Failure(f"{what}: " + detail[:700] + hint)
     return done.stdout or ""
@@ -594,7 +601,7 @@ def json_in(text):
 
 
 def sync_jobs(harness, profile, directory):
-    """Jobs named `tico-sync` on this profile: [{id, schedule, last_run, status, enabled}]. Hermes keeps them in
+    """Jobs named `tico-sync` on this profile: [{id, schedule, last_run, status, error, enabled}]. Hermes keeps them in
     <profile>/cron/jobs.json; OpenClaw's live in its Gateway and come from `openclaw cron list`."""
     if harness == "hermes":
         try:
@@ -603,7 +610,8 @@ def sync_jobs(harness, profile, directory):
             return []
         jobs = data.get("jobs") if isinstance(data, dict) else data
         return [{"id": str(j.get("id")), "schedule": str(j.get("schedule_display") or ""), "enabled": j.get("enabled", True),
-                 "last_run": str(j.get("last_run_at") or ""), "status": str(j.get("last_status") or "")}
+                 "last_run": str(j.get("last_run_at") or ""), "status": str(j.get("last_status") or ""),
+                 "error": str(j.get("last_error") or "")}
                 for j in jobs or [] if isinstance(j, dict) and j.get("name") == JOB_NAME]
     data = json_in(run_tool(tool_command(harness, profile) + ["cron", "list", "--all", "--json"], "openclaw cron list", directory))
     out = []
@@ -616,7 +624,8 @@ def sync_jobs(harness, profile, directory):
                         "schedule": (f"every {int(schedule.get('everyMs', 0)) // 60000}m" if schedule.get("kind") == "every"
                                      else str(schedule.get("expr") or "")),
                         "last_run": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(last / 1000)) if last else "",
-                        "status": str(state.get("lastStatus") or state.get("lastRunStatus") or "")})
+                        "status": str(state.get("lastStatus") or state.get("lastRunStatus") or ""),
+                        "error": str(state.get("lastError") or "")})
     return out
 
 
@@ -756,8 +765,8 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url})
         mcp = upsert_mcp(directory, url)
     else:
-        # OpenClaw (2026.3) has no MCP client: the skill calls Tico through this file, which reads the credential
-        # from here (and from the saved configuration) and nowhere else.
+        # OpenClaw gets no MCP entry (2026.3 had no MCP client; later releases do, docs/openclaw-agents.md): the skill
+        # calls Tico through this file, which reads the credential from here (and the saved configuration) only.
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url}, ENV_FILE)
         mcp = "none"
     python = sys.executable
@@ -772,14 +781,25 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
     reply = request(url, token, "POST", "/api/v2/agents/heartbeat", heartbeat_body(harness, profile, directory))
     config["last_reply"] = reply
     config["last_ok"] = time.time()
-    timer = ""
-    if not no_timer:
-        timer = install_timer(key, python, flags(harness, profile))
-        config["timer"] = timer
+    if no_timer and previous.get("timer"):
+        remove_timer(key)                 # `reinstall --no-timer`: the person runs the heartbeat, so one source
     wanted = sync if sync is not None else previous.get("sync")
     synced = apply_sync(harness, profile, directory, config, wanted) if wanted else []
     save_config(key, config)
-    removed = remove_old_timers(key)
+    # The timer is the last step: launchd or systemd refusing it (launchd refuses a plist on an external volume)
+    # must not cost the pairing, the skill or the sync job, which are all in place by now.
+    timer = timer_problem = ""
+    if not no_timer:
+        try:
+            timer = install_timer(key, python, flags(harness, profile))
+            config["timer"] = timer
+        except Failure as exc:
+            timer_problem = str(exc)
+            remove_timer(key)             # no half-installed plist or unit left behind
+            config["heartbeat_mode"] = "manual"
+            config["timer_error"] = timer_problem
+        save_config(key, config)
+    removed = remove_old_timers(key) if not timer_problem else []
     label = "Paired, finish connecting tools:" if mcp == "manual" else "Registered"
     print(f"{label} {harness_name(harness)} profile {profile!r} as bot {bot!r} at {url}")
     if mcp == "manual":
@@ -789,7 +809,7 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
     if harness == "hermes":
         print(f"  MCP server `{MCP_SERVER_NAME}` in {directory / 'config.yaml'}: {mcp}; token in {directory / '.env'}")
     else:
-        print(f"  OpenClaw has no MCP client: the skill calls Tico through this connector; token in {directory / ENV_FILE}")
+        print(f"  no MCP entry in OpenClaw: the skill calls Tico through this connector; token in {directory / ENV_FILE}")
     print(f"  credential saved in {path}")
     print(f"  heartbeat: {timer or 'none (run `heartbeat` yourself every minute)'}")
     for name in removed:
@@ -802,7 +822,31 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         print("  restart the profile's gateway or chat so it loads the new MCP server (`/reload-mcp` in a chat)")
     if harness == "openclaw" and synced and not any(line.startswith("WARNING") for line in synced):
         print("  new skills load when the next OpenClaw session starts")
+    if timer_problem:
+        for line in timer_failed_lines(harness, profile, python, timer_problem,
+                                       None if config.get("sync_error") else wanted):
+            print(line)
     return 0
+
+
+def timer_failed_lines(harness, profile, python, problem, sync):
+    """What `pair`, `install` and `reinstall` print when launchd or systemd refused the heartbeat timer."""
+    command = shlex.join([python, str(installed_copy())])
+    words = shlex.join(flags(harness, profile))
+    lines = ["WARNING: the heartbeat timer was not installed: " + problem,
+             "  Everything else is in place: the pairing, the credential"
+             + (", the tico-sync skill and its sync job." if sync and sync != "off" else "."),
+             "  Without a heartbeat the bot shows offline in Tico. Heartbeat mode is now manual: run",
+             f"    {command} heartbeat {words}",
+             "  every minute yourself, for example from cron (`crontab -e`):",
+             f"    * * * * * {command} heartbeat {words} >/dev/null 2>&1"]
+    if sync and sync != "off":
+        run = f"openclaw{'' if profile in ('', 'default') else ' --profile ' + profile} cron run <job id>"
+        lines.append(f"  The sync job does not need the timer: it runs on {harness_name(harness)}'s own schedule, and its "
+                     "first step asks Tico itself when the last heartbeat is over 5 minutes old"
+                     + (f". To run it now: `{run}` (the id is in `cron list`)." if harness == "openclaw" else "."))
+    lines.append(f"  To retry the timer once the cause is fixed: {command} reinstall {words} --timer")
+    return lines
 
 
 def profile_directory(harness, profile, given=None):
@@ -1039,15 +1083,18 @@ def cmd_update(args):
 
 
 def cmd_reinstall(args):
-    """Run the install steps again with what `install` or `pair` saved. `--sync` changes how often the agent looks."""
+    """Run the install steps again with what `install` or `pair` saved. `--sync` changes how often the agent looks;
+    `--timer` and `--no-timer` change the heartbeat mode, otherwise the saved one is kept."""
     config = load_config(args.key)
     if args.sync is not None:
         parse_sync(args.sync)
     directory = profile_directory(args.harness, args.profile, config.get("profile_dir"))
+    if args.timer or args.no_timer:
+        no_timer = args.no_timer
+    else:
+        no_timer = config.get("heartbeat_mode") == "manual" or ("heartbeat_mode" not in config and not config.get("timer"))
     return perform_install(args.harness, args.profile, directory, config["url"], config["bot"], config["token"],
-                           no_timer=False if args.timer else (config.get("heartbeat_mode") == "manual" or
-                                                             ("heartbeat_mode" not in config and not config.get("timer"))),
-                           sync=args.sync, previous=config)
+                           no_timer=no_timer, sync=args.sync, previous=config)
 
 
 # Tools renamed in Tico 0.2.21 (CHANGELOG, Breaking changes), old -> new. Names ending in `_` are prefixes.
@@ -1190,6 +1237,13 @@ def doctor_sync(say, harness, profile, directory, config):
         f"skill {SKILL_NAME} is in {skill}" if skill.is_file() else f"skill {SKILL_NAME} is missing from {skill}; run update")
     if config.get("sync_error"):
         say("problem", "the sync job was not created: " + str(config["sync_error"]))
+    # Listing OpenClaw's jobs needs its Gateway, so a stopped Gateway is said first, as what to fix: with it down
+    # no sync runs, and messages wait however healthy the heartbeat looks.
+    if harness == "openclaw" and openclaw_gateway(directory) == "gateway not running":
+        command = "openclaw" + ("" if profile in ("", "default") else f" --profile {profile}")
+        say("problem", f"the OpenClaw Gateway is not running, so the {JOB_NAME} job cannot run: start it "
+                       f"(`{command} gateway start`, or `{command} gateway run` in a terminal); the job is kept")
+        return
     try:
         jobs = sync_jobs(harness, profile, directory)
     except Failure as exc:
@@ -1203,14 +1257,47 @@ def doctor_sync(say, harness, profile, directory, config):
         ran = f"last ran {job['last_run']}" + (f" ({job['status']})" if job["status"] else "") if job["last_run"] else "has not run yet"
         say("ok" if job["enabled"] else "warn",
             f"sync job {JOB_NAME} ({job['schedule'] or wanted}) is " + ("scheduled" if job["enabled"] else "paused") + f"; {ran}")
-        if job["status"] and job["status"].lower() in ("error", "failed", "fail"):
-            say("warn", f"the last sync run ended in {job['status']}; see the job's output in {harness_name(harness)}")
-    if harness == "openclaw" and openclaw_gateway(directory) == "gateway not running":
-        say("warn", "the OpenClaw Gateway is not running, and its cron jobs run inside it")
+        if job["status"] and job["status"].lower() in ("error", "failed", "fail", "timeout", "timed-out"):
+            error = job.get("error") or ""
+            if config.get("token"):
+                error = error.replace(config["token"], "[redacted]")
+            error = " ".join(redact(error).split())[:300]
+            say("problem", f"the last sync run ended in {job['status']}" + (f": {error}" if error else "")
+                           + f"; see the job's output in {harness_name(harness)}")
     age = time.time() - float(config.get("updated_at") or time.time())
     if age > UPDATE_EVERY_SECONDS:
         say("warn", f"the connector was last updated {int(age // 86400)} days ago; the sync skill updates it weekly, "
                     "or run update")
+
+
+def openclaw_model_check(profile, directory):
+    """(level, text) from `openclaw models status --json --check`, OpenClaw's own readiness check of the profile's
+    model sign-in. It reads the profile's config and auth store and calls no model (no `--probe`), so it spends no
+    tokens. ('', why) when this OpenClaw gives no readable answer (a release without `--check`, say)."""
+    command = "openclaw" + ("" if profile in ("", "default") else f" --profile {profile}")
+    try:
+        done = subprocess.run(tool_command("openclaw", profile) + ["models", "status", "--json", "--check"],
+                              capture_output=True, text=True, timeout=60,
+                              env=dict(os.environ, OPENCLAW_STATE_DIR=str(directory)))
+    except (Failure, OSError, subprocess.SubprocessError) as exc:
+        return "", str(exc)
+    data = json_in(done.stdout or "")
+    auth = data.get("auth") if isinstance(data, dict) else None
+    if done.returncode not in (0, 1, 2) or not isinstance(auth, dict):
+        return "", f"`{command} models status --json --check` gave no answer doctor can read"
+    model = str(data.get("resolvedDefault") or data.get("defaultModel") or "the default model")[:200]
+    missing = [str(p)[:100] for p in auth.get("missingProvidersInUse") or [] if p]
+    if missing:
+        return "problem", (f"the model {model} has no sign-in (\"Missing auth\" for {', '.join(missing)}), so every sync "
+                           f"run fails at its first model call: run `{command} models auth login --provider {missing[0]}` "
+                           f"or `{command} configure`, then `{command} models status` (if the key is only in the Gateway "
+                           "service's environment, this check can't see it)")
+    if done.returncode == 1:
+        return "problem", (f"the model {model} is not ready (OpenClaw's check says missing, expired or unavailable "
+                           f"sign-in), so sync runs fail: see `{command} models status`")
+    if done.returncode == 2:
+        return "warn", f"the model {model}'s sign-in expires soon: see `{command} models status`"
+    return "ok", f"the model {model} has a usable sign-in (`models status --check`; no model was called)"
 
 
 def cmd_doctor(args):
@@ -1250,7 +1337,7 @@ def cmd_doctor(args):
         else:
             say("ok", f"mcp_servers.{MCP_SERVER_NAME} is in config.yaml ({found})")
     else:
-        say("ok", "OpenClaw has no MCP client here: the tico-sync skill calls Tico through this connector")
+        say("ok", "no MCP entry in OpenClaw: the tico-sync skill calls Tico through this connector")
 
     token = env_value(directory, ENV_TOKEN, env_name)
     if not token:
@@ -1264,7 +1351,8 @@ def cmd_doctor(args):
     if manual:
         command = shlex.join([config.get("python") or sys.executable, str(installed_copy())])
         profile_flags = shlex.join(flags(harness, args.profile))
-        say("warn", f"manual heartbeat mode: run `{command} heartbeat {profile_flags}` every minute; "
+        refused = f" (the timer was refused: {config['timer_error']})" if config.get("timer_error") else ""
+        say("warn", f"manual heartbeat mode{refused}: run `{command} heartbeat {profile_flags}` every minute; "
                     f"to install a timer, run `{command} reinstall {profile_flags} --timer`")
     else:
         loaded, note = timer_loaded(args.key)
@@ -1300,6 +1388,18 @@ def cmd_doctor(args):
     doctor_sync(say, harness, args.profile, directory, config)
     if harness == "hermes":
         doctor_gateway(say, args.profile, directory, config)
+    # The model: checked only through the harness's own offline status call, never by calling the model.
+    level, text = openclaw_model_check(args.profile, directory) if harness == "openclaw" else ("", "")
+    model_checked = bool(level)
+    if model_checked:
+        say(level, text)
+    elif harness == "openclaw":
+        say("note", f"doctor did not check the model ({text}); "
+                    f"`openclaw{'' if args.profile in ('', 'default') else ' --profile ' + args.profile} models status` "
+                    "must show no \"Missing auth\"")
+    else:
+        say("note", "doctor does not check the model: Hermes has no offline check for it. The sync job's last run "
+                    "(above) shows whether it worked")
 
     old = scan_old_tool_names(directory)
     if old:
@@ -1310,7 +1410,12 @@ def cmd_doctor(args):
             print(f"            ... and {len(old) - MAX_SHOWN} more")
     else:
         say("ok", "SOUL.md, skills, cron and memories use no old tool names")
-    print("Everything needed is working." if not problems else f"{len(problems)} problem(s) found.")
+    if problems:
+        print(f"{len(problems)} problem(s) found.")
+    elif model_checked:
+        print("Everything needed is working.")
+    else:
+        print("Everything doctor checks is working; it did not check the model (see NOTE above).")
     return 1 if problems else 0
 
 
@@ -1375,7 +1480,10 @@ def parser():
     s = sub.add_parser("reinstall", help="run the install steps again with the saved credential; --sync changes the interval")
     common(s)
     sync_option(s, None)
-    s.add_argument("--timer", action="store_true", help="install the heartbeat timer")
+    timer = s.add_mutually_exclusive_group()
+    timer.add_argument("--timer", action="store_true", help="install the heartbeat timer")
+    timer.add_argument("--no-timer", action="store_true",
+                       help="no launchd/systemd timer (removes one installed earlier): run `heartbeat` yourself")
     s.set_defaults(fn=cmd_reinstall)
     s = sub.add_parser("check", help="what the sync job asks first: what is waiting, and whether the weekly update is due")
     common(s)

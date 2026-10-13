@@ -34,7 +34,7 @@ command without `--dry-run`; it updates the same Gmail draft if run twice. The t
 
 ## 5. Report
 
-On the task: the message id, the draft text, the gaps, and one line on why. While `outbound_send` is off, keep it as a draft. When sending is on, send requested replies within the mailbox rules using your Tools.
+On the task: the message id, the draft text, the gaps, and one line on why. While mail sending is off in Tico, keep it as a draft. When sending is on, send requested replies within the mailbox rules using your Tools.
 
 When `Sending` is On and a rule there covers this message, send it with no approval, as a reply to the thread so it goes
 to the sender and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.

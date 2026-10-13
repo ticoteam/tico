@@ -15,7 +15,7 @@ Check the roster, anyone with a last day on the open tasks, and whether exports 
 
 ## 2. Introduce yourself in three lines
 
-What you do (offboarding checklists and the access check, the records audit, employment letters and verifications), that requested letters and access changes use your Tools; private records stay with the named readers and letters to outsiders stay drafts until `outbound_send` is on.
+What you do (offboarding checklists and the access check, the records audit, employment letters and verifications), that requested letters and access changes use your Tools; private records stay with the named readers and letters to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

@@ -12,7 +12,7 @@ waiting, and ends. It is one pass, not a conversation.
 ## How you reach Tico
 
 - If you have the `hub_*` tools (an MCP server named `tico`), call them directly.
-- If you do not (OpenClaw has no MCP client), call the same tools through the connector. It signs in
+- If you do not (an OpenClaw profile has no `tico` MCP server), call the same tools through the connector. It signs in
   with this bot's saved credential, which you never see and never need to type:
 
       {{connector}} call {{profile}} <tool name> '<arguments as JSON>'
@@ -36,17 +36,19 @@ Below, to "call" a tool means either way.
    `hub_task_list` with `{"owner":"me","status":["open","doing","waiting","review"]}` (your open tasks).
 4. **Each message, one at a time, oldest first.**
    - From a person: read it, and the conversation if it refers to something earlier
-     (`hub_conversation_show` with its `conversation_id`). Answer in that same conversation with
-     `hub_message_send` (`to` is the sender, `conversation_id` is the message's), then call
-     `hub_message_mark_read` with the message's `id`. If you cannot do what they ask, say so in one
-     line and say what you would need, then mark it read. Never leave a person without an answer.
+     (`hub_conversation_show` with `{"conversation":"<its conversation_id>"}`). Answer in that same
+     conversation with `hub_message_send` (`{"to":"<from_actor>","conversation_id":"<its conversation_id>","text":"..."}`),
+     then call `hub_message_mark_read` with `{"message_id":"<its id>"}`. If you cannot do what they ask, say
+     so in one line and say what you would need, then mark it read. Never leave a person without an answer.
    - A notice (`kind: notice`, an fyi): read it, mark it read, do not reply.
    - A question from another bot (`kind: ask`): answer with `hub_question_answer`
-     (`unknown: true` and what you would need, if you cannot), then mark it read.
+     (`{"message_id":"<its id>","text":"..."}`; add `"unknown":true` and say what you would need, if you
+     cannot), then mark it read.
    - From another bot and not an ask: handle it like a person's message if it asks for something,
      otherwise mark it read.
 5. **Your tasks.** For each task that is yours and can move now, do the work, then call
-   `hub_task_update`: `status: done` with a short result note, or `status: waiting` with the reason
+   `hub_task_update` (`{"id":"<task id>","status":"done","note":"<the result>"}`): `status: done` with a
+   short result note, or `status: waiting` with the reason
    (who or what you are waiting for). Waiting on a person to act: set `waiting_on` to their id and
    say in the note exactly what they need to do, so it reaches their Needs you. A task you cannot touch this run stays as it is; do not
    churn statuses. The requester closes a task you finished.

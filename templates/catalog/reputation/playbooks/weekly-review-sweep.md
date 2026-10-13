@@ -37,7 +37,7 @@ edited, removed or answered. Never delete a row.
 ## 4. Work the queue
 
 Run `playbooks/work-queue.md` for each surface with rows that have no lever yet, newest and
-most visible first, capped per batch. Then, when the owner has enabled execution (`act` access), execute requested items with the necessary Tools. Replies stay drafts until `outbound_send` is on; name any missing access on the task.
+most visible first, capped per batch. Then, when the owner has enabled execution (`act` access), execute requested items with the necessary Tools. Replies stay drafts until a person turns mail sending on in Tico; name any missing access on the task.
 
 ## 5. Write the digest
 

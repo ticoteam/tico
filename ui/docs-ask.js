@@ -222,7 +222,12 @@ html.demo .dask{top:var(--demo-h)}
   function decorate(root) {
     root.querySelectorAll('a').forEach(a => {
       const href = a.getAttribute('href') || '';
-      if (/^(Internal doc|Linked|Tico manual) · /.test(a.textContent)) a.classList.add('dask-cite');
+      const label = a.dataset.name || a.textContent;
+      if (/^(Internal doc|External|Linked|Tico manual) · /.test(label)) {
+        // File URLs are citations here, even when the Markdown renderer made them document cards.
+        a.textContent = label; a.className = 'dask-cite'; a.dataset.mi = '1';
+        a.removeAttribute('data-media'); a.removeAttribute('aria-label');
+      }
       if (href.startsWith('#/')) { a.removeAttribute('target'); a.addEventListener('click', () => { if (!asRail()) close(false); }); }
     });
   }
@@ -232,6 +237,8 @@ html.demo .dask{top:var(--demo-h)}
     return `<ul class="dask-results" data-results>${results.map(r => r.type === 'linked'
       ? `<li data-type="linked"><div class="dask-line"><span class="dask-badge linked">Linked · ${esc(KINDS[r.kind] || 'Link')}</span><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title || host(r.url))}</a></div>${
           r.description ? `<p>${esc(r.description)}</p>` : `<p>${esc(host(r.url))}</p>`}</li>`
+      : r.type === 'external'
+      ? `<li data-type="external"><div class="dask-line"><span class="dask-badge">External · GitHub</span><a href="${esc(docHref(r.id) + '?revision=' + encodeURIComponent(r.commit))}">${esc(r.title)}</a></div><p>${esc(r.source_title)} · ${esc(r.path)}</p>${r.excerpt ? `<p>${esc(clean(r.excerpt))}</p>` : ''}</li>`
       : r.type === 'manual'
       ? `<li data-type="manual"><div class="dask-line"><span class="dask-badge">Tico manual</span><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title)}</a></div>${r.excerpt ? `<p>${esc(clean(r.excerpt))}</p>` : ''}</li>`
       : `<li data-type="internal"><div class="dask-line"><span class="dask-badge internal">Internal doc</span><a href="${esc(docHref(r.id))}">${esc(r.title || r.path)}</a></div>${
@@ -335,8 +342,8 @@ html.demo .dask{top:var(--demo-h)}
       const out = await post('/v2/market/ask', {question: turn.question});
       const ids = [...new Set((out.citations || []).filter(c => c.kind === 'entity').map(c => c.id))];
       turn.answer = String(out.answer || '').replace(/\s*\[[a-z]+:[^\]]+\]/gi, '');
+      await window.marketCite?.(ids);
       turn.cites = ids.map(id => ({href: '#/market?note=' + encodeURIComponent(id), label: window.marketName?.(id) || id})).filter(c => c.label);
-      window.marketCite?.(ids);
     } catch (e) {
       turn.error = (e && e.message) || 'The Librarian could not answer.';
     }

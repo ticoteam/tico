@@ -59,7 +59,7 @@ arrives: read the thread again.
 
 ## In the daily update
 
-Under their own heading: threads opened since the last pass by bucket, requested drafts ready to post with Tools when outbound_send is on, bugs handed to
+Under their own heading: threads opened since the last pass by bucket, requested drafts ready to post with Tools when a person has turned mail sending on in Tico, bugs handed to
 engineering, and threads that closed. One line each, no thread text.
 
 ## When GitHub cannot be read

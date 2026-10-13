@@ -388,7 +388,9 @@ The free plan imports your own notes and AI summaries from the last 30 days, wit
 folders. Paid plans can also import transcripts when Granola permits them. Private notes typed by
 the note-taker are never imported. Imported meetings default to private. Tico syncs in the background
 every 25 minutes and when you open Meetings, reusing a sync from the last two minutes. Recent meetings
-are revisited for late summaries. Only an invalid or rejected OAuth grant requires sign-in again.
+are revisited for late summaries: an imported note is fetched again only while
+its meeting is under a day old, counted from the meeting date Granola lists (its `created_at`, `date` or `start_time`,
+the meeting's start). An older imported note is not fetched again, and a transcript already stored is never fetched again. Only an invalid or rejected OAuth grant requires sign-in again.
 Network failures, rate limits and server outages keep your connection and retry on the next schedule
 with backoff. Meetings and your Health page say
 **Granola needs sign-in again** when the grant is rejected; connect again to continue.
@@ -405,8 +407,14 @@ treated as UTC. Unknown dates do not prevent importing a meeting's notes.
 MCP calls share an install-wide pace of at most 60 per minute, and scheduled starts are staggered after restart.
 OAuth calls have a separate paced queue so Connect and sign-in polling can finish while imports run.
 Notes are fetched in batches of up to ten, at least six seconds apart per connection, including
-individual requests used to recover from a failed batch. Rate limits allow up to four attempts at
-the same request, using Granola's `Retry-After` when supplied or waits of 15, 30 and 60 seconds. If the limit
+individual requests used to recover from a failed batch. The first note fetch of a sync waits until ten
+seconds have passed since its previous MCP call. When a failed batch's first two individual requests fail
+with the same code, the rest of that batch is counted as skipped with that code without further requests;
+the sync keeps its checkpoint before those notes, so the next sync lists and fetches them. Notes missing from
+Granola's reply are held the same way (`missing: get_meetings`). After three syncs in a row end held, the
+checkpoint moves on and status records `held: gave up after 3 syncs` with the count.
+A rate-limited note fetch is retried up to twice in the sync, after 20 and then 60 seconds (or Granola's
+`Retry-After` when longer), unless Granola names a `Retry-After` over 60 seconds. If the limit
 persists, the sync stops with `rate_limited: get_meetings`, retains its checkpoint and does not count
 the blocked meetings as skipped. Each attempt resets its skipped count. A rate-limited sync retries
 in about five minutes, or later when Granola supplies a longer `Retry-After`, and resumes from that
@@ -426,6 +434,11 @@ its account information tool, and is null when absent. These details never chang
 Tico rights; the ID token is not retained.
 Sync failures show and log a fixed code with the failed step, such as `bad_response: list_meetings`,
 without provider content or tokens. Skipped notes also name the step while retaining their count.
+Status also includes `skip_reasons`, the last attempt's skipped count per code (for example
+`{"provider_error: get_meetings": 9}`), and `last_error_detail` for the last failure or skip: `step`,
+`http_status`, the JSON-RPC `rpc_code`, `tool_error` (an MCP `isError` result), `retry_after` in seconds,
+the fixed `signal` that classified a throttle (`rate limit`, `slow down` or `too many requests`) and the
+`batch` size. It never holds Granola's text, note IDs or titles.
 The MCP tools `hub_meeting_granola_status` and `hub_meeting_granola_sync` use the caller's person
 rights; BotOps can give the Meetings link but cannot complete the browser sign-in.
 

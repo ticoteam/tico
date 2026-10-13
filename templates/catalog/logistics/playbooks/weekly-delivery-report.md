@@ -15,7 +15,7 @@ fewer than 10 shipments are grouped as "other".
 
 Every shipment late past the threshold, stuck (no scan for 3 working days), returned to sender,
 damaged or lost. For each: last scan and time, carrier case (open one if none, via the carrier's
-process, when `outbound_send` is on), what the customer has been told. Work each with `playbooks/work-an-exception.md`.
+process, when a person has turned mail sending on in Tico), what the customer has been told. Work each with `playbooks/work-an-exception.md`.
 
 ## 3. Claims
 

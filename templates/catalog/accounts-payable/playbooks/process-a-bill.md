@@ -32,7 +32,7 @@ total, terms. List each difference. A bill with no required order is held for th
 ## 5. Apply or route
 
 Use the spending rules in `knowledge/approvals.md` for requested payment actions with your Tools. Name missing facts or access on the task, batching questions per owner. A
-question from a vendor about payment gets a reply prepared on the task, sent only when `outbound_send` is on.
+question from a vendor about payment gets a reply prepared on the task, sent only when a person has turned mail sending on in Tico.
 
 ## 6. Register
 

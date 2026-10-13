@@ -108,3 +108,11 @@ def test_verify_all_reports_the_missing_route_for_a_tunnel_and_only_for_a_tunnel
     caddy = verify.run_all(domain="t.example.com", provider="none", client_id="", front_door="caddy", records=[], resolvers=[],
                            shell=shell, sleep=lambda s: None)
     assert "Tunnel route" not in {c.name for c in caddy}
+
+
+def test_the_server_and_setup_write_the_same_runner_hostname_route(tmp_path):
+    done = write_config(tmp_path, "tico.example.com", TICO_RUNNER_URL="https://tico-runner.example.com")
+    assert done.returncode == 0, done.stderr
+    written = yaml.safe_load((tmp_path / "cloudflared.yml").read_text())
+    assert written == cloudflare.ingress_config("tico.example.com", "tico-runner.example.com")
+    assert written["ingress"][1]["path"] == "^/(?:api/v2|download)(?:/.*)?$"

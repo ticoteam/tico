@@ -147,3 +147,67 @@ def test_backup_detects_corruption_during_independent_download(api):
     with pytest.raises(Problem, match="integrity"):
         bundle(api, s3)
     assert not any(key.endswith(".manifest.json") for _, key in s3.objects)
+
+
+KEY_NAMES = ("credential.key", "github-app.key", "slack.key")
+
+
+def hand_run_backup(api, s3, monkeypatch, key="backups/hand.sqlite"):
+    """`python -m backend.manage backup`, with the fake object store in place of S3."""
+    import json
+
+    import boto3
+
+    from backend import manage
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(boto3, "client", lambda name, *a, **k: s3 if name == "s3" else pytest.fail(name))
+    manage.main(["backup", str(settings.db_path), "--bucket", "backup-bucket", "--key", key,
+                 "--blob-dir", str(api.app.state.blobs.directory)])
+
+
+def test_a_hand_run_backup_carries_the_key_files_and_restore_brings_them_back(api, tmp_path, monkeypatch, capsys):
+    sources(api)
+    data = api.app.state.store.settings.db_path.parent
+    keys = {name: bytes([i + 1]) * 32 for i, name in enumerate(KEY_NAMES)}
+    for name, value in keys.items():
+        (data / name).write_bytes(value)
+    s3 = ObjectStore()
+    hand_run_backup(api, s3, monkeypatch)
+    report = capsys.readouterr().out
+    assert all(name in report for name in KEY_NAMES) and not any(value.hex() in report for value in keys.values())
+    settings = target(tmp_path)
+    recovered = restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)
+    assert recovered["key_files"] == {name: "restored" for name in KEY_NAMES}
+    for name, value in keys.items():
+        path = settings.db_path.parent / name
+        assert path.read_bytes() == value and stat.S_IMODE(path.stat().st_mode) == 0o600
+    # A bundle restored again beside the same keys keeps them; a different key there is never overwritten.
+    again = target(tmp_path / "again")
+    again.db_path.parent.mkdir(parents=True)
+    (again.db_path.parent / "slack.key").write_bytes(b"\x09" * 32)
+    with pytest.raises(ValueError, match="slack.key"):
+        restore_bundle("backup-bucket", "backups/hand.sqlite", again, s3)
+    assert not again.db_path.exists() and (again.db_path.parent / "slack.key").read_bytes() == b"\x09" * 32
+    assert not (again.db_path.parent / "credential.key").exists()
+
+
+def test_a_hand_run_backup_carries_only_the_key_files_present_and_refuses_a_broken_one(api, tmp_path, monkeypatch):
+    sources(api)
+    data = api.app.state.store.settings.db_path.parent
+    (data / "github-app.key").write_bytes(b"\x05" * 32)
+    s3 = ObjectStore()
+    hand_run_backup(api, s3, monkeypatch)
+    settings = target(tmp_path)
+    assert restore_bundle("backup-bucket", "backups/hand.sqlite", settings, s3)["key_files"] == {"github-app.key": "restored"}
+    assert not (settings.db_path.parent / "credential.key").exists()
+    # A key file that is not 32 bytes is no key: the bundle is not published rather than carry it.
+    (data / "slack.key").write_bytes(b"short")
+    with pytest.raises(RuntimeError, match="slack.key"):
+        hand_run_backup(api, s3, monkeypatch, key="backups/broken.sqlite")
+    assert ("backup-bucket", "backups/broken.sqlite.manifest.json") not in s3.objects
+    # A tampered key copy in the bucket fails the restore before the database is made.
+    s3.objects[("backup-bucket", "backups/hand.sqlite.keys/github-app.key")] = b"\x06" * 32
+    other = target(tmp_path / "tampered")
+    with pytest.raises(RuntimeError, match="github-app.key"):
+        restore_bundle("backup-bucket", "backups/hand.sqlite", other, s3)
+    assert not other.db_path.exists() and not (other.db_path.parent / "github-app.key").exists()

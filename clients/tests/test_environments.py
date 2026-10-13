@@ -45,3 +45,12 @@ class Remove(Base):
             ENV.remove("acme")
         self.assertIn("--delete-data", str(refused.exception))
         self.assertTrue(ENV.path("acme").exists())
+
+
+class Listing(Base):
+    def test_a_manifest_without_a_slug_is_left_out_instead_of_breaking_the_list(self):
+        self.create()
+        stray = self.root / "environments" / "old"
+        stray.mkdir(parents=True)
+        (stray / "environment.json").write_text('{"id": "x", "url": "https://acme.example/", "server": "remote"}')
+        self.assertEqual([row["slug"] for row in ENV.environments()], ["acme"])

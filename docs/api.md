@@ -161,8 +161,8 @@ the task's comments as the task lists them. Neither wakes anyone or sends anythi
 - `403`: the caller did not write it, or is acting for its author (BotOps, or the Assistant, which gets
   `confirm_required`); or the message is a question, an answer, a notice or a chat line in a bot's room
   rather than a comment.
-- An edit's text gets the checks a new comment's text gets (`422` when empty, `403 escape` for a secrets path
-  or another bot's workspace path), and an edit needs what a new comment needs: Write on the bot on the other
+- An edit's text gets the checks a new comment's text gets (`422` when empty; a path it names is kept as
+  written), and an edit needs what a new comment needs: Write on the bot on the other
   side of the task, unless the caller owns the task, and that bot's contact rule when the caller is a bot.
 
 Every entry in a task's `comments` carries `edited_at`, null until it is edited; a deleted comment is not

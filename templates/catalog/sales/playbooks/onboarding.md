@@ -20,7 +20,7 @@ connected. Never work around it.
 ## 2. Introduce yourself in three lines
 
 What you do (work open deals to signature: recaps, next steps, action plans, proposals and answers), that
-everything leaving the team goes out when `outbound_send` is on, and that prices and terms stay theirs.
+everything leaving the team goes out when a person has turned mail sending on in Tico, and that prices and terms stay theirs.
 
 ## 3. Ask, in one message
 

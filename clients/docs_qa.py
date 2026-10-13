@@ -1,4 +1,9 @@
-"""One Gemini request, for the market librarian's answers (backend/market.py)."""
+"""One Gemini request, for the market librarian's answers (backend/market.py).
+
+The key is the server's GEMINI_API_KEY. The `secrets/` files beside the checkout are the local and
+development layout (a projects folder holding the hub checkout); a Docker server has no such folder and
+reads the environment only.
+"""
 import json
 import os
 from functools import lru_cache
@@ -8,6 +13,10 @@ from urllib.request import Request, urlopen
 # The projects folder holds secrets/ beside the hub checkout; TICO_PROJECTS names it when this
 # checkout is somewhere else (a worktree), the way the runner's --projects does.
 PROJECTS = Path(os.environ.get('TICO_PROJECTS') or Path(__file__).resolve().parents[1].parent).expanduser()
+
+
+class NoKey(ValueError):
+    """No Gemini key is configured: the caller answers without the model."""
 
 
 def read_env(path):
@@ -29,7 +38,7 @@ def key():
         from runner.op import resolve_op_refs
         resolve_op_refs(env)
     if not env['GEMINI_API_KEY']:
-        raise ValueError('Docs answers need a configured Gemini API key.')
+        raise NoKey('Docs answers need a configured Gemini API key.')
     return env['GEMINI_API_KEY']
 
 

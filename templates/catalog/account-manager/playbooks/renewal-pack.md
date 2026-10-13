@@ -30,5 +30,5 @@ words in the owner's voice. Put both on the task.
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<account>-renewal.md`, `hub file publish` it, attach it. Fill gaps from the agreed terms, then send the final file to the named recipient with your Tools when `outbound_send` is on; otherwise keep the draft.
+Write `reports/YYYY-MM-DD-<account>-renewal.md`, `hub file publish` it, attach it. Fill gaps from the agreed terms, then send the final file to the named recipient with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
 `hub task update <id> --status done --note`: the options, the gaps, the notice deadline.

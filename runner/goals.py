@@ -12,6 +12,18 @@ def command(name, help, args=""):
 
 # The server keeps at most this many commands per bot (backend/models.py, GoalReadiness).
 MAX_COMMANDS = 30
+# A goal sent back to work this many times with no person writing in between is stuck, not busy: the runner pauses it.
+# Claude counts its judge's "not met" verdicts: a working bot rarely tries to stop more than a few times, while a bot
+# polling a merge tried ~800 times an hour. Codex counts its continuation turns, which are ordinary working steps.
+MAX_GOAL_TRIES = 30
+MAX_CODEX_GOAL_TRIES = 100
+# Both harnesses keep a goal until it is met, so waiting on others has to count as done for now, or the bot polls.
+# Claude Code's goal judge reads this as part of the condition; Codex's model reads it with the objective.
+WAITING_CLAUSE = ("Also done for now: the only work left is waiting on someone or something else (an answer, a review "
+                  "or merge, another bot, a deploy, a set time) and the last message says \"Waiting on: <what>\". "
+                  "Don't poll for it: a reply, a task answer, a watcher or a routine wakes the bot.")
+NATIVE_GOAL_LIMIT = 4000      # Claude Code's /goal limit, and the server's
+WAITING_LINE = re.compile(r"waiting on:[*_\s]*([^\"\n]+)", re.I)
 REPO_COMMAND_NAME = re.compile(r"^[a-z0-9][a-z0-9_:-]{0,63}$")
 _FRONTMATTER = {}     # (path, mtime_ns, size) -> parsed fields: readiness runs every heartbeat, files rarely change
 
@@ -122,9 +134,33 @@ def capabilities(runtime, executable, version):
     return {"goals": supported, "commands": commands}
 
 
+def native_objective(objective):
+    """What the harness is given: the person's objective and the waiting clause, when both fit."""
+    full = objective.rstrip() + " " + WAITING_CLAUSE
+    return full if len(full) <= NATIVE_GOAL_LIMIT else objective
+
+
+def tico_objective(text):
+    """The person's objective back from what the harness reports."""
+    if isinstance(text, str) and text.endswith(WAITING_CLAUSE):
+        return text[:-len(WAITING_CLAUSE)].rstrip()
+    return text
+
+
+def waiting_on(*texts):
+    """The bot's "Waiting on: <what>" line, from the judge's reason or its last message."""
+    for text in texts:
+        for match in WAITING_LINE.finditer(text or ""):
+            what = match.group(1).strip(" *_'")
+            if what and not what.startswith("<"):        # not the clause's own "<what>", quoted back
+                return "Waiting on: " + what[:300]
+    return ""
+
+
 def codex_status(goal):
     status = goal.get("status")
-    return {"complete": "met", "blocked": "stopped", "usageLimited": "stopped",
+    # Blocked means it needs a person or an outside change: paused, so a person can resume it.
+    return {"complete": "met", "blocked": "paused", "usageLimited": "stopped",
             "budgetLimited": "stopped", "budget_limited": "stopped", "completed": "met"}.get(status, status)
 
 
@@ -142,7 +178,7 @@ def reconcile_codex_clear(host, thread_id, event, objective):
     goal = (result or {}).get("goal")
     if not goal:
         return event
-    if goal.get("objective") != objective:
+    if tico_objective(goal.get("objective")) != tico_objective(objective):     # with or without the waiting clause
         return {**event, "status": "stopped", "note": "The native goal changed"}
     status = codex_status(goal)
     if status not in ("active", "paused", "met", "stopped"):
@@ -160,5 +196,8 @@ def claude_status(message):
     # A false sentinel marks goal creation; a true sentinel marks an explicit clear.
     if attachment.get("sentinel"):
         status = "cleared" if attachment.get("met") else "active"
-    return {"status": status, "note": attachment.get("reason") or "",
-            "objective": attachment.get("condition")}
+    event = {"status": status, "note": attachment.get("reason") or "", "objective": attachment.get("condition")}
+    if status == "active" and "sentinel" not in attachment:
+        # The judge sent the bot back to work: one try. The record's id tells a re-read line from a new one.
+        event.update(tried=True, record=message.get("uuid"))
+    return event

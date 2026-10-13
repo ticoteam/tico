@@ -1,7 +1,7 @@
 # Weekly hiring pipeline summary
 
 Schedule: Fridays at 10:00 team time (routine `weekly-hiring-pipeline`), after setup. Also run by hand on request. Budget 30 minutes. The outcome is one page for the hiring
-managers: where each open role stands, who is waiting on a human, and which replies are ready to go. Messages to outsiders stay drafts until `outbound_send` is on.
+managers: where each open role stands, who is waiting on a human, and which replies are ready to go. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ---
 
@@ -25,7 +25,7 @@ human and the days. This is the line managers read first.
 ## 4. Move candidates on
 
 - **Replies owed.** For every candidate past the agreed wait, prepare the reply the stage calls for (an
-  acknowledgement, a next step, or a decline the manager already made) and send requested replies with your Tools when `outbound_send` is on; otherwise keep drafts. Never decide the content of a decision.
+  acknowledgement, a next step, or a decline the manager already made) and send requested replies with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts. Never decide the content of a decision.
 - **Interviews.** For candidates the manager moved to interview since last week, hand scheduling to
   `recruiting-coordinator` with `hub task create --owner recruiting-coordinator` (role, reference, rounds,
   panel from the role file). Without that bot, list them for the hiring manager.

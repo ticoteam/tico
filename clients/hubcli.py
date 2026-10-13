@@ -25,6 +25,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--goal ID] [--dry-run] the checks a create would fail, nothing written
                     [--next-run]           for a bot: no wake; its next run carries the task
     hub task ask <id> "<question>"
+    hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]
+                                           one decision as its own task, waiting on them; none for Yes / No
     hub task comment <id> "<text>"         on the record with your name
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
@@ -49,9 +51,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub file import s3://bucket/key [--title T] [--task ID]  copy an object with this computer's credentials
     hub file list [--bot X] [--limit N]    what is on the page, newest activity first
     hub doc list [--prefix sales/]         the company's internal docs by path
-    hub doc read <id|path|manual:name>     one doc in full, with its version; manual:<name> is a Tico manual page
+    hub doc read <id|path|external:id|manual:name>  one doc in full, with its revision and provenance
     hub doc search "<words>" [--manual] [--market]
-                                           internal and linked docs, best first, then the Tico manual (--manual:
+                                           internal and external docs, linked metadata and the Tico manual (--manual:
                                            only it; --market: also the market's notes, entities and evidence)
     hub doc write <path> --title T (--body-file F | stdin) [--note N]
                                            create or replace a doc; every write is a version
@@ -69,7 +71,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
                                            Assistant only: ask the person to confirm a side effect (an
                                            approval, anything outside the company, spend, settings,
-                                           archive/delete, activating a bot); it runs only on their click
+                                           archive/delete, activating a bot); it runs only on their click.
+                                           Several task actions: ONE card, --path /api/v2/assistant/batch
+                                           --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
+    hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
+                                           what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
@@ -194,7 +200,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub template list                      the bot templates this company can pick from
     hub bot create <slug> --template T [--name "Display"]
                                            set a chosen bot up in the workspace (BotOps only); it also registers
-                                           the bot with Tico as the requester when a person's message started the run
+                                           the bot with Tico as the requester when a person's message started the run,
+                                           and asks for its empty <org>/bot-<slug> when GitHub is connected (exits
+                                           non-zero when a person must first let BotOps create repositories)
     hub bot create <slug> --record-only [--name N] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
     hub bot check <slug>                   what preflight would still refuse about that repository
@@ -204,11 +212,15 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
     hub bot owners <slug> [--add P ...] [--remove P ...]
                                            add or remove the humans who own a bot, as the requester (BotOps)
+    hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
+                                           show or set whether the bot sends mail without approval and its forward
+                                           targets; a person who manages the bot only, never a bot (docs/mail.md)
     hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
-    hub bot go-live <bot> [--computer C] [--no-setup]
-                                           place it if needed, turn it on, start its setup
+    hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
+                                           place it if needed, turn it on, start its setup; waits for the computer
+                                           to get its repository and finishes by itself (`--help`: the file's shape)
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
@@ -262,6 +274,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            start and follow an update of this one (/api/v2/system/update), and nothing else
     hub service-key list | revoke <id>     every service key, never its secret; stop one at once
     hub grokbot sync --file f.json         sync your Grok Bots into Tico
+    hub external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
 
 The commands of the last release keep working for one more release, hidden: each prints a one-line "renamed to"
 notice on stderr and runs the new command (RENAMED below).
@@ -293,10 +306,63 @@ if __package__ in (None, ""):                          # run as a script: python
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
+# The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
+ASKED = ("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
+         "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
 
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+# `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
+# the bot already has (`hub routine list <bot>`); go-live checks the live ones match before turning the bot on.
+ROUTINES_EXAMPLE = ('[{"id": "<bot>:<routine>", "title": "Weekday review", "cron": "0 9 * * 1-5", '
+                    '"timezone": "America/Los_Angeles", "enabled": true}]')
+ROUTINE_FIELDS = {"id": str, "title": str, "cron": str, "timezone": str, "enabled": bool, "on": str}
+ROUTINE_REQUIRED = ("id", "title", "timezone")
+ROUTINES_HELP = f"""--routines-file is a JSON array with one object per Routine the bot has, as it must be live:
+
+  {ROUTINES_EXAMPLE}
+
+  id        required  the Routine's id, <bot>:<routine> (`hub routine list <bot>` shows it)
+  title     required  its title
+  timezone  required  an IANA zone, e.g. America/Los_Angeles
+  cron      optional  its cron, "" when it runs on an event (default "")
+  on        optional  the event it runs on instead, e.g. meeting.ready (default "")
+  enabled   optional  true or false (default true)
+
+No other fields. Go-live refuses when a live Routine differs, or when an enabled Routine is not listed; it creates
+nothing (set Routines with `hub routine set`).
+
+When the computer does not have the bot's repository yet, go-live keeps the placement and answers
+waiting_for_repository: the computer clones it, and Tico finishes going live when it reports the repository."""
+
+
+def read_routines_file(path):
+    """The --routines-file entries, or a CliError naming the bad field and showing the expected shape."""
+    expected = f". Expected {ROUTINES_EXAMPLE} (see `hub bot go-live --help`)"
+    try:
+        data = json.loads(Path(path).read_text())
+    except OSError as exc:
+        raise CliError(f"--routines-file {path}: cannot read it ({exc.strerror or exc})" + expected) from None
+    except ValueError as exc:
+        raise CliError(f"--routines-file {path} is not JSON ({exc})" + expected) from None
+    if not isinstance(data, list):
+        raise CliError(f"--routines-file {path}: the top level is {type(data).__name__}, not an array" + expected)
+    names = {str: "a string", bool: "true or false"}
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise CliError(f"--routines-file {path}: [{i}] is {type(entry).__name__}, not an object" + expected)
+        for key in ROUTINE_REQUIRED:
+            if key not in entry:
+                raise CliError(f"--routines-file {path}: [{i}].{key} is missing" + expected)
+        for key, value in entry.items():
+            if key not in ROUTINE_FIELDS:
+                raise CliError(f"--routines-file {path}: [{i}].{key} is not a field" + expected)
+            if not isinstance(value, ROUTINE_FIELDS[key]):
+                raise CliError(f"--routines-file {path}: [{i}].{key} must be {names[ROUTINE_FIELDS[key]]}" + expected)
+    return data
 
 
 def out(obj):
@@ -343,31 +409,30 @@ def owner_from_registry(name):
 
 
 def task_problems(actor, owner, title, body, type=None):
-    """(resolved owner, the problems the server's `task_create` would refuse on), writing none.
+    """(resolved owner, the problems the server's `task_create` would refuse on, the writing
+    warnings it would accept with), writing none.
 
-    The owner's kind comes from the registry files; the lint (`lint_human_item`) and the reach
-    rule (`classify`) are hubdb's own functions run here. Reach against live state, the
+    The owner's kind comes from the registry files; the lint (`lint_human_item`) is hubdb's own
+    function run here. Reach against live state, the
     duplicate check and whether a named type exists are the hub's to decide at the real create.
     A type other than General is a custom type, whose tasks neither lint shapes.
     """
     from backend import hubdb as H
-    problems = []
+    problems, warnings = [], []
     title, body = str(title or "").strip(), str(body or "")
     general = str(type or "").strip().lower() in ("", H.GENERAL_TYPE)
     target = owner_from_registry(owner)
     if not target:
         problems.append(f"{owner} is not in registry/employees.yaml or registry/people.yaml")
-    if H.is_bot(actor) and H.classify(f"{title}\n{body}", to_actor=target) == "escape":
-        problems.append("the task reaches outside the hub (rule 8): a real create is refused "
-                        "and repeating it quarantines you")
-    if H.is_human(target) and general:
-        problems += H.lint_human_item(body, title=title)
-    elif not title:
+    if not title:
         problems.append("give it a title that says what you are asking for")
+    elif H.is_human(target) and general and H.STYLE_LINT != "off":
+        # writing problems: the create is accepted with these as warnings unless TICO_STYLE_LINT=refuse
+        (problems if H.STYLE_LINT == "refuse" else warnings).extend(H.lint_human_item(body, title=title))
     if H.is_bot(actor) and general:
         # plain-English titles: a warning this week, a refusal once TICO_TITLE_LINT=refuse
         problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-    return target, problems
+    return target, problems, warnings
 
 
 def cmd_task_dry_run(args, who):
@@ -387,10 +452,12 @@ def cmd_task_dry_run(args, who):
     slug = (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
     actor = H.bot_actor(slug) if slug else None
     body = body_of(args)
-    owner, problems = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
+    owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
     if problems:
-        print("\n".join(f"- {p}" for p in problems))
+        print("\n".join(f"- {p}" for p in problems + [f"{w} (warning)" for w in warnings]))
         return 1
+    for w in warnings:
+        print(f"- {w} (warning: the create is accepted)")
     print(f'ok: would create "{args.title.strip()}" for {owner} '
           f'({words_outside_quotes(body)} words outside quoted drafts)')
     return 0
@@ -530,7 +597,7 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--task")
     s.set_defaults(fn="file import")
-    docs = sub.add_parser("doc", help="the team's docs: read, search and write internal docs, list linked ones, ask the Librarian").add_subparsers(dest="sub")
+    docs = sub.add_parser("doc", help="read and search team docs and external sources, write internal docs, ask the Librarian").add_subparsers(dest="sub")
     s = docs.add_parser("archive", help="archive an internal Doc with your rights")
     s.add_argument("ref")
     s.set_defaults(fn="doc archive")
@@ -538,10 +605,11 @@ def parser():
     s.add_argument("--prefix", help="only paths starting with this, e.g. sales/")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="doc list")
-    s = docs.add_parser("read", help="one internal doc in full")
-    s.add_argument("ref", help="a doc id or a path; manual:<name> for a page of the Tico manual")
+    s = docs.add_parser("read", help="one internal or indexed external doc in full")
+    s.add_argument("ref", help="a doc id/path, external:<id>, or manual:<name>")
+    s.add_argument("--revision", help="external commit returned by search")
     s.set_defaults(fn="doc read")
-    s = docs.add_parser("search", help="search internal and linked docs, then the Tico manual")
+    s = docs.add_parser("search", help="search internal, indexed external and linked docs, then the Tico manual")
     s.add_argument("q")
     s.add_argument("--limit", type=int)
     s.add_argument("--manual", dest="collection", action="store_const", const="manual",
@@ -550,6 +618,7 @@ def parser():
                    help="only team docs")
     s.add_argument("--market", action="store_true", default=None,
                    help="also the market's notes, entities and evidence")
+    s.add_argument("--source-id", help="only this external source")
     s.set_defaults(fn="doc search")
     s = docs.add_parser("write", help="create or replace an internal doc at a path")
     s.add_argument("path")
@@ -682,6 +751,15 @@ def parser():
     s.add_argument("id")
     s.add_argument("text")
     s.set_defaults(fn="task ask")
+    s = task.add_parser("question", help="put one decision to a person as its own task: a pick or Yes / No")
+    s.add_argument("question")
+    s.add_argument("--on", required=True, help="the person who decides")
+    s.add_argument("--option", action="append", help="LABEL or LABEL=FILE (an image shows with it); repeat, 2 to 6; none for Yes / No")
+    s.add_argument("--title")
+    s.add_argument("--body")
+    s.add_argument("--parent")
+    s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
+    s.set_defaults(fn="task question")
     s = task.add_parser("update")
     visibility = s.add_mutually_exclusive_group()
     visibility.add_argument("--private", dest="private", action="store_true", default=None)
@@ -701,6 +779,7 @@ def parser():
     s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
     s.add_argument("--number", type=int, help="movers: the number of a task that has none")
     s.add_argument("--role", action="append", help="who is on it by role, NAME=person,person (repeat for more roles; NAME= clears one)")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("id")
@@ -709,6 +788,7 @@ def parser():
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
     choices.add_argument("--choices", help="comma-separated option labels")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task comment")
     s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
     s.add_argument("id")
@@ -731,6 +811,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("url")
     s.add_argument("--title")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task link")
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
@@ -744,10 +825,12 @@ def parser():
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
     s = task.add_parser("close")
     s.add_argument("id")
     s.add_argument("--note")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task close")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
     s.add_argument("id")
@@ -788,6 +871,15 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="task run")
 
+    replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
+    s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")
+    s.add_argument("--from", dest="from", help="start, ISO 8601 with a zone (default 24 hours before --to)")
+    s.add_argument("--to", help="end (default now); at most 31 days after --from")
+    scope = s.add_mutually_exclusive_group()
+    scope.add_argument("--bot", help="only what involves this bot")
+    scope.add_argument("--person", help="only what involves this person")
+    scope.add_argument("--team", help="only what involves this team")
+    s.set_defaults(fn="replay show")
     goal = sub.add_parser("goal", help="goals: list yours, show one, set one, set its colour, edit it").add_subparsers(dest="sub")
     s = goal.add_parser("list", help="what you are for: your goals, the chain above them, your reports' goals")
     s.add_argument("--owner", help="someone else's: a bot slug or a person id")
@@ -976,6 +1068,11 @@ def parser():
     s.add_argument("--edge-rel", dest="edge_rel")
     s.add_argument("--edge-dst", dest="edge_dst")
     s.set_defaults(fn="market apply")
+    s = market.add_parser("import", help="apply a verified batch: one JSON entity or edge per line, each with its evidence")
+    s.add_argument("file", help="the JSONL file, at most 2000 non-blank lines (split larger ones); - reads stdin")
+    s.add_argument("--dry-run", dest="preview", action="store_true", help="report what would change and keep nothing")
+    s.add_argument("--note", default="", help="one sentence on where the batch came from")
+    s.set_defaults(fn="market import")
     s = market.add_parser("sweep", help="one owner task for needs-human, listening tasks for unverified stale entities")
     s.add_argument("--today")
     s.add_argument("--unverified", action="append", default=[], help="entity-id=what to look for")
@@ -983,10 +1080,10 @@ def parser():
     s = market.add_parser("refresh", help="rewrite the weekly delta from market events; only a Monday changes it")
     s.add_argument("--today")
     s.set_defaults(fn="market refresh")
-    s = market.add_parser("page", help="rewrite one market page (overview, coverage-universe, ...) from a Markdown file")
+    s = market.add_parser("page", help="read one market page (overview, coverage-universe, ...), or rewrite it from a Markdown file")
     s.add_argument("name", help="overview, structure-and-size, coverage-universe, people-who-matter, channels, "
                                 "regulation-and-catalysts, theses or open-questions")
-    s.add_argument("--body-file", dest="body_file", required=True, help="the whole page in Markdown; - reads stdin")
+    s.add_argument("--body-file", dest="body_file", help="the whole page in Markdown; - reads stdin; omit to read the page")
     s.set_defaults(fn="market page")
 
     listen = sub.add_parser("listening", help="Listening's saved posts: save a sweep, decide where each post goes, trace a post").add_subparsers(dest="sub")
@@ -1224,10 +1321,15 @@ def parser():
     s.add_argument("--daily", choices=("on", "off"))
     s.add_argument("--weekly", choices=("on", "off"))
     s.set_defaults(fn="update settings")
-    grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/grok-bot-sync.md)").add_subparsers(dest="sub")
+    grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
     s = grok.add_parser("sync", help="sync Grok Bots from a JSON file: {\"bots\": [...], \"source\": ...}")
     s.add_argument("--file", required=True, help="the JSON body hub_grokbot_sync takes")
     s.set_defaults(fn="grokbot sync")
+    ext = sub.add_parser("external", help="your bots on another platform in Tico (docs/external-agent-sync.md)").add_subparsers(dest="sub")
+    s = ext.add_parser("sync", help="sync Grok Bots or Dots from a JSON file: {\"bots\": [...], \"source\": ...}")
+    s.add_argument("--provider", required=True, choices=("grokbot", "dots", "muse"))
+    s.add_argument("--file", required=True, help="the JSON body hub_external_sync takes")
+    s.set_defaults(fn="external sync")
 
     calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")
     s = calendar.add_parser("list", help="appointments on a company calendar")
@@ -1339,6 +1441,14 @@ def parser():
     s.add_argument("--add", nargs="+", default=[], metavar="HUMAN")
     s.add_argument("--remove", nargs="+", default=[], metavar="HUMAN")
     s.set_defaults(fn="bot owners")
+    s = bot.add_parser("mail", help="show or set a bot's mail sending without approval (a person only)")
+    s.add_argument("slug")
+    s.add_argument("--send", dest="outbound_send", action=argparse.BooleanOptionalAction, default=None,
+                   help="--send: send without a per-message approval to the recipients docs/mail.md lists; --no-send: off")
+    s.add_argument("--forward-to", dest="forward_to", help="comma list of forward addresses; an empty string clears it")
+    s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
+                   help="take what the bot's bot.yaml asks, as its computer reported it")
+    s.set_defaults(fn="bot mail")
     s = bot.add_parser("setup-done", help="a starter bot marks its setup done, once its setup is done")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")
@@ -1346,11 +1456,13 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
     s.set_defaults(fn="bot place")
-    s = bot.add_parser("go-live", help="place it if needed, turn it on and start its setup (BotOps)")
+    s = bot.add_parser("go-live", help="place it if needed, turn it on and start its setup (BotOps)",
+                       formatter_class=argparse.RawDescriptionHelpFormatter, epilog=ROUTINES_HELP)
     s.add_argument("bot")
     s.add_argument("--computer")
     s.add_argument("--no-setup", dest="no_setup", action="store_true", help="do not start its setup chat")
-    s.add_argument("--routines-file", dest="routines_file", help="requested live schedules as a JSON array")
+    s.add_argument("--routines-file", dest="routines_file",
+                   help="the bot's live Routines as a JSON array, checked before it is turned on: " + ROUTINES_EXAMPLE)
     s.set_defaults(fn="bot go-live")
     s = bot.add_parser("restore", help="bring an archived bot back, as the person who asked (BotOps)")
     s.add_argument("bot")

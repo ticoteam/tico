@@ -18,7 +18,7 @@ most, so your questions are specific.
 
 ## 2. Introduce yourself in three lines
 
-What you do (sort, draft, flag), that requested filing uses the mailbox rules and your Tools; replies to outsiders stay drafts until `outbound_send` is on.
+What you do (sort, draft, flag), that requested filing uses the mailbox rules and your Tools; replies to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

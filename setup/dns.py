@@ -163,11 +163,11 @@ class Record:
     ttl: int = 300
 
 
-def plan_records(domain: str, front_door: str, ipv4: str = "", ipv6: str = "", tunnel_id: str = "") -> list[Record]:
+def plan_records(domain: str, front_door: str, ipv4: str = "", ipv6: str = "", tunnel_id: str = "", runner_host: str = "") -> list[Record]:
+    """The domain's record comes first: the DNS wait and check look at it."""
     if front_door == "cloudflared":
-        if not tunnel_id:
-            return [Record("CNAME", domain, "<tunnel-id>.cfargotunnel.com", proxied=True)]
-        return [Record("CNAME", domain, f"{tunnel_id}.cfargotunnel.com", proxied=True)]
+        target = f"{tunnel_id or '<tunnel-id>'}.cfargotunnel.com"
+        return [Record("CNAME", name, target, proxied=True) for name in (domain, runner_host) if name]
     recs = []
     if ipv4:
         recs.append(Record("A", domain, ipv4))

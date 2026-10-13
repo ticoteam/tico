@@ -188,7 +188,7 @@ function taskItems(state, view = state.view) {
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
-  return {foryou: active.filter(it => taskNeedsViewer(it.task)).length + looseAsks().length, list: active.length,
+  return {foryou: active.filter(it => taskNeedsViewer(it.task)).length + looseAsks().length + pendingApprovals().length, list: active.length,
     recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
 }
 
@@ -348,8 +348,8 @@ function tasksEmptyHTML(state, what) {
 }
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = state.view === 'done';
-  // Questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
-  const asks = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state) ? looseAsksHTML() : '';
+  // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
+  const asks = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state) ? approvalsHTML() + looseAsksHTML() : '';
   if (!items.length && asks) return `<div class="tl">${asks}</div>`;
   if (!items.length) {
     const emptyWhat = state.view === 'foryou' ? 'Nothing needs you.'

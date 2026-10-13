@@ -175,11 +175,50 @@ def mark_runs(c, messages):
     return messages
 
 
+def mark_prompts(c, messages):
+    """Say who started the run that sent a bot's loose message to a person, on the message itself.
+
+    A reply carries `in_reply_to` and `refs.turn_id`; a message a bot sends with a tool while it works
+    carries neither. When that run was started by another bot's message ("From Dots: ..."), the chat
+    folds it with the other side traffic instead of showing it as the bot talking to you. `prompted_by`
+    is only the kind of sender ("bot", "keeper" or "person"), never who or what they wrote, and a run
+    that took in any person's message counts as the person's. Runs never overlap for one bot
+    (one_active_attempt_per_bot), so the run is the one whose time span holds the message.
+    """
+    loose = [m for m in messages if str(m.get("from_actor", "")).startswith("bot:")
+             and str(m.get("to_actor", "")).startswith("human:") and m.get("kind") in ("say", "notice")
+             and not m.get("in_reply_to") and not (m.get("refs") or {}).get("turn_id")]
+    if not loose:
+        return
+    bots = sorted({m["from_actor"][4:] for m in loose})
+    lo, hi = min(m["created"] for m in loose), max(m["created"] for m in loose)
+    runs = c.execute(
+        f"SELECT a.bot,a.state,coalesce(a.started,a.created) AS began,a.finished,t.from_actor,"
+        " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
+        "  WHERE i.attempt_id=a.id AND im.from_actor LIKE 'human:%') AS person"
+        " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
+        f" WHERE a.bot IN ({','.join('?' * len(bots))}) AND coalesce(a.started,a.created)<=?"
+        " AND ((a.finished IS NULL AND a.state IN ('leased','running')) OR a.finished>=?)",
+        (*bots, hi, lo)).fetchall()
+    # A run that failed before it started has no `finished`; only a live one is open-ended.
+    runs = sorted(runs, key=lambda r: r["began"], reverse=True)
+    for m in loose:
+        run = next((r for r in runs if "bot:" + r["bot"] == m["from_actor"] and r["began"] <= m["created"]
+                    and (r["finished"] is None and r["state"] in ("leased", "running")
+                         or r["finished"] is not None and m["created"] <= r["finished"])), None)
+        if not run:
+            continue
+        sender = str(run["from_actor"] or "")
+        m["prompted_by"] = ("person" if run["person"] or sender.startswith("human:")
+                            else "bot" if sender.startswith("bot:") else "keeper")
+
+
 def annotate(c, auth, who, messages):
-    """Add `run` (which run handled it), `ref_tasks` and, on a bot's reply, what the run did to
-    messages this reader may already see."""
+    """Add `run` (which run handled it), `ref_tasks`, `prompted_by` on a bot's loose message to a person,
+    and, on a bot's reply, what the run did to messages this reader may already see."""
     messages[:] = [m for m in messages if privacy.message_readable(c, privacy.actor(who), m)]
     mark_runs(c, messages)
+    mark_prompts(c, messages)
     titles = {}
     for tid in {v for m in messages for v in task_refs(m)}:
         row = H.task(c, tid)

@@ -18,7 +18,7 @@ that is a named gap in the first page and a task for the owner if they want it c
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly page of what is due, overdue and blocked, and vendor follow-up drafts), that requested messages and tasks use your Tools, and messages to outsiders stay drafts until `outbound_send` is on.
+What you do (a weekly page of what is due, overdue and blocked, and vendor follow-up drafts), that requested messages and tasks use your Tools, and messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

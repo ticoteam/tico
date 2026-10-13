@@ -72,6 +72,9 @@ def install_context_search(app, store, auth):
                         found.append({"kind": "document", "id": hit["id"], "title": hit["title"], "collection": "docs",
                                       "path": hit["path"], "url": "#/docs/" + quote(hit["id"], safe=""),
                                       "excerpt": hit["excerpt"], "score": hit["score"]})
+                    elif hit["type"] == "external":
+                        found.append({**hit, "kind": "external_document", "collection": "docs",
+                                      "url": "#/docs/" + quote(hit["id"], safe="")})
                     else:
                         found.append({"kind": "linked_doc", "id": hit["id"], "title": hit["title"], "collection": "docs",
                                       "url": hit["url"], "excerpt": hit["description"], "score": hit["score"]})
@@ -105,8 +108,11 @@ def install_context_search(app, store, auth):
 
     @app.get("/api/v2/context/document")
     def document(request: Request, id: str = Query(min_length=1, max_length=200)):
-        with store.read() as c:
+        with store.read_transaction() as c:
             auth.domain(request.state.identity)
+            if id.startswith("external:"):
+                app.state.docs.reader(request.state.identity)
+                return {**app.state.doc_sources.read_from(c, id), "collection": "docs"}
             row = c.execute("SELECT * FROM docs WHERE archived=0 AND (id=? OR path=? COLLATE NOCASE)", (id, id)).fetchone()
             if row:
                 if not privacy.content_readable(c, privacy.actor(request.state.identity), dict(row)):

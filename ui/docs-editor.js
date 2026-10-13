@@ -173,30 +173,33 @@
 
   // ------------------------------------------------------------------ linked docs
   function linkDialog({link = null, onDone}) {
-    const box = dialog(`<form data-link-form novalidate><header><h2>${link ? 'Edit linked doc' : 'Add a link'}</h2>
+    const box = dialog(`<form data-link-form novalidate><header><h2>${link ? 'Edit source' : 'Add source'}</h2>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
-      <label class="gs-field"><span>Address</span><input name="url" type="url" maxlength="2000" required autocomplete="off" inputmode="url" spellcheck="false" placeholder="https://drive.google.com/drive/folders/…"></label>
+      <label class="gs-field"><span>Address</span><input name="url" type="url" maxlength="2000" required autocomplete="off" inputmode="url" spellcheck="false" placeholder="https://github.com/acme/handbook"></label>
       <p class="docs-detected muted" data-detected aria-live="polite"></p>
       <label class="gs-field"><span>Title <em>(optional)</em></span><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Defaults to the address"></label>
       <label class="gs-field"><span>Description <em>(optional)</em></span><input name="description" type="text" maxlength="300" autocomplete="off" placeholder="Help centre articles customers read"></label>
+      <details class="docs-source-scope"><summary>Scope</summary><label class="gs-field"><span>Reference <em>(optional)</em></span><input name="reference" maxlength="256" autocomplete="off" placeholder="Branch, tag or commit"></label></details>
       <p class="err" data-error role="alert" hidden></p>
-      <div class="gs-card-actions"><button class="primary" type="submit">${link ? 'Save' : 'Add link'}</button>
+      <div class="gs-card-actions"><button class="primary" type="submit">${link ? 'Save' : 'Add source'}</button>
         <button class="ghost" type="button" data-close>Cancel</button>
-        ${link ? '<button class="ghost docs-danger" type="button" data-remove>Remove link</button>' : ''}</div></form>`, {label: link ? 'Edit linked doc' : 'Add a link'});
+        ${link ? '<button class="ghost docs-danger" type="button" data-remove>Remove source</button>' : ''}</div></form>`, {label: link ? 'Edit source' : 'Add source'});
     const form = box.querySelector('form'), detected = box.querySelector('[data-detected]');
     form.elements.url.value = link?.url || ''; form.elements.title.value = link?.title || ''; form.elements.description.value = link?.description || '';
+    form.elements.reference.value = link?.reference_override || '';
     const detect = () => {
-      const kind = DocsSearch.kindOf(form.elements.url.value);
-      detected.textContent = kind ? `Filed as ${DocsSearch.kind(kind).label} · ${DocsSearch.hostOf(form.elements.url.value)}` : '';
+      const scope = DocsSearch.sourceScope(form.elements.url.value);
+      detected.textContent = scope ? `${scope.repo}${scope.tail ? ' · ' + scope.tail : ''}` : form.elements.url.value ? 'Link only' : '';
+      form.querySelector('.docs-source-scope').hidden = !scope?.tail;
+      if (link?.error_code === 'reference_needed') form.querySelector('.docs-source-scope').open = true;
     };
     form.elements.url.oninput = detect; detect(); form.elements.url.focus();
     const fail = text => { const line = form.querySelector('[data-error]'); line.textContent = text; line.hidden = !text; };
     const send = async body => {
       form.querySelector('[type=submit]').disabled = true; fail('');
       try {
-        if (link) await writeRequest('PATCH', '/v2/linked-docs/' + encodeURIComponent(link.id), body);
-        else await post('/v2/linked-docs', body);
-        box.close(); onDone?.();
+        const result = link ? await writeRequest('PATCH', '/v2/doc-sources/' + encodeURIComponent(link.id), body) : await post('/v2/doc-sources', body);
+        box.close(); onDone?.(result.source);
       } catch (error) {
         form.querySelector('[type=submit]').disabled = false;
         fail(errorCode(error) === 'already_linked' ? 'That address is already linked.' : error.message || 'That did not save.');
@@ -204,9 +207,43 @@
     };
     form.onsubmit = event => {
       event.preventDefault();
-      send({url: form.elements.url.value.trim(), title: form.elements.title.value.trim() || (link ? link.title : ''), description: form.elements.description.value.trim()});
+      send({url: form.elements.url.value.trim(), title: form.elements.title.value.trim() || (link ? link.title : ''), description: form.elements.description.value.trim(), reference: form.elements.reference.value.trim()});
     };
-    box.querySelector('[data-remove]')?.addEventListener('click', () => { if (confirm('Remove this link? The doc it points to is not touched.')) send({archived: true}); });
+    box.querySelector('[data-remove]')?.addEventListener('click', () => { if (confirm('Remove this source?')) send({archived: true}); });
+    return box;
+  }
+
+  // ------------------------------------------------------------------ research
+  // The Librarian researches the web and adds what it finds to one section (backend/librarian.py,
+  // playbooks/research-a-section.md). `body` is the page's Markdown, for its headings.
+  function researchDialog({target, body = ''}) {
+    const heads = [...new Set(String(body).split('\n').map(line => /^#{1,4}\s+(.+?)\s*#*\s*$/.exec(line)?.[1]).filter(Boolean))];
+    const box = dialog(`<form data-research-form novalidate><header><h2>Research</h2>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+      ${heads.length ? `<label class="gs-field"><span>Section</span><select name="section"><option value="">Whole page</option>${heads.map(h => `<option>${esc(h)}</option>`).join('')}</select></label>` : ''}
+      <label class="gs-field"><span>What to find</span><textarea name="instructions" rows="5" maxlength="4000" required placeholder="Add each competitor's public pricing, with sources"></textarea></label>
+      <p class="err" data-error role="alert" hidden></p>
+      <div class="gs-card-actions"><button class="primary" type="submit">Start research</button>
+        <button class="ghost" type="button" data-close>Cancel</button></div></form>`, {label: 'Research with the Librarian'});
+    const form = box.querySelector('form'), line = box.querySelector('[data-error]');
+    form.elements.instructions.focus();
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const instructions = form.elements.instructions.value.trim();
+      if (!instructions) { line.textContent = 'Say what to find.'; line.hidden = false; return; }
+      form.querySelector('[type=submit]').disabled = true; line.hidden = true;
+      try {
+        const sent = await post('/v2/librarian/research', {target, section: form.elements.section?.value || '', instructions});
+        form.innerHTML = `<header><h2>Research</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+          <p class="docs-dialog-lead">The Librarian is on it. Its changes show in this page's history.</p>
+          <div class="gs-card-actions"><a class="primary" role="button" href="#/task/${esc(sent.task_id)}" data-close>View task</a>
+            <button class="ghost" type="button" data-close>Close</button></div>`;
+      } catch (error) {
+        form.querySelector('[type=submit]').disabled = false;
+        line.textContent = errorCode(error) === 'librarian_off' ? 'The Librarian is off.' : error.message || 'That did not go through.';
+        line.hidden = false;
+      }
+    };
     return box;
   }
 
@@ -248,5 +285,5 @@
     return box;
   }
 
-  window.DocsEditor = {editor, history, linkDialog, importDialog};
+  window.DocsEditor = {editor, history, linkDialog, importDialog, researchDialog};
 })();

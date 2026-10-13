@@ -7,7 +7,7 @@ One paragraph: what this bot is for and what good looks like.
 - 
 
 ## Sending
-Draft messages to outsiders until `outbound_send` is on for this bot. Apply an owner’s
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Apply an owner’s
 routine changes directly.
 
 ## Starting a run
@@ -58,9 +58,15 @@ For a comment, use `hub task comment <id> "..." --attach <file> --ask ask.json` 
 `ask` too). Ask once per version. Read the `answer: {...}` block in the wake, or
 `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
 attach a new version when the work changes. Answers record who replied; the bot decides its next step.
+When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
+makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
+(MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
 When a task waits on a person to act (a decision, access, a fix only they can make), name them:
 `hub task update <id> --status waiting --on <person> --note "<exactly what they need to do>"`. It
-shows in their Needs you; a task left waiting with only a note in chat reaches nobody.
+shows in their Needs you; a task left waiting with only a note in chat reaches nobody. That note is
+what they read as your request, so write it to them: one plain sentence saying what you need them to
+do ("Add our tax number in Settings so I can send the invoices"), with no task or message
+ids, no shorthand and no status. Your working notes go in a comment, not in the waiting note.
 
 ## Deciding with the decision model (`hub decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this
@@ -104,5 +110,6 @@ html, pdf, office files; up to 25 MB; never credentials), or at once with `hub f
 reports/<name>.md`; publishing it again adds a version. A Google Doc, Sheet, Slides, Notion page or
 Figma file you created or edited is listed with `hub file link <url> --title "..."`, and again
 with `hub file touch <url>` after each edit (Tico keeps the address, never the document). An S3
-object is copied on this computer with `hub file import s3://bucket/key`. Files humans send you are
-inputs, not yours to list.
+object is copied on this computer with `hub file import s3://bucket/key`. Share a file as a viewable URL or a Tico
+file, never a bare `s3://` URI: `hub` rewrites one to its view URL when the server maps the bucket, and otherwise
+`hub file import` makes it a Tico file. Files humans send you are inputs, not yours to list.

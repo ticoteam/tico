@@ -11,15 +11,16 @@ from Tico HQ are on by default and share your answer and team description; [Priv
 Try locally with Docker on a Mac with Docker Desktop running, or on Linux:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
-[Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in, **Set up**, a first draft and a completed task.
+[Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in to
+[Your first result](install.md#your-first-result): Content Marketer drafts a post from a fictional brief, you review it and close the task.
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [Humans](people.md).
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
-- [Connect tools](connect-tools.md), [Credentials](credential-vault.md) and [Permissions](permissions.md).
+- [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
   Members can have 25 active bots by default; the owner can change the limit.
 - Keep Tico running: [Health and recovery](install.md#operating-it), [Updates](updates.md),
   [Backups and restore](install.md#backups-and-restore) and [Support](support.md).
@@ -38,7 +39,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Build a bot](creating-bots.md), [Routines](routines.md), [Agent context](agent-context.md) and [Watchers](watchers.md).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
-- External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok sync](grok-bot-sync.md).
+- External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
 - Advanced operations: [Cloud provisioning](install-advanced.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),

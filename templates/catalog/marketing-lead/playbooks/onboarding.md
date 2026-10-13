@@ -18,7 +18,7 @@ workstream to start with and why, not a summary of nothing.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly marketing summary, a six week calendar, routing proposals), that requested routing uses your Tools, and that public messages stay drafts until `outbound_send` is on.
+What you do (a weekly marketing summary, a six week calendar, routing proposals), that requested routing uses your Tools, and that public messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

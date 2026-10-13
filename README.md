@@ -22,31 +22,37 @@ A small pilot is what has been measured ([sizing](docs/sizing.md)).
 On your own computer (a Mac with Docker Desktop, or Linux), with no domain and no sign-in setup, run the installer with `--local`:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh -s -- --local --owner-email you@example.com
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh --local --owner-email you@example.com
 ```
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
-installer prints. Then get one bot working:
+installer prints. Then get one first result: **Content Marketer** drafts a short post about a made-up product, you review
+it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code, or an
+API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
-1. In **Finish setup**, choose an AI provider, name your team and choose **Content Marketer** (`content`) in the **Marketing** group.
-   It needs only Tico. Assistant, BotOps, Librarian and Goal Manager are the four built-in bots.
+1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
+   Assistant, BotOps, Librarian and Goal Manager are the four built-in bots.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
-4. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
+   [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
+   work and lets a run in progress finish ([Usage](docs/usage.md)).
+5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-5. On **Tasks > New task**, assign it: “Draft a 200-word blog post introducing our example app to project teams from these facts:
-   our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
-   no claims. Return a draft on this task.” Read its result on the task, then close it.
+6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+   it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
+
+Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
+with Project Coordinator), are in [Your first result](docs/install.md#your-first-result).
 
 You can choose providers later in **Settings > AI providers**; bots wait with “Add an AI provider” until you do.
-If the bot waits or sign-in fails, open **Settings > Health** and follow [first-result recovery](docs/install.md#first-result-recovery).
 Add a domain and sign-in later ([Install](docs/install.md#add-a-domain-and-sign-in-later)).
 
 For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the installer with no flags:
 
 ```bash
-curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
 It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through `tico setup`:
@@ -106,7 +112,7 @@ is one team; several can run side by side on one Mac.
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Starters are parked
-in **Needs setup** until you open one and press **Set up**; review its first draft, then assign a small task and read its result.
+in **Needs setup** until you open one and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
@@ -199,6 +205,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_REGISTRY_DIR` | Seed roster and access list directory; its `integrations/` folder layers the team's own tool pages and queries over the release ([docs/databases.md](docs/databases.md)) | `/etc/tico/registry` |
 | `TICO_INTEGRATIONS_DIR` | Where that team layer lives when it is not `<registry>/integrations` | `/etc/tico/integrations` |
 | `TICO_BLOB_DIR` or `TICO_BLOB_BUCKET` | Where attachments and meeting files are stored: a directory or an S3 bucket | `/var/lib/tico/blobs` |
+| `TICO_S3_VIEW_URLS` | Where people open a team bucket's objects: `bucket=https://base[/prefix]`, comma-separated. `s3://bucket/key` in bot text becomes `base/key` ([docs/files.md](docs/files.md#links-to-bucket-objects)) | `acme-files=https://d1234example.cloudfront.net` |
 | `TICO_ACCESS_ISSUER` and `TICO_ACCESS_AUDIENCE` | Identity proxy issuer and application audience. JWKS is read from `<issuer>/cdn-cgi/access/certs` | `https://acme.cloudflareaccess.com` |
 | `TICO_AUTH_PROXY` | `oidc` (built-in sign-in), `cloudflare` or `aws-alb`. Defaults to `cloudflare` when `TICO_ACCESS_ISSUER` is set, else none (loopback sign-in). See [Sign-in options](docs/environments.md#sign-in-options) | `oidc` |
 | `TICO_OIDC_ISSUER` | For `oidc`: `https://accounts.google.com`, `https://login.microsoftonline.com/<tenant-id>/v2.0`, or any issuer with OpenID discovery | `https://accounts.google.com` |
@@ -214,11 +221,13 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_GITHUB_OWNER` | Organization that completes bare bot repository names | `acme-inc` |
 | `TICO_CREDENTIAL_ADMINS` | Comma-separated emails allowed to write shared credentials. The owner and the Admins when empty | `you@example.com` |
 | `TICO_UNSOLICITED_PER_DAY` | How many messages a bot may start to one human in a day before it must file a task instead. Default 10; lower it to tighten | `3` |
-| `TICO_ESCAPE_QUARANTINE_AT` | How many times in a day a bot may try to reach another bot's files or a `secrets/` path before it is quarantined until a human clears it. Default 3 | `1` |
+| `TICO_STYLE_LINT` | What a writing problem in a bot's ask to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
 | `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
 | `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
 | `TICO_SCHEDULER` | `1` runs the routine scheduler in this process | `1` |
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
+| `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
+| `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
 | `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional key for the decisions provider (TypeSafe's Jev) behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Without it the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
 | `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The "New version" notice and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > Privacy) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |

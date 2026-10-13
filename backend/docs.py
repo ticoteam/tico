@@ -1,11 +1,8 @@
 """Docs: the team's written knowledge (docs/docs.md).
 
-Two kinds of thing live here. **Internal docs** are Markdown written, pasted or imported in Tico:
-every change is a version, any version can be restored, and an owner or bot administrator can lock
-one so only they may change it. **Linked docs** are only links (a help site, a Drive folder, a
-Notion page, a repository) with a title, a kind detected from the address and a one-line note:
-Tico keeps no copy of what they point to and runs no sync. Both are readable by every signed-in
-person and by bots, and both are searched together.
+Internal documents are editable and versioned. External links keep their identity and metadata;
+public GitHub sources also have refreshed, read-only snapshots (backend/doc_sources.py).
+Every signed-in person and bot can read and search the team collection.
 """
 
 import asyncio
@@ -54,9 +51,6 @@ FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5("
 
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
-# bm25 only orders documents against each other (its size depends on the whole corpus), so an internal
-# doc's score is bm25 plus this, which keeps a match in a written doc above a match in a link.
-INTERNAL_BONUS = 10.0
 LIST_MAX = 500
 MIGRATED = "docs_migrated"
 STOP = frozenset("a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
@@ -90,7 +84,13 @@ def clean_url(raw):
     if (parts.scheme not in ("http", "https") or not host or "." not in host and host != "localhost"
             or parts.username or parts.password or len(url) > 2000 or re.search(r"\s", url)):
         raise Problem("validation", "Use a web address that starts with https:// and has no password in it", 422)
-    return parts.geturl()
+    normalized = parts.geturl()
+    from clients.github_scope import parse_url
+    try:
+        scope = parse_url(normalized)
+    except ValueError:
+        scope = None
+    return scope['url'] if scope else normalized
 
 
 OTHER_HOSTS = ("dropbox.com", "box.com", "sharepoint.com", "onedrive.live.com", "1drv.ms", "atlassian.net",
@@ -381,7 +381,8 @@ def link_row(c, link_id):
 def add_link(c, actor, body):
     """One new linked doc (also what the Getting started card adds). A repeat address is a 409."""
     url = clean_url(body.url)
-    dupe = c.execute("SELECT * FROM linked_docs WHERE archived=0 AND url=?", (url,)).fetchone()
+    dupe = c.execute("SELECT l.* FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
+                     "WHERE l.archived=0 AND (l.url=? OR s.url=?)", (url, url)).fetchone()
     if dupe:
         raise Problem("already_linked", "That address is already linked", 409, extra={"linked": linked_view(dupe)})
     if c.execute("SELECT COUNT(*) FROM linked_docs WHERE archived=0").fetchone()[0] >= 500:
@@ -390,10 +391,28 @@ def add_link(c, actor, body):
     c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created,updated) VALUES(?,?,?,?,?,?,?,?)",
               (link_id, body.title or default_title(url), url, detect_kind(url), body.description, actor, now, now))
     H.event(c, actor, "docs.linked", link_id, {"url": url})
+    from .doc_sources import sync_link
+    sync_link(c, link_id)
     return linked_view(link_row(c, link_id), label_names(c, [actor]))
 
 
 # ------------------------------------------------------------------ the service
+def merge_ranked(groups, limit, tokens):
+    # Database and Python relevance scores have different scales; positions are comparable.
+    def weight(row):
+        if row.get('type') == 'linked':
+            return 0.005
+        if row.get('type') != 'internal' or not row.get('path', '').startswith('_librarian/'):
+            return 1
+        title = [t for t in manual.query_words(row['title']) if t not in ('team', 'docs', 'doc')]
+        named = bool(title) and all(t in tokens for t in title)
+        named = named or all(t in tokens for t in manual._words(row['path']))
+        return 1 if named else 0.2
+    out = [{**row, "score": round(weight(row) * 100 / (60 + rank), 6)}
+           for group in groups for rank, row in enumerate(group, 1)]
+    return sorted(out, key=lambda row: -row["score"])[:limit]
+
+
 class Docs:
     def __init__(self, app, store, auth, mutate):
         self.app, self.store, self.auth, self.mutate = app, store, auth, mutate
@@ -636,8 +655,9 @@ class Docs:
             if row["added_by"] != who.actor and not self.admin(who):
                 raise Problem("forbidden", "Only who added a linked doc, an owner or a bot administrator can change it", 403)
             url = clean_url(body.url) if body.url is not None else row["url"]
-            if url != row["url"] and c.execute("SELECT 1 FROM linked_docs WHERE archived=0 AND url=? AND id!=?",
-                                               (url, link_id)).fetchone():
+            if url != row["url"] and c.execute("SELECT 1 FROM linked_docs l LEFT JOIN doc_sources s ON s.source_id=l.id "
+                                               "WHERE l.archived=0 AND (l.url=? OR s.url=?) AND l.id!=?",
+                                               (url, url, link_id)).fetchone():
                 raise Problem("already_linked", "That address is already linked", 409)
             title = body.title if body.title is not None else row["title"]
             description = body.description if body.description is not None else row["description"]
@@ -646,28 +666,41 @@ class Docs:
                       (title, description, url, detect_kind(url), archived, H.now(), link_id))
             H.event(c, who.actor, "docs.link_removed" if archived and not row["archived"] else "docs.link_updated",
                     link_id, {"url": url})
+            from .doc_sources import sync_link
+            sync_link(c, link_id)
             names = label_names(c, [row["added_by"]])
             return {"linked": linked_view(link_row(c, link_id), names)}
         return work
 
     # -------------------------------------------------------------- search
-    def search(self, who, q, limit):
+    def search(self, who, q, limit, source_id=""):
         self.reader(who)
         with self.store.read() as c:
-            return {"results": self.find(c, q, limit)}
+            return {"results": self.find(c, q, limit, source_id)}
 
-    def find(self, c, q, limit=20):
-        """Internal sections and linked docs, best first, each with its `type`."""
+    def find(self, c, q, limit=20, source_id=""):
+        """Internal and external sections, followed by linked metadata, each with its `type`."""
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
-        results = self.find_internal(c, tokens, limit) + self.find_linked(c, tokens)
+        external = self.app.state.doc_sources.find(c, tokens, limit, source_id) if self.app else []
+        if source_id:
+            return external
+        internal, linked = self.find_internal(c, tokens, limit), self.find_linked(c, tokens)
+        if external:
+            contents = merge_ranked([internal, external], limit, tokens)
+            metadata = [{**row, 'score': 0.5 / (60 + i)} for i, row in
+                        enumerate(sorted(linked, key=lambda r: -r['score']), 1)]
+            return (contents + metadata)[:limit]
+        results = internal + linked
         results.sort(key=lambda r: (-r["score"], r["type"] != "internal", r["title"].casefold()))
         return results[:limit]
 
     def find_internal(self, c, tokens, limit):
         out = []
         weights = manual.query_weights(tokens)
+        # All candidate titles use one glossary snapshot, rather than restatting every manual file per row.
+        glossary = manual.pages().get('glossary', {}).get('body', '')
         sql, params = "SELECT id,path,title,body FROM docs WHERE archived=0", ()
         if has_fts(c):
             expression = " OR ".join('"' + manual._stem(token) + '"*' for token in tokens)
@@ -679,7 +712,7 @@ class Docs:
             if not best:
                 continue
             score, section = best
-            title_tokens = [t for t in manual.query_words(row["title"]) if t not in ("team", "docs", "doc")]
+            title_tokens = [t for t in manual.query_words(row["title"], glossary) if t not in ("team", "docs", "doc")]
             named = bool(title_tokens) and all(t in tokens for t in title_tokens)
             named = named or all(t in tokens for t in manual._words(row["path"]))
             if named:
@@ -757,6 +790,8 @@ class Docs:
 def install_docs(app, store, auth, mutate):
     docs = Docs(app, store, auth, mutate)
     app.state.docs = docs
+    from .doc_sources import install as install_sources
+    install_sources(app, docs, mutate)
 
     def create_body(item, text):
         return DocCreate(path=item.path or None, title=item.title, body=text)
@@ -778,16 +813,22 @@ def install_docs(app, store, auth, mutate):
     @app.get("/api/v2/docs/search")
     def search_docs(request: Request, q: str = Query(min_length=1, max_length=4000),
                     limit: int = Query(default=20, ge=1, le=50),
-                    collection: str = Query(default="company", pattern="^(team|company|manual|all)$")):
+                    collection: str = Query(default="company", pattern="^(team|company|manual|all)$"),
+                    source_id: str = Query(default="", max_length=100)):
         """`team` (`company` is the legacy default alias) is the team's docs; `manual` is the read-only Tico manual (backend/manual.py);
         `all` ranks team and manual sections together, each labelled with its collection."""
         who = request.state.identity
         docs.reader(who)
+        if source_id:
+            return docs.search(who, q, limit, source_id)
         if collection == "manual":
             return {"results": manual.search(q, limit)}
-        found = docs.search(who, q, limit)["results"]
+        found = docs.search(who, q, limit, source_id)["results"]
         if collection == "all":
-            found = [{**r, "collection": "company"} for r in found] + manual.search(q, limit)
+            team = [{**r, "collection": "company"} for r in found]
+            if any(r["type"] == "external" for r in found):
+                return {"results": merge_ranked([team, manual.search(q, limit)], limit, manual.query_words(q))}
+            found = team + manual.search(q, limit)
             found.sort(key=lambda row: (-row["score"], row["type"] == "linked", row["title"].casefold()))
             found = found[:limit]
         return {"results": found}

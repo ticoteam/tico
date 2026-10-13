@@ -7,6 +7,7 @@ function settingsValue(field, value) {
   if (field === 'access') return accessSummary(value);
   if (field === 'model') return settingsChoiceLabel(value?.harness || value?.runtime, value?.model, value?.effort);
   if (field === 'fallback') return value ? settingsChoiceLabel(value.harness, value.model, value.reasoning_effort || value.effort) : 'None (fail)';
+  if (field === 'compact_at') return SETTINGS_COMPACT_AT.find(([size]) => size === value)?.[1] || String(value);
   if (field === 'placement') return value?.label ? `${value.label} · ${settingsPersonName(value.operator)}` : 'not assigned';
   if (field === 'definition') return [value?.display_name, value?.status,
     value?.reports_to ? `reports to ${settingsBotName(value.reports_to)}` : 'top level'].filter(Boolean).join(' · ');
@@ -38,7 +39,7 @@ function renderSettingsHistory() {
   const pendingRows = pending.map(t => `<div class="settings-history-row"><span>${avatar(t.bot, 24, stateOf(t.bot))}</span><div><strong>${esc(settingsBotName(t.bot))} · ${t.kind === 'model' ? 'model change' : 'computer move'}</strong><p>${esc(t.state === 'preparing' ? `Checkpointing ${t.progress.prepared} of ${t.progress.total} conversations` : t.error || t.state)}</p></div><div class="history-action"><span class="pill ${t.state === 'failed' ? 'fail' : 'waiting'}">${esc(t.state)}</span><button class="ghost" type="button" data-transition-review="${esc(t.id)}">Review</button></div></div>`).join('');
   const rows = changes.map(change => {
     const e = S.emps.find(row => row.name === change.bot), transition = transitionById.get(change.transition_id);
-    const field = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',definition:'setup'}[change.field] || change.field;
+    const field = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',compact_at:'compact at',definition:'setup'}[change.field] || change.field;
     const what = change.field === 'definition' ? settingsDefinitionChange(change.before, change.after)
       : `${settingsValue(change.field, change.before)} → ${settingsValue(change.field, change.after)}`;
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>

@@ -197,6 +197,38 @@ class QuestionOption(Contract):
     file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
 
 
+class QuestionFile(Contract):
+    """A picture or file shown with one option, sent with the question (backend/media.py task_question)."""
+    name: Annotated[StrictStr, Field(min_length=1, max_length=200)]
+    content_base64: Annotated[StrictStr, Field(min_length=1, max_length=14_000_000)]
+
+
+class QuestionChoice(Contract):
+    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
+    description: Annotated[StrictStr, Field(max_length=200)] = ""
+    file: QuestionFile | None = None
+
+
+class TaskQuestion(Contract):
+    """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
+    question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
+    on: ID
+    options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
+    title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
+    body: Text | None = None
+    parent: ID | None = None
+    private: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def unique_labels(self):
+        labels = [o.label for o in self.options]
+        if len(set(labels)) != len(labels):
+            raise ValueError("Option labels must be unique")
+        if self.options and not 2 <= len(self.options) <= 6:
+            raise ValueError("A question has 2 to 6 options, or none for Yes / No")
+        return self
+
+
 class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
     header: Annotated[StrictStr, Field(max_length=30)]
@@ -500,6 +532,14 @@ class MarketApply(Contract):
     last_verified: str | None = None
 
 
+class MarketImport(Contract):
+    """A verified batch, one JSON object per line (backend/market.py `import_batch`)."""
+    name: str = Field(default="", max_length=300)
+    lines: str = Field(min_length=1, max_length=20_000_000)
+    note: str = Field(default="", max_length=2000)
+    dry_run: bool = False
+
+
 class MarketUnverified(Contract):
     id: str = Field(min_length=1, max_length=200)
     look_for: str = Field(default="", max_length=2000)
@@ -677,6 +717,21 @@ class ToolUpdate(Contract):
     title_prefix: str = Field(default="", max_length=100)
 
 
+class MailRequest(Contract):
+    """What a bot's bot.yaml asks for its mail (runner/declared_access.py `mail_request`): a request only. The
+    server-held setting (backend/mail_settings.py) decides; Health says when the two differ."""
+    outbound_send: bool = False
+    forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
+
+
+class MailSettingsUpdate(Contract):
+    """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
+    `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""
+    outbound_send: bool | None = None
+    forward_to: list[Annotated[str, Field(max_length=320)]] | None = Field(default=None, max_length=20)
+    from_request: bool = False
+
+
 class BotReadiness(GoalReadiness):
     ready: bool
     runtime: str = Field(default="", max_length=100)
@@ -703,6 +758,8 @@ class BotReadiness(GoalReadiness):
     sign_in: Literal["ready", "missing", "failed", "unknown"] = "unknown"
     # The bot's declared `access:`, for the Tools row on its page. A runner from before it omits it.
     tools: list[ToolAccess] = Field(default_factory=list, max_length=30)
+    # What bot.yaml asks for its mail sending; omitted when it asks for nothing.
+    mail_request: MailRequest | None = None
 
 
 class DiskReadiness(Contract):
@@ -1191,6 +1248,11 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotCompactAt(Contract):
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    expected_revision: int = Field(ge=1)
+
+
 class BotTransitionCreate(Contract):
     kind: Literal["model", "machine"]
     model: ID | None = None
@@ -1282,7 +1344,9 @@ class AccessRules(Contract):
     """Team rules the owner tightens (backend/team_rules.py); only what is sent changes."""
     assistant_direct: bool | None = None
     botops_direct: bool | None = None
+    botops_manages_bots: bool | None = None
     admin_credentials: bool | None = None
+    members_store_credentials: bool | None = None
     admin_sql: bool | None = None
     member_tokens: bool | None = None
 
@@ -1433,6 +1497,9 @@ class Completion(Contract):
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
+    # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
+    # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
+    undelivered: list[ID] = Field(default_factory=list, max_length=100)
 
 
 class Retry(Contract):
@@ -1461,6 +1528,14 @@ class BotPlace(Contract):
     computer: str = Field(default="", max_length=200)
 
 
+# The `routines` of a go-live (`hub bot go-live --routines-file`): the bot's live Routines as they must be before it is
+# turned on. Each names an existing Routine by its id; nothing is created. Shown in help and in a refusal of a bad file.
+ROUTINES_SHAPE = ('a JSON array of objects, one per live Routine: [{"id": "<bot>:<routine>", "title": "Weekday review", '
+                  '"cron": "0 9 * * 1-5", "timezone": "America/Los_Angeles", "enabled": true}]. id, title and timezone '
+                  'are required; cron (default "") and on (an event name, default "") say when it runs; enabled defaults '
+                  'to true; no other fields')
+
+
 class RoutineExpectation(Contract):
     id: ID
     title: str
@@ -1481,12 +1556,23 @@ class Empty(Contract):
     pass
 
 
+class LimitRetry(Contract):
+    pass
+
+
 class StopTurn(Contract):
     attempt_id: ID | None = None   # the run the person saw; a newer one is not stopped by mistake
 
 
 class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
+
+
+class LibrarianResearch(Contract):
+    """A person asks the Librarian to research and add to one page (docs/librarian.md#research)."""
+    target: Annotated[str, Field(min_length=1, max_length=300)]     # a doc id, market/<page> or a market entity id
+    section: Annotated[str, Field(max_length=300)] = ""             # a heading on it; empty is the whole page
+    instructions: Annotated[str, Field(min_length=1, max_length=4000)]
 
 
 class DocsAsk(Contract):

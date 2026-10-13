@@ -72,6 +72,14 @@ class HostError(RuntimeError):
     """The runtime refused a call, or died while answering one."""
 
 
+class SteerRefused(HostError):
+    """`steer` wrote nothing because the turn is over or already ending.
+
+    Unlike a bare HostError, the input certainly did not reach the runtime, so the runner may
+    hand it to a new turn instead of treating its delivery as uncertain.
+    """
+
+
 class Host:
     """One runtime. Subclasses implement everything below `start`."""
 
@@ -205,6 +213,19 @@ def hub_mcp_server(env):
         return None
     return {"command": sys.executable, "args": [str(HUB_MCP_SCRIPT)],
             "env": {k: env[k] for k in HUB_MCP_ENV if env.get(k)}}
+
+
+# Where a bot's conversation compacts when its "Compact at" is unset (backend/settings_admin.py COMPACT_AT).
+DEFAULT_COMPACT_AT = 250_000
+
+
+def compact_at(value):
+    """A bot's "Compact at" in tokens: its own whole number, else DEFAULT_COMPACT_AT."""
+    try:
+        tokens = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_COMPACT_AT
+    return tokens if tokens > 0 else DEFAULT_COMPACT_AT
 
 
 def settings(cwd, model=None, effort=None, env=None, slug=None, **extra):

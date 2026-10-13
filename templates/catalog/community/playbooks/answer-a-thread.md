@@ -33,5 +33,5 @@ The answer in the first sentence, then the steps, then the doc link. Use the mem
 
 ## 5. Put it up for review
 
-Add it to the week's batch, or post the requested reply with the thread link and text using your Tools when `outbound_send` is on; otherwise keep the draft.
+Add it to the week's batch, or post the requested reply with the thread link and text using your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
 After it is posted, note it in the digest. `hub task update <id> --status done --note`.

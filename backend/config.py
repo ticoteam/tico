@@ -159,6 +159,8 @@ class Settings:
     blob_credentials: str = "auto"
     blob_prefix: str = field(default="", init=False)
     upload_max_bytes: int = 2 * 1024 ** 3
+    # {bucket: https base} from TICO_S3_VIEW_URLS (clients/s3links.py): where people open a bucket's objects.
+    s3_view_urls: dict = field(default_factory=dict)
     processing_operators: tuple[str, ...] = ()
     mail_retention_days: int = 180
     release_id: str = ""
@@ -178,6 +180,11 @@ class Settings:
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
     typesafe_api_key: str = field(default="", repr=False)
+    # How many calls to the server's own models one actor may make in a UTC day, by role: decisions
+    # (`judge.call`, Slack routing included) and, counted apart, market asks (`market.ask`). backend/judge.py.
+    decisions_daily_calls_owner: int = 20_000
+    decisions_daily_calls_human: int = 5_000
+    decisions_daily_calls_bot: int = 5_000
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -218,6 +225,8 @@ class Settings:
         bucket = self.blob_bucket.removeprefix("s3://").strip("/")
         self.blob_bucket, _, self.blob_prefix = bucket.partition("/")
         self.blob_prefix = self.blob_prefix.rstrip("/")
+        from clients import s3links
+        self.s3_view_urls = s3links.parse(self.s3_view_urls, private_bucket=self.blob_bucket)
         self.public_url = self.public_url.rstrip("/")
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
@@ -350,6 +359,7 @@ class Settings:
             blob_endpoint=os.environ.get("TICO_BLOB_ENDPOINT", ""),
             blob_credentials=os.environ.get("TICO_BLOB_CREDENTIALS", "auto"),
             upload_max_bytes=int(os.environ.get("TICO_UPLOAD_MAX_BYTES") or 2 * 1024 ** 3),
+            s3_view_urls=os.environ.get("TICO_S3_VIEW_URLS", ""),
             processing_operators=tuple(filter(None, os.environ.get("TICO_PROCESSING_OPERATORS", "").split(","))),
             mail_retention_days=max(1, int(os.environ.get("TICO_MAIL_RETENTION_DAYS", "180") or "180")),
             release_id=os.environ.get("TICO_RELEASE", ""),
@@ -363,6 +373,9 @@ class Settings:
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
+            decisions_daily_calls_owner=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_OWNER", "") or 20_000)),
+            decisions_daily_calls_human=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_HUMAN", "") or 5_000)),
+            decisions_daily_calls_bot=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_BOT", "") or 5_000)),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

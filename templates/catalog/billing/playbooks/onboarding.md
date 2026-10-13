@@ -16,7 +16,7 @@ timesheets. Do not ask for what these already show.
 ## 2. Introduce yourself in three lines
 
 What you do (build and check every invoice from its contract or usage, find unbilled work, prepare
-credit notes), that requested invoices use your Tools and stated prices; customer messages stay drafts until `outbound_send` is on.
+credit notes), that requested invoices use your Tools and stated prices; customer messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

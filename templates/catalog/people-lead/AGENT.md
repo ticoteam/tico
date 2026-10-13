@@ -47,7 +47,7 @@ If `state.md` says setup has not finished, do this before any other work:
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until `outbound_send` is on for this bot. When it is on, send within
+Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
 Only when the work asks for it and your Tools allow it:

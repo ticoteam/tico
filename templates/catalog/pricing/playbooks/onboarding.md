@@ -16,7 +16,7 @@ whether the CRM is readable. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a monthly pricing review, price change impact notes, the competitor price book), that requested price changes use your Tools and documented terms; outside quotes stay drafts until outbound_send is on.
+What you do (a monthly pricing review, price change impact notes, the competitor price book), that requested price changes use your Tools and documented terms; outside quotes stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

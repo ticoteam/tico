@@ -127,6 +127,40 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     assert quiet["status"] == "info" and "credential key" in quiet["summary"] and quiet["fixes"][0]["href"].endswith("#backups-and-restore")
     assert check({**only, "credential_key": {**held, "copied_at": None, "current": False}}, local)["status"] == "warn"
     assert "credential key" in check({"mode": "off", "credential_key": held})["summary"]
+    # github-app.key and slack.key, when present, must be in the backup as they are now too.
+    files = {"github-app.key": {"present": True, "copied_at": None, "current": False}}
+    behind = check({**remote, "credential_key": held, "key_files": files})
+    assert behind["status"] == "warn" and "github-app.key" in behind["summary"]
+    assert check({**only, "credential_key": held, "key_files": files}, local)["status"] == "warn"
+    files["github-app.key"].update(copied_at="2026-01-01T00:00:00Z", current=True)
+    assert check({**remote, "credential_key": held, "key_files": files})["status"] == "ok"
+
+
+def test_secrets_a_missing_key_file_cannot_open_are_named_with_the_fix(environment):
+    from backend import slack_app
+    api = environment()
+    state = api.app.state
+    settings, store, github = state.store.settings, state.store, state.github_app
+    with store.transaction() as c:
+        github.save(c, "human:ana", "Acme", True, {"id": 7, "slug": "acme-tico", "client_id": "Iv1.synthetic",
+                                                   "pem": "synthetic-pem", "webhook_secret": "whsec-synthetic"})
+        state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "s"}, "app c in t")
+    slack_app.save(store, settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000")
+    assert "sealed_secrets" not in health_of(api)[1]
+    data = settings.db_path.parent
+    for name in ("github-app.key", "slack.key"):
+        (data / name).rename(data / (name + ".elsewhere"))
+    check = health_of(api)[1]["sealed_secrets"]
+    assert check["status"] == "warn" and check["fixes"]
+    for words in ("GitHub App", "directory sync", "Slack tokens", "github-app.key is missing", "slack.key is missing",
+                  "credential-key/github-app.key"):
+        assert words in check["summary"]
+    assert not (data / "github-app.key").exists()           # Health and the reads behind it make no new key
+    (data / "slack.key").write_bytes(b"\x01" * 32)          # the wrong key is named too
+    assert "the key they were sealed with" in health_of(api)[1]["sealed_secrets"]["summary"]
+    for name in ("github-app.key", "slack.key"):
+        (data / (name + ".elsewhere")).replace(data / name)
+    assert "sealed_secrets" not in health_of(api)[1]
 
 
 def test_listening_health_checks_custom_categories_without_question_text(environment, monkeypatch):
@@ -190,6 +224,86 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["stuck"] == [] and "release" not in json.dumps(body)
 
+
+def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_their_reason(environment):
+    """The queued chat names a sign-in reason (the Set up chat shows a Sign in hint from it) only when this bot's own
+    model is not signed in on its own computer. A bot on another runtime that waits on something else keeps its reason,
+    even while the team's default model is signed in nowhere."""
+    import json
+    api = environment()
+    revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+    assert api.put("/api/v2/providers", headers=signed_in(), json={
+        "enabled": ["openai", "anthropic"], "runtime": "claude", "expected_revision": revision}).status_code == 200
+    runner = enrolled(api)
+    add_bot(api, "writer")
+    add_bot(api, "coder")
+
+    def report(claude):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+                "schema_version": 1, "runtimes": {
+                    "claude": {"installed": True, "authenticated": claude, "detail": "" if claude == "ready" else "Claude login required"},
+                    "codex": {"installed": True, "authenticated": "ready"}},
+                "bots": {"writer": {"ready": claude == "ready", "runtime": "claude",
+                                    "problems": [] if claude == "ready" else ["Claude login required"]},
+                         "coder": {"ready": False, "runtime": "codex", "problems": ["Missing bot repository or AGENT.md"]}}}),
+                runner))
+
+    report("missing")
+    chats = {}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('coder',?,'ana')", (json.dumps({"runtime": "codex"}),))
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        for bot in ("writer", "coder"):
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                      (bot, runner, H.now()))
+            chats[bot] = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
+            H._write_message(c, owner, "bot:" + bot, "start setup", chats[bot], "say", {}, None, None)
+    snapshot = lambda bot: api.get("/api/v2/conversations/" + chats[bot]["id"] + "/snapshot", headers=signed_in()).json()["execution"]
+    writer, coder = snapshot("writer"), snapshot("coder")
+    assert writer["state"] == "queued" and writer["readiness_reason"] == "model_sign_in"
+    assert writer["label"] == "Saved — Claude login required"
+    assert "readiness_reason" not in coder and coder["label"] == "Saved — Missing bot repository or AGENT.md"
+    assert health_of(api)[1]["models"]["summary"] == "No online computer is signed in to your model."
+    report("ready")
+    assert "readiness_reason" not in snapshot("writer") and health_of(api)[1]["models"]["status"] == "ok"
+
+
+def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
+    """The sign-in hint and Health's stuck check judge the bot's own harness, not its provider's default: an Antigravity
+    bot on Gemini, on a computer where the Gemini sign-in is missing, keeps its own reason and gets no Gemini sign-in fix."""
+    import json
+    api = environment()
+    revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+    assert api.put("/api/v2/providers", headers=signed_in(), json={
+        "enabled": ["google"], "runtime": "gemini", "expected_revision": revision}).status_code == 200
+    runner = enrolled(api)
+    add_bot(api, "scout")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?", (H.now(), json.dumps({
+            "schema_version": 1, "runtimes": {
+                "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}},
+            "bots": {"scout": {"ready": False, "runtime": "gemini", "problems": ["Missing bot repository or AGENT.md"]}}}),
+            runner))
+        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('scout',?,'ana')",
+                  (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
+        c.execute("UPDATE bots SET runtime='gemini' WHERE slug='scout'")
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('scout',?,1,?,'t')",
+                  (runner, H.now()))
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        chat = H.open_conversation(c, owner, [owner, "bot:scout"], kind="chat")
+        H._write_message(c, owner, "bot:scout", "start setup", chat, "say", {}, None, None)
+    execution = api.get("/api/v2/conversations/" + chat["id"] + "/snapshot", headers=signed_in()).json()["execution"]
+    assert execution["state"] == "queued" and "readiness_reason" not in execution
+    assert execution["label"] == "Saved — Missing bot repository or AGENT.md"
+    [row] = health_of(api)[0]["stuck"]
+    assert row["bot"] == "scout" and row["why"] == "Missing bot repository or AGENT.md on Team box"
+    assert "Gemini" not in json.dumps(row) and "login" not in row["fix"] and "move" not in row["fix"]
+    # Judged as Gemini CLI, the same computer's answer is a sign-in: the hint the bot must not get.
+    from backend.readiness import can_run
+    with api.app.state.store.transaction() as c:
+        assert can_run(c, "scout", "gemini")["sign_in"] is True
+        assert "sign_in" not in can_run(c, "scout", "gemini", harness="antigravity")
 
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     """The company default is Codex but the bots here run on Claude: no Codex warning, still a Sign in button."""

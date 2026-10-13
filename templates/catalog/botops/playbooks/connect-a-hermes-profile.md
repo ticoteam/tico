@@ -5,8 +5,8 @@ profile is one agent on the human's own computer; it becomes one bot with its ow
 (docs/hermes-agents.md, docs/openclaw-agents.md). Budget 5 minutes. The human never copies a token: the profile and Tico
 pair with a short code. Everything below is for Hermes; for OpenClaw it is the same with `--harness openclaw` on the
 connection script's commands, `--model openclaw` when you register the bot, and `--profile` optional (no `--profile` is the
-default profile in `~/.openclaw`). OpenClaw has no MCP client; its skill calls Tico through the connection script, and that is
-already set up by `pair`.
+default profile in `~/.openclaw`). No MCP entry is added to OpenClaw; its skill calls Tico through the connection script, and
+that is already set up by `pair`.
 
 ## 1. Ask three things
 

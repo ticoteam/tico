@@ -10,6 +10,7 @@ tested against a fake backend in test_review.py.
 
 import contextlib, io, json, os, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake                    # noqa: E402,F401  (puts the hub on sys.path)
@@ -134,7 +135,18 @@ class Stage2(unittest.TestCase):
     creators = CREATORS
     policy_yaml = POLICY
 
+    # A bot's run carries these; with them a draft would upload its files to the run's live task.
+    HUB_ENV = ("HUB_API_URL", "HUB_TOKEN", "HUB_TASK_ID")
+
     def setUp(self):
+        self._env = mock.patch.dict(os.environ)
+        self._env.start()
+        for name in self.HUB_ENV:
+            os.environ.pop(name, None)
+        # Every `mail draft --attach` records its task uploads here and nothing leaves the process.
+        self.task_uploads = []
+        self._task_attach, cli.TASK_ATTACH = cli.TASK_ATTACH, (
+            lambda task, name, data, key: self.task_uploads.append((task, name, data, key)) or "")
         self.dir = tempfile.TemporaryDirectory()
         self.root = Path(self.dir.name)
         for slug, text in self.manifests.items():
@@ -151,10 +163,14 @@ class Stage2(unittest.TestCase):
         self._saved = {"access": access.PROJECTS, "policy_projects": pl.PROJECTS,
                        "policy_file": pl.POLICY_FILE, "review_projects": rv.PROJECTS,
                        "audit": audit_log.AUDIT_PATH, "run": pl.RUN, "hub_get": pl.HUB_GET,
+                       "server_get": pl.SERVER_GET,
                        "gmail": cli.open_gmail, "db": cli.open_db, "cal": cli.open_calendar,
                        "reviewer": os.environ.get("MAIL_REVIEWER"), "judge": os.environ.get("MAIL_DECISIONS")}
         access.PROJECTS = pl.PROJECTS = rv.PROJECTS = self.root
         pl.POLICY_FILE = self.policy_file
+        # A person has already confirmed in Tico what each bot.yaml asks (backend/mail_settings.py); the tests of the
+        # server-held switch itself replace this.
+        pl.SERVER_GET = self.confirmed_setting
         audit_log.AUDIT_PATH = self.root / "audit.jsonl"
         os.environ["MAIL_REVIEWER"] = "none"
         os.environ["MAIL_DECISIONS"] = "none"        # no judge either; test_judge.py injects a fake engine
@@ -173,6 +189,7 @@ class Stage2(unittest.TestCase):
         pl.POLICY_FILE = self._saved["policy_file"]
         pl.RUN = self._saved["run"]
         pl.HUB_GET = self._saved["hub_get"]
+        pl.SERVER_GET = self._saved["server_get"]
         rv.PROJECTS = self._saved["review_projects"]
         audit_log.AUDIT_PATH = self._saved["audit"]
         cli.open_gmail, cli.open_db = self._saved["gmail"], self._saved["db"]
@@ -185,7 +202,18 @@ class Stage2(unittest.TestCase):
             os.environ.pop("MAIL_DECISIONS", None)
         else:
             os.environ["MAIL_DECISIONS"] = self._saved["judge"]
+        cli.TASK_ATTACH = self._task_attach
+        self._env.stop()
         self.dir.cleanup()
+
+    def confirmed_setting(self, slug):
+        """The server's mail setting as if a person had turned on what `slug`'s manifest asks."""
+        try:
+            manifest = access.load(slug)
+        except Exception:
+            return {"bot": slug, "set": False, "outbound_send": False, "forward_to": []}
+        return {"bot": slug, "set": True, "outbound_send": bool(manifest.get("outbound_send")),
+                "forward_to": access.forward_to(manifest), "updated_by": "human:ana"}
 
     # -- knobs ------------------------------------------------------
     def corpus(self):

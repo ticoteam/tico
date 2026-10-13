@@ -10,8 +10,15 @@ One row per bot in `agents`: the credential's hash and the last heartbeat. Rotat
 credential replaces the hash; revoking keeps the row so the page can say who revoked it.
 """
 
+import base64
 import hmac
+import os
 import secrets
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .harnesses import is_external, resolve_harness
 from .store import H, Problem, digest, encode
@@ -22,7 +29,8 @@ PRESENCE_GAP = 180
 
 # Pairing: a profile with no credential asks to be connected, and a person (or BotOps for them) approves
 # the code it prints. Only hashes of the code and the secret are kept; the minted credential waits in the
-# row from approval until the first authenticated heartbeat.
+# row from approval until the first authenticated heartbeat, sealed so that only the profile's secret opens it
+# (`seal_held_token`).
 PAIRING_TTL = 600
 PAIRING_POLL_EVERY = 3
 PAIRINGS_PER_CLIENT_HOUR = 10
@@ -53,10 +61,10 @@ def presence(c, bot, harness=None, now=None):
     harness = harness or external_harness(c, bot)
     if not harness:
         return None
-    if harness == "grokbot":
-        from . import grokbot
+    from . import external_sync
+    if harness in external_sync.HARNESSES:
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        return grokbot.presence(c, bot, H._json(config["config_json"], {}) or {}, now)
+        return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
     credential = bool(record and not record["revoked_at"])
@@ -122,6 +130,66 @@ def heartbeat(c, who, body):
             "waiting": {"messages": len(inbox["messages"]), "tasks": len(inbox["tasks"])}}
 
 
+# The held credential is sealed to an X25519 key derived from the pairing secret, which only the profile keeps (the
+# server returns it once, at create, and stores only its hash and this public key). Approval seals with the public key
+# alone; opening needs the secret, which the profile presents on each poll. A copy of the database, or anyone reading
+# it, cannot recover the credential while it waits.
+SEALED = "sealed-v1:"
+_RAW = (serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+def _pairing_private(secret):
+    seed = HKDF(hashes.SHA256(), 32, salt=None, info=b"tico-pairing-seal:v1").derive(secret.encode())
+    return X25519PrivateKey.from_private_bytes(seed)
+
+
+def pairing_public(secret):
+    """The public half of the pairing secret's sealing key, hex: what the row keeps in `token_key`."""
+    return _pairing_private(secret).public_key().public_bytes(*_RAW).hex()
+
+
+def _wrap_key(shared, ephemeral, recipient, pairing_id):
+    return HKDF(hashes.SHA256(), 32, salt=ephemeral + recipient,
+                info=b"tico-pairing-token:v1:" + pairing_id.encode()).derive(shared)
+
+
+def seal_held_token(record, token):
+    """`token` sealed to the pairing's public key (ECIES: X25519, HKDF-SHA256, AES-256-GCM), as the row stores it."""
+    recipient = bytes.fromhex(record["token_key"])
+    ephemeral = X25519PrivateKey.generate()
+    public = ephemeral.public_key().public_bytes(*_RAW)
+    key = _wrap_key(ephemeral.exchange(X25519PublicKey.from_public_bytes(recipient)), public, recipient, record["id"])
+    nonce = os.urandom(12)
+    sealed = AESGCM(key).encrypt(nonce, token.encode(), record["id"].encode())
+    return SEALED + base64.urlsafe_b64encode(public + nonce + sealed).decode()
+
+
+def open_held_token(record, secret):
+    """The held credential, opened with the profile's pairing secret; None when there is none or the secret does not
+    open it. Call only after the secret matched `secret_hash`: a credential approved by the release before sealing
+    (plaintext, no `token_key`) is returned as it is, and it expires within PAIRING_TTL of that approval."""
+    held = record["token"]
+    if not held:
+        return None
+    if not held.startswith(SEALED):
+        return held
+    try:
+        blob = base64.urlsafe_b64decode(held[len(SEALED):])
+        public, nonce, sealed = blob[:32], blob[32:44], blob[44:]
+        private = _pairing_private(secret or "")
+        recipient = private.public_key().public_bytes(*_RAW)
+        key = _wrap_key(private.exchange(X25519PublicKey.from_public_bytes(public)), public, recipient, record["id"])
+        return AESGCM(key).decrypt(nonce, sealed, record["id"].encode()).decode()
+    except Exception:
+        return None
+
+
+def wipe_unclaimable(c, now=None):
+    """On start: a held credential that can no longer be collected (expired, or not approved) leaves the row."""
+    c.execute("UPDATE agent_pairings SET token=NULL WHERE token IS NOT NULL AND (state<>'approved' OR expires_at<=?)",
+              (now or H.now(),))
+
+
 def _code(value):
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
 
@@ -147,10 +215,10 @@ def create_pairing(c, body, client):
             break
     else:
         raise Problem("unavailable", "Could not make a pairing code; try again", 503, retryable=True)
-    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created,expires_at) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created,"
+              "expires_at,token_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
               (pairing_id, digest(raw), digest(secret), body.profile, body.host, body.version, body.harness,
-               client_hash, now, H.shift(now, seconds=PAIRING_TTL)))
+               client_hash, now, H.shift(now, seconds=PAIRING_TTL), pairing_public(secret)))
     return {"pairing_id": pairing_id, "code": raw[:4] + "-" + raw[4:], "secret": secret,
             "expires_in": PAIRING_TTL, "poll_every": PAIRING_POLL_EVERY}
 
@@ -165,7 +233,10 @@ def poll_pairing(c, pairing_id, secret):
         c.execute("UPDATE agent_pairings SET state='expired',token=NULL WHERE id=?", (pairing_id,))
         return {"state": "expired"}
     if state == "approved":
-        return {"state": "approved", "bot": record["bot"], "token": record["token"]}
+        token = open_held_token(record, secret)
+        if token is None:
+            return {"state": "expired"}      # nothing this secret opens: pair again
+        return {"state": "approved", "bot": record["bot"], "token": token}
     return {"state": state}
 
 
@@ -190,6 +261,9 @@ def approve_pairing(c, who, manager, code, bot):
     if who.role not in ("owner", "human"):
         raise Problem("forbidden", "Only a person approves a pairing", 403)
     record = _pending(c, code)
+    if not record["token_key"]:
+        # Asked for before this release, which seals the credential for the profile: no key to seal it with.
+        raise Problem("not_found", "That code was made before Tico was updated. Run the pair command again for a new one", 404)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     manager(c, who, bot)
@@ -207,7 +281,7 @@ def approve_pairing(c, who, manager, code, bot):
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
     c.execute("UPDATE agent_pairings SET state='approved',bot=?,token=?,decided_by=?,decided_at=? WHERE id=?",
-              (bot, issued["token"], who.actor, H.now(), record["id"]))
+              (bot, seal_held_token(record, issued["token"]), who.actor, H.now(), record["id"]))
     H.event(c, who.actor, "agent.pairing_approved", bot, {"profile": record["profile"], "host": record["host"]})
     return {"bot": bot, "profile": record["profile"], "host": record["host"]}
 

@@ -255,13 +255,18 @@ function settingsBotProblem(e) {
   if (e.agent) return !e.agent.credential ? 'no credential' : e.online ? '' : 'not reporting';
   return !e.machine ? 'no computer' : e.online && e.ready ? '' : e.online ? (e.readiness?.problems?.[0] || 'Computer not ready') : 'offline';
 }
-// Settings → Bots filters and bulk model change ("filter by computer, filter
+// Settings → Bots search, filters and bulk model change ("filter by computer, filter
 // by model, select in bulk, and change model in bulk"). Filters are remembered per browser; the
-// selection is not, and it is trimmed to what the filters show so a bulk change never reaches a
-// bot the person cannot see. Bulk apply is the single-row path run once per bot, not a new route.
+// search, like Routines' search, lasts while the page is open; the selection is not remembered, and
+// it is trimmed to what the search and filters show so a bulk change never reaches a bot the person
+// cannot see. Bulk apply is the single-row path run once per bot, not a new route.
+// On a phone the selects fold behind a Filters button and the checkboxes behind Select (`filtersOpen`, `picking`).
 const SETTINGS_BOTS_FILTER_KEY = 'hub.settings.bots.filters';
-const SETTINGS_BOTS_VIEW = {computer: '', model: '', effort: '', selected: new Set()};
-try { Object.assign(SETTINGS_BOTS_VIEW, JSON.parse(localStorage.getItem(SETTINGS_BOTS_FILTER_KEY) || '{}'), {selected: new Set()}); } catch {}
+const SETTINGS_BOTS_VIEW = {q: '', computer: '', model: '', effort: '', selected: new Set(), filtersOpen: false, picking: false};
+try {
+  const {computer = '', model = '', effort = ''} = JSON.parse(localStorage.getItem(SETTINGS_BOTS_FILTER_KEY) || '{}');
+  Object.assign(SETTINGS_BOTS_VIEW, {computer, model, effort});
+} catch {}
 function settingsBotsRemember() {
   const {computer, model, effort} = SETTINGS_BOTS_VIEW;
   try { localStorage.setItem(SETTINGS_BOTS_FILTER_KEY, JSON.stringify({computer, model, effort})); } catch {}
@@ -284,18 +289,31 @@ function settingsBotsFilterOptions(rows) {
   const sorted = map => [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
   return {computers: sorted(computers), models: sorted(models), efforts: sorted(efforts)};
 }
+// The search box: every word of the query appears in the bot's name, slug, role, description or team.
+const settingsBotMatches = (e, q) => !q.trim() || searchIncludes([e.display_name, botDisplayName(e.name), e.name, e.role,
+  e.description, e.team && teamLabel(e.team)], q);
 function settingsBotsVisible(rows) {
-  const {computer, model, effort} = SETTINGS_BOTS_VIEW;
+  const {q, computer, model, effort} = SETTINGS_BOTS_VIEW;
   return rows.filter(e => (!computer || settingsBotComputerKey(e) === computer)
     && (!model || settingsBotModelKey(e) === model)
-    && (!effort || (!e.agent && settingsBotEffort(e) === effort)));
+    && (!effort || (!e.agent && settingsBotEffort(e) === effort))
+    && settingsBotMatches(e, q));
 }
 function settingsBotsFilterHTML(options, shown, total) {
+  const view = SETTINGS_BOTS_VIEW, active = ['computer', 'model', 'effort'].filter(name => view[name]).length;
+  const picking = view.picking || view.selected.size > 0;
   const select = (name, label, all, list) => `<select class="settings-inline-select" data-bots-filter="${name}" aria-label="Filter bots by ${label.toLowerCase()}">
-      <option value="">${all}</option>${list.map(row => `<option value="${esc(row.key)}" ${row.key === SETTINGS_BOTS_VIEW[name] ? 'selected' : ''}>${esc(row.label)} (${row.n})</option>`).join('')}</select>`;
-  return `<div class="settings-bots-filters">${select('computer', 'Computer', 'All computers', options.computers)}
-    ${select('model', 'Model', 'All models', options.models)}${select('effort', 'Effort', 'Any effort', options.efforts)}
-    <span class="settings-bots-count" data-bots-count>${shown === total ? `${total} bots` : `${shown} of ${total} bots`}</span></div>
+      <option value="">${all}</option>${list.map(row => `<option value="${esc(row.key)}" ${row.key === view[name] ? 'selected' : ''}>${esc(row.label)} (${row.n})</option>`).join('')}</select>`;
+  return `<div class="settings-bots-filters${view.filtersOpen ? ' open' : ''}">
+    <span class="sb-search"><input class="settings-filter-search" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search" data-bots-search
+      value="${esc(view.q)}" placeholder="Search bots" aria-label="Search bots" aria-controls="settings-bots-list">
+      <button type="button" class="sb-search-clear" data-bots-search-clear aria-label="Clear search" ${view.q ? '' : 'hidden'}>×</button></span>
+    <button type="button" class="ghost sb-filters-toggle" data-bots-filters-toggle aria-expanded="${view.filtersOpen}" aria-controls="settings-bots-selects">Filters${active ? ` <span class="cnt">${active}</span>` : ''}</button>
+    <span class="sb-selects" id="settings-bots-selects">${select('computer', 'Computer', 'All computers', options.computers)}
+    ${select('model', 'Model', 'All models', options.models)}${select('effort', 'Effort', 'Any effort', options.efforts)}</span>
+    <span class="settings-bots-count" data-bots-count role="status">${shown === total ? '' : `${shown} of `}${total} bot${total === 1 ? '' : 's'}</span>
+    <span class="sb-pick-tools"><button type="button" class="linkish" data-bots-pick-all ${picking ? '' : 'hidden'}>Select all</button>
+      <button type="button" class="linkish" data-bots-picking aria-pressed="${picking}">${picking ? 'Done' : 'Select'}</button></span></div>
     <div class="settings-bulk" data-bots-bulk hidden><strong data-bulk-count></strong>
       <button class="primary" type="button" data-bulk-model>Change model…</button><button class="ghost" type="button" data-bulk-clear>Clear</button></div>`;
 }
@@ -449,24 +467,67 @@ function renderSettingsBots() {
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.name)}"><td class="settings-pick">${pick(e)}</td>
       <td class="sb-cell-name"><div class="sb-bot">${avatar(e.name, 27, stateOf(e.name))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${esc(e.name)}">${shownName(e)}</a>${botDisplayName(e.name) !== (e.display_name || e.name) ? `<span class="mono muted">${esc(e.name)}</span>` : ''}${badges}</div>${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
-      <td class="sb-cell-access">${settingsAccessCell(e)}</td><td class="sb-cell-model">${model}</td>
+      <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model">${model}</td>
       <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>
       <td class="sb-cell-limit">${useLimitButton(e.name, e.display_name, SETTINGS_DATA.limits?.bots?.[e.name])}</td>
       <td class="settings-row-actions">${settingsCanManageBot(e) ? `<button class="ghost" type="button" data-edit-bot="${esc(e.name)}" aria-label="Edit ${esc(e.display_name)}">Edit</button>` : ''}</td></tr>`;
   };
-  el.innerHTML = !all.length ? '<div class="empty">No bots are registered.</div>' : `${settingsBotsFilterHTML(options, rows.length, all.length)}${rows.length ? `<div class="scroll"><table class="settings-bots-table"><thead><tr><th class="settings-pick"><input type="checkbox" data-bots-select-all aria-label="Select all shown bots"></th><th>Bot</th><th>Access</th><th>Model</th><th>Fallback</th><th>Owners</th><th>Computer</th><th>Limit</th><th aria-label="Actions"></th></tr></thead><tbody>
+  const q = SETTINGS_BOTS_VIEW.q.trim();
+  const none = q ? `<div class="empty">No bots match “${esc(q)}”${['computer', 'model', 'effort'].some(name => SETTINGS_BOTS_VIEW[name]) ? ' with these filters' : ''}.</div>`
+    : '<div class="empty">No bots match these filters.</div>';
+  const html = !all.length ? '<div class="empty">No bots are registered.</div>' : `${settingsBotsFilterHTML(options, rows.length, all.length)}${rows.length ? `<div class="scroll" id="settings-bots-list"><table class="settings-bots-table${SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size ? ' picking' : ''}"><thead><tr><th class="settings-pick"><input type="checkbox" data-bots-select-all aria-label="Select all shown bots"></th><th>Bot</th><th>Access</th><th>Model</th><th>Fallback</th><th>Owners</th><th>Computer</th><th>Limit</th><th aria-label="Actions"></th></tr></thead><tbody>
     ${rows.map(row).join('')}
-    </tbody></table></div>` : '<div class="empty">No bots match these filters.</div>'}`;
+    </tbody></table></div>` : `<div id="settings-bots-list">${none}</div>`}`;
+  // While the search box has the cursor (typing, or the refresh loop meanwhile) it stays the same element:
+  // replacing a focused field drops the cursor and closes a phone's keyboard. Everything around it is redrawn.
+  const tools = el.querySelector('.settings-bots-filters');
+  const search = tools?.querySelector('[data-bots-search]');
+  if (all.length && search && search === document.activeElement) {
+    const next = document.createElement('template'); next.innerHTML = html;
+    const fresh = next.content.querySelector('.settings-bots-filters');
+    tools.className = fresh.className;
+    for (const part of ['[data-bots-filters-toggle]', '.sb-selects', '[data-bots-count]', '.sb-pick-tools']) tools.querySelector(part).replaceWith(fresh.querySelector(part));
+    tools.querySelector('[data-bots-search-clear]').hidden = !SETTINGS_BOTS_VIEW.q;
+    fresh.remove();
+    [...el.children].forEach(child => { if (child !== tools) child.remove(); });
+    tools.after(next.content);
+  } else el.innerHTML = html;
   settingsBotsSyncSelection(el, rows);
   void settingsArchivedBots(el);
+  // A control that redraws the list takes the keyboard back to itself, or to the search box when it is gone
+  // (hidden on a computer, or no longer drawn): a redraw must not drop focus to the page.
+  const redraw = selector => {
+    renderSettingsBots();
+    const target = [...el.querySelectorAll(selector)].find(node => node.getClientRects().length);
+    (target || el.querySelector('[data-bots-search]'))?.focus();
+  };
   el.onclick = event => {
     const restore = event.target.closest('[data-bot-restore]');
     if (restore) { void settingsRestoreBot(restore.dataset.botRestore, restore); return; }
     const choice = event.target.closest('[data-choice-open]');
     if (choice) { settingsChoicePopover(choice); return; }
     if (event.target.closest('[data-bulk-model]')) { settingsBulkModelDialog(); return; }
-    if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); renderSettingsBots(); return; }
+    if (event.target.closest('[data-bulk-clear]')) { SETTINGS_BOTS_VIEW.selected.clear(); redraw('[data-bots-picking]'); return; }
+    if (event.target.closest('[data-bots-search-clear]')) {
+      SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots(); el.querySelector('[data-bots-search]')?.focus(); return;
+    }
+    // On a phone the checkbox cell is the tap target, not just the 16px box.
+    const pickCell = event.target.closest('td.settings-pick');
+    if (pickCell && event.target === pickCell) { pickCell.querySelector('input:not(:disabled)')?.click(); return; }
+    if (event.target.closest('[data-bots-filters-toggle]')) { SETTINGS_BOTS_VIEW.filtersOpen = !SETTINGS_BOTS_VIEW.filtersOpen; redraw('[data-bots-filters-toggle]'); return; }
+    // Done also drops the selection: nothing stays picked behind checkboxes that are no longer shown.
+    if (event.target.closest('[data-bots-picking]')) {
+      SETTINGS_BOTS_VIEW.picking = !(SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size);
+      if (!SETTINGS_BOTS_VIEW.picking) SETTINGS_BOTS_VIEW.selected.clear();
+      redraw('[data-bots-picking]'); return;
+    }
+    if (event.target.closest('[data-bots-pick-all]')) {
+      const pickable = rows.filter(settingsBotSelectable), on = !pickable.every(e => SETTINGS_BOTS_VIEW.selected.has(e.name));
+      pickable.forEach(e => on ? SETTINGS_BOTS_VIEW.selected.add(e.name) : SETTINGS_BOTS_VIEW.selected.delete(e.name));
+      el.querySelectorAll('[data-bot-pick]').forEach(box => { box.checked = on; });
+      settingsBotsSyncSelection(el, rows); return;
+    }
     const cap = event.target.closest('[data-use-limit]');
     if (cap) {
       const slug = cap.dataset.useLimit, name = settingsBotName(slug);
@@ -485,9 +546,21 @@ function renderSettingsBots() {
     if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
     if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
   };
+  el.oninput = event => {
+    const search = event.target.closest('[data-bots-search]');
+    if (search) { SETTINGS_BOTS_VIEW.q = search.value; renderSettingsBots(); }
+  };
+  // Escape empties the search box (as a search field does in Chrome and Safari); an empty box lets it through.
+  el.onkeydown = event => {
+    const search = event.key === 'Escape' && event.target.closest('[data-bots-search]');
+    if (!search || !search.value) return;
+    event.preventDefault(); event.stopPropagation();
+    search.value = ''; SETTINGS_BOTS_VIEW.q = ''; renderSettingsBots();
+  };
   el.onchange = event => {
+    if (event.target.closest('[data-bots-search]')) return;
     const filter = event.target.closest('[data-bots-filter]');
-    if (filter) { SETTINGS_BOTS_VIEW[filter.dataset.botsFilter] = filter.value; settingsBotsRemember(); renderSettingsBots(); return; }
+    if (filter) { SETTINGS_BOTS_VIEW[filter.dataset.botsFilter] = filter.value; settingsBotsRemember(); redraw(`[data-bots-filter="${filter.dataset.botsFilter}"]`); return; }
     const one = event.target.closest('[data-bot-pick]');
     if (one) { one.checked ? SETTINGS_BOTS_VIEW.selected.add(one.dataset.botPick) : SETTINGS_BOTS_VIEW.selected.delete(one.dataset.botPick); settingsBotsSyncSelection(el, rows); return; }
     if (event.target.closest('[data-bots-select-all]')) {
@@ -510,11 +583,24 @@ function renderSettingsBots() {
 // The same catalog cards the first run shows, for a team that is already set up. Nothing is
 // locked on here: the bots that were required at first run already exist and are filtered out.
 async function settingsCatalogPicker() {
-  const dialog = $('#catalog-picker'); if (!dialog) return;
+  if (!S.me?.id || !settingsCanCreateBots()) return;
+  let dialog = $('#catalog-picker');
+  const temporary = !dialog;
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'catalog-picker'; dialog.className = 'bot-editor catalog-picker';
+    dialog.setAttribute('aria-labelledby', 'catalog-picker-title');
+    document.body.append(dialog);
+  }
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="catalog-picker-title">Add from template</h2><span class="spacer"></span>
       <button class="ghost" type="button" data-catalog-close aria-label="Close">✕</button></div>
     <div class="bot-editor-body" id="catalog-picker-body"><div class="empty">Loading templates…</div></div></form>`;
-  dialog.onclose = () => { dialog.innerHTML = ''; };
+  const leave = () => dialog.close();
+  window.addEventListener('hashchange', leave);
+  dialog.onclose = () => {
+    window.removeEventListener('hashchange', leave); dialog.innerHTML = '';
+    if (temporary) { dialog.remove(); teamAddReturnFocus(); }
+  };
   dialog.querySelectorAll('[data-catalog-close]').forEach(button => button.onclick = () => dialog.close());
   dialog.showModal();
   let cards;
@@ -561,6 +647,7 @@ async function settingsCatalogPicker() {
     const chosen = state.cards.filter(card => state.picked.has(card.slug));
     if (!chosen.length) { status.innerHTML = '<span class="err">Choose at least one bot.</span>'; return; }
     if (!S.me?.id) { status.innerHTML = '<span class="err">Sign in before adding a bot.</span>'; return; }
+    if (!settingsCanCreateBots()) { status.innerHTML = '<span class="err">You no longer have permission to add bots.</span>'; return; }
     submit.disabled = true; status.textContent = 'Adding…';
     try {
       const hints = [];
@@ -582,13 +669,18 @@ async function settingsCatalogPicker() {
           model: card.model || '', effort: card.reasoning_effort || '', operator: S.me.id, owners: [S.me.id], runner_id: null});
         if (added.name_hint) hints.push(added.name_hint);
       }
-      dialog.close(); await loadSettings(); settingsShow('bots');
+      dialog.close(); await refresh(true);
+      if (S.route === SETTINGS) { await loadSettings(); settingsShow('bots'); }
       toast(hints.length ? hints.join('; ') : chosen.length === 1 ? `Added ${catalogName(state, chosen[0])}` : `Added ${chosen.length} bots`);
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       if (String(error.message).includes('Team default')) {
         const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'AI providers';
-        link.onclick = () => { dialog.close(); settingsShow('providers'); };
+        link.onclick = () => {
+          dialog.close();
+          if (S.route === SETTINGS) settingsShow('providers');
+          else { SETTINGS_TAB = 'providers'; location.hash = SETTINGS; }
+        };
         status.append(' ', link);
       }
       submit.disabled = false;

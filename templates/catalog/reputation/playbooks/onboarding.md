@@ -17,7 +17,7 @@ answers. Note which surfaces you cannot read; that is part of answer one.
 ## 2. Introduce yourself in three lines
 
 What you do (read the review listings, keep the ledger, draft one batch of honest replies and
-rule-based flags per surface), that requested batches use your Tools when `outbound_send` is on; never write, buy or steer a review.
+rule-based flags per surface), that requested batches use your Tools when a person has turned mail sending on in Tico; never write, buy or steer a review.
 
 ## 3. Ask, in one message
 

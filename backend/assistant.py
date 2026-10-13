@@ -9,9 +9,11 @@ read it or post in it, the owner and administrators included. A message goes one
 * everything else is a turn of the assistant bot on the company's runner. That turn acts as the
   person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
   so every hub tool it calls is checked, and audited "via assistant", exactly as if they had made
-  the call. Low-risk writes run directly (`write_allowed`); anything with a side effect that
-  matters is proposed as a pending action, and only the person's own click (`confirm`) runs it,
-  through the same routes with their own credential. The bot itself can never confirm.
+  the call. Low-risk writes run directly (`write_allowed`); a task change, comment or link the
+  person asked for in their own words runs directly when the turn cites their message
+  (`instruction`); anything else with a side effect that matters is proposed as a pending action,
+  and only the person's own click (`confirm`) runs it, through the same routes with their own
+  credential. The bot itself can never confirm.
 """
 
 import asyncio
@@ -102,6 +104,47 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     return bool(owns and owns(updating.group(1), False))
 
 
+# ------------------------------------------------------------------ what the person asked for in their own chat
+# A task change, comment or link the person asked their Assistant for in their own Assistant chat runs without a card when
+# the turn cites that message (`X-Tico-On-Behalf-Of`: its id, or `turn` for the message that started the run). The server
+# checks the message, not the words: the person's own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S.
+# The turn is the person, so their rights stay the ceiling. Approvals, spending, sending, running a task now and the
+# rest stay a click, and so does all of it when the owner's rule "Assistant acts without asking" is off.
+INSTRUCTION_TTL_S = 30 * 60
+_INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links)")]
+
+
+def instructed_route(method, path):
+    path = normalize_path(path)
+    return (method == "POST" and bool(path) and path != "/api/v2/tasks/dry-run"
+            and any(p.fullmatch(path) for p in _INSTRUCTED))
+
+
+def instruction(c, who, ref):
+    """The delegation record (backend/hubdb.py DELEGATION) for the person's own message that asked for this write, or a
+    403 saying why it lends nothing. `ref` is the message's id, or `turn`: the message that started this run."""
+    def refuse(detail):
+        raise Problem("on_behalf_of", detail + "; if they did not clearly ask, propose it (`hub assistant propose`)", 403)
+    if who.via != "assistant" or who.confirmed or not who.attempt_id or not H.is_human(who.actor):
+        refuse("Only an Assistant run in the person's own chat acts on what they asked")
+    message_id = str(ref or "")
+    if message_id == "turn":
+        row = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                        (who.attempt_id,)).fetchone()
+        message_id = row["message_id"] if row else ""
+    msg = H.message(c, message_id) if message_id else None
+    room = H.conversation(c, msg["conversation_id"]) if msg else None
+    refs = (msg or {}).get("refs") or {}
+    if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
+            or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
+            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("closed_at")):
+        refuse("Cite a message the person sent you in their own Assistant chat")
+    if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
+        refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
+    return {"for": who.actor, "cited": msg["id"], "run": "asked"}
+
+
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
 # runner enrollment, this assistant and anything that hands back a secret, can never be proposed.
 _PROPOSABLE = [(m, re.compile(p)) for m, p in (
@@ -109,7 +152,7 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/tasks"), ("POST", r"/api/v2/tasks/[^/]+"),
     ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now|ask)"),
     ("POST", r"/api/v2/messages"), ("POST", r"/api/v2/chat/[^/]+"), ("POST", r"/api/v2/notes"),
-    ("POST", r"/api/v2/updates/[^/]+/reply"),
+    ("POST", r"/api/v2/updates/[^/]+/reply"), ("POST", r"/api/v2/assistant/batch"),
     ("POST", r"/api/v2/bots"), ("POST", r"/api/v2/bots/[^/]+/(archive|definition|owners|co-owners|updates|goals)"),
     ("POST", r"/api/v2/bots/[^/]+/(assignment|placement)"), ("POST", r"/api/v2/credentials/[^/]+/grants"),
     ("POST", r"/api/v2/(?:people|humans)/[^/]+"), ("POST", r"/api/v2/access/(?:people|humans)(/[^/]+)?"),
@@ -212,6 +255,7 @@ def describe(c, method, path, body):
         (r"/api/v2/chat/([^/]+)", lambda g: f"Send a message to {bot(g[0])}"),
         (r"/api/v2/notes", lambda g: f"Leave a note for {who(body.get('to'))}"),
         (r"/api/v2/updates/[^/]+/reply", lambda g: "Reply to a bot's update"),
+        (r"/api/v2/assistant/batch", lambda g: f"{len(body.get('actions') or [])} task actions, on one Confirm"),
         (r"/api/v2/bots", lambda g: f"Add bot “{body.get('display_name', '')}”"),
         (r"/api/v2/bots/([^/]+)/archive", lambda g: f"Archive bot {bot(g[0])}"),
         (r"/api/v2/bots/([^/]+)/definition", lambda g: f"Change settings of bot {bot(g[0])}: "
@@ -249,6 +293,56 @@ def describe(c, method, path, body):
     return f"{method} {path}", diff
 
 
+# Body fields a proposal may never carry: each has its own explicit confirm that a card's click does not replace.
+PERSON_ONLY_FIELDS = ("replace_lost_key",)
+
+# One card for a group of task actions ("close these 20 tasks"): `{"actions": [{method, path, body}, ...]}`, each a
+# task change, comment or link (`instructed_route`), never an approval or anything else. One click runs them in order,
+# each as the person through its own route, and a step that fails does not stop the rest.
+BATCH_PATH = "/api/v2/assistant/batch"
+MAX_BATCH = 100
+
+
+def batch_steps(body):
+    """The steps of a bulk card, checked, or a 422."""
+    steps = body.get("actions") if isinstance(body, dict) and set(body) == {"actions"} else None
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_BATCH:
+        raise Problem("operation", f"A bulk card carries only `actions`: 1 to {MAX_BATCH} task changes, comments or links", 422)
+    out = []
+    for step in steps:
+        if not isinstance(step, dict) or set(step) - {"method", "path", "body"}:
+            raise Problem("operation", "Each action is {method, path, body}", 422)
+        method, path, sent = str(step.get("method") or "POST"), normalize_path(step.get("path")), step.get("body") or {}
+        if not isinstance(sent, dict) or not instructed_route(method, path) or any(f in sent for f in PERSON_ONLY_FIELDS):
+            raise Problem("operation", "A bulk card holds only task changes, comments and links "
+                          "(POST /api/v2/tasks/<id>, /comments, /links); propose anything else on its own", 422)
+        out.append({"method": method, "path": path, "body": {k: v for k, v in sent.items() if k != "on_behalf_of"}})
+    return out
+
+
+def covers(row, method, path):
+    """Whether a confirmed proposal covers this request: its own operation, or one step of a bulk card."""
+    if row["path"] == BATCH_PATH:
+        steps = json.loads(row["body_json"] or "{}").get("actions") or []
+        return any(s.get("method") == method and s.get("path") == path for s in steps)
+    return row["method"] == method and row["path"] == path
+
+
+def runnable(c, method, path, body):
+    """A task change as the route takes it. "closed" is not a status a task update sets: closing is `close`, so a card
+    that says `{"status": "closed"}` closes (every Confirm of one failed with "body.status: Input should be ..."). One
+    without the task's version gets the one it has now (and failed with "body.version: Field required"); a change to
+    the task after that is still a conflict, not a silent overwrite."""
+    m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path or "")
+    if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
+        return body
+    if body.get("status") == "closed":
+        body = {**{k: v for k, v in body.items() if k != "status"}, "close": True}
+    if "version" not in body and (t := H.task(c, m.group(1))):
+        body = {**body, "version": t["version"]}
+    return body
+
+
 def create_proposal(c, settings, who, room, proposer, summary, method, path, body):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
@@ -259,6 +353,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if not valid_operation(method, path, settings, proposer):
         raise Problem("operation", "That is not something that can be proposed: it is not on the list of routes "
                       "a person confirms", 422)
+    if any(field in (body or {}) for field in PERSON_ONLY_FIELDS):
+        raise Problem("operation", "Replacing a lost key is confirmed by a person directly, never through a proposal", 422)
     if path == "/api/v2/support/tickets":
         # The person approves the exact text, so it must be one the ticket will take: no card for a message that
         # would fail (too long, control characters) only after the click.
@@ -268,13 +364,25 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                  (who.actor,)).fetchone()[0] >= MAX_PENDING:
         raise Problem("too_many", "Too many proposals are waiting; confirm or cancel some first", 409)
     body = {k: v for k, v in (body or {}).items() if k != "on_behalf_of"}
+    if path == BATCH_PATH:
+        body = {"actions": [{**s, "body": runnable(c, s["method"], s["path"], s["body"])} for s in batch_steps(body)]}
+    else:
+        body = runnable(c, method, path, body)
     same = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND status='pending' AND method=? AND path=? "
                      "AND body_json=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same)), "message_id": None, "repeated": True}
     what, diff = describe(c, method, path, body)
-    if not re.fullmatch(r"/api/v2/tasks/[^/]+", path):
+    if path == BATCH_PATH:
+        # One line per step: what it does to which task, and the fields it changes.
+        diff = []
+        for s in body["actions"]:
+            line, changes = describe(c, s["method"], s["path"], s["body"])
+            fields = changes or [{"field": k, "new": v} for k, v in s["body"].items()]
+            diff.append({"field": line, "new": ", ".join(f"{d['field']}: {d['new']}" for d in fields
+                                                          if d["field"] != "version")})
+    elif not re.fullmatch(r"/api/v2/tasks/[^/]+", path):
         # The card lists every field the request carries, so nothing that runs is missing from what is confirmed.
         # (A task update lists what changes: its old and new values.)
         diff = [{"field": k, "new": v} for k, v in body.items()]
@@ -421,6 +529,19 @@ def _terms(arg):
         else:
             terms.append(w)
     return hint, terms
+
+
+def outcome(response):
+    """Only the status and an error's detail are kept: an answer's body may hold a secret."""
+    if response.status_code < 400:
+        return {"status_code": response.status_code, "error": None}
+    detail = None
+    try:
+        payload = response.json()
+        detail = (payload.get("error") or {}).get("detail") if isinstance(payload, dict) else None
+    except ValueError:
+        pass
+    return {"status_code": response.status_code, "error": str(detail or f"HTTP {response.status_code}")[:300]}
 
 
 class Internal:
@@ -762,7 +883,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def view(c, who, room):
         from .views import conversation_snapshot
-        snap = conversation_snapshot(c, room["id"]) if room else {"messages": [], "execution": None, "has_more": False,
+        snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
                                                                      "next_before": None}
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r)) for r in c.execute(
@@ -908,7 +1029,14 @@ def install(app, store, auth, mutate, onboarding):
                           "confirm_hash=? WHERE id=?", (H.now(), H.now(), digest(secret), aid))
                 H.event(c, who.actor, "assistant.action.confirmed", aid,
                         {"summary": row["summary"][:200], "method": row["method"], "path": row["path"]})
-                return row
+                # A card stored before its task change was made runnable (`runnable`) still runs, read as it is now.
+                sent = json.loads(row["body_json"] or "{}")
+                if row["path"] == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):
+                    sent = {"actions": [{**s, "body": runnable(c, s.get("method") or "POST", s.get("path"), s.get("body") or {})}
+                                        if isinstance(s, dict) else s for s in sent["actions"]]}
+                else:
+                    sent = runnable(c, row["method"], row["path"], sent)
+                return {**row, "body_json": json.dumps(sent)}
         row = await asyncio.to_thread(claim)
         if row is None:
             raise Problem("expired", "This proposal is more than a day old; ask again", 409)
@@ -919,24 +1047,36 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("operation", "This proposal is not on the list of routes a person confirms", 422)
             api = Internal(request)
             api.headers["x-tico-assistant-action"] = aid + "." + secret
-            response = await api.call(row["method"], path,
-                                      body=json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None,
-                                      key="assistant-" + aid)
-            ok = response.status_code < 400
-            detail = None
-            if not ok:
-                try:
-                    payload = response.json()
-                    detail = (payload.get("error") or {}).get("detail") if isinstance(payload, dict) else None
-                except ValueError:
-                    pass
-            # Only the status and an error's detail are kept: an answer's body may hold a secret.
-            result = {"status_code": response.status_code, "error": None if ok else str(detail or f"HTTP {response.status_code}")[:300]}
+            sent = json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None
+            if isinstance(sent, dict):
+                sent = {k: v for k, v in sent.items() if k not in PERSON_ONLY_FIELDS}   # a card stored before the check
+            if path == BATCH_PATH:
+                # Each step through its own route, as the person; one that fails is reported and the rest still run.
+                items = []
+                for i, step in enumerate(batch_steps(sent)):
+                    try:
+                        response = await api.call(step["method"], step["path"], body=step["body"],
+                                                  key=f"assistant-{aid}-{i}")
+                        items.append({"path": step["path"], **outcome(response)})
+                    except httpx.HTTPError as exc:
+                        items.append({"path": step["path"], "status_code": 0, "error": "It could not be sent: " + str(exc)[:200]})
+                failed = [item for item in items if item["error"]]
+                ok = len(failed) < len(items)
+                result = {"status_code": failed[0]["status_code"] if failed and not ok else 200,
+                          "error": (f"{len(failed)} of {len(items)} did not go through: "
+                                    + "; ".join(item["error"] for item in failed))[:300] if failed else None,
+                          "items": items}
+            else:
+                response = await api.call(row["method"], path, body=sent,
+                                          key="assistant-" + aid)
+                result = outcome(response)
+                ok = result["error"] is None
         except Problem as exc:
             result = {"status_code": exc.status, "error": exc.detail[:300]}
         except httpx.HTTPError as exc:
             result = {"status_code": 0, "error": "It could not be sent: " + str(exc)[:200]}
         finally:
-            note = ("Done: " + row["summary"]) if ok else ("That did not go through: " + str(result["error"])[:300])
+            note = (("Done: " + row["summary"] + (". " + result["error"] if result.get("error") else "")) if ok
+                    else ("That did not go through: " + str(result["error"])[:300]))
             out = settle(aid, who, "done" if ok else "failed", result, note)     # even if the client went away
         return out

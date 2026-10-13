@@ -74,6 +74,13 @@ person. A new status, note or owner clears `--on` unless the same update names t
 and `--on ""` clears it by hand. A private task can only wait on a person who can read it, and a
 task made private stops waiting on anyone who cannot.
 
+The person reads that note as your request, so write it to them: one plain sentence, no task or
+message ids, no status. The update warns (as the title lint does) when the note is missing and no
+open question to them asks instead, carries an id, or runs past two sentences or 40 words; with
+`TICO_STYLE_LINT=refuse` it is refused. Decide leads the card with an open question to the person,
+then what a bot last said to them on the task, then the task's request, and folds the note under
+"Latest note".
+
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
 child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency
@@ -223,9 +230,9 @@ Only the task's owner or requester, or a human mover, can re-parent it; bots mus
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner or requester, or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-Bots finish open subtasks before marking a parent Done. Humans can always choose Ready or Done,
-or close a parent to cancel work. The keeper can cancel obsolete routine requests even when
-they have open subtasks. Finishing or moving away the last open subtask wakes the
+A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
+subtasks stay open, and the parent's history and its Finished or Closed notice end with
+"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
 parent's owner with “All subtasks done”, unless that owner made the change.
 Closing a parent cancels it; later subtask completion does not wake its owner.
 Done, Closed and Declined count as finished. Open descendants under a finished subtask do not

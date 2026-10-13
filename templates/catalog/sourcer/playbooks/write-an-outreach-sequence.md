@@ -1,7 +1,7 @@
 # Write an outreach sequence
 
 Triggered by the slate, or by a task naming a person to approach for a role. Budget 10 minutes a person.
-The outcome is three short messages for one person, each sent only when `outbound_send` is on.
+The outcome is three short messages for one person, each sent only when a person has turned mail sending on in Tico.
 
 ---
 
@@ -31,5 +31,5 @@ stop and log it.
 
 ## 5. Check and hand over
 
-Read all three as the recipient: accurate, specific, nothing promised. Send requested touch one with your Tools when `outbound_send` is on, otherwise keep the draft, and record the planned dates of the others in
+Read all three as the recipient: accurate, specific, nothing promised. Send requested touch one with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft, and record the planned dates of the others in
 `knowledge/contact-log.md`. A "no" at any point ends the sequence the same day.

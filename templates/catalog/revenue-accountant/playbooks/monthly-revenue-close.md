@@ -43,4 +43,4 @@ tied to named contracts. Explain the movement in one sentence.
 
 `reports/YYYY-MM-revenue-close.md` in the shape of `knowledge/examples/revenue-close.md`, `hub file
 publish` it, commit, and `hub task update <id> --status done --note`: reconciled or the difference, the
-entries count, the path. Questions for the accountant go on the task, prepared to send with Tools when outbound_send is on.
+entries count, the path. Questions for the accountant go on the task, prepared to send with Tools when a person has turned mail sending on in Tico.

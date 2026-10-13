@@ -40,7 +40,7 @@ def resolved_registry(projects, registry_dir):
     source = yaml.safe_load((registry_dir / "employees.yaml").read_text())
     entries = {}
     fields = {"name", "display_name", "description", "repo", "reports_to", "team", "runtime", "model",
-              "reasoning_effort", "effort", "status", "max_run_minutes", "schedules", "access", "routines", "tools",
+              "reasoning_effort", "effort", "compact_at", "status", "max_run_minutes", "schedules", "access", "routines", "tools",
               "reads", "slack_channel", "role", "title", "order"}
     for entry in source["employees"]:
         slug = entry["name"]
@@ -278,7 +278,10 @@ def main(argv=None):
         import boto3
         s3 = boto3.client("s3")
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
-        report = upload_bundle(args.database, args.bucket, args.key, s3, Blobs(settings, s3))
+        # A hand-run bundle carries the key files beside the database (credential.key, github-app.key, slack.key):
+        # restore_bundle (python -m backend.backup) puts them back beside the restored database.
+        report = upload_bundle(args.database, args.bucket, args.key, s3, Blobs(settings, s3),
+                               key_dir=Path(args.database).resolve().parent)
     print(json.dumps(report, indent=2))
 
 

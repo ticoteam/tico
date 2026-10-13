@@ -1,0 +1,118 @@
+/* ui/styles/decide.css — Decide: one card at a time, the count on top, two big buttons at the bottom; on a phone it
+   takes the whole screen. The way in on the Tasks page header ("Decide · N").
+   The cascade runs in the order index.html links these files; keep rules in order. */
+.tl-decide{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-base);font-weight:600;white-space:nowrap;text-decoration:none;font-variant-numeric:tabular-nums}
+.tl-decide:hover{text-decoration:none;border-color:var(--wait)}
+.tl-decide[hidden]{display:none}
+.tl-decide-bar{height:24px;padding:0 9px;border-radius:6px;font-size:var(--t-sm)}
+@media (min-width:761px){.tl-decide-head{display:none}}
+@media (max-width:760px){.tl-decide-bar{display:none}}
+
+#main.decide-layout{max-width:none;padding:0;overflow:hidden;display:flex;flex-direction:column}
+.decide{flex:1 1 auto;min-height:0;width:100%;max-width:460px;margin:0 auto;padding:0 16px;box-sizing:border-box;display:flex;flex-direction:column;position:relative}
+.dc-head{display:grid;grid-template-columns:72px 1fr 72px;align-items:center;min-height:52px;padding-top:4px}
+.dc-back{justify-self:start;display:grid;place-items:center;width:40px;height:40px;margin-left:-8px;border:0;border-radius:8px;background:none;color:var(--ink);cursor:pointer}
+.dc-back .nav-icon{width:28px;height:28px;font-size:28px}
+.dc-back:hover{background:var(--surface2)}
+.dc-count{margin:0;text-align:center;font-size:var(--t-lg);font-weight:650;line-height:1.2}
+.dc-count small{display:block;font-size:var(--t-xs);font-weight:500;color:var(--muted)}
+.dc-text{justify-self:end;padding:8px 2px 8px 8px;border:0;background:none;color:var(--muted);font:500 var(--t-base) var(--sans);white-space:nowrap;cursor:pointer;text-decoration:none}
+.dc-text:hover{color:var(--ink);text-decoration:none}
+
+.dc-stage{flex:1 1 auto;min-height:0;position:relative}
+.dc-card{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;touch-action:pan-y;
+  transition:transform var(--dur) var(--ease),opacity var(--dur) var(--ease)}
+.dc-card.in{transform:translateY(10px);opacity:0}
+.dc-card.out-left{transform:translateX(-110%) rotate(-4deg);opacity:0}
+.dc-card.out-right{transform:translateX(110%) rotate(4deg);opacity:0}
+.dc-who{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.dc-who .av{flex:none}
+.dc-who-text{flex:1;min-width:0}
+.dc-who-name{font-weight:600;font-size:var(--t-md);line-height:1.25}
+.dc-who-sub{color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-who .pill{flex:none}
+/* a bot's face and name open its chat: the name reads as before until hovered or focused */
+.dc-who-face{flex:none;display:flex;border-radius:50%}
+.dc-who-link{color:inherit;text-decoration:none;border-radius:4px}
+.dc-who-link:hover{text-decoration:underline}
+.dc-who-face:focus-visible,.dc-who-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dc-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px;display:flex;flex-direction:column;gap:12px}
+.dc-q{margin:0;font-size:var(--t-xl);font-weight:650;line-height:var(--lh-tight);text-wrap:balance;overflow-wrap:anywhere}
+.dc-q.dc-title{font-size:var(--t-lg)}
+.dc-ctx{margin:0;color:var(--muted);font-size:var(--t-md)}
+.dc-msg{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-size:var(--t-md);line-height:var(--lh-read);overflow-wrap:anywhere}
+.dc-msg>:first-child{margin-top:0}.dc-msg>:last-child{margin-bottom:0}
+/* nothing said to the person: say so, and the way to ask; the owner's own status note folds away, muted */
+.dc-blank{margin:0;color:var(--muted);font-size:var(--t-md);line-height:var(--lh-read)}
+.dc-ask{align-self:flex-start}
+.dc-latest{color:var(--muted);font-size:var(--t-sm)}
+.dc-latest summary{width:max-content;cursor:pointer;font-weight:500}
+.dc-latest p{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:var(--lh-read)}
+
+/* options: two pictures side by side, else numbered tiles */
+.dc-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dc-opt,.dc-tile{display:flex;flex-direction:column;align-items:stretch;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;text-align:left;overflow:hidden;cursor:pointer;
+  transition:border-color var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
+.dc-opt:hover,.dc-tile:hover{border-color:var(--accent)}
+.dc-opt.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.dc-pic{display:block;min-height:120px;background:var(--surface2)}
+.dc-pic.ready{min-height:0;background:none}
+.dc-pic img{display:block;width:100%;height:auto;max-height:45vh;object-fit:contain;opacity:0;transition:opacity var(--dur) var(--ease)}
+.dc-pic.ready img{opacity:1}
+.dc-glyph{display:grid;place-items:center;color:var(--muted);font:600 var(--t-sm) var(--mono)}
+.dc-l{display:block;padding:8px 10px;font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere}
+.dc-desc{display:block;padding:0 10px 8px;color:var(--muted);font-size:var(--t-sm)}
+.dc-tiles{display:flex;flex-direction:column;gap:8px}
+.dc-tile .dc-tl{display:flex;align-items:baseline;gap:10px;padding:12px 14px}
+.dc-tile .dc-tl .dc-l{padding:0}
+.dc-tile .dc-tl b{color:var(--muted);font-weight:600}
+.dc-tile .dc-desc{padding:0 14px 12px 34px;margin-top:-6px}
+.dc-descs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:var(--t-md)}
+.dc-descs .dc-desc{display:inline;padding:0 0 0 6px}
+
+/* a task's files: pictures large, anything else a chip */
+.dc-files{display:flex;flex-direction:column;gap:8px}
+.dc-img{display:block;position:relative;min-height:120px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface2)}
+.dc-img img{display:block;width:100%;height:auto;max-height:60vh;object-fit:contain;opacity:0;transition:opacity var(--dur) var(--ease)}
+.dc-img.ready{min-height:0}
+.dc-img.ready img{opacity:1}
+.dc-file{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font-size:var(--t-sm);text-decoration:none;min-width:0}
+.dc-file:hover{border-color:var(--accent);text-decoration:none}
+.dc-fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.decide .approval-payload{margin:0}
+
+/* the note, and the send button a task card's comment has */
+.dc-note{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
+.dc-note textarea{flex:1;min-width:0;min-height:38px;max-height:120px;box-sizing:border-box;resize:none;padding:8px 14px;border:1px solid var(--line);border-radius:19px;background:var(--bg);color:var(--ink);font:var(--t-md)/1.4 var(--sans)}
+.dc-note textarea:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.dc-send{flex:none;display:grid;place-items:center;width:38px;height:38px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+.dc-send svg{width:18px;height:18px}
+.dc-send:disabled{background:var(--surface2);color:var(--muted);opacity:1}
+
+/* the two big buttons */
+.dc-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 0}
+.dc-actions:empty{display:none}
+.dc-actions button{height:52px;min-width:0;padding:0 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface2);color:var(--ink);font:600 var(--t-lg) var(--sans);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-actions button:hover:not(:disabled){border-color:var(--g5)}
+.dc-actions button.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.dc-actions kbd{display:none;margin-left:8px;font:500 var(--t-xs) var(--mono);opacity:.6}
+.dc-keys{display:none;margin:0;padding:0 0 12px;text-align:center;color:var(--muted);font-size:var(--t-xs)}
+@media (hover:hover) and (pointer:fine) and (min-width:761px){.dc-actions kbd{display:inline}.dc-keys{display:block}.decide.dc-empty .dc-keys{display:none}}
+
+.dc-toast{position:absolute;left:16px;right:16px;bottom:144px;z-index:2;display:flex;align-items:center;gap:14px;width:max-content;max-width:calc(100% - 32px);margin:0 auto;padding:10px 14px;box-sizing:border-box;border-radius:12px;background:var(--ink);color:var(--bg);font-size:var(--t-base);box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.dc-toast[hidden]{display:none}
+.dc-toast span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-toast button{flex:none;padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
+
+.dc-done{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:14px;text-align:center}
+.dc-done h2{margin:0;font-size:var(--t-xl)}
+
+@media (max-width:760px){
+  /* a mode of its own: the whole screen, no tab bar */
+  body.decide-open #mobile-nav{display:none}
+  body.decide-open #main.decide-layout{position:fixed;inset:var(--demo-h,0px) 0 0;z-index:20;padding:env(safe-area-inset-top) 0 0;background:var(--bg)}
+  .decide{max-width:none}
+  .dc-actions{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .dc-toast{bottom:calc(144px + env(safe-area-inset-bottom))}
+}
+@media (prefers-reduced-motion:reduce){.dc-card{transition:none}}

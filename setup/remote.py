@@ -77,6 +77,17 @@ class StepFailed(RuntimeError):
     pass
 
 
+def fetch_and_run(url: str, args: str = "") -> str:
+    """Downloads an installer to a temp file and runs it with sh, on one line. Never `curl | sh`: the scripts run
+    under sh or bash `set -eu` without pipefail, where a failed download feeds sh nothing and "succeeds".
+    Each failure exits on its own, since under `set -e` a failure on the left of `&&` does not stop the script."""
+    u = shlex.quote(url)
+    run = f'sh "$f" {args}'.rstrip()
+    return (f'f=$(mktemp) || exit 1; if ! curl -fsSL {u} -o "$f"; then rm -f "$f"; '
+            f'echo "tico-setup: could not download {url}" >&2; exit 1; fi; '
+            f'{run} || {{ rc=$?; rm -f "$f"; exit "$rc"; }}; rm -f "$f"')
+
+
 def _sh(cmd: str, root: bool) -> str:
     return f"sudo -n sh -c {shlex.quote(cmd)}" if root else cmd
 
@@ -118,7 +129,7 @@ class Host:
             self.say("    Docker and the Compose plugin are already installed.")
             return
         self.say("    Installing Docker (get.docker.com) ...")
-        self.ex("curl -fsSL https://get.docker.com | sh && systemctl enable --now docker", "Installing Docker")
+        self.ex(fetch_and_run("https://get.docker.com") + " && systemctl enable --now docker", "Installing Docker")
         self.ex(DOCKER_OK, "Docker Compose plugin check (needs Compose v2)")
 
     def write_private(self, path: str, data: bytes, what: str) -> None:
@@ -167,7 +178,7 @@ def docker_install_lines(os_family: str, need_aws_cli: bool) -> list[str]:
                 "mkdir -p /usr/local/lib/docker/cli-plugins",
                 'curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-$(uname -m)"'
                 " -o /usr/local/lib/docker/cli-plugins/docker-compose", "chmod +x /usr/local/lib/docker/cli-plugins/docker-compose"]
-    lines = ["if ! docker compose version >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi",
+    lines = [f"if ! docker compose version >/dev/null 2>&1; then {fetch_and_run('https://get.docker.com')}; fi",
              "systemctl enable --now docker"]
     return lines + (["command -v aws >/dev/null || snap install aws-cli --classic"] if need_aws_cli else [])
 

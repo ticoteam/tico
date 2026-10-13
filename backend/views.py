@@ -20,7 +20,7 @@ from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution
 from pathlib import Path
 
 from . import read_cache
-from .store import H, P, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
+from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
 
 
@@ -322,8 +322,10 @@ def operation_issues(c, who, auth):
                         severity="warning", needs_person=False)
         queued = privacy.job_count(c, who, slug)
         if location.get("agent"):
+            # A synced agent is handed its messages at a sync, which marks them delivered; it never reads them in Tico.
+            unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
             queued = sum(privacy.message_readable(c, privacy.actor(who), m) for m in c.execute(
-                "SELECT * FROM messages WHERE to_actor=? AND read_at IS NULL "
+                "SELECT * FROM messages WHERE to_actor=? AND " + unread + " "
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now())))
         uncertain = privacy.job_count(c, who, slug, ("uncertain",))
         if uncertain and not mac_offline:
@@ -344,11 +346,11 @@ def operation_issues(c, who, auth):
         elif agent and bot["state"] == "active" and not location["online"] and agent.get("synced"):
             detail = ("Last sync " + agent["last_seen"] + "." if agent["last_seen"] else "No history has synced yet.")
             if queued:
-                detail += (f" {queued} unread message{'s' if queued != 1 else ''} stored in Tico; "
-                           "messages are not relayed back to Grok.")
+                detail += (f" {queued} message{'s' if queued != 1 else ''} wait{'s' if queued == 1 else ''} "
+                           "for the next sync.")
             add("agent", bot["display_name"] + "'s history has not synced lately", detail,
                 bot=slug, since=agent["last_seen"], severity="warning", needs_person=False,
-                action="Run the existing history sync in Grok Bot to refresh this copy.")
+                action="Run the Tico sync in " + (agent.get("label") or "the agent") + " to refresh this copy.")
         elif agent and bot["state"] == "active" and not location["online"]:
             detail = ("Last heartbeat " + agent["last_seen"] + "." if agent["last_seen"]
                       else "No heartbeat yet: install the credential and the heartbeat timer on its box.")
@@ -399,7 +401,7 @@ def operation_issues(c, who, auth):
             if online:
                 checkout_issue(add, row, runner_busy(c, row["id"]))
         for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
-            if managed_backups and row["service"] in ("backup", "restore-check"):
+            if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
             detail = json.loads(row["detail_json"] or "{}")
             if row["service"] == "github:token":
@@ -454,7 +456,17 @@ def operation_issues(c, who, auth):
     return issues
 
 
-def conversation_snapshot(c, cid, who=None):
+def own_sign_in(c, bot, settings=None):
+    """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
+    check and the model picker use), or '' when its computer is signed in or it waits on something else."""
+    from .readiness import can_run, own_harness
+    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
+    verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
+    return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
+
+
+def conversation_snapshot(c, cid, who=None, settings=None):
     page = privacy.page(c, who, cid) if who else message_page(c, cid)
     job = c.execute("SELECT j.*,a.state AS attempt_state,a.lease_until,a.stop_requested FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
@@ -502,6 +514,10 @@ def conversation_snapshot(c, cid, who=None):
                 if any(str(p).startswith("No AI provider is chosen") for p in problems):
                     readiness_reason = "missing_provider"
                     label = "Saved — no AI provider is chosen"
+                elif (verdict := own_sign_in(c, job["bot"], settings)):
+                    # Only this bot's own model, on its own computer: a bot that waits on anything else keeps its own reason.
+                    readiness_reason = "model_sign_in"
+                    label = "Saved — " + verdict
                 else:
                     label = "Saved — " + str(problems[0]) if problems else "Saved — waiting for computer setup"
         parts = []
@@ -662,6 +678,30 @@ def recent_bots(c, auth, who, since, limit, needs):
     return out
 
 
+def approval_files(c, auth, who, payload):
+    """For each file a send approval names, in order: {file_id, version} of a version of its Tico file that
+    `who` may open and whose stored sha256 and size are the approved ones, else None. The requester writes
+    the payload, so its `file_id` is only a hint; a later version of the same file never stands in."""
+    from .files import file_visible
+    files = (payload or {}).get("attachments") if isinstance(payload, dict) else None
+    out, cache = [], {}
+    for f in files if isinstance(files, list) else []:
+        link = None
+        fid = str(f.get("file_id") or "") if isinstance(f, dict) else ""
+        try:
+            size, digest = int(f["size"]), str(f["sha256"]).strip().lower()
+        except (KeyError, TypeError, ValueError):
+            fid = ""
+        row = c.execute("SELECT * FROM bot_files WHERE id=? AND locator='tico_blob'", (fid,)).fetchone() if fid else None
+        if row and file_visible(c, auth, who, row, cache):
+            match = c.execute("SELECT version FROM bot_file_versions WHERE file_id=? AND digest=? AND size=? "
+                              "ORDER BY version DESC LIMIT 1", (fid, digest, size)).fetchone()
+            if match:
+                link = {"file_id": fid, "version": match["version"]}
+        out.append(link)
+    return out
+
+
 def needs_items(c, auth, who, task_view, older=None):
     """The person's queue. A task there only for a question older than H.ASK_OLDER_DAYS goes to `older` instead
     (a list the caller passes), out of the queue and its count."""
@@ -705,9 +745,12 @@ def needs_items(c, auth, who, task_view, older=None):
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
         if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
-            items.append({**row, "kind": "approval", "what": row["kind"],
-                          "title": "Approve this " + row["kind"],
-                          "requester": row["requested_by"], "conversation_id": msg["conversation_id"]})
+            item = {**row, "kind": "approval", "what": row["kind"],
+                    "title": "Approve this " + row["kind"],
+                    "requester": row["requested_by"], "conversation_id": msg["conversation_id"]}
+            if row["kind"] == "send":
+                item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
+            items.append(item)
     return sorted(items, key=lambda x: needs_order(
         x["requester"] if x["kind"] == "approval" else (x.get("ask") or {}).get("from_actor") or x.get("origin_actor") or x.get("requester"),
         x["kind"], x["created"], x.get("rank") if x["kind"] == "task" else None))
@@ -730,7 +773,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     access = auth.bot_accesses(c, principal)
     bot_rows = H.bots(c)
     allowed = {row["slug"] for row in bot_rows if access.get(row["slug"], auth.FULL)["write"]}
-    task_rows = [dict(t) for t in c.execute("SELECT * FROM tasks")]
+    task_rows = [dict(t) for t in c.execute("SELECT * FROM tasks WHERE " + privacy.STATUS_TASKS_SQL)]
     bot_tasks = {}
     for task in task_rows:
         for actor in {task["owner"], task["requester"]}:
@@ -1053,7 +1096,9 @@ def install_views(app, store, auth, mutate, task_view):
     def status(request: Request):
         who = request.state.identity
         human_only(who)
-        with store.read() as c:
+        # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
+        # after the first privacy check opens a transaction.
+        with store.read_transaction() as c:
             health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
             tick = health["last_success"] if health else None
             age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
@@ -1388,7 +1433,7 @@ def install_views(app, store, auth, mutate, task_view):
     def snapshot(request: Request, cid: str):
         with store.read() as c:
             auth.conversation(c, request.state.identity, cid)
-            snap = conversation_snapshot(c, cid, request.state.identity)
+            snap = conversation_snapshot(c, cid, request.state.identity, auth.settings)
             turns.annotate(c, auth, request.state.identity, snap["messages"])
             return snap
 

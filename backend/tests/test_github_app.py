@@ -11,6 +11,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi.testclient import TestClient
 
 from backend import github_app as G
@@ -18,7 +19,7 @@ from backend import hubdb as H
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
-from backend.store import encode
+from backend.store import Problem, encode
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
@@ -195,6 +196,66 @@ def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_
     gh.permissions = {"administration": "read"}
     response = api.delete(path, headers={**auth(), "Idempotency-Key": str(uuid.uuid4())})
     assert response.status_code == 403 and "Administration" in response.json()["error"]["detail"]
+
+
+def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
+    assert manifest(api)["manifest"]["default_permissions"]["administration"] == "write"
+    assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
+
+
+def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_granted(api, gh, monkeypatch):
+    """BotOps' create without Administration: a refusal naming a person, one owner task however often it is
+    retried, a Health alert, and the repository made (and the task closed) once GitHub reports the permission."""
+    from backend import repo_waits
+    connect(api, administration="false")
+    gh.permissions = {"administration": "read", "contents": "write", "metadata": "read"}
+    gh.missing = {"bot-newbie"}
+    botops_turn(api)
+    create = lambda: api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    # Nobody on the roster can change the app's permissions yet: no task, only the refusal and Health.
+    assert create().json()["error"]["needs_you_task"] is None
+    with api.app_state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),))
+    first, again = create(), create()
+    for refused in (first, again):
+        error = refused.json()["error"]
+        assert refused.status_code == 409 and error["code"] == "github_permission_missing", refused.text
+        assert error["detail"].startswith("A person must act")
+        assert error["create_url"] == "https://github.com/new?owner=Acme&visibility=private&name=bot-newbie"
+        assert error["permissions_url"] == "https://github.com/organizations/Acme/settings/apps/acme-tico/permissions"
+    assert first.json()["error"]["needs_you_task"] == again.json()["error"]["needs_you_task"]
+    with api.app_state.store.read() as c:
+        tasks = c.execute("SELECT id,owner,status FROM tasks WHERE title LIKE 'Create Acme/bot-newbie%'").fetchall()
+        assert [tuple(t)[1:] for t in tasks] == [("human:ana", "open")]
+        assert H.bot(c, "newbie")["state"] == "planned"
+    needs = api.get("/api/v2/needs-you", headers=auth()).json()
+    assert [i["id"] for i in needs["items"] if i["id"] == tasks[0]["id"]] == [tasks[0]["id"]]
+    health = {x["id"]: x for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
+    alert = health["github_repo_create"]
+    assert alert["label"] == "GitHub can't create bot repositories" and "Acme/bot-newbie" in alert["summary"]
+    assert {f["href"] for f in alert["fixes"]} >= {error["create_url"], error["permissions_url"]}
+    assert "github_repo_create" not in {x["id"] for x in api.get("/api/v2/health", headers=auth("person-test")).json()["checks"]}
+
+    assert repo_waits.resume(api.app_state.github_app) == {}          # nothing changed on GitHub yet
+    assert not gh.created_repositories
+    # Another waiting bot whose check fails unexpectedly does not hold this one up.
+    with api.app_state.store.transaction() as c:
+        every = repo_waits.waits(c)
+        repo_waits._save(c, repo_waits.KEY, {**every, "cpo": {"repository": "Acme/bot-cpo", "task_id": None}})
+    service, mint = api.app_state.github_app, api.app_state.github_app.mint
+    def flaky(repos, *a, **k):
+        if repos == ["Acme/bot-cpo"]:
+            raise httpx.ConnectError("synthetic")
+        return mint(repos, *a, **k)
+    monkeypatch.setattr(service, "mint", flaky)
+    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+    checked = api.post("/api/v2/github/app/check-permissions", json={}, headers=auth())
+    assert checked.status_code == 200 and checked.json()["administration"] is True, checked.text
+    assert list(checked.json()["resumed"]) == ["newbie"] and [w["bot"] for w in checked.json()["waiting"]] == ["cpo"]
+    assert gh.created_repositories == {"Acme/bot-newbie"}
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT status FROM tasks WHERE id=?", (tasks[0]["id"],)).fetchone()[0] == "closed"
+    assert "github_repo_create" not in {x["id"] for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
 
 
 def test_state_is_single_use_and_bound_to_session(api, gh):
@@ -375,6 +436,37 @@ def test_per_call_token_reuses_cache_without_writes_but_turn_start_keeps_45_minu
     assert "HTTP 500" in failed.json()["error"]["detail"]
     assert len(gh.of("/access_tokens")) == mints_before_error + 1
     assert token_health(api)
+
+
+def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypatch):
+    import threading
+    connect(api)
+    service = api.app_state.github_app
+    service.mint(None, {"metadata": "read"})          # learns the installation and the app's JWT
+    store, writes = api.app_state.store, []
+    original_transaction = store.transaction
+    monkeypatch.setattr(store, "transaction", lambda: writes.append(True) or original_transaction())
+    release, answer = threading.Event(), gh.__call__
+    def slow(request):
+        if request.url.path.endswith("/access_tokens"):
+            release.wait(5)
+        return answer(request)
+    monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(slow))
+    mints_before, tokens = len(gh.of("/access_tokens")), []
+    threads = [threading.Thread(target=lambda: tokens.append(service.mint(["Acme/emp-cpo"], G.TURN_PERMISSIONS)[0]))
+               for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    deadline = time.time() + 5
+    while len(gh.of("/access_tokens")) == mints_before and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)
+    release.set()
+    for thread in threads:
+        thread.join(5)
+    assert len(tokens) == 6 and len(set(tokens)) == 1
+    assert len(gh.of("/access_tokens")) == mints_before + 1
+    assert not writes, "a mint reads the installation and reuses the JWT without taking the write lock"
 
 
 def test_extra_repositories_join_the_turn_token_with_the_same_permissions(api, gh):
@@ -639,7 +731,176 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
         assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
     # A local grant never replaces GitHub's own Administration permission.
     gh.permissions = {'administration': 'read', 'contents': 'write'}
-    assert create({'slug': 'newbie', 'empty': True}).status_code == 403
+    missing = create({'slug': 'newbie', 'empty': True})
+    assert missing.status_code == 409 and missing.json()['error']['code'] == 'github_permission_missing'
     assert api.put(path, json={'mode': 'own', 'create_repositories': False}, headers=auth()).json()['create_repositories'] is False
     assert create({'slug': 'newbie'}).status_code == 403
     assert api.get('/api/v2/bots/botops/repositories', headers=auth()).json()['create_repositories'] is True
+
+
+def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_and_none_for_a_bot(api, gh):
+    from backend import team_rules
+    connect(api)
+    botops_turn(api)
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot='botops'")
+        # The daily update: BotOps' own schedule.
+        c.execute("UPDATE messages SET kind='notice',refs_json='{\"wake\": \"update\"}' WHERE id='m-botops'")
+    wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
+    assert sorted(turn_token(api, "botops").json()["repositories"]) == wide
+    with api.app_state.store.read() as c:
+        # The computer's git helper asked: the run in progress on it decided the scope.
+        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='github.token' AND target='botops' "
+                                     "ORDER BY ts DESC,rowid DESC LIMIT 1").fetchone()[0])
+    assert audit["runs"] == [{"attempt": "a2", "rights": "bot:botops", "own_run": True}]
+    assert sorted(api.post("/api/v2/github/token", json={"bot": "botops"},
+                           headers=auth("botops-test")).json()["repositories"]) == wide
+    with api.app_state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+    with api.app_state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": True})
+        c.execute("UPDATE messages SET from_actor='bot:cmo' WHERE id='m-botops'")
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+    # A person asking: the bots they manage (Riley runs cpo), whatever team rule; nothing once no run is in progress.
+    from backend import rooms
+    with api.app_state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"botops_manages_bots": False})
+        c.execute("UPDATE bot_config SET operator='riley' WHERE bot='cpo'")
+        room = rooms.personal_room(c, "human:riley", "botops")
+        c.execute("UPDATE messages SET from_actor='human:riley',conversation_id=?,kind='say' WHERE id='m-botops'", (room["id"],))
+        c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (room["id"],))
+    assert sorted(turn_token(api, "botops").json()["repositories"]) == ["Acme/emp-botops", "Acme/emp-cpo"]
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='a2'")
+    assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
+
+
+def lose_key(api, *sources):
+    """Seal directory credentials for `sources` with github-app.key, then lose the file with no copy anywhere."""
+    state = api.app_state
+    with state.store.transaction() as c:
+        for source in sources:
+            state.directory.put_credentials(c, "human:ana", source, {"client_secret": source + "-synthetic"}, source)
+    state.github_app.key_file().unlink()
+
+
+def directory_put(api, **more):
+    revision = api.get("/api/v2/directory", headers=auth()).json()["revision"]
+    body = {"source": "entra", "filter": {}, "expected_revision": revision,
+            "credentials": {"tenant": "t", "client_id": "c", "client_secret": "entra-new"}, **more}
+    return api.put("/api/v2/directory", json=body, headers={**auth(), "Idempotency-Key": str(uuid.uuid4())})
+
+
+def test_a_lost_github_app_key_is_replaced_only_when_the_owner_confirms(api, gh):
+    connect(api)
+    lose_key(api, "entra")
+    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
+    state = api.app_state
+    for params in ({}, {"replace_lost_key": "true"}):       # a GET, even a link carrying the flag, never drops anything
+        refused = api.get("/api/v2/github/app/manifest", params={"org": "Acme", **params}, headers=auth())
+        assert refused.status_code == 409 and "replace-lost-key" in refused.text
+        with state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 1
+    assert api.post("/api/v2/github/app/replace-lost-key", headers=auth("person-test")).status_code == 403
+    assert api.post("/api/v2/github/app/replace-lost-key", headers=auth()).json() == {"replaced": True}
+    connect(api)
+    with state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 0   # to be entered again
+        assert state.github_app.private_key(c, state.github_app.row(c))
+        (event,) = c.execute("SELECT detail_json FROM events WHERE action='github.lost_key_replaced'").fetchall()
+    assert json.loads(event[0]) == {"github_app": False, "directory_sources": ["entra"]}
+
+
+def test_two_directory_sources_sealed_with_a_lost_key_do_not_deadlock(api, gh):
+    lose_key(api, "google", "entra")
+    refused = directory_put(api)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_key_missing", refused.text
+    assert directory_put(api, replace_lost_key=True).status_code == 200, "the confirmed save goes through"
+    state = api.app_state
+    with state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT source FROM directory_credentials")] == ["entra"]
+        assert state.directory.credentials(c, "entra")["client_secret"] == "entra-new"
+    # With the key present the flag drops nothing.
+    assert directory_put(api, replace_lost_key=True).status_code == 200
+    with state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='github.lost_key_replaced'").fetchone()[0] == 1
+
+
+def test_a_proposal_cannot_carry_the_lost_key_replacement():
+    """PUT /api/v2/directory is a route BotOps may propose; replacing the lost key is a person's own confirm, not a card's."""
+    from types import SimpleNamespace
+
+    from backend import assistant
+    settings = SimpleNamespace(assistant_bot="assistant")
+    body = {"source": "entra", "replace_lost_key": True}
+    with pytest.raises(Problem, match="person directly"):
+        assistant.create_proposal(None, settings, None, None, "botops", "Save Entra", "PUT", "/api/v2/directory", body)
+
+
+def enable_kms(api):
+    """TICO_CREDENTIAL_KMS_KEY set after the install already sealed secrets with github-app.key."""
+    from backend.credentials import CredentialCipher
+    from backend.tests.test_credentials import FakeKMS
+    state = api.app_state
+    state.store.settings.credential_kms_key = "test-key"
+    state.vault.cipher = CredentialCipher("test-key", FakeKMS())
+
+
+def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_resealed_once(api, gh, caplog):
+    connect(api)
+    state = api.app_state
+    with state.store.transaction() as c:
+        state.directory.put_credentials(c, "human:ana", "entra", {"client_secret": "entra-synthetic"}, "app c in t")
+    legacy = state.github_app.key_file().read_bytes()
+    with state.store.read() as c:
+        before = {"app": bytes(state.github_app.row(c)["ciphertext"]),
+                  "entra": bytes(c.execute("SELECT ciphertext FROM directory_credentials").fetchone()[0])}
+    from backend import health, slack_app
+    slack_app.save(state.store, state.store.settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000")
+    enable_kms(api)
+    with state.store.read() as c:
+        state.vault.cipher.key(c)            # the vault's KMS data key, as the first save under KMS makes it
+        # Nothing is lost (github-app.key and slack.key still open them), but Health says which files are still needed.
+        check = health._sealed_secrets(c, state.store.settings, state.github_app)
+        assert check["status"] == "info", check
+        assert "2 secrets still need github-app.key" in check["summary"] and "1 still needs slack.key" in check["summary"]
+        assert "keep" in check["summary"].lower()
+        assert bytes(state.github_app.row(c)["ciphertext"]) == before["app"]       # Health only looks
+    caplog.set_level("INFO")
+    assert state.github_app.webhook_secret() == "whs"
+    with state.store.read() as c:
+        assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
+        assert state.directory.credentials(c, "entra")["client_secret"] == "entra-synthetic"
+        app_row, source = state.github_app.row(c), c.execute("SELECT * FROM directory_credentials").fetchone()
+        vault_key = state.vault.cipher.key(c)
+    # Re-sealed with the vault key, once: the legacy key no longer opens them, the vault key does.
+    assert bytes(app_row["ciphertext"]) != before["app"] and bytes(source["ciphertext"]) != before["entra"]
+    AESGCM(vault_key).decrypt(app_row["nonce"], app_row["ciphertext"], b"tico-github-app:v1")
+    with pytest.raises(Exception):
+        AESGCM(legacy).decrypt(app_row["nonce"], app_row["ciphertext"], b"tico-github-app:v1")
+    resealed = [r.getMessage() for r in caplog.records if "re-sealed" in r.getMessage().lower()]
+    assert len(resealed) == 2 and not any("whs" in m or "entra-synthetic" in m or "BEGIN" in m for m in resealed)
+    caplog.clear()
+    with state.store.read() as c:
+        assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
+    assert not [r for r in caplog.records if "re-sealed" in r.getMessage().lower()]
+    assert state.github_app.key_file().read_bytes() == legacy     # left as it was, for an older backup's rows
+    with state.store.read() as c:
+        check = health._sealed_secrets(c, state.store.settings, state.github_app)
+    assert check["status"] == "info" and "github-app.key" not in check["summary"] and "1 secret still needs slack.key" in check["summary"]
+    assert slack_app.load(state.store, state.store.settings, state.vault)["bot_token"] == "xoxb-synthetic-0000000000"
+    with state.store.read() as c:
+        assert health._sealed_secrets(c, state.store.settings, state.github_app) is None   # every one re-sealed: clear
+
+
+def test_without_github_app_key_a_pre_kms_secret_still_fails_and_no_key_file_is_made(api, gh):
+    connect(api)
+    state = api.app_state
+    state.github_app.key_file().unlink()
+    enable_kms(api)
+    with state.store.read() as c:
+        with pytest.raises(Problem, match="could not be decrypted"):
+            state.github_app.private_key(c, state.github_app.row(c))
+    assert state.github_app.webhook_secret() == ""
+    assert not state.github_app.key_file().exists()

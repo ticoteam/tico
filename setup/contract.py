@@ -26,6 +26,10 @@ HEALTH_PATH = "/healthz"
 REDIRECT_PATH = "/auth/callback"
 # Sign-in starts here and must answer with a redirect to the identity provider.
 SIGNIN_PATH = "/auth/login"
+# A separate runner hostname serves only what runners and outside agents call; docker/entrypoint.sh writes the same path.
+RUNNER_ROUTE_PATH = r"^/(?:api/v2|download)(?:/.*)?$"
+# An /api/v2 route the server answers with no sign-in (backend/app.py), so a check can tell it from a login page.
+RUNNER_PROBE_PATH = "/api/v2/agents/setup-script"
 
 OIDC_ISSUERS = {
     "google": "https://accounts.google.com",
@@ -43,7 +47,7 @@ SECRET_KEYS = frozenset({
 
 # Order they appear in the written .env.
 ENV_ORDER = (
-    "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "COMPOSE_PROFILES", "TICO_DOMAIN", "CLOUDFLARE_TUNNEL_TOKEN",
+    "TICO_TEAM_NAME", "TICO_COMPANY_NAME", "TICO_OWNER_EMAIL", "COMPOSE_PROFILES", "TICO_DOMAIN", "TICO_RUNNER_URL", "CLOUDFLARE_TUNNEL_TOKEN",
     "TICO_AUTH_PROXY", "TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID", "TICO_OIDC_CLIENT_SECRET", KEY_ALLOWED_DOMAIN,
     "TICO_ACCESS_ISSUER", "TICO_ACCESS_AUDIENCE", *DECISIONS_KEYS.values(), "TICO_UPDATER_URL", "TICO_TAG",
 )

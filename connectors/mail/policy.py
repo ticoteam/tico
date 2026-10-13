@@ -17,11 +17,11 @@ Two entry points:
 Order of the send chain (docs/mail-service.md, "The guardrails"):
 
   global.send_enabled -> mailbox paused -> the employee declares `send` on this mailbox ->
-  outbound_send: true -> recipient is internal | a forward target the owner listed (`forward_to:` in
-  bot.yaml) | the sender of the thread being replied to | an allowance covers it | --approval-issue N ->
+  outbound_send on (held on the Tico server, `switch()`) -> recipient is internal | a forward target a person
+  approved in Tico | the sender of the thread being replied to | an allowance covers it | --approval-issue N ->
   caps -> blocklist -> owner_handles_personally
 
-With `outbound_send: true` the owner has already said yes: the first three kinds of recipient need no
+With outbound_send on the owner has already said yes: the first three kinds of recipient need no
 per-message approval. Everything else still needs an allowance or an approval, and the caps, the blocklist and
 owner-handles-personally apply to every send.
 
@@ -58,9 +58,9 @@ LIST_KEYS = ("addresses", "domains")
 
 FALLBACK_DEFAULTS = {"max_sends_per_day": 20, "per_recipient_cooldown_days": 14,
                      "max_external_recipients": 1, "allow_cc_external": False,
-                     "allow_attachments": False}
+                     "allow_attachments": False}     # opt-in: a team turns attachments on in its policy file
 
-# What a computer with no registry runs on: sending is on globally (each bot still needs `outbound_send: true` and a
+# What a computer with no registry runs on: sending is on globally (each bot still needs sending on in Tico and a
 # `send` verb), the caps are the usual ones, and nothing is on the blocklist. The per-recipient wait is 0 days because the
 # recipients that need no approval (a forward target, the sender of the thread being answered) are written to again and
 # again; the daily cap is the brake. A registry's own policy file sets its own.
@@ -469,7 +469,23 @@ def _payload_addrs(value):
     return _addr_set(value)
 
 
-def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
+def file_set(files):
+    """{(name, size, sha256)} for attached files or an approval's `attachments` list; None when an entry
+    is not a well-formed {name, size, sha256}."""
+    out = set()
+    for f in files or ():
+        try:
+            name, size, digest = str(f["name"]), int(f["size"]), str(f["sha256"]).strip().lower()
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not name or size < 0 or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return None
+        out.add((name, size, digest))
+    return out
+
+
+def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", attachments=None,
+                   draft=""):
     """Read one per-message yes and say how far it reaches.
 
     `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
@@ -477,8 +493,27 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
     {"ok", "detail", "full", "named", "issue"}. `full` is the owner's yes to this exact message:
     it lifts the recipient caps, the cooldown, and `outbound_send: false`, and the second
     reviewer advises instead of blocking. docs/mail-service.md, "Per-message approval".
+
+    `attachments` ([{name, size, sha256}] of the files as they are in the draft) narrows it to an
+    approval of these exact files: a Tico send approval whose payload names this draft and each
+    file by name, size and sha256, or a GitHub Issue whose `Send to:` line matches and whose text
+    names each file and its sha256 and no other hash. The owner's message telling the bot to send
+    names no files, so it never approves a message with attachments.
     """
     n = str(number or "").strip()
+    if attachments:
+        if n.isdigit():
+            return _github_approval_check(n, to, cc, thread_id, repo, attachments)
+        if HUB_ID.match(n):
+            row = _hub_approval_check(n, to, cc, slug, attachments, draft)
+            if row:
+                return row
+        out = _blank_approval(n)
+        out["detail"] = (f"--approval-issue {number!r} is not a Tico send approval or a GitHub Issue; "
+                         "an owner's message to send does not cover attachments. A message with "
+                         "attachments needs an approval that names its files (`mail draft` prints "
+                         "the request)")
+        return out
     if n.isdigit():
         return _github_approval_check(n, to, cc, thread_id, repo)
     if HUB_ID.match(n):
@@ -489,7 +524,7 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug=""):
     return out
 
 
-def _github_approval_check(n, to, cc, thread_id, repo):
+def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     out = _blank_approval(n)
     r = RUN(["gh", "issue", "view", n, "-R", repo, "--json", "state,labels,title,body"],
             capture_output=True, text=True)
@@ -523,14 +558,27 @@ def _github_approval_check(n, to, cc, thread_id, repo):
     ext_to = [str(x).strip().lower() for x in to if str(x).strip()]
     ext_cc = [str(x).strip().lower() for x in cc if str(x).strip()]
     out["full"] = bool(ext_to) and _send_spec_matches(text, ext_to, ext_cc)
+    if attachments:
+        want = file_set(attachments)
+        named = set(re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", text))
+        unnamed = [f"{name} ({digest[:12]})" for name, _, digest in sorted(want or ())
+                   if name.lower() not in text or digest not in named]
+        if not want or not out["full"] or unnamed or named != {d for _, _, d in want}:
+            out["ok"] = out["full"] = False
+            out["detail"] = (f"Issue {n} does not approve these files: it needs a `Send to:` line for "
+                             "every address and each file's name and sha256, and no other file"
+                             + (f" (missing {', '.join(unnamed)})" if unnamed else "")
+                             + ". A changed or different file needs a new approval")
+            return out
     out["detail"] = (f"Issue {n}: closed, {', '.join(APPROVAL_LABELS)}, "
                      + ("its `Send to:` line matches every address on this message, To and Cc: "
                         "per-message approval" if out["full"] else f"names {named[0]}"))
     return out
 
 
-def _hub_approval_check(n, to, cc, slug):
-    """A decided Tico `send` approval whose payload names every external address."""
+def _hub_approval_check(n, to, cc, slug, attachments=None, draft=""):
+    """A decided Tico `send` approval whose payload names every external address and, for a
+    message with files, this draft and exactly its files by name, size and sha256."""
     row = _hub_row("approvals", n)
     if not row:
         return None
@@ -553,12 +601,29 @@ def _hub_approval_check(n, to, cc, slug):
         out["detail"] = (f"Tico approval {n} names to={sorted(got_to)} cc={sorted(got_cc)}, "
                          f"not this message's to={sorted(ext_to)} cc={sorted(ext_cc)}")
         return out
+    if attachments:
+        want, got = file_set(attachments), file_set(payload.get("attachments"))
+        if str(payload.get("draft") or "") != str(draft or "") or not draft:
+            out["detail"] = (f"Tico approval {n} is for draft {payload.get('draft') or '(none)'}, "
+                             f"not {draft or '(none)'}")
+            return out
+        if not want or got != want:
+            out["detail"] = (f"Tico approval {n} names files "
+                             + _files_text(got) + "; the draft carries " + _files_text(want)
+                             + ". A changed or different file needs a new approval")
+            return out
     out["ok"] = out["full"] = True
     out["named"] = sorted(ext_to | ext_cc)
     who = f"bot:{slug}" if slug else "the requester"
     out["detail"] = (f"Tico send approval {n}: approved, names every address on this message: "
                      f"per-message approval for {who}")
     return out
+
+
+def _files_text(files):
+    if files is None:
+        return "(not a list of name, size and sha256)"
+    return ", ".join(f"{n} ({sz} bytes, {d[:12]})" for n, sz, d in sorted(files)) or "(none)"
 
 
 def _hub_message_check(n, slug):
@@ -637,34 +702,77 @@ def approval_issue(number, recipients=(), thread_id="", repo=HUB_REPO):
 
 # ---------------------------------------------------------------- outbound_send
 
-def outbound_send(slug, manifest=None):
-    """`outbound_send:` from <bot-slug>/bot.yaml. The owner is the human; always true."""
+# Whether a bot sends without a per-message approval, and to which forward targets, is held on the Tico server
+# (GET /api/v2/bots/<slug>/mail-settings, backend/mail_settings.py), where only a person who manages the bot can
+# set it. `outbound_send` and `forward_to` in bot.yaml are only a request: a bot, or anything that can push to its
+# repository, writes that file, so it alone never turns sending on. Tests replace `SERVER_GET`.
+SERVER_GET = None
+SETTING_HINT = ("a person who manages the bot turns it on in Tico: Settings > Bots > {slug} > Mail sending, "
+                "or `hub bot mail {slug} --send`")
+
+
+def _server_row(slug):
+    get = SERVER_GET or (lambda s: HUB_GET(f"bots/{s}/mail-settings"))
+    try:
+        row = get(slug)
+    except Exception:
+        row = None
+    return row if isinstance(row, dict) and "outbound_send" in row else None
+
+
+def switch(slug, manifest=None):
+    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward}.
+
+    `on` and `forward_to` come from the server only. With no server value (none set yet, or no Tico reachable from
+    this run) sending without approval is off. `asks` / `asks_forward` are what bot.yaml requests, for messages."""
     if str(slug).strip().lower() == OWNER:
-        return True
-    if manifest is None:
+        return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
+                "asks_forward": []}
+    try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
-        manifest = access.load(slug)
-    return bool((manifest or {}).get("outbound_send", False))
+        if manifest is None:
+            manifest = access.load(slug)
+        asks_forward = access.forward_to(manifest)
+    except Failure:
+        manifest, asks_forward = {}, []
+    asks = bool((manifest or {}).get("outbound_send", False))
+    out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
+    row = _server_row(slug)
+    hint = SETTING_HINT.format(slug=slug)
+    if row is None or not row.get("set"):
+        out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
+                          if row is not None else "this run cannot read " + slug + "'s mail setting from Tico")
+                         + "; " + hint
+                         + (". bot.yaml asks for outbound_send: true, which has no effect by itself" if asks else ""))
+        return out
+    out["source"] = "server"
+    out["on"] = bool(row.get("outbound_send"))
+    out["forward_to"] = [a for a in access.forward_to({"forward_to": row.get("forward_to") or []})]
+    who = str(row.get("updated_by") or "a person")
+    out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
+                     + ("" if out["on"] else "; " + hint))
+    return out
+
+
+def outbound_send(slug, manifest=None):
+    """Whether `slug` sends without a per-message approval: the server-held switch. The owner is the human; always true."""
+    return switch(slug, manifest)["on"]
 
 
 def forward_targets(slug, manifest=None):
-    """The addresses the owner lists as `slug`'s forward targets (`forward_to:` in bot.yaml); none for an unreadable
-    or missing manifest, and none for the owner's own handle (who needs no list)."""
-    if str(slug).strip().lower() == OWNER:
-        return []
-    try:
-        from . import access                            # noqa: PLC0415 - avoids a cycle
-        return access.forward_to(manifest if manifest is not None else access.load(slug))
-    except Failure:
-        return []
+    """The forward targets a person approved for `slug` on the server; none without a server value, and none for
+    the owner's own handle (who needs no list). A `forward_to:` address in bot.yaml alone is not one."""
+    return switch(slug, manifest)["forward_to"]
 
 
 def is_forward(pol, slug, to, manifest=None):
     """Whether every outside address on `to` is one of the bot's forward targets (and there is one): the message is
     the bot passing mail on to the owner, whose text quotes whatever the sender wrote."""
     outside = externals(pol, to)
-    return bool(outside) and outbound_send(slug, manifest) \
-        and all(a in set(forward_targets(slug, manifest)) for a in outside)
+    if not outside:
+        return False
+    sw = switch(slug, manifest)
+    return sw["on"] and all(a in set(sw["forward_to"]) for a in outside)
 
 
 def inbound_senders(messages, mailbox=""):
@@ -704,11 +812,19 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                    if is_reply else "the hub does not write to them."),
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
-    if attachments and not pol["defaults"]["allow_attachments"]:
-        raise Refused("attachments are not allowed on mail the hub writes.",
-                      "Put the file in the S3 bucket and reference the s3:// URI on the Issue "
-                      "(policies/shared-rules.md).")
+    if attachments:
+        check_attachments_allowed(pol)
     return everyone
+
+
+def check_attachments_allowed(pol):
+    """Refuses (exit 2) any attachment unless the policy opts in. Checked before a file is read."""
+    if not pol["defaults"]["allow_attachments"]:
+        raise Refused("attachments are not allowed on mail the hub writes "
+                      "(defaults.allow_attachments is false in registry/mail-policy.yaml; "
+                      "it is off unless the team turns it on).",
+                      "Draft it without --attach and put the file on the task, or ask the owner "
+                      "to set defaults.allow_attachments: true.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -725,17 +841,22 @@ def _decide(checks, gate="", reason=""):
     return Decision({"allowed": not reason, "gate": gate, "reason": reason, "checks": checks})
 
 
-def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
+def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                approval=None, manifest=None, verbs=None, conn=None, now=None,
-               root=None, repo=HUB_REPO, thread_senders=()):
+               root=None, repo=HUB_REPO, thread_senders=(), draft=""):
     """The whole chain. Never raises for a policy problem - the caller downgrades to a draft.
 
     `verbs` is the employee's declared gmail verbs on this mailbox (access.resolve); pass None
     and it is looked up. `conn` is the mail database, for the caps; without it caps are skipped
     (a --dry-run with no state). `thread_senders` are the addresses that wrote into the thread this
     message answers (`inbound_senders`); with `outbound_send: true`, a reply goes to them without an approval.
+    `attachments` is [{name, size, sha256}] of the files in the draft `draft`; a bare count is
+    treated as files no approval can name.
     """
     checks = []
+    files = list(attachments) if isinstance(attachments, (list, tuple)) else []
+    attachments = len(files) if files else int(attachments or 0)
+    bound = files if attachments else None
 
     def ok(gate, detail=""):
         checks.append({"gate": gate, "ok": True, "detail": detail})
@@ -772,28 +893,31 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
     ext_cc = externals(pol, cc)
     # One read of the approval Issue for the whole chain. `full` means it names every external
     # address on this message, To and Cc: the owner's per-message yes.
-    appr = approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug) if approval else None
+    appr = (approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug,
+                           attachments=bound or ([{}] if attachments else None), draft=draft)
+            if approval else None)
     full = bool(appr and appr["full"])
 
-    if not outbound_send(slug, manifest):
+    sw = switch(slug, manifest)
+    if not sw["on"]:
         if full:
-            ok("outbound_send", f"false in {_where(slug)}, lifted for this message "
+            ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
                                 f"by {appr['detail']}")
         else:
-            return no("outbound_send", f"outbound_send is false in {_where(slug)}"
+            return no("outbound_send", f"outbound_send is false for {slug}: {sw['detail']}"
                       + ("; --approval-issue lifts it for a matching GitHub Issue, a Tico "
                          "send approval, or the owner's message telling this employee to send"
                          + (f". {appr['detail']}" if appr and appr.get("detail") else "")
                          if approval else ""))
     else:
-        ok("outbound_send", "true")
+        ok("outbound_send", f"true ({sw['detail']})")
 
     allowance = allowance_for(pol, slug, box)
-    # The owner turned sending on (`outbound_send: true` itself, not an approval lifting it): three kinds of
+    # A person turned sending on in Tico (the switch itself, not an approval lifting it): three kinds of
     # recipient then need no per-message yes. Internal addresses are not in `ext`; the other two are here.
     standing = {}
-    if outbound_send(slug, manifest):
-        targets = set(forward_targets(slug, manifest))
+    if sw["on"]:
+        targets = set(sw["forward_to"])
         senders = set(a.strip().lower() for a in thread_senders or []) if thread_id and not ext_cc else set()
         for addr in ext:
             if addr in targets:
@@ -833,11 +957,33 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
         elif not covered:
             why.append("and no --approval-issue was given")
         if not covered:
+            unapproved = [a for a in need if a in sw["asks_forward"]]
+            if unapproved:
+                why.append(f"{', '.join(unapproved)} is in forward_to in bot.yaml but not approved in Tico; "
+                           + SETTING_HINT.format(slug=slug).replace("--send", "--forward-to <addresses>"))
             return no("recipient", "; ".join(why)
-                      + ". With outbound_send on, only internal addresses, forward_to targets in bot.yaml and the "
-                        "sender of the thread being replied to go without one")
+                      + ". With outbound_send on, only internal addresses, the forward targets approved in Tico and "
+                        "the sender of the thread being replied to go without one")
 
     caps = caps_for(pol, allowance)
+    if attachments:
+        # A file can carry anything the bot's computer holds, and a reviewer only sees its name and
+        # size, so no standing path (an internal address, a forward target, the thread's sender or an
+        # allowance) covers it: every attached send needs the owner's per-message yes.
+        if not caps["allow_attachments"]:
+            return no("attachments", "attachments are not allowed (defaults.allow_attachments is "
+                                     "false in registry/mail-policy.yaml)")
+        seen = appr
+        if seen is not None and not seen["ok"] and not ext and not ext_cc:
+            seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal
+                                  attachments=bound or [{}], draft=draft)
+        if not (seen and seen["ok"]):
+            return no("attachments", "a message with attachments needs a Tico send approval "
+                      "naming this draft and its files (name, size and sha256), even to a recipient "
+                      "who needs none without them; request the one `mail draft` printed and pass "
+                      "its id as --approval-issue"
+                      + (f". {seen['detail']}" if seen and seen.get("detail") else ""))
+        ok("attachments", f"{attachments} file(s) approved by {seen['detail']}")
     if full:
         ok("caps", f"recipient count, external Cc and cooldown lifted for this message by "
                    f"Issue {appr['issue']}, which names every address on it")
@@ -852,8 +998,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=0, thread_id="",
                               f"({', '.join(ext_cc)})"
                               + ("; an --approval-issue that names every address lifts it"
                                  if not approval else ""))
-    if attachments and not caps["allow_attachments"]:
-        return no("caps", "attachments are not allowed")
     if conn is not None:
         from . import db                                # noqa: PLC0415
         day = now.astimezone(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
@@ -899,9 +1043,11 @@ def describe(pol, slug, mailbox=None, root=None):
     box = str(mailbox or "").strip().lower()
     a = allowance_for(pol, slug, box) if box else None
     caps = caps_for(pol, a)
+    sw = switch(slug)
     out = {"employee": slug, "mailbox": box, "send_enabled": pol["send_enabled"],
            "mailbox_paused": paused(pol, box) if box else None,
-           "outbound_send": outbound_send(slug), "forward_to": forward_targets(slug),
+           "outbound_send": sw["on"], "forward_to": sw["forward_to"], "mail_setting": sw["detail"],
+           "bot_yaml_asks": {"outbound_send": sw["asks"], "forward_to": sw["asks_forward"]},
            "policy_source": "built-in defaults (no registry)" if pol.get("builtin") else str(POLICY_FILE),
            "caps": caps,
            "internal_domains": pol["internal_domains"],

@@ -33,5 +33,5 @@ invoices. Add each finding to `knowledge/unbilled.md` and to the run as a propos
 ## 5. Write and hand over
 
 `reports/YYYY-MM-DD-invoice-run.md` in the shape of `knowledge/examples/invoice-run.md`, `hub file
-publish` it, and issue the requested, checked batch with your Tools. Customer messages stay drafts until `outbound_send` is on. Commit, and `hub task update <id> --status
+publish` it, and issue the requested, checked batch with your Tools. Customer messages stay drafts until a person turns mail sending on in Tico. Commit, and `hub task update <id> --status
 done --note` with ready, held, unbilled and the path.

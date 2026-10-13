@@ -8,7 +8,7 @@ pack: marketing
 icon: edit_note
 suggest: default
 tags: [content, blog, seo, social, b2b, b2c, smb]
-summary: "Plans the next four weeks of posts and articles and writes one finished piece a week in the team's voice, ready to publish. Public messages stay drafts until `outbound_send` is on."
+summary: "Plans the next four weeks of posts and articles and writes one finished piece a week in the team's voice, ready to publish. Public messages stay drafts until a person turns mail sending on in Tico."
 when: "A team that publishes posts or articles and has no one with the hours to plan and draft them."
 pains:
   - "we don't post regularly"

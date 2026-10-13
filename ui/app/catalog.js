@@ -17,7 +17,7 @@ const catalogName = (state, card) => state.edits[card.slug]?.display_name ?? car
 const catalogText = (state, card) => state.edits[card.slug]?.instructions ?? card.instructions ?? '';
 const catalogLocked = (state, card) => state.lock && !!card.required;
 function catalogPeople() {
-  const rows = (SETTINGS_DATA.people || []).filter(person => person.email);
+  const rows = (S.route === SETTINGS ? SETTINGS_DATA.people : S.people || []).filter(person => person.email && !person.hidden);
   if (rows.length) return rows;
   return S.me?.email ? [{id: S.me.id, name: S.me.name, email: S.me.email}] : [];
 }

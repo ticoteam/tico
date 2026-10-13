@@ -35,6 +35,10 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-spin{flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);animation:marketspin .9s linear infinite}
 @keyframes marketspin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.market-spin{animation:none;border-color:var(--accent)}}
+.market-read-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.market-research{flex:none;padding:3px 10px;border-radius:6px;background:none;border:1px solid var(--line);color:var(--ink);font-size:12.5px;cursor:pointer}
+.market-research:hover{background:var(--surface2)}
+.market-research:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .market-none{margin:0;color:var(--muted);font-size:14px}
 .market-blank{margin:0;color:var(--muted)}
 .market-ask-open{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin:0 0 10px;padding:7px 10px;border-radius:7px;background:none;border:1px solid var(--line);color:var(--ink);font-size:13px;cursor:pointer}
@@ -92,14 +96,20 @@ window.marketCite = ids => MARKET_VIEW?.cite?.(ids);
 
 async function mountMarket(shell) {
   const today = new Date().toISOString().slice(0, 10);
-  const [entities, edges, library] = await Promise.all([
-    get('/v2/market/entities'),
-    get('/v2/market/edges?as_of=' + today),
+  const graphUrl = (id, fill = false, include = []) => {
+    const params = new URLSearchParams({focus: id, fill, limit: 250, as_of: today});
+    include.slice(0, 20).forEach(id => params.append('include', id));
+    return '/v2/market/graph?' + params;
+  };
+  const [initial, listing, library] = await Promise.all([
+    get(graphUrl(marketSelfId(), true)),
+    get('/v2/market/entities?status=active&limit=50'),
     get('/company-docs?collection=market'),
   ]);
-  const nodes = (entities.entities || []).filter(row => row.status !== 'retired' && row.status !== 'merged');
+  const nodes = initial.entities || [];
   const byId = new Map(nodes.map(row => [row.id, row]));
-  const links = (edges.edges || []).filter(edge => byId.has(edge.src) && byId.has(edge.dst));
+  const links = initial.edges || [];
+  (listing.entities || []).forEach(row => byId.set(row.id, row));
   // A fresh install starts with pages the seed wrote ("None in the seed."): they are not shown until the graph has rows.
   const pages = (library.documents || []).filter(doc => nodes.length || !doc.seeded).sort((a, b) => a.title.localeCompare(b.title));
   let researching = marketResearchGet();
@@ -116,31 +126,69 @@ async function mountMarket(shell) {
       <div id="market-read" class="market-read"></div>
     </section>
     <div class="market-graph">
+      <button id="market-reset" class="market-research market-reset" type="button">Reset</button>
       <canvas id="market-canvas" aria-label="Graph of the market"></canvas>
     </div>`;
   const graph = mountGraph($('#market-canvas'), nodes, links);
   const index = $('#market-index');
   const filter = $('#market-filter');
 
-  function renderIndex(query) {
+  let listVersion = 0, listTimer = 0, stopped = false, graphVersion = 0, openVersion = 0;
+  let graphFocus = marketSelfId(), graphDefault = true;
+
+  async function loadGraph(id, fill = false, include = []) {
+    const version = ++graphVersion;
+    if (!include.length && graphFocus === id && graphDefault === fill) { graph.focus(fill ? null : id); return; }
+    const data = await get(graphUrl(id, fill, include));
+    if (stopped || version !== graphVersion) return;
+    (data.entities || []).forEach(row => byId.set(row.id, row));
+    graph.update(data.entities || [], data.edges || [], fill ? null : id);
+    graphFocus = id; graphDefault = fill;
+  }
+  $('#market-reset').onclick = () => void loadGraph(marketSelfId(), true).catch(error => toast(error.message));
+
+  function renderIndex(data, query, offset = 0) {
     const q = query.trim().toLowerCase();
     const match = row => !q || (row.name || row.title || '').toLowerCase().includes(q) || (row.id || '').toLowerCase().includes(q);
-    const groups = [['Pages', pages.filter(doc => doc.id !== 'market/overview').map(doc => ({id: doc.id, name: doc.title}))]];
+    const rows = data.entities || [];
+    rows.forEach(row => byId.set(row.id, row));
+    const groups = [['Pages', pages.filter(doc => doc.id !== 'market/overview' && match(doc)).map(doc => ({id: doc.id, name: doc.title}))]];
     for (const [type, label] of MARKET_TYPES) {
-      const rows = nodes.filter(row => row.type === type && match(row));
-      if (rows.length) groups.push([label, rows]);
+      const typed = rows.filter(row => row.type === type);
+      if (typed.length) groups.push([label, typed]);
     }
-    const shownPages = groups[0][1].filter(match);
-    groups[0][1] = shownPages;
     index.innerHTML = groups.filter(([, rows]) => rows.length).map(([label, rows]) =>
       `<section><h2>${esc(label)}</h2><ul>${rows.map(row =>
-        `<li><a href="${marketHref(row.id)}" data-market-note="${esc(row.id)}">${esc(row.name || row.title)}</a></li>`).join('')}</ul></section>`
+        `<li><a href="${marketHref(row.id)}" data-market-note="${esc(row.id)}"${row.id === marketNoteId() ? ' class="cur" aria-current="page"' : ''}>${esc(row.name || row.title)}</a></li>`).join('')}</ul></section>`
     ).join('') || (q ? '<p class="market-empty">Nothing matches.</p>' : '');
+    index.insertAdjacentHTML('beforeend', `<div class="market-paging">
+      ${offset ? '<button type="button" data-market-prev>Previous</button>' : ''}
+      ${data.next_offset != null ? '<button type="button" data-market-next>Next</button>' : ''}</div>`);
+    const prev = index.querySelector('[data-market-prev]'), next = index.querySelector('[data-market-next]');
+    if (prev) prev.onclick = () => void fetchIndex(query, Math.max(0, offset - 50));
+    if (next) next.onclick = () => void fetchIndex(query, data.next_offset);
   }
-  renderIndex('');
-  filter.oninput = () => renderIndex(filter.value);
+  async function fetchIndex(query, offset = 0) {
+    const version = ++listVersion;
+    try {
+      const data = await get('/v2/market/entities?' + new URLSearchParams({status: 'active', limit: 50, offset, q: query}));
+      if (!stopped && version === listVersion) renderIndex(data, query, offset);
+    } catch (error) { if (!stopped && version === listVersion) index.textContent = error.message; }
+  }
+  renderIndex(listing, '');
+  filter.oninput = () => {
+    clearTimeout(listTimer); ++listVersion;
+    listTimer = setTimeout(() => void fetchIndex(filter.value), 180);
+  };
+  // Research with the Librarian on the page or entry being read (ui/docs-editor.js).
+  let shownBody = '';
+  $('#market-read').addEventListener('click', event => {
+    const button = event.target.closest('[data-market-research]');
+    if (button) DocsEditor.researchDialog({target: button.dataset.marketResearch, body: shownBody});
+  });
 
   async function open(id) {
+    const version = ++openVersion;
     const overview = $('#market-overview');
     const onBrief = id === MARKET_BRIEF;
     overview.classList.toggle('cur', onBrief);
@@ -153,34 +201,49 @@ async function mountMarket(shell) {
     const read = $('#market-read');
     const showDoc = async doc => {
       const full = await get('/company-docs/' + doc.id.split('/').map(encodeURIComponent).join('/'));
-      read.innerHTML = `<p class="market-kicker">Market</p><div class="md market-md">${safeMd(full.content || '')}</div>`;
-      graph.focus(null);
+      if (stopped || version !== openVersion) return;
+      shownBody = full.content || '';
+      read.innerHTML = `${marketHead('Market', doc.id === 'market/weekly-delta' ? '' : doc.id)}<div class="md market-md">${safeMd(shownBody)}</div>`;
+      if (onBrief) await loadGraph(marketSelfId(), true); else { ++graphVersion; graph.focus(null); }
     };
     if (onBrief) {
       const overview = pages.find(row => row.id === 'market/overview');
       if (overview) { await showDoc(overview); return; }
       read.innerHTML = '<p class="market-blank">Nothing here yet.</p>';
-      graph.focus(null);
-      return;
-    }
-    if (byId.has(id)) {
-      const shown = await get('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/'));
-      read.innerHTML = renderEntity(shown, byId);
-      graph.focus(id);
-      const current = index.querySelector('a.cur');
-      if (current) current.scrollIntoView({block: 'nearest'});
+      await loadGraph(marketSelfId(), true);
       return;
     }
     const doc = pages.find(row => row.id === id);
     if (!doc) {
-      read.innerHTML = '<p class="market-empty">That note is not in the market.</p>';
-      graph.focus(null);
+      try {
+        const [shown] = await Promise.all([
+          get('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/') + '?names=true'), loadGraph(id),
+        ]);
+        if (stopped || version !== openVersion) return;
+        byId.set(id, shown.entity);
+        (shown.neighbors || []).forEach(row => byId.set(row.id, row));
+        shownBody = '';
+        read.innerHTML = renderEntity(shown, byId);
+        graph.focus(id);
+        const current = index.querySelector('a.cur');
+        if (current) current.scrollIntoView({block: 'nearest'});
+      } catch (error) {
+        if (!stopped && version === openVersion) {
+          read.innerHTML = `<p class="market-empty">${esc(error.message || 'That note is not in the market.')}</p>`;
+          graph.focus(null);
+        }
+      }
       return;
     }
     await showDoc(doc);
   }
 
-  return {shell, open, stop: () => graph.stop(), name: id => byId.get(id)?.name || '', cite: ids => graph.cite(ids)};
+  return {shell, open, stop() { stopped = true; clearTimeout(listTimer); graph.stop(); },
+    name: id => byId.get(id)?.name || '',
+    async cite(ids) {
+      if (ids[0]) await loadGraph(ids[0], false, ids).catch(error => toast(error.message));
+      if (!stopped) graph.cite(ids);
+    }};
 }
 
 // ---------------------------------------------------------------- an empty market
@@ -210,9 +273,9 @@ function marketResearchSet(row) {
 // What the market holds, in one string: how many entities, and when its newest page was written. The seed's
 // pages are already there when the owner asks, so "has content" means "differs from what it was when asked".
 async function marketSig() {
-  const [entities, pages] = await Promise.all([get('/v2/market/entities'), get('/company-docs?collection=market')]);
+  const [entities, pages] = await Promise.all([get('/v2/market/entities?limit=1'), get('/company-docs?collection=market')]);
   const written = (pages.documents || []).filter(doc => doc.id !== 'market/weekly-delta').map(doc => String(doc.fetched || ''));
-  return `${(entities.entities || []).length}|${written.reduce((a, b) => a > b ? a : b, '')}`;
+  return `${(entities.total ?? (entities.entities || []).length)}|${written.reduce((a, b) => a > b ? a : b, '')}`;
 }
 
 function marketBlankHtml(row) {
@@ -274,6 +337,12 @@ function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
+// The note's kicker, and Research for a page or entry the Librarian can add to.
+function marketHead(kicker, target) {
+  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
+    ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
+}
+
 function renderEntity(shown, names) {
   const entity = shown.entity;
   const bits = [entity.type, entity.tier].filter(Boolean).join(' · ');
@@ -289,7 +358,7 @@ function renderEntity(shown, names) {
   const evidence = (shown.evidence || []).map(row =>
     `<blockquote class="market-quote">${row.our_read ? `<p>${esc(row.our_read)}</p>` : ''}${row.quote ? `<p>${esc(row.quote)}</p>` : ''}</blockquote>`
   ).join('');
-  return `<p class="market-kicker">${esc(bits || 'Entity')}</p><h1>${esc(entity.name)}</h1>
+  return `${marketHead(bits || 'Entity', entity.id)}<h1>${esc(entity.name)}</h1>
     ${entity.summary ? `<p class="market-summary">${esc(entity.summary)}</p>` : ''}
     ${aliases.length ? `<p class="market-aliases">Also called ${aliases.map(esc).join(', ')}</p>` : ''}
     ${lines.length ? `<h2>Relations</h2><ul class="market-rels">${lines.join('')}</ul>` : '<p class="market-empty">No current relations.</p>'}
@@ -297,53 +366,52 @@ function renderEntity(shown, names) {
 }
 
 function mountGraph(canvas, rows, edges) {
-  const degree = new Map();
-  edges.forEach(edge => {
-    degree.set(edge.src, (degree.get(edge.src) || 0) + 1);
-    degree.set(edge.dst, (degree.get(edge.dst) || 0) + 1);
-  });
-  const nodes = rows.map(row => ({
-    id: row.id, name: row.name, type: row.type, tier: row.tier,
-    r: 2.4 + Math.min(5.5, Math.sqrt(degree.get(row.id) || 0) * 1.7),
-    x: 0, y: 0, vx: 0, vy: 0,
-  }));
-  const byId = new Map(nodes.map(node => [node.id, node]));
-  const links = edges.map(edge => ({a: byId.get(edge.src), b: byId.get(edge.dst), rel: edge.rel})).filter(link => link.a && link.b);
-  const linked = new Set(links.flatMap(link => [link.a.id, link.b.id]));
-  let ring = 0;
-  const free = nodes.filter(node => !linked.has(node.id));
-  const bound = nodes.filter(node => linked.has(node.id) && node.id !== marketSelfId());
-  bound.forEach((node, index) => {
-    const angle = (index / Math.max(1, bound.length)) * Math.PI * 2;
-    node.x = Math.cos(angle) * 150;
-    node.y = Math.sin(angle) * 110;
-  });
-  free.forEach((node, index) => {
-    const angle = (index / Math.max(1, free.length)) * Math.PI * 2 + (index % 4) * 0.35;
-    const radius = 210 + (index % 6) * 28;
-    node.x = Math.cos(angle) * radius;
-    node.y = Math.sin(angle) * radius * 0.72;
-  });
-  const self = byId.get(marketSelfId());
-  if (self) { self.x = 0; self.y = 0; }
+  let nodes = [], byId = new Map(), links = [];
+  function replace(rows, edges, parentId = null) {
+    const old = byId, parent = old.get(parentId);
+    nodes = rows.slice(0, 300).map((row, index) => {
+      const kept = old.get(row.id);
+      const angle = index * 2.399963;
+      const radius = (parent ? 12 : 18) * Math.sqrt(index + 1);
+      return {id: row.id, name: row.name, type: row.type, tier: row.tier,
+        r: 2.4 + Math.min(5.5, Math.sqrt(row.degree || 0) * 1.7),
+        x: kept?.x ?? (row.id === parentId ? 0 : (parent?.x || 0) + Math.cos(angle) * radius),
+        y: kept?.y ?? (row.id === parentId ? 0 : (parent?.y || 0) + Math.sin(angle) * radius * 0.72),
+        vx: 0, vy: 0, pinned: !!kept || row.id === parentId};
+    });
+    byId = new Map(nodes.map(node => [node.id, node]));
+    links = edges.map(edge => ({a: byId.get(edge.src), b: byId.get(edge.dst), rel: edge.rel})).filter(link => link.a && link.b);
+    const self = byId.get(marketSelfId());
+    if (self && !old.has(self.id)) { self.x = 0; self.y = 0; }
+  }
+  replace(rows, edges);
   let focus = null;
   let cited = new Set();
   let hover = null;
-  let frame = 0;
+  let ticks = 0, settled = 0, raf = 0;
   let running = true;
   const view = {x: 0, y: 0, k: 1};
   let drag = null;
 
   function step() {
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        let dx = nodes[j].x - nodes[i].x;
-        let dy = nodes[j].y - nodes[i].y;
-        const dist = Math.hypot(dx, dy) || 0.01;
-        const force = 420 / (dist * dist);
-        dx /= dist; dy /= dist;
-        nodes[i].vx -= dx * force; nodes[i].vy -= dy * force;
-        nodes[j].vx += dx * force; nodes[j].vy += dy * force;
+    // Beyond nearby cells repulsion is negligible; the grid avoids all-pairs work.
+    const grid = new Map(), cellSize = 100;
+    for (const node of nodes) {
+      const key = Math.floor(node.x / cellSize) + ',' + Math.floor(node.y / cellSize);
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(node);
+    }
+    for (const node of nodes) {
+      if (node.pinned) continue;
+      const cx = Math.floor(node.x / cellSize), cy = Math.floor(node.y / cellSize);
+      for (let x = cx - 1; x <= cx + 1; x++) for (let y = cy - 1; y <= cy + 1; y++) {
+        for (const other of grid.get(x + ',' + y) || []) {
+          if (other === node) continue;
+          const dx = node.x - other.x, dy = node.y - other.y;
+          const dist = Math.max(2, Math.hypot(dx, dy));
+          const force = 420 / (dist * dist * dist);
+          node.vx += dx * force; node.vy += dy * force;
+        }
       }
     }
     for (const link of links) {
@@ -355,16 +423,23 @@ function mountGraph(canvas, rows, edges) {
       link.a.vx += dx * force; link.a.vy += dy * force;
       link.b.vx -= dx * force; link.b.vy -= dy * force;
     }
+    let speed = 0;
     for (const node of nodes) {
+      if (node.pinned) { node.vx = 0; node.vy = 0; continue; }
       if (node.id === marketSelfId()) { node.x = 0; node.y = 0; node.vx = 0; node.vy = 0; continue; }
       node.vx -= node.x * 0.008;
       node.vy -= node.y * 0.008;
       node.vx *= 0.72; node.vy *= 0.72;
       node.x += Math.max(-12, Math.min(12, node.vx));
       node.y += Math.max(-12, Math.min(12, node.vy));
+      speed = Math.max(speed, Math.abs(node.vx), Math.abs(node.vy));
     }
+    ticks++;
+    settled = speed < 0.08 ? settled + 1 : 0;
   }
-  for (let n = 0; n < 160; n++) step();
+  function invalidate() {
+    if (running && !document.hidden && !raf) raf = requestAnimationFrame(draw);
+  }
 
   function neighbors() {
     const near = new Set();
@@ -394,7 +469,8 @@ function mountGraph(canvas, rows, edges) {
   }
 
   function draw() {
-    if (!running) return;
+    raf = 0;
+    if (!running || document.hidden) return;
     const rect = canvas.getBoundingClientRect();
     const ratio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.floor(rect.width * ratio));
@@ -408,8 +484,7 @@ function mountGraph(canvas, rows, edges) {
     palette();
     ctx.fillStyle = pal.bg;
     ctx.fillRect(0, 0, rect.width, rect.height);
-    if (frame < 40) step();
-    frame += 1;
+    if (ticks < 180 && settled < 8) step();
     const near = neighbors();
     ctx.save();
     ctx.translate(rect.width / 2 + view.x, rect.height / 2 + view.y);
@@ -443,7 +518,7 @@ function mountGraph(canvas, rows, edges) {
     const hits = (box, self) => placed.some(o => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)
       || nodes.some(n => n !== self && n.x + n.r > box.l && n.x - n.r < box.r && n.y + n.r > box.t && n.y - n.r < box.b);
     ctx.lineJoin = 'round';
-    for (const node of [...nodes].sort((a, b) => rank(a) - rank(b))) {
+    for (const node of [...nodes].sort((a, b) => rank(a) - rank(b)).slice(0, 60)) {
       if (!few && rank(node) === 3) continue;
       const w = ctx.measureText(node.name).width, gap = node.r + 5;
       const spots = [[node.x + gap, node.y], [node.x - gap - w, node.y], [node.x - w / 2, node.y - gap - 4], [node.x - w / 2, node.y + gap + 4]]
@@ -458,9 +533,17 @@ function mountGraph(canvas, rows, edges) {
       ctx.fillText(node.name, spot.x, spot.y);
     }
     ctx.restore();
-    if (running) requestAnimationFrame(draw);
+    if (ticks < 180 && settled < 8) invalidate();
   }
-  requestAnimationFrame(draw);
+  const resize = new ResizeObserver(invalidate);
+  resize.observe(canvas);
+  const theme = new MutationObserver(invalidate);
+  theme.observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme', 'class', 'style']});
+  const visibility = () => { if (document.hidden) { cancelAnimationFrame(raf); raf = 0; } else invalidate(); };
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  media.addEventListener('change', invalidate);
+  document.addEventListener('visibilitychange', visibility);
+  invalidate();
 
   function world(event) {
     const rect = canvas.getBoundingClientRect();
@@ -482,12 +565,14 @@ function mountGraph(canvas, rows, edges) {
     if (drag && drag.moved) {
       view.x = drag.vx + (event.clientX - drag.x);
       view.y = drag.vy + (event.clientY - drag.y);
+      invalidate();
       return;
     }
     if (drag) drag.moved = Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 3;
     const node = hit(world(event));
     hover = node ? node.id : null;
     canvas.style.cursor = node ? 'pointer' : 'grab';
+    invalidate();
   };
   canvas.onmousedown = event => {
     drag = {x: event.clientX, y: event.clientY, vx: view.x, vy: view.y, moved: false, node: hit(world(event))};
@@ -500,16 +585,33 @@ function mountGraph(canvas, rows, edges) {
     if (!moved && picked) location.hash = marketHref(picked.id);
   };
   window.addEventListener('mouseup', release);
-  canvas.onwheel = event => {
+  const wheel = event => {
     event.preventDefault();
     const next = Math.min(2.4, Math.max(0.45, view.k * (event.deltaY < 0 ? 1.08 : 0.92)));
     view.k = next;
+    invalidate();
   };
-  canvas.addEventListener('wheel', canvas.onwheel, {passive: false});
+  canvas.addEventListener('wheel', wheel, {passive: false});
 
   return {
-    focus(id) { focus = byId.has(id) ? id : null; cited = new Set(); },
-    cite(ids) { cited = new Set(ids); if (ids[0] && byId.has(ids[0])) focus = ids[0]; },
-    stop() { running = false; window.removeEventListener('mouseup', release); },
+    update(rows, edges, id) {
+      replace(rows, edges, id);
+      focus = byId.has(id) ? id : null; cited = new Set();
+      const parent = byId.get(id);
+      if (parent) { view.x = -parent.x * view.k; view.y = -parent.y * view.k; }
+      else { view.x = 0; view.y = 0; view.k = 1; }
+      ticks = 0; settled = 0; invalidate();
+    },
+    focus(id) { focus = byId.has(id) ? id : null; cited = new Set(); invalidate(); },
+    cite(ids) { cited = new Set(ids); if (ids[0] && byId.has(ids[0])) focus = ids[0]; invalidate(); },
+    stop() {
+      running = false; cancelAnimationFrame(raf);
+      resize.disconnect(); theme.disconnect();
+      media.removeEventListener('change', invalidate);
+      document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener('mouseup', release);
+      canvas.removeEventListener('wheel', wheel);
+      canvas.onmousemove = canvas.onmousedown = null;
+    },
   };
 }

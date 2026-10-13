@@ -8,6 +8,7 @@ import json
 import os
 import plistlib
 import re
+import socket
 import stat
 import subprocess
 import sys
@@ -117,6 +118,9 @@ class Fake:
         self.oc_jobs = {}
         self.broken = {}             # {"openclaw": "gateway closed"}: every call of that tool fails
         self.counter = 0
+        self.refuse_timer = ""       # launchctl bootstrap / systemctl enable fail with this, as launchd does for a
+                                     # plist on an external volume
+        self.models_status = None    # (exit code, JSON) for `openclaw models status --json --check`; None: unknown
 
     def run(self, command, *args, **kwargs):
         if len(command) > 1 and str(command[1]).endswith("hermes_agent.py"):
@@ -129,6 +133,8 @@ class Fake:
         out = ""
         if command[:2] == ["launchctl", "print"] and not self.loaded:
             code = 113
+        if self.refuse_timer and (command[:2] == ["launchctl", "bootstrap"] or command[:3] == ["systemctl", "--user", "enable"]):
+            return subprocess.CompletedProcess(command, 5, stdout="", stderr=self.refuse_timer)
         if command[:3] == ["systemctl", "--user", "is-active"]:
             out, code = ("active\n", 0) if self.loaded else ("inactive\n", 3)
         return subprocess.CompletedProcess(command, code, stdout=out, stderr="")
@@ -209,6 +215,9 @@ class Fake:
         if args[:2] == ["cron", "rm"]:
             self.oc_jobs[profile] = [j for j in jobs if j["id"] != args[2]]
             return self.done(args, json.dumps({"ok": True}))
+        if args[:2] == ["models", "status"] and self.models_status is not None:
+            code, data = self.models_status
+            return self.done(args, banner + json.dumps(data, indent=2), code=code)
         return self.done(args, code=2, err="unexpected openclaw call")
 
 
@@ -550,7 +559,7 @@ class Sync(Base):
         self.assertNotIn("update due", out)
 
 class OpenClaw(Base):
-    """The same connector for an OpenClaw profile: no MCP client, so the credential goes in tico.env and the
+    """The same connector for an OpenClaw profile: no MCP entry, so the credential goes in tico.env and the
     skill calls Tico through `call`; the job is `openclaw cron`."""
 
     def setUp(self):
@@ -581,7 +590,7 @@ class OpenClaw(Base):
         self.assertIn("TICO_AGENT_TOKEN=" + TOKEN, env.read_text())
         self.assertEqual(stat.S_IMODE(env.stat().st_mode), 0o600)
         self.assertFalse((self.state / "config.yaml").exists())
-        self.assertIn("no MCP client", out)
+        self.assertIn("no MCP entry in OpenClaw", out)
         saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
         self.assertEqual((saved["bot"], saved["harness"], saved["sync"]), ("claw", "openclaw", "1h"))
         self.assertEqual(stat.S_IMODE((self.config_dir / "openclaw-claw.json").stat().st_mode), 0o600)
@@ -615,6 +624,18 @@ class OpenClaw(Base):
         self.assertEqual(self.run_cli("reinstall", "--harness", "openclaw", "--profile", "claw", "--sync", "off")[0], 0)
         self.assertEqual(self.jobs(), [])
 
+    def test_doctor_names_a_stopped_gateway_as_the_problem(self):
+        """With the Gateway down no sync runs, though the heartbeat keeps the bot online: doctor must not say all is well."""
+        self.pair()
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        (self.state / "openclaw.json").write_text(json.dumps({"gateway": {"mode": "local", "port": port}}))
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 1, out)
+        self.assertIn("the OpenClaw Gateway is not running", out)
+        self.assertNotIn("Everything needed is working", out)
+
     def test_uninstall_removes_the_job_the_skill_and_tico_env(self):
         self.pair()
         self.assertEqual(self.run_cli("uninstall", "--harness", "openclaw", "--profile", "claw")[0], 0)
@@ -641,6 +662,155 @@ class OpenClaw(Base):
         self.assertEqual([r for r in self.hub.requests if r["path"] == "/api/v2/mcp"][1]["body"]["params"]["arguments"],
                          {"to": "human:ana", "text": "On it."})
 
+    PLIST = "Library/LaunchAgents/team.tico-agent.openclaw-claw.plist"
+    REFUSED = "Bootstrap failed: 5: Input/output error"
+
+    def test_a_refused_launchd_timer_keeps_the_pairing_the_skill_and_the_job(self):
+        """Seen with OpenClaw 2026.10.1 and HOME on an external volume: launchd refuses the plist after approval.
+        Before, pair exited 1 with no skill and no job, and only a second approval got out of it."""
+        self.fake.refuse_timer = self.REFUSED
+        code, out, err = self.pair()
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue((self.state / "skills" / "tico-sync" / "SKILL.md").is_file())
+        self.assertEqual([j["name"] for j in self.jobs()], ["tico-sync"])
+        saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
+        self.assertEqual((saved["bot"], saved["heartbeat_mode"], saved["sync"]), ("claw", "manual", "1h"))
+        self.assertIn(self.REFUSED, saved["timer_error"])
+        self.assertNotIn("timer", saved)
+        self.assertFalse((self.home / self.PLIST).exists(), "no half-installed plist is left for the next login")
+        # The skill and the job were made before the timer was tried.
+        order = [c for c in self.fake.calls if "bootstrap" in c or c[-1:] == ["--json"] and "add" in c]
+        self.assertEqual(["add" in c for c in order], [True, False])
+        # What failed, how to keep the bot online by hand or from cron, how to run the sync, how to retry the timer.
+        self.assertIn("WARNING: the heartbeat timer was not installed: launchctl bootstrap failed: " + self.REFUSED, out)
+        self.assertIn("Everything else is in place: the pairing, the credential, the tico-sync skill and its sync job.", out)
+        self.assertIn("* * * * * ", out)
+        self.assertIn("heartbeat --harness openclaw --profile claw", out)
+        self.assertIn("openclaw --profile claw cron run <job id>", out)
+        self.assertIn("reinstall --harness openclaw --profile claw --timer", out)
+        self.assertIn("OpenClaw cron job tico-sync, every 1h, skill attached", out)
+        # Doctor says why it is manual; a plain reinstall keeps manual mode and does not hit launchd again.
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertIn("manual heartbeat mode (the timer was refused: launchctl bootstrap failed", out)
+        bootstraps = len(self.fake.ran("launchctl", "bootstrap"))
+        self.assertEqual(self.run_cli("reinstall", "--harness", "openclaw", "--profile", "claw")[0], 0)
+        self.assertEqual(len(self.fake.ran("launchctl", "bootstrap")), bootstraps)
+        # Once launchd accepts it, --timer installs it with no new approval.
+        self.fake.refuse_timer = ""
+        polls = self.hub.count("/api/v2/agents/pairings/p-1")
+        code, out, err = self.run_cli("reinstall", "--harness", "openclaw", "--profile", "claw", "--timer")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("WARNING", out)
+        self.assertTrue((self.home / self.PLIST).exists())
+        saved = json.loads((self.config_dir / "openclaw-claw.json").read_text())
+        self.assertEqual(saved["heartbeat_mode"], "timer")
+        self.assertNotIn("timer_error", saved)
+        self.assertEqual(self.hub.count("/api/v2/agents/pairings/p-1"), polls)
+
+    def test_reinstall_no_timer_switches_to_manual_and_removes_the_timer(self):
+        self.assertEqual(self.pair()[0], 0)
+        plist = self.home / self.PLIST
+        self.assertTrue(plist.exists())
+        code, out, err = self.run_cli("reinstall", "--harness", "openclaw", "--profile", "claw", "--no-timer")
+        self.assertEqual(code, 0, err)
+        self.assertFalse(plist.exists())
+        self.assertIn(["launchctl", "bootout", "gui/%d" % os.getuid(), str(plist)], self.fake.calls)
+        self.assertIn("heartbeat: none", out)
+        self.assertEqual(json.loads((self.config_dir / "openclaw-claw.json").read_text())["heartbeat_mode"], "manual")
+        self.assertEqual([j["name"] for j in self.jobs()], ["tico-sync"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            H.main(["reinstall", "--harness", "openclaw", "--profile", "claw", "--timer", "--no-timer"])
+
+    MISSING_AUTH = {"defaultModel": "openai/gpt-6-astra", "resolvedDefault": "openai/gpt-6-astra",
+                    "auth": {"missingProvidersInUse": ["openai"], "modelRouteIssues": [], "runtimeAuthRoutes": []}}
+
+    def test_doctor_names_a_model_with_no_sign_in_without_calling_it(self):
+        """The 2026.10.1 run: no model route, yet doctor said "Everything needed is working."."""
+        self.pair()
+        self.fake.models_status = (1, self.MISSING_AUTH)
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 1, out)
+        self.assertIn('PROBLEM the model openai/gpt-6-astra has no sign-in ("Missing auth" for openai)', out)
+        self.assertIn("openclaw --profile claw models auth login --provider openai", out)
+        self.assertNotIn("Everything needed is working", out)
+        (call,) = self.fake.ran("/usr/bin/openclaw", "--profile", "claw", "models")
+        self.assertEqual(call[3:], ["models", "status", "--json", "--check"])
+        self.assertFalse(any("--probe" in c or c[3:5] == ["agent"] for c in self.fake.calls), "a model was called")
+        # OpenClaw's check failing for another reason (expired, unavailable) is a problem too; expiring is a warning.
+        self.fake.models_status = (1, dict(self.MISSING_AUTH, auth={"missingProvidersInUse": []}))
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 1, out)
+        self.assertIn("is not ready", out)
+        self.fake.models_status = (2, dict(self.MISSING_AUTH, auth={"missingProvidersInUse": []}))
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 0, out)
+        self.assertIn("WARN    the model openai/gpt-6-astra's sign-in expires soon", out)
+
+    def test_doctor_is_all_clear_only_when_the_model_check_passes(self):
+        self.pair()
+        self.fake.models_status = (0, dict(self.MISSING_AUTH, auth={"missingProvidersInUse": []}))
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 0, out)
+        self.assertIn("ok      the model openai/gpt-6-astra has a usable sign-in", out)
+        self.assertIn("Everything needed is working.", out)
+        # An OpenClaw that cannot answer (no --check before 2026.10): doctor says plainly it did not check the model.
+        self.fake.models_status = None
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 0, out)
+        self.assertIn("NOTE    doctor did not check the model", out)
+        self.assertIn('`openclaw --profile claw models status` must show no "Missing auth"', out)
+        self.assertNotIn("Everything needed is working", out)
+        self.assertIn("Everything doctor checks is working; it did not check the model", out)
+
+    def test_doctor_reports_the_last_sync_runs_failure(self):
+        self.pair()
+        self.fake.models_status = (0, dict(self.MISSING_AUTH, auth={"missingProvidersInUse": []}))
+        self.jobs()[0]["state"] = {"lastRunAtMs": 1791777833229, "lastStatus": "error", "lastError":
+                                   "No route-compatible authentication source is configured for openai. token=abc123. "
+                                   "Invalid API key: sk-proj-SECRETkey0123. token sk-SECRETother99 expired. "
+                                   "Authorization: Basic dXNlcjpwYXNz. resolved to " + TOKEN + " and "
+                                   "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyzABC"}
+        code, out, _ = self.run_cli("doctor", "--harness", "openclaw", "--profile", "claw")
+        self.assertEqual(code, 1, out)
+        self.assertIn("PROBLEM the last sync run ended in error: No route-compatible authentication source", out)
+        self.assertNotIn("abc123", out)
+        for secret in ("sk-proj-SECRETkey0123", "sk-SECRETother99", "dXNlcjpwYXNz", TOKEN,
+                       "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-xyzABC"):
+            self.assertNotIn(secret, out)
+        self.assertNotIn("Everything needed is working", out)
+
+
+class TimerRefused(Base):
+    def test_a_refused_systemd_timer_keeps_the_hermes_install(self):
+        self.platform("linux")
+        self.fake.refuse_timer = "Failed to connect to bus: No medium found"
+        code, out, err = self.run_cli("install", "--profile", "scout", "--url", self.hub.url, "--bot", "scout",
+                                      "--token", TOKEN)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("WARNING: the heartbeat timer was not installed: systemctl --user enable --now "
+                      "tico-agent-scout.timer failed: Failed to connect to bus", out)
+        self.assertIn("reinstall --profile scout --timer", out)
+        self.assertTrue((self.profile / "skills" / "tico-sync" / "SKILL.md").is_file())
+        self.assertEqual(len(json.loads((self.profile / "cron" / "jobs.json").read_text())["jobs"]), 1)
+        self.assertEqual(self.credential()["heartbeat_mode"], "manual")
+        units = self.home / ".config" / "systemd" / "user"
+        self.assertFalse((units / "tico-agent-scout.timer").exists())
+        self.assertIn(["systemctl", "--user", "disable", "--now", "tico-agent-scout.timer"], self.fake.calls)
+
+    def test_hermes_doctor_says_it_does_not_check_the_model_and_reports_a_failed_run(self):
+        self.install()
+        code, out, _ = self.run_cli("doctor", "--profile", "scout")
+        self.assertIn("NOTE    doctor does not check the model", out)
+        self.assertNotIn("Everything needed is working", out)
+        jobs_file = self.profile / "cron" / "jobs.json"
+        data = json.loads(jobs_file.read_text())
+        data["jobs"][0].update(last_run_at="2026-10-11T10:00:00", last_status="error", last_error="provider said 401")
+        jobs_file.write_text(json.dumps(data))
+        code, out, _ = self.run_cli("doctor", "--profile", "scout")
+        self.assertEqual(code, 1, out)
+        self.assertIn("PROBLEM the last sync run ended in error: provider said 401", out)
+
+
 class SkillFile(unittest.TestCase):
     """skills/tico-sync/SKILL.md is what both agents load: lint it so a bad edit cannot ship."""
     PATH = REPO / "skills" / "tico-sync" / "SKILL.md"
@@ -653,6 +823,20 @@ class SkillFile(unittest.TestCase):
         self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)), {"connector", "profile"})
         rendered = H.render_skill(text, "openclaw", "claw", "/usr/bin/python3")
         self.assertNotIn("{{", rendered)
+
+    def test_every_argument_example_fits_its_tool(self):
+        """An agent without MCP sees no tool schema, only these examples: a wrong key is a refused call, and a
+        message never marked read is answered again on the next run."""
+        from clients import hubtools
+        text = " ".join(self.PATH.read_text().split())
+        examples = re.findall(r"`(hub_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
+        self.assertGreaterEqual({name for name, _ in examples},
+                                {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_update"})
+        for name, example in examples:
+            schema = hubtools.BY_NAME[name]["inputSchema"]
+            keys = set(json.loads(example))
+            self.assertLessEqual(set(schema.get("required", [])), keys, (name, example))
+            self.assertLessEqual(keys, set(schema["properties"]), (name, example))
 
 
 class Interval(unittest.TestCase):

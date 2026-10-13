@@ -23,7 +23,7 @@ given.
 For each open question: find the answer in the docs (`hub doc search`, `hub doc ask`) and the code; write the
 reply (the fix, one line of why, the doc link); run any code against the stated SDK version where you can,
 and say which version. Check it against `knowledge/do-not-say.md`. A question you cannot answer goes to the
-named engineer as a proposed task. Post requested replies with your Tools when `outbound_send` is on; otherwise keep drafts with their destinations.
+named engineer as a proposed task. Post requested replies with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts with their destinations.
 
 ## 4. Update the friction log
 

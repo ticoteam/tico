@@ -90,9 +90,10 @@ def _hits(words, token):
     return token in words or any(w.startswith(stem) for w in words)
 
 
-def query_words(q):
+def query_words(q, glossary=None):
     text = str(q).casefold()
-    glossary = pages().get("glossary", {}).get("body", "")
+    if glossary is None:
+        glossary = pages().get("glossary", {}).get("body", "")
     mappings = re.findall(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$", glossary, re.M)
     for old, new in sorted(mappings, key=lambda pair: -len(pair[0])):
         if old.casefold() in ("instead of", "---"):

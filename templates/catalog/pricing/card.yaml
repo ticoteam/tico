@@ -8,7 +8,7 @@ pack: engineering
 icon: sell
 suggest: niche
 tags: [saas, pricing, packaging, discounts, subscription, b2b, competitors]
-summary: "Researches pricing and packaging: competitor price changes, the discounts actually given in closed deals, plan mix, and the impact of any price change being weighed. Requested changes use Tools; outside quotes stay drafts until outbound_send is on."
+summary: "Researches pricing and packaging: competitor price changes, the discounts actually given in closed deals, plan mix, and the impact of any price change being weighed. Requested changes use Tools; outside quotes stay drafts until a person turns mail sending on in Tico."
 when: "A software team that has not revisited its prices in a year or more, or whose discounts are given deal by deal with no pattern."
 pains:
   - "we haven't looked at our prices in two years"

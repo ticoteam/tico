@@ -94,8 +94,8 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
         if (librarianOff) return json({error: {code: 'librarian', detail: 'The Librarian is not running yet.'}}, 409);
         return json({task_id: 't-market', bot: 'librarian'});
       }
-      if (p === '/api/v2/market/entities') { polls.push(Date.now()); return json({entities: market.entities}); }
-      if (p === '/api/v2/market/edges') return json({edges: []});
+      if (p === '/api/v2/market/entities') { polls.push(Date.now()); return json({entities: market.entities, total: market.entities.length}); }
+      if (p === '/api/v2/market/graph') return json({entities: market.entities, edges: []});
       if (p === '/api/company-docs') return json({documents: market.docs});
       if (p.startsWith('/api/company-docs/')) return json({content: '# Overview\n\nNorthwind sells office cleaning. [Source](https://northwind.example/about)'});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

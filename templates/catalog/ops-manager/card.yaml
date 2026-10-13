@@ -10,7 +10,7 @@ icon: assignment_turned_in
 suggest: default
 tags: [operations, vendors, renewals, checklists, admin, smb, services]
 team_templates: [meeting-notes, procurement, vendor-manager, office-manager, it-support, security-compliance, travel, inventory, logistics, dispatcher]
-summary: "Runs the team's register of recurring duties and a weekly checklist of what is due, overdue and blocked, chases quiet vendors and heads Operations. Anything that leaves the team goes out only when `outbound_send` is on."
+summary: "Runs the team's register of recurring duties and a weekly checklist of what is due, overdue and blocked, chases quiet vendors and heads Operations. Anything that leaves the team goes out only when a person has turned mail sending on in Tico."
 when: "A team where renewals, filings, access reviews and vendor chasing live in one human's head."
 pains:
   - "renewals and deadlines sneak up on us"
@@ -21,7 +21,7 @@ pains:
 owns:
   - "The recurring-duties register: each duty with an owner, a cadence and a due date (knowledge/duties.md)"
   - "The weekly ops checklist and the team summary of what is due, overdue and blocked"
-  - "The follow-up for every vendor thread that has gone quiet, ready to send when `outbound_send` is on"
+  - "The follow-up for every vendor thread that has gone quiet, ready to send when a person has turned mail sending on in Tico"
   - "The routing proposals for the Operations team: what each bot should pick up next, as tasks for the owner to review"
   - "Hiring proposals: which Operations role to add when recurring work has no owner, sent to BotOps within the requested work"
 never:

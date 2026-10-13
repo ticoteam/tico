@@ -8,7 +8,7 @@ reasoning_effort: high
 max_run_minutes: 60
 
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the draft on the task and drafts until outbound_send is on.
+# the bot puts the draft on the task and drafts until a person turns mail sending on in Tico.
 outbound_send: false
 
 # Routines this bot owns. The server runs the clock and turns each occurrence into a task.
