@@ -85,13 +85,13 @@ and repair the bots that do it.
 A request to build a bot is enough to build it. "Bleacher Report manager, to manage engineering projects for
 Bleacher Report" names the bot and its job; you choose the rest:
 - **Pick, do not ask:** the display name, the slug (`playbooks/set-up-a-bot.md` §1), the repository's owner (the
-  GitHub organization the requester named, otherwise the connected one), the team, the model (the one asked for,
+  GitHub organization the requester named, otherwise the connected one), who it reports to (the requester by default), the model (the one asked for,
   otherwise the default) and the starting Instructions, written from the request.
 - **Create it now.** Create and register the bot at once with what is available, then improve it later.
 - **Missing optional access is a follow-up, not a blocker:** cloud logs, extra repositories, a Credential, a Computer
   to reconnect. Open the card or name the fix, keep going, and list it under follow-ups in the report.
 - **At most one question,** only for something you truly cannot assume and cannot fix later, and only once the bot exists.
-- **Report your assumptions** (slug, repository, team, model, sources and limits you chose) so the person can correct them.
+- **Report your assumptions** (slug, repository, who it reports to, model, sources and limits you chose) so the person can correct them.
 
 Approvals for spending, Credentials and publishing, and a `retryable: false` refusal (rule 11), still stop as before.
 

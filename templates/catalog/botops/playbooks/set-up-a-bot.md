@@ -22,8 +22,8 @@ instead of a template. Pick the closest template in the templates, and write `AG
 
 If any of those is missing, choose it and go on (AGENT.md, Defaults, not questions):
 
-- **Slug:** the display name in lowercase, words joined by hyphens ("Bleacher Report Manager" is
-  `bleacher-report-manager`). Check `hub api GET bots?include_archived=true`; if it is taken, add a
+- **Slug:** the display name in lowercase, keeping only a–z and 0–9, with single hyphens between words and at most
+  30 characters ("Bleacher Report Manager" is `bleacher-report-manager`). Check `hub api GET bots?include_archived=true`; if it is taken, add a
   short distinguishing word or a number. The slug is the repository name, the value of `name:` in
   `bot.yaml`, and the label on every task the bot ever gets, so renaming it later is real work: choose
   it predictably and name it in the report.
