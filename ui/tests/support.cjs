@@ -210,6 +210,7 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     long.messages.push({...reply(31, 0), body: 'Another reply while you read'});
     await v.page.evaluate(() => window.supportPoll());
     await pill.waitFor();
+    await v.page.waitForTimeout(800);                         // past the 600 ms reader window, as a real reader would be
     await v.page.getByRole('button', {name: 'Delete request'}).click();
     await v.page.locator('.support-empty').waitFor();
     assert.equal(await pill.isVisible(), false, 'no stale pill after the conversation changes');
