@@ -344,3 +344,9 @@ def mock_socket_refusal(monkeypatch):
         raise ValueError('APIError: Tico could not get a GitHub token for acme/web: the GitHub App is not installed on it')
     monkeypatch.setattr(G.credential_socket, 'request', refuse)
     return contextlib.nullcontext()
+
+
+def test_a_failed_helper_is_recognised_with_or_without_its_reason():
+    assert G.is_failed_helper(G.FAILED_HELPER)
+    assert G.is_failed_helper(G.failed_helper("Tico could not get a GitHub token for acme/web: it's not installed"))
+    assert not G.is_failed_helper(G.STATIC_HELPER) and not G.is_failed_helper(None)

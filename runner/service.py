@@ -1730,7 +1730,7 @@ class Runner:
             try:
                 git_credentials.apply(env, self.client, row["bot"], self.config_path if not credentials else None,
                                       credentials.path if credentials else None)
-                if env.get("GIT_CONFIG_VALUE_1") == git_credentials.FAILED_HELPER:
+                if git_credentials.is_failed_helper(env.get("GIT_CONFIG_VALUE_1")):
                     continue                # never fall back to another login when scoped access failed
                 if self.push(path, env, catch_up_remote=False):
                     pushed.add(path)

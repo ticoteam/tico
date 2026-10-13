@@ -164,6 +164,12 @@ def failed_helper(reason=""):
     return f'!f() {{ echo {shlex.quote(reason)} >&2; echo quit=true; }}; f'
 
 
+def is_failed_helper(value):
+    """Whether a credential helper is the one `apply` sets when no token could be had, with or without a reason."""
+    value = str(value or "")
+    return value == FAILED_HELPER or value.startswith("!f() { echo ") and value.endswith(" >&2; echo quit=true; }; f")
+
+
 def apply(env, client, bot, config_path=None, socket_path=None):
     """Add the bot's repository-scoped GitHub credentials to `env`. True when applied.
     Never raises: a turn must not fail because GitHub access could not be arranged."""
