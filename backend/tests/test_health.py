@@ -361,9 +361,9 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
 
 
-def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(environment):
+def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(request):
     from backend.repositories import save_metadata
-    api = environment()
+    api = request.getfixturevalue("environment")()
     runner = enrolled(api)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     why = ("Cloning the local mirror of acme/web failed: error: unable to create file a: Filename too long. "
