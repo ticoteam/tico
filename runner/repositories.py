@@ -588,8 +588,8 @@ def worktree_base(workspace, repo, env):
                 refreshed = git_credentials.credential_socket.request_refresh(socket_path, source_env.get('HUB_TOKEN', ''), name)
             except (OSError, ValueError):
                 pass
-        command = [*safe_git.PREFIX, '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'protocol.file.allow=always', '-c', 'http.followRedirects=false', '-c', 'http.sslVerify=true', 'clone', '--quiet', '--single-branch']
-        clone_env, url = env, git_repository.address(name)
+        direct = [*safe_git.PREFIX, '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'protocol.ssh.allow=always', '-c', 'protocol.file.allow=always', '-c', 'http.followRedirects=false', '-c', 'http.sslVerify=true', 'clone', '--quiet', '--single-branch']
+        command, clone_env, url = list(direct), env, git_repository.address(name)
         if refreshed:
             url = refreshed['mirror']
             from urllib.parse import urlparse, unquote
@@ -600,24 +600,19 @@ def worktree_base(workspace, repo, env):
             repo['default_branch'] = refreshed['default_branch']
             if refreshed.get('warning'):
                 repo['fetch_warning'] = refreshed['warning']
-        if repo.get('default_branch'):
-            command += ['--branch', repo['default_branch']]
-        try:
-            done = isolation.run([*command, '--', url, str(path)], env=clone_env, capture_output=True, text=True, timeout=CLONE_TIMEOUT)
-        except (OSError, subprocess.SubprocessError) as exc:
-            discard_failed_clone(path, fresh=True)
-            if isinstance(exc, subprocess.TimeoutExpired):
-                raise ValueError(timed_out('Git clone', name, CLONE_TIMEOUT)) from None
-            if repo.get('machine_git'):
-                raise ValueError(machine_error(name, type(exc).__name__)) from None
-            raise ValueError(f'Git clone of {name} failed: {type(exc).__name__}') from None
-        if done.returncode:
-            # Git refuses a destination something else made meanwhile: that folder is not this clone's to remove.
-            if 'already exists' not in (done.stderr or ''):
-                discard_failed_clone(path, fresh=True)
-            if repo.get('machine_git'):
-                raise ValueError(machine_error(name, done.stderr or f'exit {done.returncode}', clone_env))
-            raise ValueError(git_error('Git clone', name, done, clone_env))
+        branch_args = ['--branch', repo['default_branch']] if repo.get('default_branch') else []
+        problem = _clone(name, path, [*command, *branch_args], url, clone_env, repo.get('machine_git'))
+        if problem and refreshed and not problem.endswith(_ELSEWHERE):
+            # The computer's mirror could not be copied into the workspace while GitHub may well be fine: clone from
+            # GitHub with this bot's own access instead of failing the turn on the mirror.
+            fallback = _clone(name, path, [*direct, *branch_args], git_repository.address(name), env, False)
+            if fallback:
+                raise ValueError(f'{problem}; cloning from GitHub instead also failed: '
+                                 f'{fallback.removeprefix(f"Git clone of {name} failed: ")}')
+            problem, refreshed, clone_env = None, None, env
+            repo['fetch_warning'] = "Could not copy this computer's mirror of " + name + '; cloned from GitHub instead'
+        if problem:
+            raise ValueError(problem)
         if refreshed:
             for key, value in [('remote.origin.url', git_repository.address(name)),
                                ('remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')]:
@@ -687,6 +682,27 @@ def worktree_base(workspace, repo, env):
     if done.returncode:
         raise ValueError('Could not record base default branch')
     return path, branch
+
+
+_ELSEWHERE = 'already exists and is not an empty directory.'
+
+
+def _clone(name, path, command, url, env, machine_git):
+    """Clone into a new `path`: None, or why not (git's own reason). What a failed clone left is removed."""
+    try:
+        done = isolation.run([*command, '--', url, str(path)], env=env, capture_output=True, text=True, timeout=CLONE_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        discard_failed_clone(path, fresh=True)
+        if isinstance(exc, subprocess.TimeoutExpired):
+            return timed_out('Git clone', name, CLONE_TIMEOUT)
+        return machine_error(name, type(exc).__name__) if machine_git else f'Git clone of {name} failed: {type(exc).__name__}'
+    if not done.returncode:
+        return None
+    if 'already exists' in (done.stderr or ''):
+        # Git refuses a destination something else made meanwhile: that folder is not this clone's to remove.
+        return f'Git clone of {name} failed: {path.name} {_ELSEWHERE}'
+    discard_failed_clone(path, fresh=True)
+    return machine_error(name, done.stderr or f'exit {done.returncode}', env) if machine_git else git_error('Git clone', name, done, env)
 
 
 def discard_failed_clone(path, fresh=False):

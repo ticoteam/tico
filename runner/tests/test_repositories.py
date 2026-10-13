@@ -721,3 +721,38 @@ def test_a_mirror_that_stays_broken_reports_both_reasons(repos):
     assert 'rebuilt the mirror from GitHub and cloning it failed again' in error
     assert sum('clone' in call.args[0] for call in git.call_args_list) == 2      # rebuilt once, not in a loop
     assert sum(bool('fetch' in call.args[0] and call.kwargs['env'].get('GH_TOKEN')) for call in git.call_args_list) == 2
+
+
+def test_turn_clone_falls_back_to_github_when_the_mirror_cannot_be_copied(tmp_path):
+    from runner import repositories as R
+    clones = []
+    def run(args, **kwargs):
+        if 'clone' in args:
+            clones.append(args)
+            path = Path(args[-1])
+            (path / '.git').mkdir(parents=True)
+            if 'tico-mirror' in args:
+                return subprocess.CompletedProcess(args, 128, '', 'error: unable to read 0123abcd\nfatal: remote did not send all necessary objects\n')
+            assert args[-2] == 'https://github.com/acme/web.git'
+        return subprocess.CompletedProcess(args, 0, '', '')
+    repo = {'full_name': 'acme/web', '_mirror_refresh': {'mirror': (tmp_path / 'mirror.git').as_uri(), 'default_branch': 'main'}}
+    with mock.patch('runner.repositories.isolation.run', side_effect=run):
+        path, branch = R.worktree_base(tmp_path, repo, {'PATH': os.environ['PATH']})
+    assert branch == 'main' and len(clones) == 2 and path.exists()
+    assert "Could not copy this computer's mirror of acme/web; cloned from GitHub instead" == repo['fetch_warning']
+
+
+def test_turn_clone_reports_both_reasons_when_mirror_and_github_fail(tmp_path):
+    from runner import repositories as R
+    def run(args, **kwargs):
+        if 'clone' in args:
+            if 'tico-mirror' in args:
+                return subprocess.CompletedProcess(args, 128, '', 'fatal: remote did not send all necessary objects\n')
+            return subprocess.CompletedProcess(args, 128, '', 'remote: Repository not found.\nfatal: repository not found\n')
+        return subprocess.CompletedProcess(args, 0, '', '')
+    repo = {'full_name': 'acme/web', '_mirror_refresh': {'mirror': (tmp_path / 'mirror.git').as_uri(), 'default_branch': 'main'}}
+    with mock.patch('runner.repositories.isolation.run', side_effect=run):
+        with pytest.raises(ValueError) as caught:
+            R.worktree_base(tmp_path, repo, {'PATH': os.environ['PATH']})
+    assert str(caught.value) == ('Git clone of acme/web failed: fatal: remote did not send all necessary objects; cloning from '
+                                 'GitHub instead also failed: remote: Repository not found. / fatal: repository not found')
