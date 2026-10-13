@@ -518,3 +518,124 @@ def test_partial_clone_with_a_registered_worktree_is_kept(tmp_path):
     with mock.patch('runner.repositories.base_kept', side_effect=ValueError('cannot prune')):
         discard_failed_clone(path, fresh=True)
     assert path.exists()
+
+
+# ---------------------------------------------------------------- a computer base clone that fails
+def roomy():
+    return mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB))
+
+
+def mirror_fetch_fails(stderr):
+    def git(args, **kwargs):
+        if 'fetch' in args and kwargs['env'].get('GH_TOKEN'):
+            return subprocess.CompletedProcess(args, 128, '', stderr)
+        return fake_git(args, **kwargs)
+    return git
+
+
+def only_one(repos):
+    repos.client.get.return_value['repositories'] = repos.client.get.return_value['repositories'][:1]
+
+
+def test_base_clone_failure_reports_gits_reason_without_the_token(repos):
+    only_one(repos)
+    stderr = ("remote: Repository not found.\nfatal: repository "
+              "'https://x-access-token:synthetic-install-token@github.com/org/one.git/' not found\n")
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails(stderr)), roomy():
+        cycle(repos)
+    row = repos.report()[0]
+    assert row['state'] == 'failed'
+    assert row['error'].startswith('Git mirror fetch of org/one failed: remote: Repository not found.')
+    assert 'Retrying in 5 minutes' in row['error'] and 'restart' in row['error']
+    assert 'synthetic-install-token' not in json.dumps(repos.report()) + repos.state_file.read_text()
+    assert 'check GitHub access, disk space and network' not in row['error']
+
+
+def test_real_git_reason_reaches_the_report(repos, tmp_path):
+    """Real git, a local path only: what git itself said is what the computer reports."""
+    only_one(repos)
+    missing = tmp_path / 'no-such-repository.git'
+    original_git = repos.run_git
+    def local_git(args, **kwargs):
+        args = [missing.as_uri() if a.startswith('https://github.com/') else
+                ('protocol.file.allow=always' if a == 'protocol.file.allow=never' else a) for a in args]
+        return original_git(args, **kwargs)
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=local_git), roomy():
+        cycle(repos)
+    error = repos.report()[0]['error']
+    assert error.startswith('Git mirror fetch of org/one failed: fatal: ')
+    assert 'no-such-repository.git' in error and 'does not appear to be a git repository' in error
+
+
+def test_retry_starts_at_minutes_doubles_and_stops_at_six_hours(repos):
+    only_one(repos)
+    delays = []
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: unable to access: HTTP 500')), roomy():
+        for _ in range(9):
+            repos.rows.setdefault('org/one', {'full_name': 'org/one', 'state': 'cloning'}).update(attempted_at=0)
+            cycle(repos)
+            delays.append(repos.rows['org/one']['retry_delay'])
+    assert delays == [300, 600, 1200, 2400, 4800, 9600, 19200, 21600, 21600]
+    assert 'Retrying in 6 hours' in repos.rows['org/one']['error']
+
+
+def test_restarting_the_runner_retries_a_failed_clone_at_once(repos):
+    only_one(repos)
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: HTTP 500')), roomy():
+        for _ in range(4):
+            repos.rows.setdefault('org/one', {'full_name': 'org/one'}).update(attempted_at=0)
+            cycle(repos)
+    assert repos.rows['org/one']['retry_delay'] == 2400
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git) as git, roomy():
+        cycle(repos)
+        assert not git.called                           # still waiting out the backoff
+        restarted = Repositories(repos.root.parent, repos.state_file, repos.client)
+        try:
+            assert restarted.rows['org/one']['failures'] == 0
+            cycle(restarted)
+            assert git.called
+            assert restarted.rows['org/one']['state'] == 'cloned'
+            assert 'error' not in restarted.rows['org/one']
+        finally:
+            restarted.pool.shutdown(wait=True)
+
+
+def test_token_refusal_names_the_cause(repos):
+    only_one(repos)
+    repos.client.post.side_effect = APIError('github_repo_not_accessible', 'org/one is not reachable; check the GitHub App installation', 409)
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+        cycle(repos)
+    assert 'Tico could not get a GitHub token for org/one: the GitHub App is not installed on it' in repos.rows['org/one']['error']
+    repos.client.post.side_effect = None
+    repos.client.post.return_value = {'token': 'synthetic-install-token', 'repositories': ['org/two']}
+    repos.rows['org/one']['attempted_at'] = 0
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+        cycle(repos)
+    assert 'Tico could not get a GitHub read token for org/one: the GitHub App is not installed on it' in repos.rows['org/one']['error']
+
+
+def test_a_clone_stopped_halfway_is_removed_and_cloned_again(repos):
+    only_one(repos)
+    path = repos.root / 'org__one'
+    (path / '.git' / 'objects').mkdir(parents=True)
+    (path / '.git' / 'objects' / 'tmp_pack_partial').write_text('half a pack')
+    repos.rows['org/one'] = {'full_name': 'org/one', 'state': 'cloning', 'managed': True, 'partial': True}
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+        cycle(repos)
+    assert repos.rows['org/one']['state'] == 'cloned'
+    assert 'partial' not in repos.rows['org/one']
+    assert not (path / '.git' / 'objects' / 'tmp_pack_partial').exists()
+
+
+def test_a_failed_clone_leaves_no_half_made_folder(repos):
+    only_one(repos)
+    def clone_fails(args, **kwargs):
+        if 'clone' in args:
+            (Path(args[-1]) / '.git').mkdir(parents=True)
+            return subprocess.CompletedProcess(args, 128, '', 'error: unable to create file a: Filename too long\nfatal: unable to checkout working tree\n')
+        return fake_git(args, **kwargs)
+    with mock.patch('runner.repositories.Repositories.run_git', side_effect=clone_fails), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert 'Filename too long' in row['error'] and 'unable to checkout working tree' in row['error']
+    assert not (repos.root / 'org__one').exists() and 'partial' not in row

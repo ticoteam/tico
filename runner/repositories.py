@@ -18,6 +18,9 @@ from clients import git_repository
 from . import git_credentials, isolation, safe_git
 
 FETCH_INTERVAL = 15 * 60
+# A failed base clone is tried again after 5 minutes, then 10, 20, ... and at most every 6 hours. A runner
+# restart (Computers > Restart) forgets the wait and tries at once.
+RETRY_FIRST, RETRY_MOST = 5 * 60, 6 * 3600
 CLONE_TIMEOUT = 120           # a base clone made inside a turn, when no computer mirror is there yet
 REMOVE_AFTER = 30 * 86400
 GB = 1024 ** 3
@@ -57,6 +60,11 @@ def timed_out(what, name, seconds):
     return f'{what} of {name} timed out after {int(seconds)} seconds; a large repository or a slow network needs longer'
 
 
+def wait_words(seconds):
+    minutes = round(seconds / 60)
+    return f'{minutes} minutes' if minutes < 120 else f'{minutes // 60} hours'
+
+
 def mirror_warning(mirror):
     try:
         fetched_at = float((mirror / 'tico-fetched-at').read_text())
@@ -83,6 +91,11 @@ class Repositories:
             self.rows = {name: row for name, row in saved.items() if valid_repository(name) and isinstance(row, dict)}
         except (OSError, ValueError, AttributeError):
             self.rows = {}
+        # Restarting the runner is how a person says "try again now": a failure's wait does not outlive it.
+        for row in self.rows.values():
+            if row.get('state') == 'failed' or row.get('failures'):
+                row.pop('attempted_at', None)
+                row.update(failures=0, retry_delay=FETCH_INTERVAL)
 
     def close(self):
         self.stopping.set()
@@ -294,6 +307,11 @@ class Repositories:
         try:
             path = self.path(name)
             exists = path.exists()
+            if exists and self.rows[name].get('partial') and not (path / '.git' / 'tico-managed').exists():
+                # A clone this runner started and never finished (it was stopped mid-clone): nothing in it is anyone's
+                # work, so it is removed and cloned again rather than refused as a broken repository forever.
+                discard_failed_clone(path, fresh=True)
+                exists = path.exists()
             if exists and (not (self.rows[name].get('managed') or (path / '.git' / 'tico-managed').is_file()) or not (path / '.git').is_dir() or (path / '.git').is_symlink()):
                 raise ValueError('Repository folder already exists and is not a managed base clone; left as it is')
             volumes = (self.root if self.root.exists() else self.root.parent,
@@ -312,10 +330,17 @@ class Repositories:
             mirror = self.mirror_path(name)
             self.mirrors.mkdir(mode=0o755, parents=True, exist_ok=True)
             os.chmod(self.mirrors, 0o755)
-            granted = self.client.post('runners/me/repositories/token')
+            try:
+                granted = self.client.post('runners/me/repositories/token')
+            except Exception as exc:
+                raise ValueError(git_credentials.token_problem(exc, repo['full_name'])) from None
             token = granted.get('token') or ''
-            if not token or name not in {n.lower() for n in granted.get('repositories', [])}:
-                raise ValueError('No GitHub read token for this repository; check the GitHub connection')
+            if not token:
+                raise ValueError(f'Tico could not get a GitHub read token for {repo["full_name"]}: the GitHub App gave '
+                                 'none; check Settings > Tools > GitHub')
+            if name not in {n.lower() for n in granted.get('repositories', [])}:
+                raise ValueError(f'Tico could not get a GitHub read token for {repo["full_name"]}: the GitHub App is not '
+                                 "installed on it or cannot reach it; add it to the App's repository access on GitHub")
             env = {**clean, **git_credentials.environment(token)}
             url = f'https://github.com/{repo["full_name"]}.git'
             prefix = ['git', '-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
@@ -327,7 +352,8 @@ class Repositories:
                 result = self.run_git([*prefix, 'ls-remote', '--symref', url, 'HEAD'], env=env, timeout=timeout)
                 match = re.search(r'^ref: refs/heads/(.+)\tHEAD$', result.stdout, re.M)
                 if result.returncode or not match:
-                    raise ValueError('Could not find the default branch; check GitHub access')
+                    raise ValueError(git_error('Finding the default branch', repo['full_name'], result, env)
+                                     if result.returncode else 'Could not find the default branch; check GitHub access')
                 branch = match.group(1)
             if not mirror.exists():
                 done = self.run_git([*prefix, 'init', '--bare', '--quiet', '--initial-branch=' + branch, str(mirror)], env=clean, timeout=10)
@@ -348,7 +374,7 @@ class Repositories:
                                  '--no-write-fetch-head', '--', url, f'+refs/heads/{branch}:refs/heads/{branch}'],
                                 env=env, timeout=timeout)
             if done.returncode:
-                raise ValueError(f'Git mirror fetch failed (exit {done.returncode}); check GitHub access, disk space and network')
+                raise ValueError(git_error('Git mirror fetch', repo['full_name'], done, env))
             done = self.run_git([*prefix, '-C', str(mirror), 'symbolic-ref', 'HEAD', 'refs/heads/' + branch], env=clean, timeout=10)
             if done.returncode:
                 raise ValueError('Could not set mirror default branch')
@@ -362,13 +388,15 @@ class Repositories:
                 isolation.mkdir(self.root, mode=0o755)
                 created = True
                 with self.lock:
-                    self.rows[name].update(state='cloning', managed=True)
+                    self.rows[name].update(state='cloning', managed=True, partial=True)
                     self.save()
                 done = self.run_git([*local, 'clone', '--quiet', '--single-branch', '--no-hardlinks',
                                      '--origin', 'tico-mirror', '--branch', branch, '--', mirror.as_uri(), str(path)],
                                     env=clean, timeout=timeout, bot=True)
                 if done.returncode:
-                    raise ValueError('Could not clone local mirror; check disk space and permissions')
+                    # A turn's own clone may have made the folder meanwhile: that one is not this clone's to remove.
+                    created = 'already exists' not in (done.stderr or '')
+                    raise ValueError(git_error('Cloning the local mirror', repo['full_name'], done, clean))
             else:
                 done = self.run_git([*local, '-C', str(path), 'rev-parse', '--git-dir'], env=clean, timeout=10, bot=True)
                 if done.returncode:
@@ -386,8 +414,8 @@ class Repositories:
                                  f'+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}'],
                                 env=clean, timeout=timeout, bot=True)
             if done.returncode:
-                # Git's stderr may contain credentials or local secrets; keep them out of reports.
-                raise ValueError(f'Git {"fetch" if exists else "clone"} failed (exit {done.returncode}); check GitHub access, disk space and network')
+                # git_error masks credentials and local secrets in git's stderr before it reaches a report.
+                raise ValueError(git_error(f'Git {"fetch" if exists else "clone"}', repo['full_name'], done, clean))
             done = self.run_git([*local, '-C', str(path), 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + branch], env=clean, timeout=10, bot=True)
             if done.returncode:
                 raise ValueError('Could not record base default branch; check permissions')
@@ -398,27 +426,31 @@ class Repositories:
                 self.rows[name].update(state='cloned', managed=True, fetched_at=now,
                                        last_fetch=datetime.fromtimestamp(now, timezone.utc).isoformat(), size_mb=round(size, 1))
                 self.rows[name].pop('error', None)
+                self.rows[name].pop('partial', None)
                 self.rows[name].update(failures=0, retry_delay=FETCH_INTERVAL)
         except Exception as exc:
             if created:
                 try:
-                    if path.exists() and not base_kept(path):
-                        shutil.rmtree(self.path(name))
+                    discard_failed_clone(self.path(name), fresh=True)
+                    with self.lock:
+                        self.rows[name].pop('partial', None)
                 except (OSError, ValueError):
                     pass
             if isinstance(exc, subprocess.TimeoutExpired):
-                error = f'Git timed out after {exc.timeout} seconds; check the network'
+                error = f'Git timed out after {int(exc.timeout)} seconds syncing {repo["full_name"]}; a large repository or a slow network needs longer'
             elif isinstance(exc, ValueError):
-                error = str(exc).replace(token, '[redacted]') if token else str(exc)
+                from . import redact
+                error = redact.scrub_credentials(str(exc), [token] if token else [])
             elif isinstance(exc, OSError) and exc.errno == 28:
                 error = 'Not enough disk space; free space on the workspace volume'
             else:
                 error = 'Could not sync base clone; check GitHub connection, network, disk space and folder permissions'
             with self.lock:
                 failures = self.rows[name].get('failures', 0) + 1
-                delay = (900, 3600, 21600)[min(failures - 1, 2)]
+                delay = min(RETRY_FIRST * 2 ** min(failures - 1, 10), RETRY_MOST)
                 self.rows[name].update(state='failed', failures=failures, retry_delay=delay, attempted_at=time.time(),
-                                       error=f'{error}. Retrying in {delay // 60} minutes')
+                                       error=f'{error.rstrip(".")}. Retrying in {wait_words(delay)}, or restart the '
+                                             "computer's runner to retry now")
 
     def refresh_mirror(self, name, token):
         """A bounded refresh requested by an authorized turn; tokens never enter the base."""
