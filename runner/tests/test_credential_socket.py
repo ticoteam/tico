@@ -162,7 +162,8 @@ def test_git_token_purpose_fallback_does_not_hide_other_422_errors(monkeypatch):
     server = C.serve(hub, os.path.join(directory, "cred.sock"))
     try:
         server.register("attempt-a", "alpha")
-        with pytest.raises(ValueError, match="APIError"):
+        with pytest.raises(ValueError, match="APIError: Tico could not get a GitHub token for Acme/docs: "
+                                             "The repository is outside this installation"):
             C.request(server.path, "attempt-a", repository="Acme/docs", purpose="git")
         assert hub.calls == [("github/token", {"bot": "alpha", "purpose": "git"})]
     finally:

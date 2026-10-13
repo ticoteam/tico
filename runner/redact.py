@@ -253,8 +253,9 @@ _CREDENTIAL_SHAPES = [
 # Git's progress, advice and recovery hints: never the reason something failed.
 _GIT_NOISE = re.compile(r"^(?:hint:|cloning into|remote: (?:enumerating|counting|compressing|total)|receiving objects|"
                         r"resolving deltas|updating files|filtering content|checking out files|"
-                        r"you can inspect what was checked out|and retry with|warning: clone succeeded)", re.I)
-_GIT_REASON = re.compile(r"^(?:fatal:|error:|remote:|tico:|git-lfs|batch response|smudge|.*\b(?:error|denied|"
+                        r"you can inspect what was checked out|and retry with|warning: clone succeeded|"
+                        r"fatal: credential helper .* told us to quit)", re.I)
+_GIT_REASON = re.compile(r"^(?:fatal:|error:|remote:|tico\b|git-lfs|batch response|smudge|.*\b(?:error|denied|"
                          r"not found|timed out|too long|failed)\b)", re.I)
 
 

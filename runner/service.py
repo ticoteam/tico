@@ -1113,7 +1113,7 @@ class Runner:
                 self.github_token_legacy_purpose = True
                 granted = git_credentials.hub_token(self.client, {"bot": bot})
         except APIError as exc:
-            problem = str(exc.detail or exc.code)[:400]
+            problem = git_credentials.token_problem(exc, str((entry or {}).get("repository") or ""))[:400]
             if exc.status == 409 and exc.code == "assignment_repository" and key is not None:
                 refused[bot] = (key, problem)
             return None, problem

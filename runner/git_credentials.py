@@ -136,13 +136,43 @@ def environment(token, helper=STATIC_HELPER):
     }
 
 
+def token_problem(exc, repository=""):
+    """Why Tico could not get a GitHub token, in plain words, from the hub's refusal (`/github/token`,
+    `runners/me/repositories/token`): with the App connected, git cannot reach GitHub without one, so this is
+    the reason a clone fails, not git's "could not read Username"."""
+    what = f"for {repository}" if repository else "for this bot's repositories"
+    status, code = getattr(exc, "status", 0), str(getattr(exc, "code", "") or "")
+    detail = " ".join(str(getattr(exc, "detail", "") or "").split())[:200]
+    if code == "github_repo_not_accessible" or status == 409 and "not reachable" in detail:
+        why = ("the GitHub App is not installed on it or cannot reach it; add it to the App's repository access "
+               "on GitHub, then check Settings > Tools > GitHub")
+    elif status == 403 and "organization" in detail:
+        why = f"it is outside the connected GitHub organization ({detail})"
+    elif status:
+        why = detail or f"the server answered {status} ({code or 'no detail'})"
+    else:
+        why = f"the server did not answer ({type(exc).__name__})"
+    from .redact import scrub_credentials
+    return scrub_credentials(f"Tico could not get a GitHub token {what}: {why}")
+
+
+def failed_helper(reason=""):
+    """A credential helper that tells git, and so the person reading its error, why there is no token."""
+    reason = " ".join(str(reason or "").split())[:300]
+    if not reason:
+        return FAILED_HELPER
+    return f'!f() {{ echo {shlex.quote(reason)} >&2; echo quit=true; }}; f'
+
+
 def apply(env, client, bot, config_path=None, socket_path=None):
     """Add the bot's repository-scoped GitHub credentials to `env`. True when applied.
     Never raises: a turn must not fail because GitHub access could not be arranged."""
+    reason = ""
     try:
         granted = hub_token(client, {"bot": bot})
     except Exception as exc:
-        log(f"Tico runner: {bot}: GitHub App token unavailable ({type(exc).__name__}); check Settings > Tools > GitHub")
+        reason = token_problem(exc)
+        log(f"Tico runner: {bot}: GitHub App token unavailable ({type(exc).__name__}): {reason}")
         granted = {"configured": True}
     if not granted.get("configured"):
         return False
@@ -153,7 +183,7 @@ def apply(env, client, bot, config_path=None, socket_path=None):
     elif stored and stored != granted["token"] and granted.get("repository"):
         env[OTHER_TOKEN_KEY] = stored
     helper = fresh_helper(config_path, bot, socket_path) if (config_path or socket_path or "tokens" in granted) else STATIC_HELPER
-    env.update(environment(granted["token"], helper if applied else FAILED_HELPER))
+    env.update(environment(granted["token"], helper if applied else failed_helper(reason)))
     if "tokens" in granted:
         env[TOKENS_KEY] = json.dumps(granted["tokens"])
         executable = shutil.which("gh", path=env.get("PATH", os.environ.get("PATH")))
@@ -398,7 +428,8 @@ def credential(config_path, bot, socket_path=None, repository=None):
                 "github/token", {"bot": bot, "purpose": "git"})
             return select_token(granted, repository)
     except Exception as exc:
-        print(f"Tico runner: no fresh GitHub App token ({type(exc).__name__})", file=sys.stderr)
+        reason = str(exc) if socket_path else token_problem(exc, repository)
+        print(f"Tico runner: no fresh GitHub App token ({type(exc).__name__}): {reason[:300]}", file=sys.stderr)
     granted = {"configured": True, "token": os.environ.get("GH_TOKEN", "")}
     if TOKENS_KEY in os.environ:
         granted["tokens"] = json.loads(os.environ[TOKENS_KEY])

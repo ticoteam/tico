@@ -104,6 +104,11 @@ class Server:
                     return {'error': 'mirror refresh unavailable'}
                 return self.refresh(repository, granted)
         except Exception as exc:
+            if getattr(exc, "status", 0):
+                # The hub's refusal names the cause (App not installed on it, outside the organization): a failed
+                # clone shows it rather than a bare exception name.
+                from .git_credentials import token_problem
+                return {"error": f"{type(exc).__name__}: {token_problem(exc, repository)}"}
             return {"error": type(exc).__name__}
         if not granted:
             return {"error": "no token"}

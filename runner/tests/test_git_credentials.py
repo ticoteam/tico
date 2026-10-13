@@ -222,7 +222,8 @@ def test_app_token_failure_blocks_machine_helpers_and_askpass(tmp_path):
         result = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
                                 env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10)
         assert result.returncode != 0
-        assert 'GitHub App token unavailable' in result.stderr
+        # The hub's own reason reaches git's error, so a failed clone names why there was no token.
+        assert "Tico could not get a GitHub token for this bot's repositories: App token failed" in result.stderr
         assert not marker.exists()
     hub = Hub({'configured': False})
     assert not G.apply({}, hub, 'alpha')
@@ -311,3 +312,35 @@ def test_mac_login_shells_keep_the_wrapper_and_refresh_after_the_starting_token_
         assert {p: p.read_bytes() for p in original_files} == original_files
     finally:
         hub.close()
+
+
+@pytest.mark.parametrize('error,wanted', [
+    (('github_repo_not_accessible', 'acme/web is not reachable; check the GitHub App installation', 409),
+     "Tico could not get a GitHub token for acme/web: the GitHub App is not installed on it or cannot reach it"),
+    (('forbidden', "That bot's repository is not in the connected organization (acme)", 403),
+     'Tico could not get a GitHub token for acme/web: it is outside the connected GitHub organization'),
+    (('github_repo_missing', 'The repository acme/web does not exist yet on GitHub.', 409),
+     'Tico could not get a GitHub token for acme/web: The repository acme/web does not exist yet on GitHub.'),
+])
+def test_token_problem_names_the_hubs_cause_in_plain_words(error, wanted):
+    from clients.tico import APIError
+    assert G.token_problem(APIError(*error), 'acme/web').startswith(wanted)
+    assert 'the server did not answer (TimeoutError)' in G.token_problem(TimeoutError(), 'acme/web')
+    secret = 'ghs_' + 'Q' * 36
+    assert secret not in G.token_problem(APIError('x', f'bad {secret}', 500), 'acme/web')
+
+
+def test_socket_refusal_carries_the_hubs_reason_to_git(monkeypatch, capsys):
+    monkeypatch.delenv(G.TOKENS_KEY, raising=False)
+    monkeypatch.delenv('GH_TOKEN', raising=False)
+    with mock_socket_refusal(monkeypatch):
+        assert G.credential(None, 'alpha', socket_path='/nonexistent', repository='acme/web') == ''
+    assert 'the GitHub App is not installed on it' in capsys.readouterr().err
+
+
+def mock_socket_refusal(monkeypatch):
+    import contextlib
+    def refuse(*args, **kwargs):
+        raise ValueError('APIError: Tico could not get a GitHub token for acme/web: the GitHub App is not installed on it')
+    monkeypatch.setattr(G.credential_socket, 'request', refuse)
+    return contextlib.nullcontext()
