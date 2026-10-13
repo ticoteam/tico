@@ -289,6 +289,7 @@ class ClaudeProcess:
 def make_claude(**kw):
     ClaudeProcess.instances = []
     kw.setdefault("version", lambda: "2.1.296 (Claude Code)")
+    kw.setdefault("help", lambda: "  --autocompact <auto|tokens>  Auto-compact window size")
     host = ClaudeHost(bot="cpo", spawn=lambda argv, **kwargs: ClaudeProcess(argv, **kwargs), **kw)
     host.start()
     return host
@@ -488,6 +489,25 @@ class ClaudeStreamJson(unittest.TestCase):
         for version, steers in (("2.1.296 (Claude Code)", True), ("2.2.0 (Claude Code)", True),
                                 ("2.1.295 (Claude Code)", False), ("", False), ("claude: not found", False)):
             self.assertEqual(make_claude(version=lambda v=version: v).supports_steer, steers, version)
+
+    def test_compact_at_is_the_autocompact_window_less_its_buffer_and_old_claude_gets_none(self):
+        def window(host, **extra):
+            tid = host.start_thread("cpo", base.settings("/tmp/emp-cpo", **extra))
+            argv = host._argv(tid, host._threads[tid], None)
+            return argv[argv.index("--autocompact") + 1] if "--autocompact" in argv else None
+        host = make_claude()
+        self.assertEqual(window(host), "283000")                                       # unset: 250k
+        self.assertEqual(window(host, shared=True), "283000")                          # project,local settings too
+        self.assertEqual(window(host, compact_at=150_000), "183000")
+        self.assertEqual(window(host, compact_at=400_000), "433000")
+        self.assertEqual(window(host, compact_at=1_000_000), "1000000")                # Claude's ceiling
+        self.assertIsNone(window(make_claude(help=lambda: "  --effort <level>  Effort level")))
+
+    def test_codex_threads_compact_at_the_bots_limit(self):
+        host = CodexHost(env_mode="config", config={})
+        self.assertEqual(host._thread_params(base.settings("/tmp/emp-cpo"))["config"]["model_auto_compact_token_limit"], 250_000)
+        self.assertEqual(host._thread_params(base.settings("/tmp/emp-cpo", compact_at=400_000))
+                         ["config"]["model_auto_compact_token_limit"], 400_000)
 
     def test_a_replay_without_the_written_uuid_counts_for_the_oldest_unread_message(self):
         logs = []

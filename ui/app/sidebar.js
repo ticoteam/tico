@@ -417,7 +417,6 @@ $('#org-mine').onclick = () => {
   orgMineSave();
   renderTree();
 };
-$('#org-add-group').onclick = () => orgGroupEdit({add: ''});
 $('#org-history').onclick = () => {
   try { localStorage.setItem(ORG_HISTORY_ON_KEY, orgHistoryOn() ? '0' : '1'); } catch {}
   if (orgHistoryOn() && navCollapsed.delete('organisation')) {
@@ -599,7 +598,7 @@ function renderTree() {
   $('#org-mine').setAttribute('aria-pressed', String(orgMineOn()));
   $('#tree').classList.toggle('history', historyOn);
   const manage = orgCanGroups() && !historyOn;
-  $('#org-add-group').hidden = !manage;
+  teamAddRefresh();
   $('#tree').innerHTML = historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + rec('', 0)
       + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : '');

@@ -8,8 +8,12 @@ docs do not say, and keeps a map of the docs so the next question is cheaper. It
 
 - **Internal docs**: markdown written, pasted or imported in Tico, in folders. It reads them with `hub doc search`,
   `hub doc read` and `hub doc list`.
-- **Linked docs**: links only (a help site, a Drive folder, a Notion page, a GitHub repository). Tico keeps no copy. It reads
-  them with `hub doc fetch <url>`, on its own computer.
+- **Indexed external docs**: refreshed public GitHub documentation. Search returns passages and observed commits;
+  `hub doc read external:<id> --revision <commit>` reads the untrusted reference copy. Answers use
+  `[External · File title — Section](citation_url)` with the supplied revision URL. Fresh indexed material
+  (checked within six hours) needs no live fetch unless the person asks for the latest version.
+- **Linked docs**: other sites and private repositories retain metadata only. It can read supported addresses with
+  `hub doc fetch <url>` on its own computer. Live reads are separate evidence, not updates to the shared index.
 
 - **The Tico manual**: this release's own docs, read-only and separate from the team's (docs/docs.md). `hub doc search`
   ranks matching manual and team sections together, labelled "Tico manual", and `hub doc read manual:<name>` reads one. It answers
@@ -20,7 +24,7 @@ docs do not say, and keeps a map of the docs so the next question is cheaper. It
 
 The playbooks in its repository (`templates/catalog/librarian/playbooks/`) are the product. In short:
 
-1. **Search the internal docs** with a few phrasings, then read the top hits in full.
+1. **Search internal and indexed external docs** with a few phrasings, then read the top hits in full.
 2. **Consult its map** when that is not enough: `_librarian/where-things-live.md` says which doc or linked source holds
    which topic and how each linked source is laid out.
 3. **Follow the linked docs**: the sitemap first, then links from the pages it reads, as deep as the question needs and no
@@ -49,7 +53,7 @@ pages web search returns).
 
 **Humans.** Docs and Market show an **Ask the Librarian** rail on the right on desktop. Its arrow hides it and **Ask the
 Librarian** brings it back; the choice is kept per viewer in this browser. On a phone, the button opens a full-screen sheet.
-On Docs, matching internal, linked and manual docs appear at once
+On Docs, matching internal, indexed external, linked and manual docs appear at once
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on

@@ -583,11 +583,24 @@ function renderSettingsBots() {
 // The same catalog cards the first run shows, for a team that is already set up. Nothing is
 // locked on here: the bots that were required at first run already exist and are filtered out.
 async function settingsCatalogPicker() {
-  const dialog = $('#catalog-picker'); if (!dialog) return;
+  if (!S.me?.id || !settingsCanCreateBots()) return;
+  let dialog = $('#catalog-picker');
+  const temporary = !dialog;
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'catalog-picker'; dialog.className = 'bot-editor catalog-picker';
+    dialog.setAttribute('aria-labelledby', 'catalog-picker-title');
+    document.body.append(dialog);
+  }
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="catalog-picker-title">Add from template</h2><span class="spacer"></span>
       <button class="ghost" type="button" data-catalog-close aria-label="Close">✕</button></div>
     <div class="bot-editor-body" id="catalog-picker-body"><div class="empty">Loading templates…</div></div></form>`;
-  dialog.onclose = () => { dialog.innerHTML = ''; };
+  const leave = () => dialog.close();
+  window.addEventListener('hashchange', leave);
+  dialog.onclose = () => {
+    window.removeEventListener('hashchange', leave); dialog.innerHTML = '';
+    if (temporary) { dialog.remove(); teamAddReturnFocus(); }
+  };
   dialog.querySelectorAll('[data-catalog-close]').forEach(button => button.onclick = () => dialog.close());
   dialog.showModal();
   let cards;
@@ -634,6 +647,7 @@ async function settingsCatalogPicker() {
     const chosen = state.cards.filter(card => state.picked.has(card.slug));
     if (!chosen.length) { status.innerHTML = '<span class="err">Choose at least one bot.</span>'; return; }
     if (!S.me?.id) { status.innerHTML = '<span class="err">Sign in before adding a bot.</span>'; return; }
+    if (!settingsCanCreateBots()) { status.innerHTML = '<span class="err">You no longer have permission to add bots.</span>'; return; }
     submit.disabled = true; status.textContent = 'Adding…';
     try {
       const hints = [];
@@ -655,13 +669,18 @@ async function settingsCatalogPicker() {
           model: card.model || '', effort: card.reasoning_effort || '', operator: S.me.id, owners: [S.me.id], runner_id: null});
         if (added.name_hint) hints.push(added.name_hint);
       }
-      dialog.close(); await loadSettings(); settingsShow('bots');
+      dialog.close(); await refresh(true);
+      if (S.route === SETTINGS) { await loadSettings(); settingsShow('bots'); }
       toast(hints.length ? hints.join('; ') : chosen.length === 1 ? `Added ${catalogName(state, chosen[0])}` : `Added ${chosen.length} bots`);
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       if (String(error.message).includes('Team default')) {
         const link = document.createElement('button'); link.type = 'button'; link.className = 'linkish'; link.textContent = 'AI providers';
-        link.onclick = () => { dialog.close(); settingsShow('providers'); };
+        link.onclick = () => {
+          dialog.close();
+          if (S.route === SETTINGS) settingsShow('providers');
+          else { SETTINGS_TAB = 'providers'; location.hash = SETTINGS; }
+        };
         status.append(' ', link);
       }
       submit.disabled = false;

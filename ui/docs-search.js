@@ -40,6 +40,15 @@
     if (is(...OTHER_HOSTS)) return 'other';
     return 'website';
   }
+  function sourceScope(value) {
+    const url = parse(value);
+    if (!url || !['github.com', 'www.github.com'].includes(url.hostname)) return null;
+    let path;
+    try { path = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, '').split('/'); }
+    catch { return null; }
+    if (path.length < 2 || (path.length > 2 && !['tree', 'blob'].includes(path[2]))) return null;
+    return {repo: path.slice(0, 2).join('/').replace(/\.git$/, ''), tail: path.slice(3).join('/')};
+  }
   const kind = name => KINDS[name] || KINDS.other;
   // The words of a query as the server reads them (letters and digits), for highlighting and emptiness.
   const terms = query => (String(query).toLowerCase().match(/\w+/g) || []).slice(0, 12);
@@ -53,6 +62,6 @@
     return {results: found.results || [], stale: mine !== ticket};
   }
 
-  root.DocsSearch = {KINDS, LOCK, kind, kindOf, hostOf, terms, run};
+  root.DocsSearch = {KINDS, LOCK, kind, kindOf, hostOf, sourceScope, terms, run};
   if (typeof module !== 'undefined') module.exports = root.DocsSearch;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

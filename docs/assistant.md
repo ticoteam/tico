@@ -67,6 +67,17 @@ running a task now. The owner may turn **Assistant acts without asking** off (Se
 direct, and a task, message or comment involving a bot is a card again. An assistant run's credential works only while its
 lease is live.
 
+**What you ask for in your chat, it does.** When you tell it to close, finish, decline, reopen, reassign, comment on or
+link a task ("close those three", "mark the launch done"), it does it as you, with no card. The write cites your
+message (`X-Tico-On-Behalf-Of`: the message's id, or `turn` for the one that started the run; `hub task
+close|update|comment|link|label --on-behalf-of turn`), and the server checks that message: yours, typed in your own
+Assistant chat (not written by a bot or the Assistant, not another chat), and no more than 30 minutes old. Otherwise it
+answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do
+yourself it cannot do for you. Only these task routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`);
+an approval, running a task now, a message to another human and everything below stay a card whatever you said, and
+with **Assistant acts without asking** off they are cards again. The record shows you as the actor, `via` assistant,
+and the audit event's `delegation` names the message (`{"for": "human:<you>", "cited": "<message id>", "run": "asked"}`).
+
 The Computer fetches the Assistant's own granted credentials to start the run, including on older versions of Tico.
 It never fetches your personal credentials for that run; its Tico tools still act with your rights. If a job's lease
 expires before start ten times since the server started, Tico marks it failed and leaves a message in your private
@@ -80,12 +91,22 @@ the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exact
 error's detail are kept of the result, never the answer's body.
 
 **Anything with a side effect that matters is proposed, and only your click runs it:** approving or declining a Needs-you
-item, sending anything outside the team or to another human, spending, changing humans, access or settings, archiving or
+item (a send, spend, publish or merge approval, even if you ask for it in chat), task actions you did not clearly ask for,
+sending anything outside the team or to another human, spending, changing humans, access or settings, archiving or
 deleting, activating a bot. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your chat. The server
 refuses these operations when the assistant tries them itself (`403 confirm_required`). **Confirm** runs the recorded
 operation through the same routes with *your* credential, once (a claim makes a second click a `409`), and
-records `assistant.action.confirmed` and the operation's own events via assistant. The bot cannot confirm or cancel
+records `assistant.action.confirmed` and the operation's own events via assistant. A task change proposed without the
+task's `version` is given the one the task has (a change in between is still a `409`), and `{"status": "closed"}`
+is taken as the close it means (`close: true`), so such a card runs, including one stored before this rule.
+
+**Many at once is one card.** Several task actions (closing twenty stale tasks) are one bulk card, never twenty:
+`POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch` and body `{"actions": [{"method": "POST", "path":
+"/api/v2/tasks/<id>", "body": {...}}, ...]}`, 1 to 100 task changes, comments or links and nothing else (`422`). The
+card lists one line per task. One **Confirm** runs each step in order through its own route, as you; a step that fails
+does not stop the rest, and the result lists every step's status (`result.items`) with the failures summed up in
+`result.error` ("2 of 20 did not go through: ..."). It is `failed` only when none went through. The bot cannot confirm or cancel
 (`403`; a confirm run carries a credential made at click time, bound to the stored method and path, valid for two minutes and then failed), a personal API token cannot either, another human sees `404`, and an unconfirmed proposal expires after
 24 hours.
 
@@ -114,5 +135,5 @@ Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhe
 ## For the assistant bot
 
 Its instructions are `templates/catalog/assistant/AGENT.md` and `playbooks/assistant-chat.md`: how Tico is organised,
-how to route work to the right bot, to answer briefly with links, never to act beyond you, and to propose (never do)
-anything with a side effect. They live in the bot's repository; edit them there or through BotOps.
+how to route work to the right bot, to answer briefly with links, never to act beyond you, to do the task actions you
+ask for, and to propose (never do) anything else with a side effect, several at once on one card. They live in the bot's repository; edit them there or through BotOps.

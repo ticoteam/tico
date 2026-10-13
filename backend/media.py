@@ -454,9 +454,10 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         """A bot puts one decision to a person (`hub task question`): the task is the bot's own, the structured
         question is put to the person and the task waits on them, all in one write, so a refusal or a retry never
         leaves half a question behind. Option files come in the request and are attached to the new task. Every
-        check runs first in a read, the bytes are stored with no transaction open (an upload never holds the write
-        lock), then the write runs the cheap checks again. Bytes stored for a write then refused stay: the same
-        bytes may already back another file, so they are never deleted here."""
+        check, including whether the person could read the task, runs first in a read, the bytes are stored with no
+        transaction open (an upload never holds the write lock), then the write runs the checks again. A private
+        question is a private task whose parties are the bot and the person asked. Bytes stored for a write refused
+        only by a later change stay: the same bytes may already back another file, so they are never deleted here."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("identity", "A bot puts a question to a person this way; a person asks in a comment", 403)
@@ -490,7 +491,19 @@ def install_media(app, store, auth, mutate, send_message, task_create):
 
         def unreadable(person):
             return Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
-                           "ask someone who can read your work, or file it without --private", 403)
+                           "ask someone who can read your work and its parent task", 403)
+
+        def readable_by(c, person, private, parent):
+            """The person reads the task this question makes, by every rule a read checks: a company-visible one by
+            the bot's activity access; a private one as its other party, given they read the run's private work."""
+            if private and not privacy.question_party(c, who, person, parent):
+                raise unreadable(person)
+            try:
+                auth.task_row(c, auth.identity_for_actor(c, person),
+                              {"id": "", "owner": who.actor, "requester": person if private else who.actor,
+                               "private": int(private)})
+            except Problem as exc:
+                raise unreadable(person) from exc
 
         if any(decoded):
             replay = replay_upload(store, request, body.model_dump())
@@ -503,23 +516,17 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 return replay
             with store.read_transaction() as c:
                 person, parent = checked(c)
-                # A company-visible task: the person reads it by the bot's activity access, checked here before
-                # anything is stored. A private one names its parties as it is made; the write checks that.
+                # Checked here before anything is stored, and again in the write on the task as made.
                 private = bool(body.private or privacy.private_execution(c, who) or H.private_tasks_default(c, who.actor)
                                or parent and H.task_private(c, parent))
-                if not private:
-                    try:
-                        auth.task_row(c, auth.identity_for_actor(c, person),
-                                      {"id": "", "owner": who.actor, "requester": who.actor, "private": 0})
-                    except Problem as exc:
-                        raise unreadable(person) from exc
+                readable_by(c, person, private, parent)
         stored = [blobs.put(item[0], item[2]) if item else None for item in decoded]
 
         def work(c):
             person, _ = checked(c)
             made = task_create(c, who, M.TaskCreate(
                 title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
-                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []))
+                relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person)
             tid = made["task"]["id"]
             # The person must be able to read the task by every rule a read checks, or the question would reach
             # them (Slack, mail) while the task stays hidden from them.

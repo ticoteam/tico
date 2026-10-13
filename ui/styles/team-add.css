@@ -1,0 +1,15 @@
+/* Team plus menu and the two small add dialogs. */
+#team-add-menu{position:fixed;z-index:50;min-width:180px;max-width:calc(100vw - 16px);padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16)}
+#team-add-menu button{display:block;width:100%;border:0;background:none;text-align:left;padding:10px 12px;border-radius:6px;color:var(--ink)}
+#team-add-menu button:hover,#team-add-menu button:focus-visible{background:var(--surface2)}
+#team-add-menu button[hidden]{display:none}
+.tmodal.team-add-dialog{width:min(440px,calc(100vw - 32px))}
+.team-add-dialog h2{margin:0;font-size:var(--t-lg);color:var(--ink)}
+.team-add-dialog .tmodal-body{padding-top:16px}
+.team-add-choices{display:grid;gap:10px}
+.team-add-choices button{display:grid;gap:6px;text-align:left;white-space:normal;padding:14px;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.team-add-choices button:hover{border-color:var(--accent)}
+.team-add-choices span{font-size:var(--t-sm);font-weight:400;color:var(--muted);line-height:1.5}
+#team-add-human label{display:block;margin-bottom:14px}
+#team-add-human input{display:block;width:100%;margin-top:6px}
+#team-add-human p{font-size:var(--t-sm);line-height:1.5}

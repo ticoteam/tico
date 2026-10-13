@@ -51,7 +51,7 @@ from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
 from .providers import MODEL_BY_ID, MODEL_CATALOG
-from .settings_admin import SettingsAdmin, repository_present
+from .settings_admin import SettingsAdmin, compact_at as compact_at_of, repository_present
 from .readiness import absolute as absolute_link, can_run
 from . import fleet_check as fleet_check_module
 from .getting_started import _online_runners
@@ -187,6 +187,7 @@ def create_app(settings=None):
         scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
         directory_task = asyncio.create_task(directory_loop()) if timers else None
         granola_task = asyncio.create_task(app.state.granola.loop(stop)) if timers else None
+        docs_task = asyncio.create_task(app.state.doc_sources.loop(stop)) if timers and not settings.demo else None
         # A demo runs no scheduler: nothing fires, and nothing waits for a bot that will never run.
         import threading
         copy_stop = threading.Event()
@@ -200,6 +201,7 @@ def create_app(settings=None):
             yield
         finally:
             stop.set()
+            app.state.doc_sources.stop.set()
             copy_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
@@ -215,6 +217,8 @@ def create_app(settings=None):
                 await timing_task
             except asyncio.CancelledError:
                 pass
+            if docs_task:
+                await docs_task
             if scheduler_task:
                 await scheduler_task
             if directory_task:
@@ -303,6 +307,7 @@ def create_app(settings=None):
 
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import describe as describe_action
+    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
     from . import botops_act
 
     def assistant_owns(task_id, actor, shared=False):
@@ -431,9 +436,19 @@ def create_app(settings=None):
                                                  request.state.identity.actor,
                                                  lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                                                  assistant_direct(), assistant_to_bot)):
-                    raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                  "own. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions); "
-                                  "the person confirms it in " + settings.app_name, 403)
+                    # A task change, comment or link the person asked for in their own Assistant chat: the turn cites
+                    # their message and it runs as them, recorded via assistant for that message (backend/assistant.py).
+                    asked = request.headers.get(botops_act.HEADER)
+                    if not (asked and request.state.identity.via == "assistant" and assistant_direct()
+                            and assistant_instructed(request.method, request.url.path)):
+                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
+                                      "own. A task change, comment or link the person clearly asked for in this chat runs "
+                                      "when you cite their message (`--on-behalf-of turn`). Otherwise propose it with "
+                                      "`hub assistant propose` (or POST /api/v2/assistant/actions), several task actions on "
+                                      "one card (path /api/v2/assistant/batch); the person confirms it in "
+                                      + settings.app_name, 403)
+                    with store.read() as c:
+                        delegation_reset = H.DELEGATION.set(assistant_instruction(c, request.state.identity, asked))
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -441,7 +456,8 @@ def create_app(settings=None):
             if caller and request.method not in ("GET", "HEAD", "OPTIONS"):
                 with store.read() as c:
                     privacy.guard_write(c, caller, request.url.path, auth)
-            on_behalf = request.headers.get(botops_act.HEADER)
+            # The Assistant's citation was checked above; only BotOps borrows a requester's identity here.
+            on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(botops_act.HEADER)
             if (not on_behalf and getattr(request.state, "identity", None) is not None
                     and request.state.identity.actor == "bot:" + BOTOPS
                     and request.url.path.startswith("/api/v2/")
@@ -1488,6 +1504,7 @@ def create_app(settings=None):
                         "shared": bool(declared.get("shared")),
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
+                        "compact_at": compact_at_of(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
         owner_rows = ([rows.human(owner) for owner in configured] if configured is not None
@@ -2429,7 +2446,9 @@ def create_app(settings=None):
                     "mover": mover(c, request.state.identity),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
-    def task_create(c, who, body, lint=True):
+    def task_create(c, who, body, lint=True, asked=None):
+        """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
+        private they are its requester, so its two parties are the bot and them."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if privacy.private_execution(c, who):
@@ -2481,7 +2500,14 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
+        if asked and private:
+            if who.role != "bot" or owner != who.actor:
+                raise Problem("identity", "Only a bot's own question names the person asked", 403)
+            if not privacy.question_party(c, who, asked, parent):
+                raise Problem("privacy", f"{H.actor_id(asked)} cannot read this run's private work or the parent task, "
+                              "so a private question cannot go to them", 403)
+            requester_actor = asked
+        elif (who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id
                 and private):
             origin = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                                "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot=?",
@@ -4174,6 +4200,11 @@ def create_app(settings=None):
     @app.post("/api/v2/bots/{bot}/fallback")
     def fallback(request: Request, bot: str, body: M.BotFallback):
         return mutate(request, body, lambda c: settings_admin.set_fallback(
+            c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/compact-at")
+    def bot_compact_at(request: Request, bot: str, body: M.BotCompactAt):
+        return mutate(request, body, lambda c: settings_admin.set_compact_at(
             c, request.state.identity, bot, body))
 
     @app.post("/api/v2/bots/{bot}/transitions")

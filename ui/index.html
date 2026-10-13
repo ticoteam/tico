@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/tokens.css">
 <link rel="stylesheet" href="/tico/ui/styles/base.css">
 <link rel="stylesheet" href="/tico/ui/styles/sidebar.css">
+<link rel="stylesheet" href="/tico/ui/styles/team-add.css">
 <link rel="stylesheet" href="/tico/ui/styles/avatars.css">
 <link rel="stylesheet" href="/tico/ui/styles/layout.css">
 <link rel="stylesheet" href="/tico/ui/styles/help.css">
@@ -97,7 +98,7 @@
         <button class="section-toggle" type="button" data-section-toggle="organisation" aria-expanded="true" aria-controls="nav-organisation">
           <span>Team</span><span class="section-chev" aria-hidden="true">›</span>
         </button>
-        <button class="org-history" id="org-add-group" type="button" title="Add group" aria-label="Add group" hidden><span class="org-plus" aria-hidden="true">+</span></button>
+        <button class="org-history" id="org-add-group" type="button" title="Add to team" aria-label="Add to team" aria-haspopup="menu" aria-expanded="false" aria-controls="team-add-menu" hidden><span class="org-plus" aria-hidden="true">+</span></button>
         <button class="org-history" id="org-mine" type="button" aria-pressed="false" title="Only bots I can read or write" aria-label="Only bots I can read or write"><span class="nav-icon" aria-hidden="true">person</span></button>
         <button class="org-history" id="org-history" type="button" aria-pressed="false" title="Most recently viewed first" aria-label="Sort teammates by most recently viewed"><span class="nav-icon" aria-hidden="true">history</span></button>
       </div>
@@ -264,6 +265,7 @@
 <script src="/tico/ui/app/overview.js"></script>
 <script src="/tico/ui/app/router.js"></script>
 <script src="/tico/ui/app/drawer.js"></script>
+<script src="/tico/ui/app/team-add.js"></script>
 <script src="/tico/ui/app/search.js"></script>
 <script src="/tico/ui/app/org-fan.js"></script>
 <script src="/tico/ui/app/nav-events.js"></script>

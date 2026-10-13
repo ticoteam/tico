@@ -1248,6 +1248,11 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotCompactAt(Contract):
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    expected_revision: int = Field(ge=1)
+
+
 class BotTransitionCreate(Contract):
     kind: Literal["model", "machine"]
     model: ID | None = None

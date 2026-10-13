@@ -446,16 +446,30 @@ def _github(fetcher, url, owner, name, kind, ref, path):
         except ValueError:
             raise FetchError("github", "GitHub answered with something that is not JSON") from None
 
+    def scoped_contents():
+        try:
+            return call(f"/contents/{quote(unquote(path))}?ref={quote(unquote(ref), safe='')}")
+        except FetchError as exc:
+            if exc.code != "http_404":
+                raise
+            from clients import github_scope
+            scope = github_scope.parse_url(url)
+            try:
+                reference, folder = github_scope.resolve(scope, {}, call)
+            except ValueError as error:
+                raise FetchError("github_reference", str(error)) from None
+            return call(f"/contents/{quote(folder)}?ref={quote(reference, safe='')}")
+
     try:
         if kind == "blob":
-            data = call(f"/contents/{quote(unquote(path))}?ref={quote(unquote(ref))}")
+            data = scoped_contents()
             if isinstance(data, dict) and data.get("encoding") == "base64":
                 text = base64.b64decode(data.get("content") or "").decode("utf-8", "replace")
                 links = [{"text": t, "url": u} for t, u in re.findall(r"\[([^\]]*)\]\((https?://[^)\s]+)\)", text)]
                 return {"final_url": url, "title": data.get("name") or path, "text": text, "links": links}
             raise FetchError("github", "That GitHub file is too large or is not text")
         if kind == "tree":
-            data = call(f"/contents/{quote(unquote(path))}?ref={quote(unquote(ref))}")
+            data = scoped_contents()
             entries = data if isinstance(data, list) else []
             return {"final_url": url, "title": f"{owner}/{name}/{path}", "links": [
                         {"text": e["path"], "url": e.get("html_url") or ""} for e in entries],

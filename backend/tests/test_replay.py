@@ -51,3 +51,48 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
     short = get(api, "replay?" + span, token="cara-test")
     assert short["truncated"] and short["items"] and all(i["at"] < short["next"] for i in short["items"])
 
+
+
+def test_replay_refuses_a_time_too_far_out_to_convert(api):
+    for start, end in (("0001-01-01T00:00:00+14:00", "0001-01-02T00:00:00+14:00"),
+                       ("9999-12-30T00:00:00-14:00", "9999-12-31T23:59:59-14:00")):
+        r = api.get("/api/v2/replay?" + urlencode({"from": start, "to": end}), headers={"Authorization": "Bearer ana-test"})
+        assert r.status_code == 422, r.text
+        assert "out of range" in r.text
+
+
+def test_replay_scans_a_bounded_number_of_rows_per_source(api, monkeypatch):
+    """Rows the viewer may not read, or outside the scope, still count: a call stops scanning and says it was cut short."""
+    store = api.app.state.store
+    monkeypatch.setattr(replay, "SCAN_MAX", 3)
+
+    def span():
+        return datetime.now(timezone.utc)
+
+    def query(first, last, extra=""):
+        return "replay?" + urlencode({"from": first.isoformat(), "to": last.isoformat()}) + extra
+
+    # Task changes: a private task Cara cannot read changes status many times, then one she can read does.
+    started = span() - timedelta(seconds=1)
+    with store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private plan", "", "human:ben", lint=False, private=True)
+        public = H.task_create(c, "human:cara", "Public plan", "", "bot:ops", lint=False, private=False)
+    with store.transaction() as c:
+        for status in ("doing", "waiting", "doing", "waiting", "doing"):
+            H.task_update(c, "human:ben", secret["id"], status=status)
+        H.task_update(c, "bot:ops", public["id"], status="doing")
+    tasks = get(api, query(started, span() + timedelta(seconds=1)), token="cara-test")
+    assert tasks["truncated"] and tasks["next"]
+    assert all(i["at"] < tasks["next"] for i in tasks["items"])
+
+    # Messages: a scope that leaves out every message in Cara's room still scans them, and stops.
+    started = span() - timedelta(seconds=1)
+    for n in range(6):
+        post(api, "chat/ops", {"text": f"Note {n}"}, token="cara-test")
+    rooms = get(api, query(started, span() + timedelta(seconds=1), "&person=ben"), token="cara-test")
+    assert rooms["truncated"] and rooms["next"] and not rooms["items"]
+
+    # Under the cap nothing is cut short.
+    monkeypatch.setattr(replay, "SCAN_MAX", 1000)
+    whole = get(api, query(started, span() + timedelta(seconds=1), "&person=ben"), token="cara-test")
+    assert not whole["truncated"]

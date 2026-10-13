@@ -85,7 +85,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
-| **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot is a card |
+| **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
 | **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |

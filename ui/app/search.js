@@ -13,7 +13,9 @@ function searchEntries() {
     out.push({kind: 'page', label, href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
   for (const e of shownEmps()) {
-    out.push({kind: 'bot', label: shownName(e), alias: e.name, href: `#/bot/${encodeURIComponent(e.name)}`, avatar: avatar(e.name, 22, stateOf(e.name))});
+    // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all
+    out.push({kind: 'bot', label: String(e.display_name || '').replace(TEMP_RE, ''), html: shownName(e), temp: isTempBot(e),
+      alias: e.name, href: `#/bot/${encodeURIComponent(e.name)}`, avatar: avatar(e.name, 22, stateOf(e.name))});
   }
   for (const p of (S.people || []).filter(p => !p.hidden)) {
     out.push({kind: 'person', label: p.name || p.id, alias: p.title || '', href: `#/person/${encodeURIComponent(p.id)}`, avatar: personAvatar(p, 22)});
@@ -26,6 +28,7 @@ function searchRank(entry, q) {
   if (label.split(/\s+/).some(w => w.startsWith(q))) return 1;
   if (label.includes(q) || alias.startsWith(q)) return 2;
   if (alias.includes(q)) return 3;
+  if (entry.temp && 'temporary'.startsWith(q) && q.length >= 3) return 3;   // "temp" finds the flagged bots
   return -1;
 }
 // "Ask the Assistant..." closes every list: the words typed go to your private Assistant chat, prefilled
@@ -48,7 +51,7 @@ function searchRender() {
   const rows = searchResults(q);
   SEARCH_SEL = Math.min(SEARCH_SEL, Math.max(0, rows.length - 1));
   list.innerHTML = rows.length ? rows.map((e, i) => `<li role="option" data-href="${esc(e.href)}"${e.kind === 'assistant' ? ` data-ask="${esc(e.ask)}"` : ''} aria-selected="${i === SEARCH_SEL}">${
-      e.avatar || `<span class="nav-icon" aria-hidden="true">${esc(e.icon)}</span>`}<span>${esc(e.label)}</span><span class="search-kind">${
+      e.avatar || `<span class="nav-icon" aria-hidden="true">${esc(e.icon)}</span>`}<span>${e.html || esc(e.label)}</span><span class="search-kind">${
       e.kind === 'page' ? 'page' : e.kind === 'bot' ? 'bot' : esc(e.alias || 'human')}</span></li>`).join('')
     : `<li class="search-empty">Nothing named “${esc(q.trim())}”.</li>`;
   list.querySelector('[aria-selected=true]')?.scrollIntoView({block: 'nearest'});

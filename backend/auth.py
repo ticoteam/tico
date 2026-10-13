@@ -451,14 +451,15 @@ class Auth:
             if action:
                 # The person's own click on something the Assistant proposed (backend/assistant.py
                 # confirm), and only that: never the Assistant's own identity or a token credential, and
-                # only with the secret made at confirm time, for the exact method and path stored, within
+                # only with the secret made at confirm time, for the exact method and path stored (or a step of a bulk card), within
                 # two minutes of the click.
                 aid, _, secret = action.partition(".")
-                row = c.execute("SELECT method,path,confirm_hash,running_since,proposer FROM assistant_actions "
+                from .assistant import covers
+                row = c.execute("SELECT method,path,body_json,confirm_hash,running_since,proposer FROM assistant_actions "
                                 "WHERE id=? AND owner=? AND status='running'", (aid, who.actor)).fetchone()
                 if (who.role not in ("owner", "human") or who.via or who.via_token or not secret or not row
                         or not row["confirm_hash"] or not hmac.compare_digest(row["confirm_hash"], digest(secret))
-                        or row["method"] != method or row["path"] != path
+                        or not covers(row, method, path)
                         or str(row["running_since"] or "") < H.shift(H.now(), seconds=-120)):
                     raise Problem("assistant_action", "That assistant action is not being confirmed", 403)
                 # Recorded via whoever proposed it (the Assistant, or BotOps for what a person asked it for).
@@ -1014,10 +1015,20 @@ class Auth:
 
 def bot_reads_task(c, bot, row):
     """Whether `bot` may read this task under the same rules as reading it (Auth.task_row): what a notice or an
-    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built."""
+    answer sent to it may carry. A bot's access needs none of the server's sign-in settings, so no Auth is built.
+    With no transaction open, the read runs in a savepoint released at the end, so task_row's snapshot never leaves
+    a BEGIN open on an autocommit connection."""
     policy = Auth.__new__(Auth)
+    opened = not c.in_transaction
+    if opened:
+        c.execute("SAVEPOINT bot_reads_task")
     try:
+        if opened and row:
+            row = H.task(c, row["id"])      # read in this snapshot, as task_row's own BEGIN would
         policy.task_row(c, Identity(bot, "bot"), row)
     except Problem:
         return False
+    finally:
+        if opened:
+            c.execute("RELEASE bot_reads_task")
     return True

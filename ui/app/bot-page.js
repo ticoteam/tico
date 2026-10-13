@@ -518,6 +518,11 @@ function showBotTab(tab) {
   if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
   if (view === 'history') void botHistoryLoad(BOT.slug);
   placeBotHead();
+  if (chat && BOT_PILL?.focusOnOpen) {
+    delete BOT_PILL.focusOnOpen;
+    const box = pq(BOT_PILL, '.p-text');
+    box.focus(); box.setSelectionRange(box.value.length, box.value.length);
+  }
   if (!chat) convStop(); // the thread and microphone stop off-screen
   else if (isKeeper(BOT.slug)) {
     if (!V2C || V2C.slug !== BOT.slug) v2ChatLoad(BOT.slug);

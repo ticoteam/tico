@@ -8,7 +8,7 @@ from backend import agents, rooms, views
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
-from backend.settings_admin import SettingsAdmin
+from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend.store import H, P, encode, repo_url
 from backend.tests import test_api as T
 from backend.tests.test_api import api  # noqa: F401
@@ -51,6 +51,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "shared": bool(declared.get("shared")),
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
+                    "compact_at": compact_at_of(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
     configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
     owner_rows = ([H.human(c, owner) for owner in configured] if configured is not None

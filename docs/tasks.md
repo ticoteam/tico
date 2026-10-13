@@ -74,6 +74,13 @@ person. A new status, note or owner clears `--on` unless the same update names t
 and `--on ""` clears it by hand. A private task can only wait on a person who can read it, and a
 task made private stops waiting on anyone who cannot.
 
+The person reads that note as your request, so write it to them: one plain sentence, no task or
+message ids, no status. The update warns (as the title lint does) when the note is missing and no
+open question to them asks instead, carries an id, or runs past two sentences or 40 words; with
+`TICO_STYLE_LINT=refuse` it is refused. Decide leads the card with an open question to the person,
+then what a bot last said to them on the task, then the task's request, and folds the note under
+"Latest note".
+
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
 child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency

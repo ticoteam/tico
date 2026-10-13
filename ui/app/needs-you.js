@@ -41,7 +41,8 @@ function needsV2Item(it, folded, showName = true) {
 }
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its
-// recipients, subject, draft and files readably; every kind keeps the exact payload under Details.
+// recipients, subject, draft and files readably; a publish where it goes and its full text; a spend or merge
+// its fields. Each keeps the exact payload folded underneath; any other kind shows the raw payload, wrapped.
 const APPROVAL_FILE_ID = /^[A-Za-z0-9-]{8,80}$/;   // the ids the file viewer opens (fileLinkId)
 function approvalFileIcon() {
   const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), path = document.createElementNS(ns, 'path');
@@ -49,6 +50,47 @@ function approvalFileIcon() {
   for (const [k, v] of Object.entries({d: 'M3.5 1.5h4.5l2.5 2.5v8.5h-7z M8 1.5V4h2.5', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linejoin': 'round'})) path.setAttribute(k, v);
   svg.append(path);
   return svg;
+}
+// Where a publish goes: a Support ticket by its number, a web address as a link, anything else as text.
+function approvalWhere(url) {
+  const u = String(url ?? '').trim(), ticket = /^hq-ticket:(TK-[A-Za-z0-9]+)$/.exec(u);
+  if (ticket) return 'Support ticket ' + ticket[1];
+  if (/^https?:\/\//i.test(u)) {
+    try {
+      const href = new URL(u);
+      if (href.protocol === 'http:' || href.protocol === 'https:') {
+        const a = document.createElement('a');
+        a.href = href.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = u;
+        return a;
+      }
+    } catch { /* not a web address: shown as text */ }
+  }
+  return u;
+}
+// The readable rows for a publish, spend or merge: the fields APPROVAL_FIELDS requires by name, then one row per other
+// key (labelled with the key; the content hash stays in the exact payload). A string or number shows as is, anything
+// else as its JSON. A row is [label, value, class, keep]; a named row with no value is left out, a `keep` row never is.
+// Null for any other kind.
+function approvalFacts(what, p) {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  const shown = v => v == null ? '' : typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
+  const plain = v => typeof v === 'string' || typeof v === 'number';
+  let rows, named;
+  if (what === 'publish') {
+    const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
+    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
+      text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
+                   : ['Text', shown(text), 'approval-text']];
+    named = ['url', 'text', 'content_sha256'];
+  } else if (what === 'spend') {
+    rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
+    named = ['amount', 'account', 'what'];
+  } else if (what === 'merge') {
+    rows = [['Repository', shown(p.repo)], ['Pull request', plain(p.pr) && p.pr !== '' ? '#' + String(p.pr).replace(/^#/, '') : shown(p.pr)]];
+    named = ['repo', 'pr'];
+  } else return null;
+  for (const key of Object.keys(p)) if (!named.includes(key) && key !== 'content_sha256') rows.push([key, plain(p[key]) ? String(p[key]) : JSON.stringify(p[key]), '', true]);
+  return rows;
 }
 function approvalPayloadNode(it) {
   const p = it.payload, el = (tag, cls, text) => {
@@ -60,7 +102,21 @@ function approvalPayloadNode(it) {
   const box = el('div', 'req-next approval-payload'), main = el('div', 'md');
   box.append(el('span', '', 'Exactly this'), main);
   const raw = el('pre', '', JSON.stringify(p, null, 2));
-  if (it.what !== 'send') { main.append(raw); return box; }
+  if (it.what !== 'send') {
+    const rows = approvalFacts(it.what, p);
+    if (!rows) { main.append(raw); return box; }
+    const facts = el('dl', 'approval-facts');
+    for (const [label, value, cls, keep] of rows) {
+      if (!keep && (value == null || value === '')) continue;
+      const dd = el('dd', cls || '');
+      if (value instanceof Node) dd.append(value); else dd.textContent = String(value);
+      facts.append(el('dt', '', label), dd);
+    }
+    const details = el('details', 'approval-raw');
+    details.append(el('summary', '', 'Exact payload'), raw);
+    main.append(facts, details);
+    return box;
+  }
   const list = v => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(String).join(', ');
   const facts = el('dl', 'approval-facts');
   for (const [label, value] of [['From', p.mailbox], ['To', list(p.to)], ['Cc', list(p.cc)],

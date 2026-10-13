@@ -26,7 +26,8 @@
   // One proposal as a Confirm / Cancel card. What will really happen comes from the server; the proposing
   // bot's own words are only its summary. Used by the Assistant page and by BotOps' chat (`cards`).
   function actionCard(action, esc) {
-    const done = {done: 'Done.', failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
+    // A bulk card that ran with some steps refused is done, and says which did not go through.
+    const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
       cancelled: 'Cancelled.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
     // Never cut a value: a long one is folded behind "Show more", whole.
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160

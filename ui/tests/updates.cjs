@@ -115,6 +115,17 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const {page, errors} = await open({width: 1280, height: 900});
     await page.goto('http://tico-ui.test/#/updates');
     await page.locator('#upd-feed .upd-card').first().waitFor();
+    // Search shows a temporary bot with its flag, not the flag's markup, and "temp" finds it.
+    await page.keyboard.press('Control+k');
+    for (const words of ['Game', 'temp']) {
+      await page.locator('#search-input').fill(words);
+      const game = page.locator('#search-results li[data-href="#/bot/game"]');
+      await game.waitFor();
+      assert.match(await game.innerText(), /Game/, `search finds the temporary bot by "${words}"`);
+      assert.doesNotMatch(await game.innerText(), /<span|class=|Temp /, 'its flag is not shown as markup or the word Temp');
+      assert.equal(await game.locator('.proj').count(), 1, 'its flag is shown');
+    }
+    await page.evaluate(() => document.querySelector('#search-modal').close());
     assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'overview');
     await page.waitForFunction(() => window.__badges.length > 0);
     assert.equal(await page.evaluate(() => window.__badges[0]), '2', 'the badge opens on the unread count');

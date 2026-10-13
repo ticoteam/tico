@@ -46,7 +46,7 @@ def ensure_room(c, actor):
 
 
 async def _search(request, question):
-    """The instant results: stream A's `GET /api/v2/docs/search` (internal and linked docs), read as the
+    """The instant results: stream A's `GET /api/v2/docs/search` (internal, indexed external and linked docs), read as the
     person with the credential they came in with, so it shows exactly what the Docs page would."""
     data = await Internal(request).get("docs/search", q=question, collection="all", limit=RESULT_LIMIT)
     return list((data or {}).get("results") or [])[:RESULT_LIMIT]

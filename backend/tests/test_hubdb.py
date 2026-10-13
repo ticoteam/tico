@@ -3,6 +3,7 @@
 Every test runs against a fresh database in a temp directory with a small fake registry, so
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
+import hashlib
 import json
 import re
 import tempfile
@@ -298,6 +299,64 @@ class Rule6Approvals(HubCase):
         H.approval_decide(self.conn, ANA, appr["id"], "declined")
         self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
 
+    @staticmethod
+    def publish(text, digest=None):
+        return {"url": "hq-ticket:TK-0000AAAA", "text": text,
+                "content_sha256": digest or hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+    def test_a_publish_text_that_matches_its_hash_is_requested(self):
+        body = self.publish("Thanks, the fix is in 0.3.41.")
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish", body)["kind"], "publish")
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+
+    def test_an_upper_case_publish_hash_is_refused_because_the_publisher_compares_it_exactly(self):
+        upper = self.publish("Upgrade to 0.3.41 and it works.")
+        upper["content_sha256"] = upper["content_sha256"].upper()
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish", upper)
+        self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_hash_that_is_not_lower_case_hex_is_refused_without_text_too(self):
+        digest = hashlib.sha256(b"Upgrade to 0.3.41 and it works.").hexdigest()
+        for given in (digest.upper(), digest[:63], " " + digest, "z" * 64, 42):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": given})
+            self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+        self.assertEqual(H.approval_request(self.conn, CMO, "publish",
+                                            {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest})["kind"], "publish")
+
+    def test_a_publish_text_that_is_not_a_string_is_refused_as_such(self):
+        digest = hashlib.sha256(b"Thanks, the fix is in 0.3.41.").hexdigest()
+        for text in (None, 42, ["Thanks"]):
+            e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                             {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest, "text": text})
+            self.assertEqual("text must be a string", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_text_that_does_not_match_its_hash_is_refused(self):
+        other = hashlib.sha256(b"A different reply that would really be posted.").hexdigest()
+        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish",
+                         self.publish("Thanks, the fix is in 0.3.41.", other))
+        self.assertIn("the text doesn't match content_sha256; send the exact text that will be published", e.detail)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_a_publish_with_no_text_is_not_checked(self):
+        appr = H.approval_request(self.conn, CMO, "publish", {"url": "https://acme.example/notes",
+                                                               "content_sha256": "b" * 64})
+        self.assertIsNone(appr["decision"])
+
+    def test_a_unicode_reply_with_a_trailing_newline_matches_the_file_bytes_hq_tickets_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reply.md"
+            path.write_bytes("Merci, Zoë: café ✓ fixed in 0.3.41 \u2014 see you.\r\nLine two.\n".encode("utf-8"))
+            data = path.read_bytes()                    # what hq-tickets hashes
+            sent = json.loads(json.dumps({"url": "hq-ticket:TK-0000AAAA", "text": data.decode("utf-8"),
+                                          "content_sha256": hashlib.sha256(data).hexdigest()}))
+        self.assertTrue(sent["text"].endswith("\n"))
+        H.approval_request(self.conn, CMO, "publish", sent)
+        self.assertEqual(H.refusals_for(self.conn, CMO), [])
+
 
 # ----------------------------------------------------------------------------- rule 7
 class Rule7Lint(HubCase):
@@ -570,6 +629,55 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(needs(), 0)
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
         self.refused('private', H.task_update, self.conn, CMO, secret['id'], status='waiting', waiting_on='ben')
+
+    def test_a_waiting_note_for_a_person_is_linted_as_their_ask(self):
+        lints = lambda tid: [e[0] for e in self.conn.execute(
+            "SELECT new FROM task_events WHERE task_id=? AND field='lint' ORDER BY ts", (tid,))]
+        task = H.task_create(self.conn, CMO, 'Coordinate the external agent scenario', '', CMO, private=False)
+        # The bot's working notes as the ask: ids, a page of status. Saved, waiting on Ana, with warnings.
+        notes = ('Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static '
+                 'Larkspur. Docs task Doing; no sample edit/deploy or duplicate human question. Waiting on a call.')
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=notes)
+        self.assertEqual((after['waiting_on'], after['note']), (ANA, notes))
+        self.assertTrue(any('"db14c907"' in w for w in after['warnings']), after['warnings'])
+        self.assertTrue(any('working notes' in w for w in after['warnings']), after['warnings'])
+        self.assertEqual(len(lints(task['id'])), 1)
+        # One plain sentence to the person passes.
+        plain = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana',
+                              note='Tell me whether the public example should show the agent demo.')
+        self.assertNotIn('warnings', plain)
+        # No note at all says nothing to them, unless a question to them on the task already asks.
+        bare = H.task_create(self.conn, CMO, 'Renew the domain', '', CMO, private=False)
+        self.assertIn('say in one plain sentence', H.task_update(
+            self.conn, CMO, bare['id'], status='waiting', waiting_on='ana')['warnings'][0])
+        asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
+        H.task_ask(self.conn, CMO, asked['id'], 'Which date should it go out?')
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana'))
+        # A note on a task that waits on nobody is not an ask.
+        self.assertNotIn('warnings', H.task_update(self.conn, CMO, bare['id'], status='doing', note=notes))
+        self.assertEqual(H.lint_waiting_note('Restart the build host; it refuses SSH', ANA), [])
+
+    def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
+        flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]
+        sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
+        for note, ident in [('Approve the fix in db14c907.', 'db14c907'), (f'Approve the fix in {sha}.', sha),
+                            ('Approve the fix in 3f2a9c1.', '3f2a9c1'), ('Review #388 before Friday.', '#388'),
+                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f')]:
+            self.assertEqual(flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note)
+        for note in ['Approve the $250000 budget.', 'Approve the £1500000 offer.', 'Approve the €250000 and ¥9000000 quotes.',
+                     'Name the deadbeef test host.', 'Pick a date after 2026-10-11 for the launch.',
+                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.']:
+            self.assertEqual(flagged(note), [], note)
+        # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
+        self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))
+        self.assertTrue(H.lint_title('Approve the $250000 budget'))
+        self.assertEqual(H.lint_title('Fix the db14c907 crash'), [], 'lowercase hex is a waiting-note check, not a title one')
+        # A colon that opens a plain clause is prose; a status code is still jargon.
+        self.assertEqual(H.lint_waiting_note('Check the order status: it says pending.', ANA), [])
+        self.assertEqual(H.lint_waiting_note('Approve the release; status: doing.', ANA),
+                         ['internal jargon in the note for ana: "status: doing."'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nowner: bot:cmo'), ['internal codes: "owner: bot:cmo"'])
+        self.assertEqual(H.lint_human_item('Approve the release\n\nThe owner: the CMO, who signs it.'), [])
 
     def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
         H.status_set(self.conn, H.KEEPER, "cmo", state="idle")

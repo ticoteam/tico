@@ -39,7 +39,9 @@ withdrawn text in the audit trail.
 4. **Approval lint is the payload's fields.** An approval has no title or body, so rule 7 on
    an approval means "the payload is the exact thing": `send` needs to/cc/subject/
    body_sha256/mailbox, `spend` amount/account/what, `publish` url/content_sha256, `merge`
-   repo/pr. A missing field is `Refused("lint", "send needs cc")`.
+   repo/pr. A missing field is `Refused("lint", "send needs cc")`. A `publish` payload's
+   content_sha256 must be 64 lower-case hex characters, and its optional `text` must be a string
+   whose SHA-256 (of its UTF-8, as lower-case hex) is exactly content_sha256, or it is refused.
 5. **`status_set(..., state="active")`** is accepted although `active` is not a `bot_status`
    state: it is how §4 rule 8 says a human clears a quarantine. It sets `bots.state=active`
    and `bot_status.state=idle`.
@@ -812,6 +814,53 @@ def _refuse_foreign(conn):
             "TICO_DB at an empty path or a Tico database, or restore a snapshot.")
 
 
+def ensure_market_reads(conn):
+    """Additive indexes and exact resolution keys, shared by local and cloud boot."""
+    conn.execute("SAVEPOINT market_read_indexes")
+    try:
+        for name, spec in (
+            ("market_entities_name", "market_entities(name, id)"),
+            ("market_entities_status_name", "market_entities(status, name, id)"),
+            ("market_entities_type_name", "market_entities(type, name, id)"),
+            ("market_events_ts", "market_events(ts, id)"),
+            ("market_edges_rel_pair", "market_edges(rel, src, dst)"),
+        ):
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='market_entity_keys'").fetchone()
+        conn.execute("CREATE TABLE IF NOT EXISTS market_entity_keys (key TEXT NOT NULL, entity_id TEXT NOT NULL, "
+                     "PRIMARY KEY(key, entity_id)) WITHOUT ROWID")
+        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_entity ON market_entity_keys(entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_unicode ON market_entity_keys(entity_id) "
+                     "WHERE key GLOB '*[^ -~]*'")
+        def keys(ref):
+            return f"""SELECT lower(trim({ref}.name)) AS key
+                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid({ref}.external_ids) THEN {ref}.external_ids ELSE '{{}}' END, '$.domain')))
+                UNION SELECT lower(trim(value)) FROM json_each(CASE WHEN json_valid({ref}.aliases) THEN {ref}.aliases ELSE '[]' END)"""
+        if not exists:
+            conn.execute("""INSERT OR IGNORE INTO market_entity_keys
+                SELECT lower(trim(name)), id FROM market_entities WHERE trim(name)<>''
+                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain'))), id
+                    FROM market_entities WHERE coalesce(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain')),'')<>''
+                UNION SELECT lower(trim(j.value)), e.id FROM market_entities e, json_each(CASE WHEN json_valid(e.aliases) THEN e.aliases ELSE '[]' END) j
+                    WHERE trim(j.value)<>''""")
+        for event, before in (("INSERT", ""), ("UPDATE OF name, aliases, external_ids",
+                                               "DELETE FROM market_entity_keys WHERE entity_id=old.id;")):
+            suffix = "insert" if event == "INSERT" else "update"
+            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS market_keys_{suffix} AFTER {event} ON market_entities BEGIN
+                {before}
+                INSERT OR IGNORE INTO market_entity_keys SELECT key, new.id FROM ({keys('new')})
+                    WHERE key IS NOT NULL AND key<>'';
+            END""")
+        conn.execute("""CREATE TRIGGER IF NOT EXISTS market_keys_delete AFTER DELETE ON market_entities BEGIN
+            DELETE FROM market_entity_keys WHERE entity_id=old.id;
+        END""")
+    except Exception:
+        conn.execute("ROLLBACK TO market_read_indexes")
+        raise
+    finally:
+        conn.execute("RELEASE market_read_indexes")
+
+
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -836,6 +885,7 @@ def migrate(conn, adopt_legacy=False):
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
     # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
@@ -950,6 +1000,7 @@ def _one(conn, sql, args=()):
 VIA = contextvars.ContextVar("hub_via", default="")
 # When BotOps acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
 # asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
+# The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
@@ -989,7 +1040,7 @@ def event(conn, actor, action, target="", detail=None):
     """Append the audit row every write leaves behind."""
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
-        if VIA.get() == "botops" and DELEGATION.get():
+        if VIA.get() in ("botops", "assistant") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "action": action,
            "target": str(target or ""), "detail_json": _dump(detail)}
@@ -1028,7 +1079,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None):
 
 # ----------------------------------------------------------------------------- lint (rule 7)
 LINT_MAX_WORDS = 120
-LINT_CODES = re.compile(r"\b(owner|status)\s*:\s*[\w:./-]+", re.I)
+# `status: doing`, `owner:bot:cmo`. A colon that opens a plain clause ("the order status: it says pending") is prose.
+LINT_CODES = re.compile(r"\b(owner|status)\s*:\s*(?!(?:it|this|that|the|an?|there|they|we|you|i)\b)[\w:./-]+", re.I)
 # Plain-English titles: an identifier is a bare
 # reference number - `DC040302`, `03QEZT3C`, `#18823` - that belongs in the body or a link.
 # Dates, versions (3.5) and short model names are not identifiers.
@@ -1178,6 +1230,39 @@ def lint_title(title):
     return problems
 
 
+# A waiting note is put in front of the person as the ask: a task or message id (`db14c907`, a uuid) or a commit
+# hash (7 to 40 hex characters) is the bot's own shorthand, and so is a page of status. A run of hex needs a digit
+# and a letter, so a word ("deadbeef", "defaced") or a plain number is not an id. One may end a sentence.
+LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])"
+                         r"(?:[0-9a-f]{8}(?:-[0-9a-f]{4}){1,4}(?:[0-9a-f]{8})?|[0-9a-f]{7,40})(?![\w/-]|\.[\w/-])", re.I)
+LINT_CURRENCY = "$£€¥"
+LINT_WAIT_WORDS = 40
+
+
+def lint_waiting_note(note, person, asked=False):
+    """The note on a task a bot sets waiting on a person (`--status waiting --on <person> --note`): the person reads
+    it as what they are asked to do, so it is one plain request to them, not the bot's working notes. The problems,
+    empty when it passes. No note passes only when an open question to them on the task already asks."""
+    text, name = str(note or "").strip(), actor_id(person)
+    if not text:
+        return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
+    problems = []
+    # An amount ("$250000") is not a reference number. Only here: a title keeps LINT_IDENT as it is.
+    m = LINT_HEX_ID.search(text) or next((i for i in LINT_IDENT.finditer(text)
+                                          if not (i.start() and text[i.start() - 1] in LINT_CURRENCY)), None)
+    if m:
+        problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
+    n = len(text.split())
+    sentences = len([s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()])
+    if n > LINT_WAIT_WORDS or sentences > 2:
+        problems.append(f"the note for {name} reads as working notes ({n} words): write one plain sentence "
+                        f"asking them for what you need, and keep your notes in a comment")
+    m = LINT_CODES.search(text) or LINT_JARGON.search(text)
+    if m:
+        problems.append(f'internal jargon in the note for {name}: "{m.group(0)}"')
+    return problems
+
+
 def lint_approval(kind, payload):
     """Rule 7 for an approval: the payload is the exact thing, so every field must be there."""
     problems = []
@@ -1189,11 +1274,29 @@ def lint_approval(kind, payload):
             if f == "cc" and "cc" in payload:
                 continue                    # an empty Cc is a real answer
             problems.append(f"{kind} needs {f}")
+    digest = payload.get("content_sha256")
+    if kind == "publish" and digest not in (None, "") and not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+        # Every publisher compares against hashlib's hexdigest(), so any other shape could never publish.
+        problems.append("content_sha256 must be 64 lower-case hex characters")
     if kind == "merge" and "merge needs pr" in problems:
         # A merge approval is for one pull request; a change with none is a decision for a person.
         problems[problems.index("merge needs pr")] = ("merge needs pr (the pull request number); for a change "
                                                       "with no pull request, file a decision task for the person instead")
     return problems
+
+
+def publish_text_matches(payload):
+    """A publish payload's `text` is what the person approves; `content_sha256` is what the publisher
+    checks. They agree only when the hash is SHA-256 of the text's UTF-8 bytes (hq-tickets hashes the
+    reply file's bytes and sends them decoded, so a UTF-8 file round-trips exactly)."""
+    text, digest = payload.get("text"), payload.get("content_sha256")
+    if not isinstance(text, str) or not isinstance(digest, str):
+        return False
+    try:
+        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:              # a lone surrogate is no text anyone could publish
+        return False
+    return actual == digest                 # exact: hq-tickets compares against a lower-case hexdigest
 
 
 def style_problems(conn, actor, problems, severity="normal"):
@@ -3346,6 +3449,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     person = (waiting_on or None) if waiting_on is not None else (None if changed else row.get("waiting_on"))
     # A note that waits on a person is put in front of them, so it is checked like a title or body.
     checked = ("title", "body", "note") if person else ("title", "body")
+    # ...and it is read as the ask: one plain request to them, not the bot's working notes (warned, as titles are).
+    if person and is_bot(actor) and is_human(person) and (person != row.get("waiting_on") or note is not None):
+        asked = any(a["to_actor"] == person for a in open_task_asks(conn, row))
+        plain = plain + style_problems(conn, actor, lint_waiting_note(
+            note if note is not None else row.get("note"), person, asked))
     for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
         if value is None:
             continue
@@ -4109,6 +4217,12 @@ def approval_request(conn, actor, kind, payload, task_id=None):
     problems = lint_approval(kind, payload)
     if problems:
         refuse(conn, actor, "lint", "; ".join(problems), severity)
+    if kind == "publish" and "text" in payload and not publish_text_matches(payload):
+        # The person reads `text`, the publisher checks `content_sha256`: they must be the same reply.
+        if not isinstance(payload["text"], str):
+            refuse(conn, actor, "lint", "text must be a string", severity)
+        refuse(conn, actor, "lint", "the text doesn't match content_sha256; send the exact text that will be published",
+               severity)
     digest = payload_hash(payload)
     dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
     if dup:

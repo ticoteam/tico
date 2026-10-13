@@ -60,7 +60,7 @@
     },
     {
       "name": "Docs",
-      "description": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; linked docs, which are links; and search across both."
+      "description": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them."
     },
     {
       "name": "Assistant",
@@ -3217,6 +3217,347 @@
         ]
       }
     },
+    "/api/v2/doc-sources": {
+      "get": {
+        "summary": "External sources and indexing state; limit/cursor page",
+        "operationId": "listDocSources",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocSourceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      },
+      "post": {
+        "summary": "Save a URL and queue public GitHub indexing; duplicate URLs open the existing source",
+        "operationId": "addDocSource",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocSourceResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/doc-sources/{source_id}": {
+      "patch": {
+        "summary": "Edit or remove a source; follows linked-doc permissions",
+        "operationId": "updateDocSource",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      }
+    },
+    "/api/v2/doc-sources/{source_id}/documents": {
+      "get": {
+        "summary": "Included file metadata, limit/cursor page",
+        "operationId": "listSourceDocuments",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2000,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDocumentList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      }
+    },
+    "/api/v2/doc-sources/{source_id}/refresh": {
+      "post": {
+        "summary": "Queue one coalesced refresh without waiting for GitHub",
+        "operationId": "refreshDocSource",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocSourceResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      }
+    },
     "/api/v2/docs": {
       "get": {
         "summary": "Internal docs by path, without their text; path_prefix narrows to a folder, limit and cursor page",
@@ -3426,6 +3767,69 @@
         ]
       }
     },
+    "/api/v2/docs/external/{document_id}": {
+      "get": {
+        "summary": "Untrusted external text and provenance; optional observed revision",
+        "operationId": "getExternalDoc",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "default": "",
+              "title": "Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalDocResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      }
+    },
     "/api/v2/docs/import": {
       "post": {
         "summary": "A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) converted to Markdown and saved as a new internal doc",
@@ -3543,6 +3947,17 @@
               "pattern": "^(team|company|manual|all)$",
               "default": "company",
               "title": "Collection"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Source Id"
             }
           }
         ],
@@ -6902,7 +7317,7 @@
     },
     "/api/v2/linked-docs": {
       "get": {
-        "summary": "Linked docs: links to where other docs live; Tico keeps no copy",
+        "summary": "External link identities and metadata; public GitHub content is indexed separately",
         "operationId": "listLinkedDocs",
         "responses": {
           "200": {
@@ -15000,6 +15415,124 @@
         ],
         "additionalProperties": true
       },
+      "DocSource": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "added_by": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "reference_override": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "link_only",
+              "queued",
+              "preparing",
+              "updating",
+              "ready",
+              "empty",
+              "failed",
+              "access_needed"
+            ]
+          },
+          "last_checked": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doc_count": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "error_code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "added_by",
+          "description",
+          "doc_count",
+          "error_code",
+          "id",
+          "kind",
+          "last_checked",
+          "path",
+          "provider",
+          "reference",
+          "reference_override",
+          "repo",
+          "skipped",
+          "status",
+          "title",
+          "url"
+        ],
+        "additionalProperties": true
+      },
+      "DocSourceList": {
+        "type": "object",
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocSource"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "sources"
+        ],
+        "additionalProperties": true
+      },
+      "DocSourceResult": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/DocSource"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": true
+      },
       "DocsAsk": {
         "properties": {
           "question": {
@@ -15129,6 +15662,9 @@
             "type": "array",
             "items": {
               "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ExternalHit"
+                },
                 {
                   "type": "object",
                   "properties": {
@@ -15337,6 +15873,157 @@
           "parts",
           "state",
           "text"
+        ],
+        "additionalProperties": true
+      },
+      "ExternalDocResult": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "external"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "trust": {
+                "enum": [
+                  "untrusted_external"
+                ]
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "source_title": {
+                "type": "string"
+              },
+              "source_url": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string"
+              },
+              "last_checked": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "citation_url": {
+                "type": "string"
+              },
+              "reference_notice": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "citation_url",
+              "commit",
+              "content",
+              "id",
+              "last_checked",
+              "path",
+              "reference_notice",
+              "source_id",
+              "source_title",
+              "source_url",
+              "title",
+              "trust",
+              "type"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "doc"
+        ],
+        "additionalProperties": true
+      },
+      "ExternalHit": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "external"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "trust": {
+            "enum": [
+              "untrusted_external"
+            ]
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_title": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "last_checked": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "citation_url": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "citation_url",
+          "collection",
+          "commit",
+          "excerpt",
+          "id",
+          "last_checked",
+          "path",
+          "score",
+          "section",
+          "source_id",
+          "source_title",
+          "source_url",
+          "title",
+          "trust",
+          "type"
         ],
         "additionalProperties": true
       },
@@ -20557,6 +21244,155 @@
           "next_before"
         ],
         "additionalProperties": true
+      },
+      "SourceCreate": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Title",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Description",
+            "default": ""
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Reference",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "SourceCreate"
+      },
+      "SourceDocumentList": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/DocSource"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "commit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commit",
+                "id",
+                "path",
+                "title"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "documents",
+          "next_cursor",
+          "source"
+        ],
+        "additionalProperties": true
+      },
+      "SourceEdit": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SourceEdit"
       },
       "Storage": {
         "type": "object",

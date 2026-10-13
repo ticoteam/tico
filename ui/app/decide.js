@@ -120,6 +120,12 @@ function decideRedraw(st) {
 }
 
 // ---- drawing
+// A bot's name opens the bot, as its side-rail entry does. A bot this person can't see, a person or Tico itself has
+// no link.
+const decideChatHref = actor => {
+  const slug = actorSlug(actor);
+  return slug && (S.emps || []).some(e => e.name === slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
+};
 const decideCurrent = st => st.cards.get(st.queue[0]);
 const decideDecision = c => c.type !== 'task';
 function decidePaintHead(st) {
@@ -148,9 +154,12 @@ function decideRender(st, enter = false) {
     : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner).startsWith('bot:') ? c.it.owner
     : c.it.requester || c.it.owner;
   const decide = decideDecision(c), needsNote = decideNeedsNote(c);
+  const name = actorLabel(from) || 'Tico', chat = decideChatHref(from);
+  // A bot's face and name open the bot, as the side rail does; the face is a second way in for the pointer, the name the one for keys.
+  const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>` : actorFace(from, 32);
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
-    <div class="dc-who">${actorFace(from, 32)}
-      <div class="dc-who-text"><div class="dc-who-name">${esc(actorLabel(from) || 'Tico')}</div>
+    <div class="dc-who">${face}
+      <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}</div>
         <div class="dc-who-sub">${esc(decide ? plainActors(c.it.title || '') : decideMeta(c.it))}</div></div>
       <span class="pill ${decide ? 'needs' : ''}">${decide ? 'Decide' : 'Task'}</span></div>
     <div class="dc-body"></div>
@@ -223,12 +232,36 @@ function decideMeta(it) {
   if (it.kind === 'question') return `Question for you · ${ageShort(it.ask?.created || it.created)}`;
   return `Assigned to you · ${ageShort(it.created)}`;
 }
+// What a task card leads with: what the person must do, in the words written to them. In order, an open question
+// to them; the last thing someone else said to them on the task (not a copy of a status note: the server mirrors
+// those into the chat); the task's request, its body (on a card waiting on them, only when a person wrote it). The
+// owner's status note is its own working record (ids, shorthand), so it is never the headline: it folds under
+// "Latest note".
+function decideLead(st, c) {
+  const it = c.it, data = st.data.get(it.id), me = myActor(), comments = data?.comments || [];
+  const note = String(it.note || '').trim(), text = s => String(s || '').trim();
+  const asked = [it.ask, ...comments.filter(m => m.kind === 'ask' && !m.answered_by).reverse()]
+    .find(m => m && m.to_actor === me && m.from_actor !== me && text(m.body));
+  const said = comments.filter(m => m.kind === 'say' && m.from_actor !== me && m.to_actor === me && !m.refs?.note
+    && text(m.body) && text(m.body) !== note).at(-1);
+  // A body that opens with the title does not say it twice. On a card waiting on me, the body is the ask only when a
+  // person wrote it: a bot's body is its own working record (ids, shorthand), so the card says nothing was asked.
+  const body = text(taskBody(it)), title = text(it.title);
+  const asks = !decideWaitingOnMe(it) || String(it.requester || '').startsWith('human:');
+  const request = !asks ? '' : body.startsWith(title) ? body.slice(title.length).trim() : body;
+  const lead = text(asked?.body) || text(said?.body) || request;
+  return {lead, note: note && note !== lead ? note : ''};
+}
+const decideWaitingOnMe = it => it.waiting_on === myActor() || it.kind === 'waiting';
 function decideTaskHTML(st, c) {
-  const it = c.it, data = st.data.get(it.id), me = myActor();
-  const said = (data?.comments || []).filter(m => m.from_actor !== me && String(m.body || '').trim()).at(-1);
-  // A body that opens with the title does not say it twice.
-  const body = String(taskBody(it) || '').trim(), title = String(it.title || '').trim();
-  const text = said?.body || it.note || (body.startsWith(title) ? body.slice(title.length).trim() : body);
+  const it = c.it, data = st.data.get(it.id);
+  const {lead, note} = decideLead(st, c);
+  const bot = String(it.owner || '').startsWith('bot:') ? actorLabel(it.owner) : decideBot(c);
+  // Nothing the person can act on: say so, and offer the comment box to ask. Until the comments load, say nothing.
+  const blank = !lead && data && decideWaitingOnMe(it)
+    ? `<p class="dc-blank">${esc(`${bot} set this waiting on you without saying what it needs.`)}</p>
+       <button type="button" class="ghost dc-ask" data-dc="ask">Comment to ask</button>` : '';
+  const latest = note ? `<details class="dc-latest"><summary>Latest note</summary><p>${esc(plainActors(note))}</p></details>` : '';
   const files = (data?.files || []).filter(f => !f.archived && f.versions.length);
   const shown = files.map(f => {
     const v = tfVersion(f), kind = tfKind(f.name, v.mime || f.mime);
@@ -237,7 +270,7 @@ function decideTaskHTML(st, c) {
       : `<a class="dc-file" href="${esc(v.url)}" target="_blank" rel="noopener"><span class="tc-kind">${esc(tfGlyph(kind, f.name))}</span><span class="dc-fname">${esc(f.name)}</span><span class="muted tnum">v${v.n}</span></a>`;
   }).join('');
   return `<p class="dc-q dc-title">${esc(plainActors(it.title || ''))}</p>
-    ${text ? `<div class="dc-msg md">${safeMd(plainActors(text))}</div>` : ''}${shown ? `<div class="dc-files">${shown}</div>` : ''}`;
+    ${lead ? `<div class="dc-msg md">${safeMd(plainActors(lead))}</div>` : blank}${shown ? `<div class="dc-files">${shown}</div>` : ''}${latest}`;
 }
 async function decideLoad(st, c, again = false) {
   if (c.type === 'approve' || st.data.has(c.it.id) && !again) return;
@@ -330,7 +363,9 @@ const DEC_OUTBOX = new Set();
 // The outbox is kept in this browser too, so a write the page could not confirm before it closed goes out on the
 // next load, under the same keys.
 const DEC_SAVED = 'tico.decide.outbox';
+let DEC_SIGNED_OUT = false;
 function decideSave() {
+  if (DEC_SIGNED_OUT) return;
   try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
 }
 function decideResume() {
@@ -405,6 +440,16 @@ function decideFlush() {
   }
 }
 window.addEventListener('pagehide', decideFlush);
+// Signing out: what still waits goes out as on leaving the page, then none of it (a note's words included) stays in
+// this browser for whoever uses it next. The same links observability.js resets on.
+document.addEventListener('click', e => {
+  const link = e.target.closest?.('a[href]');
+  if (!link || !/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) return;
+  decideFlush();
+  DEC_SIGNED_OUT = true;
+  DEC_OUTBOX.clear();
+  try { localStorage.removeItem(DEC_SAVED); } catch {}
+}, true);
 function decideToast(st, text, undo) {
   const t = $('.decide .dc-toast');
   if (!t) return;
@@ -426,6 +471,7 @@ function decideClick(st, ev) {
   if (!b || b.disabled || st.swiped) return;
   const what = b.dataset.dc;
   if (what === 'back') { location.hash = TASKS; return; }
+  if (what === 'ask') { $('.decide .dc-note textarea')?.focus(); return; }
   if (what === 'undo') { const undo = st.undo; st.undo = null; $('.decide .dc-toast').hidden = true; undo?.(); return; }
   decideAct(st, what, Number(b.dataset.i));
 }

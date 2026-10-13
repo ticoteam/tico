@@ -8,6 +8,63 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Add teammates from Team.** The plus beside Team offers a section, bot or human according to your permissions.
+  Bots come from the existing template picker or an editable, unsent BotOps request for a custom bot or help with an
+  existing folder or GitHub repository. Humans need an email and optional name; no invitation email is sent.
+- **External sources in Docs.** Add a public GitHub repository, folder or file to browse read-only previews and search its contents. The Librarian can read indexed passages and cite their exact commit. Sources refresh every six hours; failed updates keep the last good copy. Other URLs remain searchable links.
+- **Compact at, per bot.** The bot editor's Compact at (150k, 250k the default, 400k, 600k or 1M tokens) sets how full a bot's conversation
+  gets before it is compacted, instead of the model's whole window: Claude Code gets `--autocompact` on every turn (when its `--help` lists it)
+  and Codex `model_auto_compact_token_limit`. Changing it keeps the bot's session.
+- **Docs show a bot working with a specialist outside Tico.** [Connect tools](docs/connect-tools.md#work-with-a-specialist-outside-tico)
+  has a new section with TIDY, a cleaning and maintenance company, as the example. A bot uses TIDY through a Tool (its MCP server or
+  an API skill), and a person approves any booking or spending. Tico doesn't run TIDY's workers, has no TIDY connector and doesn't
+  track vendor spend. Exact setup is left to TIDY's own reference, because its public pages disagree. [Connect an external agent](docs/connect-an-agent.md)
+  now separates that direction (a bot in Tico using an outside service) from an outside agent working in Tico.
+  A new section, [Hire an external AI specialist](docs/connect-tools.md#hire-an-external-ai-specialist), lists providers you
+  can hire for a role: TIDY (property operations), Fin (support), Smith.ai (reception and intake), 11x's Alice and Artisan's Ava
+  (sales and business development), Devin (engineering) and HappyRobot (logistics). For each it gives the work offered and how a bot
+  could reach it, where the vendor documents that, then four steps for bringing one into your work. These are examples, not
+  integrations Tico has built or tested.
+- **The Assistant does the task actions you ask it for, and many at once are one card.** Tell it in your Assistant chat to close, finish, reopen, reassign, comment on or link tasks and it does them as you, with no Confirm card: the write cites your message, and the server checks it's yours, in your own Assistant chat and under 30 minutes old, and applies your own rights. Anything you didn't clearly ask for is a card, and a group of task actions is now one card listing every task, with one Confirm that runs them all and says which didn't go through, instead of a card each (which stopped at 20). Confirming a card to close a task no longer fails with "body.version: Field required; body.status: Input should be ...": a card that says status closed closes the task with its current version, including cards already waiting. Approvals (send, spend, publish, merge) and everything else still need your own click. See [Assistant](docs/assistant.md).
+- **A Decide card's bot opens the bot.** Tapping the bot's name or face at the top of a card opens that bot, as its entry in the side rail does. The card's own buttons aren't touched. A card from a person has no link.
+
+### Fixed
+- **`hub tool add --dry-run` no longer crashes.** It failed with "AttributeError: 'Namespace' object has no attribute 'body'" because the CLI ran every `--dry-run` as a task-create preview. Only `hub task create --dry-run` is checked locally now; `hub tool add --dry-run` sends the tool entry to the server, which validates it without opening a task.
+- **A refused heartbeat timer no longer leaves an OpenClaw or Hermes profile half connected.** When launchd refused the timer (as it does for a plist on an external volume, seen with OpenClaw 2026.10.1), `pair` exited 1 after the approval with no `tico-sync` skill and no sync job, and since `reinstall` retried the timer, only a second approval with `pair --no-timer` got out of it. The connector now installs the skill and the sync job first and tries the timer (launchd or systemd) last. If the timer fails, it keeps the pairing, removes the half-made timer, switches to manual heartbeat mode and ends with a `WARNING` that says what failed, gives a cron line for `heartbeat`, and gives `reinstall ... --timer` to retry with no new approval. It still exits 0, as when the sync job can't be made. `reinstall` also takes `--no-timer` now, which switches to manual mode and removes an installed timer. See [OpenClaw agents](docs/openclaw-agents.md).
+- **`doctor` no longer says "Everything needed is working" when the agent's model can't run.** For OpenClaw it runs `openclaw models status --json --check`, OpenClaw's offline check that calls no model and costs no tokens, and reports "Missing auth" (or an expired or unavailable sign-in) as a problem with the command that fixes it. When that check can't be read (an older OpenClaw), and always for Hermes, which has no such check, `doctor` prints a `NOTE` that it did not check the model and ends "Everything doctor checks is working; it did not check the model". A sync run that ended in an error is now a problem, not a warning, and shows the agent's error with any credential in it blanked.
+- **A publish approval's hash must be lower-case hex, and its text a string.** `hq-tickets reply --approval` compares `content_sha256` exactly against a lower-case hex digest, so a request with an upper-case hash was approved and then refused at publish. A `content_sha256` that isn't 64 lower-case hex characters is now refused when requested, with or without `text`: "content_sha256 must be 64 lower-case hex characters". A `text` that isn't a string (`null`, a number) is refused with "text must be a string" instead of the mismatch message; a payload with no `text` is unchanged. On Needs you and Decide, a publish whose text is only whitespace now says "not included; only a hash of it is in the payload" instead of showing an empty row.
+- **A publish approval's text must match its hash.** A `publish` approval carries `url`, `content_sha256` and an optional `text`. The person approving reads the text, but the publisher (for example `hq-tickets reply --approval`) checks only the URL and hash, so harmless text with the hash of a different reply would have published that other reply. A request whose `text` isn't the exact content behind `content_sha256` (SHA-256 of its UTF-8 bytes, as lower-case hex) is now refused: "the text doesn't match content_sha256; send the exact text that will be published". A payload with no `text` is unchanged.
+- **Chat goals no longer loop on waiting or on goals that can't be met.** The harness's goal now also counts "the only work left is waiting on someone or something else" as done for now: the bot says "Waiting on: <what>" and stops, and the goal shows Paused. A goal sent back to work 30 times (100 Codex continuation turns) with no person writing in between is paused and cleared in the harness, and the bot's reply says so with the last reason. This also stops a Claude Code goal that outlived its chat from looping in the bot's other runs. Codex's `blocked` shows as Paused.
+- **Search shows a temporary bot's flag, not its markup.** A temporary bot appeared in search as `<span class="proj" …>⚑</span>Name`; it now shows the flag and its name, and typing "temp" finds the temporary bots.
+- **Replay refuses a time it cannot convert, and stops scanning early.** A `from` or `to` whose UTC time falls outside years 1 to 9999 (`0001-01-01T00:00:00+14:00`) now gets a 422 that says so, not a 500. Each source a replay reads (tasks, task changes, messages, runs) stops after 20,000 rows, counting rows the viewer may not read or that fall outside the team, bot or person asked for, so one call no longer reads a month of a busy server; when it stops, the replay is cut short as at 5000 items (`truncated`, with `next` to continue).
+- **A bot's private question reaches any person on the team.** `hub task question --private` (MCP `hub_task_question` with `private: true`) worked only when the person asked had started the bot's run; asked of anyone else it was refused for privacy. It now files a private task whose two parties are the bot and the person asked, who must already be able to read the private task the run is working on and the parent task. Nobody else can read it, the person who started the run included.
+- **A refused question stores no option files.** Whether the person asked could read a private question was checked only after its option files were stored; it is now checked before, as it was for a company-visible one.
+- **Signing out leaves no unsent Decide actions in the browser.** Actions Decide had not yet confirmed, a note's words included, stayed in the browser's storage after Sign out. Signing out now sends what still waits, as leaving the page does, and removes the saved copy.
+- **A bot's read check no longer leaves a transaction open.** The check that a bot may read a task before it is told about it opened a transaction it never closed when called with none open; it now reads in a savepoint it releases.
+- **A publish approval reads on a phone.** In Needs you and Decide, a Support reply waiting on "Publish this?" now says where it goes
+  ("Support ticket TK-…", a web address as a link only when it is http or https) and shows the whole reply as wrapped text, instead of
+  raw JSON cut off at the screen's edge. A spend shows its amount, account and what it is for, and a merge its repository and pull
+  request; any other field in the payload gets a row of its own, and a publish without its text says only a hash of it is included.
+  The exact payload, content hash included, folds under Exact payload, and any approval's raw JSON now wraps. Payload text is never
+  read as HTML.
+- **Decide leads a waiting card with what you're asked to do, not the bot's working note.** A task a bot set waiting on you showed
+  the bot's status note as the card's message, often a blob of task ids and shorthand. The card now leads with, in order, an open
+  question to you on the task, the last thing a bot said to you on it, or the task's request; the status note folds under a muted
+  "Latest note". When there is none of these, the card says "<Bot> set this waiting on you without saying what it needs" with a
+  Comment to ask button. Setting a task waiting on a person (`hub task update --status waiting --on <person>`) now warns the bot,
+  as the title lint does, when the note has no ask, carries ids, or reads as working notes rather than one plain sentence to that
+  person (`TICO_STYLE_LINT=refuse` refuses it instead); the bot template says the same.
+- **A waiting card leads with a task's request only when a person wrote it, and the waiting-note lint is sharper.** On a task a
+  bot set waiting on you, Decide no longer leads with a body a bot wrote (often a blob of ids): with no question or message to you,
+  the card says "<Bot> set this waiting on you without saying what it needs" with Comment to ask. A body a person wrote still leads.
+  The waiting-note lint now catches a commit hash of 7 to 40 hex characters, full 40-character hashes included, and a hex id that
+  ends a sentence. It no longer flags an amount after a currency sign (`$250000`, also £, € and ¥); titles keep their own
+  reference-number check unchanged. No lint now flags a colon that opens a plain clause ("Check the order status: it says
+  pending."); `status: doing` and `owner: bot:cmo` are still flagged.
+
+## [0.3.40] - 2026-10-11
+
+### Added
 - **Replay: watch what happened over a stretch of time.** Replay (in the account menu, `#/replay`) plays back a window, Today,
   Yesterday, the last 7 days or a custom start and end, as a task board whose cards appear and move between To do, Doing, Waiting
   and Done, an activity feed where chats, task comments and runs come in and bot replies type out, and bot faces that show who is

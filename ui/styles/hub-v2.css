@@ -89,8 +89,21 @@
 .docs-workspace{display:grid;grid-template-columns:minmax(220px,260px) minmax(0,1fr);gap:0;align-items:stretch;flex:1;min-height:0}
 .docs-browser{min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;border-right:1px solid var(--line);padding:0 10px 24px 0}
 .docs-loading{color:var(--muted);font-size:var(--t-sm);padding:6px 8px;margin:0}
-.docs-section+.docs-section{margin-top:18px}
-.docs-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 2px;padding:2px 6px}
+/* Each source heading stays reachable while its document list scrolls independently. */
+.docs-browser:has(>.docs-section){display:flex;flex-direction:column;overflow:hidden}
+.docs-browser>.docs-section{display:flex;flex-direction:column;min-height:0;flex:1}
+.docs-browser>.docs-section:not([open]){flex:0;min-height:34px}
+.docs-section::details-content{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.docs-browser>.docs-section>.docs-section-head{flex:none;padding:8px 4px}
+.docs-group-scroll{overflow:auto;min-height:0;overscroll-behavior:contain}
+.docs-section+.docs-section{margin-top:12px;border-top:1px solid var(--line)}
+.docs-source-all{display:block;padding:5px 8px;color:var(--muted);font-size:var(--t-sm)}
+.docs-source-list .docs-link-main{padding:10px 8px}
+.docs-source-files .docs-recent-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.docs-source-scope{margin:8px 0}
+.docs-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:800px){.docs-browser>.docs-section{flex:none}.docs-group-scroll{max-height:35vh}.docs-source-files .docs-recent-row{grid-template-columns:1fr}.docs-tools{flex-wrap:wrap}}
+.docs-section-head{display:flex;align-items:center;justify-content:flex-start;gap:8px;margin:0 0 2px;padding:2px 6px}
 .docs-section-head h2{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .docs-section-head h2 .muted{margin-left:4px;font-weight:400;letter-spacing:0}
 .docs-mini{padding:0;border:0;background:none;color:var(--muted);font-size:var(--t-sm)}
@@ -253,3 +266,7 @@
 .task-chat textarea{width:100%;resize:vertical;margin:8px 0}
 .task-chat-thread{max-height:300px;overflow:auto;overflow-wrap:anywhere}
 .task-chat .row{display:flex;gap:8px}
+
+.market-reset{position:absolute;top:10px;right:10px;z-index:1;background:var(--surface)}
+.market-paging{display:flex;justify-content:space-between;gap:8px;margin:10px 8px}
+.market-paging button{font:inherit;font-size:12px;color:var(--ink);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer}

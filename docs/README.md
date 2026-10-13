@@ -20,7 +20,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [Humans](people.md).
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
-- [Connect tools](connect-tools.md), [Credentials](credential-vault.md) and [Permissions](permissions.md).
+- [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
   Members can have 25 active bots by default; the owner can change the limit.
 - Keep Tico running: [Health and recovery](install.md#operating-it), [Updates](updates.md),
   [Backups and restore](install.md#backups-and-restore) and [Support](support.md).

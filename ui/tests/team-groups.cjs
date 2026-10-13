@@ -6,9 +6,15 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 
 const FULL = {see: true, read: true, write: true};
+async function shot(page, name) {
+  if (!process.env.TICO_SCREENSHOT_DIR) return;
+  await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity));
+  await page.screenshot({path: path.join(process.env.TICO_SCREENSHOT_DIR, name + '.png')});
+}
 
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
@@ -54,12 +60,30 @@ async function open(browser, me, branches = false) {
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (p.startsWith('/vendor/')) {
+      const file = path.join(__dirname, '..', p);
+      if (fs.existsSync(file)) return route.fulfill({contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript', body: fs.readFileSync(file)});
+    }
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (failures.has(p)) return route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: 'Temporarily unavailable'})});
     if (p === '/api/me') return json(me);
     if (p === '/api/humans') return json({people, org_groups: groupRows()});
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
+    if (p === '/api/runs') return json([]);
+    if (p === '/api/v2/templates') return json({cards: [{template: 'bookkeeping', slug: 'bookkeeping', name: 'Bookkeeper',
+      summary: 'Keeps the ledger.', instructions: '# Bookkeeper\n\nKeep the ledger.', model: 'fixture-model'}]});
+    if (p === '/api/v2/bots' && method === 'POST') {
+      const body = request.postDataJSON(); calls.push(['POST', 'bots', body]);
+      bots.push(bot(body.slug, body.display_name, '', '', {status: body.status}));
+      return json({bot: {slug: body.slug}});
+    }
+    if (p === '/api/v2/access/humans' && method === 'POST') {
+      const body = request.postDataJSON(); calls.push(['POST', 'humans', body]);
+      people.push({id: 'new-human', ...body, org_parent: '', team: ''});
+      return json({id: 'new-human'});
+    }
+    if (p.startsWith('/api/v2/chat/') && method === 'POST') { calls.push(['POST', 'chat', request.postDataJSON()]); return json({}); }
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/messaging/bots') return json({bots: [{bot: 'channel', name: 'Channel Inbox', sources: [{kind: 'slack', id: 'slack:C1', name: '#support'}]}]});
@@ -176,8 +200,11 @@ async function owner(browser) {
   assert.equal(await node(page, 'b:inbox').isVisible(), false);
   await row(page, 'Message bots').locator('.dept-label').click();
 
-  // Add a group: the plus beside Team, a field, Enter.
+  // Add a group even when Team is collapsed and showing history.
+  await page.locator('#org-history').click();
+  await page.locator('[data-section-toggle=organisation]').click();
   await page.locator('#org-add-group').click();
+  await page.getByRole('menuitem', {name: 'Add section', exact: true}).click();
   const field = page.locator('#tree .org-name');
   await field.fill('Legal');
   await field.press('Enter');
@@ -185,6 +212,7 @@ async function owner(browser) {
   assert.deepEqual(calls.shift(), ['POST', 'groups', {name: 'Legal'}]);
   // Escape adds nothing.
   await page.locator('#org-add-group').click();
+  await page.getByRole('menuitem', {name: 'Add section', exact: true}).click();
   await page.locator('#tree .org-name').press('Escape');
   assert.equal(await page.locator('#tree .org-name').count(), 0);
   assert.deepEqual(calls, []);
@@ -237,16 +265,109 @@ async function owner(browser) {
 
 async function member(browser) {
   const {page, errors} = await open(browser, {id: 'ben', role: 'viewer', name: 'Ben', email: 'ben@example.test', cloud: true, company_role: 'member'});
-  // A member reads the chart: no plus, no rename, nothing to drag, and a group nobody is in is not shown.
+  // A member may create bots, but has no group-edit handles; an empty group is not shown.
   assert.deepEqual(await shape(page), [
     {Ana: ['Cara', 'Scout']}, {Marketing: [{Ben: ['CMO']}, {SEO: ['Writer']}]}, {'Message bots': ['Inbox Manager', 'Channel Inbox']}]);
-  assert.equal(await page.locator('#org-add-group').isVisible(), false);
+  await page.locator('#org-add-group').click();
+  assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Add bot']);
+  await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-group-rename], [data-group-add], [data-group-delete], #tree .org-no-group').count(), 0);
   await page.evaluate(() => orgGroupDelete('marketing'));
   assert.equal(await page.locator('#tree .noderow[data-org^="g:"][draggable="true"]').count(), 0);
   assert.equal(await node(page, 'b:scout').getAttribute('draggable'), null, 'a member moves only what reports up to them');
   assert.deepEqual(errors, []);
   await page.close();
+}
+
+async function teamAdd(browser) {
+  const {page, errors, calls, failures} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
+  const choose = async name => {
+    await page.locator('#org-add-group').click();
+    await page.getByRole('menuitem', {name, exact: true}).click();
+  };
+  // The plus is reachable by keyboard and cancelling writes nothing.
+  await page.locator('#org-add-group').focus();
+  await page.keyboard.press('ArrowDown');
+  await shot(page, 'team-add-menu-desktop');
+  await page.keyboard.press('End');
+  assert.equal(await page.getByRole('menuitem', {name: 'Add human'}).evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#org-add-group').evaluate(el => el === document.activeElement), true);
+  assert.deepEqual(calls, []);
+
+  // The template picker creates a bot and refreshes the chart without visiting Settings.
+  await choose('Add bot');
+  await shot(page, 'team-add-bot-desktop');
+  await page.locator('[data-team-template]').click();
+  await page.locator('[data-cat-toggle=bookkeeping]').check();
+  await page.locator('[data-cat-name=bookkeeping]').fill('Ledger');
+  await page.getByRole('button', {name: 'Add selected', exact: true}).click();
+  await node(page, 'b:bookkeeping').waitFor();
+  const added = calls.shift();
+  assert.equal(added[1], 'bots');
+  assert.equal(added[2].display_name, 'Ledger');
+  assert.equal(added[2].template, 'bookkeeping');
+  assert.deepEqual(added[2].owners, ['ana']);
+  assert.equal(new URL(page.url()).hash, '#/updates');
+
+  // A failed add keeps the entered human available for correction and retry.
+  await choose('Add human');
+  await page.locator('#team-add-human [name=email]').fill('dana@acme.example');
+  await page.locator('#team-add-human [name=name]').fill('Dana');
+  failures.add('/api/v2/access/humans');
+  await page.locator('#team-add-human [type=submit]').click();
+  await page.locator('[data-team-error]:not([hidden])').waitFor();
+  assert.equal(await page.locator('#team-add-human [name=email]').inputValue(), 'dana@acme.example');
+  failures.clear();
+  await page.locator('#team-add-human [type=submit]').click();
+  await node(page, 'p:new-human').waitFor();
+  assert.deepEqual(calls.shift(), ['POST', 'humans', {email: 'dana@acme.example', name: 'Dana'}]);
+
+  // BotOps starts an editable draft, never sends it, and preserves one already being written.
+  await choose('Add bot');
+  await page.locator('[data-team-botops]').click();
+  const draft = page.locator('#chat-composer .p-text');
+  await draft.waitFor();
+  assert.match(await draft.inputValue(), /folder path and computer, or GitHub URL/);
+  assert.equal(await draft.evaluate(el => el === document.activeElement), true);
+  await draft.fill('Keep this existing request.');
+  await choose('Add bot');
+  await page.locator('[data-team-botops]').click();
+  assert.equal(await draft.inputValue(), 'Keep this existing request.');
+  assert.deepEqual(calls, [], 'the handoff does not send a chat message');
+
+  // The same actions work from the phone drawer and the menu stays within the screen.
+  await page.setViewportSize({width: 390, height: 844});
+  await page.locator('#bot-back-arrow').click();
+  await page.waitForFunction(() => location.hash === '#/updates');
+  await page.locator('#mobile-more').click();
+  await page.locator('#org-add-group').click();
+  const bounds = await page.locator('#team-add-menu').boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 390 && bounds.y + bounds.height <= 844);
+  await shot(page, 'team-add-menu-mobile');
+  await page.getByRole('menuitem', {name: 'Add human', exact: true}).click();
+  assert.equal(await page.locator('body').evaluate(el => el.classList.contains('drawer')), false);
+  assert.equal(await page.locator('#team-add-human [name=email]').evaluate(el => el === document.activeElement), true);
+  await shot(page, 'team-add-human-mobile');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('#team-add-dialog'));
+  assert.equal(await page.locator('#mobile-more').evaluate(el => el === document.activeElement), true);
+  assert.deepEqual(errors, []);
+  await page.close();
+
+  // Members see only capabilities granted by the server; revocation blocks even an open form.
+  const limited = await open(browser, {id: 'ben', role: 'viewer', can_create_bots: false, can_add_people: true, cloud: true});
+  await limited.page.locator('#org-add-group').click();
+  assert.deepEqual(await limited.page.getByRole('menuitem').allTextContents(), ['Add human']);
+  await limited.page.getByRole('menuitem', {name: 'Add human'}).click();
+  await limited.page.locator('#team-add-human [name=email]').fill('coworker@acme.example');
+  await limited.page.evaluate(() => { S.me.can_add_people = false; teamAddRefresh(); });
+  await limited.page.locator('#team-add-human [type=submit]').click();
+  await limited.page.locator('[data-team-error]:not([hidden])').waitFor();
+  assert.deepEqual(limited.calls, []);
+  assert.equal(await limited.page.locator('#org-add-group').isVisible(), false);
+  assert.deepEqual(limited.errors, []);
+  await limited.page.close();
 }
 
 async function deleteGroups(browser) {
@@ -343,6 +464,7 @@ async function personalBranches(browser) {
     await externalChanges(browser);
     await owner(browser);
     await member(browser);
+    await teamAdd(browser);
     await deleteGroups(browser);
     await personalBranches(browser);
     console.log('PASS: groups nest in the team chart; owners add, rename, drag into and nest groups; members read.');

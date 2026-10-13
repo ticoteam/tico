@@ -650,6 +650,8 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import docs as _docs
             _docs.ensure_schema(c, self.settings)
+            from . import doc_sources as _doc_sources
+            _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
             c.executescript(_bot_tools.SCHEMA)
             from . import mail_settings as _mail_settings
@@ -1126,6 +1128,7 @@ class Store:
                     from . import task_relations as _task_relations
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
+                H.ensure_market_reads(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
