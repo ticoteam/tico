@@ -756,3 +756,62 @@ def test_turn_clone_reports_both_reasons_when_mirror_and_github_fail(tmp_path):
             R.worktree_base(tmp_path, repo, {'PATH': os.environ['PATH']})
     assert str(caught.value) == ('Git clone of acme/web failed: fatal: remote did not send all necessary objects; cloning from '
                                  'GitHub instead also failed: remote: Repository not found. / fatal: repository not found')
+
+
+# ---------------------------------------------------------------- a clone a person already made (a Mac)
+def own_clone(repos, source, origin='git@github.com:org/one.git'):
+    path = repos.root / 'org__one'
+    repos.root.mkdir(exist_ok=True)
+    subprocess.run(['git', 'clone', '-q', source.as_uri(), str(path)], check=True)
+    subprocess.run(['git', '-C', str(path), 'remote', 'set-url', 'origin', origin], check=True)
+    (path / 'notes.txt').write_text('my uncommitted notes')
+    return path
+
+
+def test_a_mac_takes_over_a_clone_of_the_same_repository_and_keeps_its_origin(repos, tmp_path):
+    only_one(repos)
+    source = local_source(tmp_path)
+    path = own_clone(repos, source)
+    with from_local(repos, source), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert row['state'] == 'cloned' and row['adopted'], row.get('error')
+    assert (path / 'notes.txt').read_text() == 'my uncommitted notes'
+    assert subprocess.check_output(['git', '-C', str(path), 'remote', 'get-url', 'origin'], text=True).strip() == 'git@github.com:org/one.git'
+    assert subprocess.check_output(['git', '-C', str(path), 'remote', 'get-url', 'tico-mirror'], text=True).strip() == repos.mirror_path('org/one').as_uri()
+    assert json.loads((path / '.git' / 'tico-managed').read_text()) == {'full_name': 'org/one', 'adopted': True}
+    # No longer wanted here: Tico forgets it, and the person's clone stays.
+    repos.client.get.return_value = {'repositories': []}
+    now = time.time()
+    with mock.patch('runner.repositories.time.time', return_value=now):
+        cycle(repos)
+    with mock.patch('runner.repositories.time.time', return_value=now + REMOVE_AFTER + 1):
+        cycle(repos)
+        cycle(repos)
+    assert (path / 'notes.txt').read_text() == 'my uncommitted notes'
+    assert not (path / '.git' / 'tico-managed').exists()
+    assert 'org/one' not in repos.rows
+
+
+@pytest.mark.parametrize('origin,reason', [
+    ('git@github.com:org/other.git', 'its origin is git@github.com:org/other.git, not org/one'),
+    ('https://notgithub.com/org/one.git', 'its origin is https://notgithub.com/org/one.git, not org/one'),
+])
+def test_a_clone_of_something_else_is_left_alone_and_says_why(repos, tmp_path, origin, reason):
+    only_one(repos)
+    source = local_source(tmp_path)
+    path = own_clone(repos, source, origin)
+    before = (path / '.git' / 'config').read_text()
+    with from_local(repos, source), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert row['state'] == 'failed' and reason in row['error'] and 'adopted' not in row
+    assert (path / '.git' / 'config').read_text() == before and not (path / '.git' / 'tico-managed').exists()
+
+
+def test_a_computer_that_isolates_bots_never_takes_over_a_folder(repos, tmp_path, monkeypatch):
+    only_one(repos)
+    source = local_source(tmp_path)
+    own_clone(repos, source)
+    monkeypatch.setattr('runner.repositories.isolation.enabled', lambda: True)
+    assert 'separate user' in repos.adoption_problem(repos.root / 'org__one', 'org/one')

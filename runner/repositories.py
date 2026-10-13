@@ -230,7 +230,8 @@ class Repositories:
                     continue
                 name = name.lower() if valid_name(name) else name
                 if valid_repository(name) and not marker.is_symlink() and base_folder(name) == marker.parent.parent.name:
-                    self.rows.setdefault(name, {'full_name': name, 'state': 'cloned', 'managed': True, 'left_at': now, 'size_mb': 0})
+                    self.rows.setdefault(name, {'full_name': name, 'state': 'cloned', 'managed': True, 'left_at': now, 'size_mb': 0,
+                                                **({'adopted': True} if stored.get('adopted') is True else {})})
             for name, row in list(self.rows.items()):
                 if name in wanted:
                     row.pop('left_at', None)
@@ -263,7 +264,12 @@ class Repositories:
         for name in stale:
             try:
                 path = self.path(name)
-                if self.rows[name].get('managed') and path.exists():
+                if self.rows[name].get('adopted') and path.exists():
+                    # A clone a person made is theirs: Tico stops looking after it and leaves it where it is.
+                    marker = path / '.git' / 'tico-managed'
+                    if marker.is_file() and not marker.is_symlink():
+                        marker.unlink()
+                elif self.rows[name].get('managed') and path.exists():
                     kept = base_kept(path)
                     if kept:
                         self.rows[name].update(error=kept)
@@ -306,6 +312,31 @@ class Repositories:
                         raise ValueError('Mirror is writable by another user; repair the computer mirror permissions')
         return path
 
+    def adoption_problem(self, path, full_name):
+        """Why a folder already at a base clone's place cannot be taken over, or '' when it can: a real Git checkout
+        of this very repository, made by the user the runner runs as, on a computer where bots are not a separate
+        user (a Mac). Nothing in it is changed by asking."""
+        from . import redact
+        git_dir = path / '.git'
+        if isolation.enabled():
+            return 'bots run as a separate user on this computer, so a folder made by someone else is not taken over'
+        if not git_dir.is_dir() or git_dir.is_symlink():
+            return 'it is not a Git checkout'
+        if any(p.lstat().st_uid != os.geteuid() for p in (path, git_dir)):
+            return 'it belongs to another user'
+        if (git_dir / 'objects' / 'info' / 'alternates').exists() or (git_dir / 'commondir').exists():
+            return 'it shares its objects with another repository'
+        env = safe_git.clean_environment()
+        git = [*safe_git.prefix(path), '-C', str(path), 'config', '--local', '--get']
+        if self.run_git([*git, 'core.worktree'], env=env, timeout=10).returncode == 0:
+            return 'its work tree is somewhere else'
+        if self.run_git([*git, '--bool', 'core.bare'], env=env, timeout=10).stdout.strip() == 'true':
+            return 'it is a bare repository'
+        origin = self.run_git([*git, 'remote.origin.url'], env=env, timeout=10).stdout.strip()
+        if not github_origin(origin, full_name):
+            return f'its origin is {redact.scrub_credentials(origin)[:120] or "not set"}, not {full_name}'
+        return ''
+
     def discard_mirror(self, name):
         """Remove a computer mirror so it is fetched afresh. It holds only what GitHub has, never anyone's work."""
         mirror = self.mirror_path(name)
@@ -330,8 +361,17 @@ class Repositories:
                 # work, so it is removed and cloned again rather than refused as a broken repository forever.
                 discard_failed_clone(path, fresh=True)
                 exists = path.exists()
-            if exists and (not (self.rows[name].get('managed') or (path / '.git' / 'tico-managed').is_file()) or not (path / '.git').is_dir() or (path / '.git').is_symlink()):
+            managed = self.rows[name].get('managed') or (path / '.git' / 'tico-managed').is_file()
+            if exists and (not (path / '.git').is_dir() or (path / '.git').is_symlink()):
                 raise ValueError('Repository folder already exists and is not a managed base clone; left as it is')
+            if exists and not managed:
+                # A clone a person made here themselves (on a Mac, with their own git) is taken over when it is
+                # plainly this repository's; Tico then fetches into it but never deletes it or rewrites its origin.
+                problem = self.adoption_problem(path, repo['full_name'])
+                if problem:
+                    raise ValueError(f'Repository folder already exists and is not a managed base clone ({problem}); left as it is')
+                with self.lock:
+                    self.rows[name].update(managed=True, adopted=True)
             volumes = (self.root if self.root.exists() else self.root.parent,
                        self.mirrors if self.mirrors.exists() else self.state_file.parent)
             volume, usage = min(((p, shutil.disk_usage(p)) for p in volumes), key=lambda item: item[1].free)
@@ -447,11 +487,14 @@ class Repositories:
                 done = self.run_git([*local, '-C', str(path), 'rev-parse', '--git-dir'], env=clean, timeout=10, bot=True)
                 if done.returncode:
                     raise ValueError('Base clone is not a working Git repository; repair it without deleting local work')
-            for key, value in [('remote.tico-mirror.url', mirror.as_uri()),
-                               ('remote.tico-mirror.fetch', f'+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}'),
-                               ('remote.origin.url', url), ('remote.origin.pushurl', url),
-                               ('remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'),
-                               ('branch.' + branch + '.remote', 'origin'), ('branch.' + branch + '.merge', 'refs/heads/' + branch)]:
+            settings = [('remote.tico-mirror.url', mirror.as_uri()),
+                        ('remote.tico-mirror.fetch', f'+refs/heads/{branch}:refs/remotes/tico-mirror/{branch}')]
+            if not self.rows[name].get('adopted'):
+                # An adopted clone keeps the origin and branch settings its owner chose (an SSH remote, say).
+                settings += [('remote.origin.url', url), ('remote.origin.pushurl', url),
+                             ('remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'),
+                             ('branch.' + branch + '.remote', 'origin'), ('branch.' + branch + '.merge', 'refs/heads/' + branch)]
+            for key, value in settings:
                 done = self.run_git([*local, '-C', str(path), 'config', '--local', '--replace-all', key, value], env=clean, timeout=10, bot=True)
                 if done.returncode:
                     raise ValueError('Could not configure base clone mirror; check its Git config and permissions')
@@ -475,7 +518,8 @@ class Repositories:
             done = self.run_git([*local, '-C', str(path), 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + branch], env=clean, timeout=10, bot=True)
             if done.returncode:
                 raise ValueError('Could not record base default branch; check permissions')
-            mark_managed(path, clean)
+            mark_managed(path, clean, repo['full_name'] if self.rows[name].get('adopted') else None,
+                         adopted=bool(self.rows[name].get('adopted')))
             size = sum(p.stat().st_size for root, dirs, files in os.walk(path, followlinks=False)
                        for p in (Path(root) / f for f in files) if not p.is_symlink()) / (1024 ** 2)
             with self.lock:
@@ -725,8 +769,26 @@ def discard_failed_clone(path, fresh=False):
     shutil.rmtree(path)
 
 
-def mark_managed(path, env, name=None):
-    marker = json.dumps({'full_name': name}) if name else ''
+def github_origin(url, full_name):
+    """Whether `url` is GitHub's address for `full_name`, in its HTTPS or SSH spelling (no user, no other host)."""
+    pattern = r'(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)' + re.escape(full_name) + r'(?:\.git)?/?'
+    return re.fullmatch(pattern, str(url or '').strip(), re.I) is not None
+
+
+def was_adopted(path):
+    try:
+        marker = path / '.git' / 'tico-managed'
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 1024:
+            return False
+        return json.loads(marker.read_text() or '{}').get('adopted') is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def mark_managed(path, env, name=None, adopted=False):
+    # A clone Tico took over stays recorded as one, whoever marks it next (a turn's worktree_base).
+    adopted = adopted or was_adopted(path)
+    marker = json.dumps({'full_name': name, **({'adopted': True} if adopted else {})}) if name else ''
     done = isolation.run(['/bin/sh', '-c', 'test ! -L .git/tico-managed && printf %s \"$1\" > .git/tico-managed', 'mark', marker],
                          cwd=str(path), env=safe_git.process_environment(env), capture_output=True, timeout=15)
     if done.returncode:
