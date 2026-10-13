@@ -72,7 +72,7 @@ async function chatJumpTo(state, id) {
     try { if (!await v2ChatOlder(state)) return false; paged = true; }
     catch (error) { toast(error.message, true); return false; }
   }
-  state.followLatest = false;
+  state.stick?.release();
   v2ChatRender(state);
   // Paging and the top-only control can resize the scroller. Let that layout settle
   // before the jump, so a queued scroll-to-end event cannot reclaim following.
@@ -82,7 +82,7 @@ async function chatJumpTo(state, id) {
   }
   const thread = $('#conv-thread'), el = thread?.querySelector(`[data-message="${CSS.escape(id)}"]`);
   if (!el) { toast('That message is hidden here', true); return false; }
-  state.followLatest = false;
+  state.stick?.release();
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   el.scrollIntoView({block: 'center', behavior: still || paged ? 'auto' : 'smooth'});
   el.classList.remove('jump-mark'); void el.offsetWidth; el.classList.add('jump-mark');

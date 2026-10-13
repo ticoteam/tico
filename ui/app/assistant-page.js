@@ -38,7 +38,7 @@ async function pageAssistant() {
     <section class="card conv" id="conv">
       <div class="conv-older" id="conv-older"></div>
       <div id="conv-thread" data-assistant><div class="empty">Loading…</div></div>
-      <button type="button" class="conv-jump" id="conv-jump" hidden></button>
+      <button type="button" class="stick-pill" id="conv-jump" hidden></button>
     </section>
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div id="chat-composer"></div>
@@ -81,7 +81,7 @@ async function assistantSend(P, text) {
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
       for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }
-      state.followLatest = true;
+      state.stick?.toBottom();
       if (!r.fast) { state.live = {text: ''}; state.execution = null; state.sentAt = Date.now(); }
       v2ChatRender(state);
       if (!r.fast) v2ChatStream(state);

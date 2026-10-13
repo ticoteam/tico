@@ -14,7 +14,7 @@
    The Librarian cites [Internal doc · Title](doc:<id>) and [Linked · host](https://...). `doc:<id>` is
    turned into the Docs page route here and nowhere else (docHref). Its text is bot text: it only ever
    reaches the page through safeMd, the sanitizing renderer, never as raw HTML. Globals used from
-   ui/app: get, post, esc, safeMd, API, toast. */
+   ui/app: get, post, esc, safeMd, API, toast, stickScroll. */
 'use strict';
 (function () {
   const css = `
@@ -183,6 +183,7 @@ html.demo .dask{top:var(--demo-h)}
           conversationId: id, messageId: message.id};
       });
       openingConversation = false;
+      stickScroll(panel.querySelector('.dask-body')).toBottom();
       resume();
       panel.querySelector('.dask-history').open = false;
       panel.querySelector('textarea').focus();
@@ -267,24 +268,25 @@ html.demo .dask{top:var(--demo-h)}
   function draw() {
     if (!panel) return;
     const body = panel.querySelector('.dask-body');
-    const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
     const turns = session().turns;
-    body.innerHTML = turns.length ? turns.map(turnHtml).join('')
-      : `<div class="dask-empty">
-          <div class="dask-hints">${HINTS[ctx].map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div></div>`;
-    decorate(body);
-    body.querySelectorAll('[data-hint]').forEach(b => { b.onclick = () => ask(b.dataset.hint); });
-    body.querySelectorAll('[data-collection]').forEach(select => {
-      select.onchange = async () => {
-        const turn = turns[Number(select.dataset.collection)], collection = select.value;
-        turn.collection = collection;
-        try {
-          const found = await get('/v2/docs/search?limit=8&collection=' + collection + '&q=' + encodeURIComponent(turn.question));
-          if (turn.collection === collection) { turn.results = found.results || []; draw(); }
-        } catch (e) { toast?.(e.message || 'Search failed'); }
-      };
-    });
-    if (atEnd || busy) body.scrollTop = body.scrollHeight;
+    // At the bottom the answer is followed as it streams in; scrolled up, nothing moves and a pill says it came.
+    stickScroll(body).update(() => {
+      body.innerHTML = turns.length ? turns.map(turnHtml).join('')
+        : `<div class="dask-empty">
+            <div class="dask-hints">${HINTS[ctx].map(h => `<button class="ghost" type="button" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div></div>`;
+      decorate(body);
+      body.querySelectorAll('[data-hint]').forEach(b => { b.onclick = () => ask(b.dataset.hint); });
+      body.querySelectorAll('[data-collection]').forEach(select => {
+        select.onchange = async () => {
+          const turn = turns[Number(select.dataset.collection)], collection = select.value;
+          turn.collection = collection;
+          try {
+            const found = await get('/v2/docs/search?limit=8&collection=' + collection + '&q=' + encodeURIComponent(turn.question));
+            if (turn.collection === collection) { turn.results = found.results || []; draw(); }
+          } catch (e) { toast?.(e.message || 'Search failed'); }
+        };
+      });
+    }, {fresh: busy});
     const button = panel.querySelector('.dask-form button');
     if (button) button.disabled = busy || openingConversation;
     panel.querySelector('[data-new-chat]').disabled = busy || openingConversation;
@@ -360,6 +362,7 @@ html.demo .dask{top:var(--demo-h)}
     if (ctx === 'market') turn.market = true;
     s.turns.push(turn);
     if (s.turns.length > TURN_LIMIT) s.turns.shift();
+    stickScroll(panel.querySelector('.dask-body')).toBottom();      // the question just asked is where you look
     draw();
     if (turn.market) return askMarket(turn);
     try {

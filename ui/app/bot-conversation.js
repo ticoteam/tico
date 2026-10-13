@@ -128,7 +128,7 @@ function convChatStarted(slug, j, text, files) {
     started: j.started || new Date().toISOString(), finished: null, exit: null,
     events: [], activity: {}, comments: [], local: true});
   state.active = {run: j.run, issue: null, offset: 0};
-  convRender(state); convSchedule(state);
+  state.sent = true; convRender(state); convSchedule(state);
 }
 function convRender(state) {
   const thread = $('#conv-thread'); if (!thread || CONV !== state) return;
@@ -138,23 +138,26 @@ function convRender(state) {
     if (r.finished == null) { state.openWork.add(r.run); state.wasLive.add(r.run); }
     else if (state.wasLive.has(r.run)) { state.wasLive.delete(r.run); state.openWork.delete(r.run); }
   }
-  // stay pinned to the newest message, unless the reader has scrolled up to read something older
-  const atEnd = !state.rendered || thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 40;
-  const wasHeight = thread.scrollHeight, wasTop = thread.scrollTop;
+  // stay pinned to the newest message, unless the reader has scrolled up to read something older (ui/app/stick-scroll.js);
+  // the stick belongs to the thread, so the 30 s reload (a new state) keeps the reader's place
+  const stick = stickScroll(thread, {pill: $('#conv-jump')});
+  if (state.sent) { state.sent = false; stick.toBottom(); }           // what you just sent is where you look
   const groups = state.runs.map(r => convGroup(r, slug)).join('');
   state.pending = state.pending.filter(p => !state.runs.some(r => r.issue === p.number));   // the run took it over
   const pending = state.pending.map(p => `<div class="conv-run"><div class="bubble you pending"><span class="who">${esc(myHandle())}</span>${esc(p.text)}${chatCopyHTML(p.text)}</div><div class="conv-run-head">Queued as <a class="mono" href="${esc(p.url)}" target="_blank" rel="noopener">#${esc(p.number)}</a> · picked up within a minute</div></div>`).join('');
   const cleared = state.cleared ? `<div class="conv-break">Session cleared by you ${esc(fmt(state.cleared) || '')}</div>` : '';
-  thread.innerHTML = (groups + pending || '<div class="empty">Nothing yet. Say something below.</div>') + cleared;
+  const html = (groups + pending || '<div class="empty">Nothing yet. Say something below.</div>') + cleared;
+  const newest = `${state.runs.at(-1)?.run}:${state.runs.at(-1)?.events?.length || 0}:${state.pending.length}`;
+  const fresh = !!thread.dataset.newest && thread.dataset.newest !== newest;
+  thread.dataset.newest = newest;
+  stick.update(() => { thread.innerHTML = html; }, {fresh, prepended: state.prepending});
+  state.prepending = false;
   thread.querySelectorAll('details.conv-act[data-run]').forEach(d => d.addEventListener('toggle', () => {
     if (d.open) state.openWork.add(d.dataset.run); else state.openWork.delete(d.dataset.run);
   }));
   thread.querySelectorAll('[data-sess]').forEach(a => a.onclick = ev => {      // replay -> the real file
     ev.preventDefault(); sessionOpen(slug, a.dataset.sessRt || '', a.dataset.sess);
   });
-  if (atEnd) thread.scrollTop = thread.scrollHeight;
-  else thread.scrollTop = wasTop + (thread.scrollHeight - wasHeight);   // "Load older" must not move what you are reading
-  state.rendered = true;
   $('#conv-older').innerHTML = state.older ? '<button class="ghost" type="button" id="conv-older-btn">Load older</button>' : '';
   const older = $('#conv-older-btn');
   if (older) older.onclick = async () => {
@@ -163,7 +166,7 @@ function convRender(state) {
       const d = await get(`/employees/${slug}/conversation?before=${encodeURIComponent(state.runs[0]?.run || '')}`);
       if (CONV !== state) return;
       state.runs = (d.runs || []).slice().reverse().concat(state.runs);
-      state.older = !!d.older; convRender(state);
+      state.older = !!d.older; state.prepending = true; convRender(state);   // "Load older" must not move what you are reading
     } catch (err) { older.disabled = false; older.textContent = `Could not load older runs: ${err.message}`; }
   };
   const last = state.runs[state.runs.length - 1];

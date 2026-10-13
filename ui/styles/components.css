@@ -35,3 +35,7 @@ td.tags .pill{margin-right:2px}
 .pill.ok,.pill.active{background:var(--ok-bg);color:var(--ok)}
 .pill.p0,.pill.p1{background:var(--fail-bg);color:var(--fail)}
 .empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:1.5}
+/* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
+   sets left and top to the thread's foot). */
+.stick-pill{position:absolute;z-index:3;transform:translate(-50%,-100%);padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:600 var(--t-sm) var(--sans);box-shadow:0 2px 8px rgba(0,0,0,.12);cursor:pointer;white-space:nowrap}
+.stick-pill:hover,.stick-pill:focus-visible{border-color:var(--accent)}

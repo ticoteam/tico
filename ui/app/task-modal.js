@@ -441,10 +441,10 @@ function taskCommentsRender(state, data) {
   if (!can) d.askDrafts?.clear();
   if (can && askBusy(thread)) return;     // never under someone answering
   if (html !== state.rendered) {
-    const atEnd = !state.rendered || thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 40;
-    thread.innerHTML = html;
-    askDraftRestore(thread, d);
-    if (atEnd) thread.scrollTop = thread.scrollHeight;
+    // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.js).
+    const stick = stickScroll(thread);
+    if (!state.rendered) stick.toBottom();
+    stick.update(() => { thread.innerHTML = html; askDraftRestore(thread, d); }, {fresh: !!state.rendered});
     state.rendered = html;
   }
 }
@@ -501,6 +501,8 @@ async function taskCommentSend(state) {
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text});
     if (!taskChatCurrent(state)) return;
     box.value = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
+    const thread = $('.task-comments', state.host);
+    if (thread) stickScroll(thread).toBottom();      // your comment is where you look
     await taskChatRead(state);
     status.textContent = data.woke ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {

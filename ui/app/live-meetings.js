@@ -144,10 +144,19 @@ function liveRestoreDraft(host, draft) {
   }
 }
 
+const LIVE_LOGS = ['.live-transcript', '.live-chat'];
 function livePaintDetail(state, detail) {
   const host = $('.live-detail');
   if (state.paintedId) liveCaptureDraft(state, state.paintedId);
   const draft = state.drafts[detail.id] || {};
+  // The transcript and the chat are rebuilt with the card; each keeps its reader's place (ui/app/stick-scroll.js).
+  const logs = LIVE_LOGS.map(sel => {
+    const el = state.paintedId === detail.id && host.querySelector(sel);
+    if (!el) return null;
+    const stick = stickScroll(el), was = {atBottom: stick.atBottom, top: el.scrollTop, count: el.children.length};
+    stick.stop();
+    return was;
+  });
   const me = liveIsHumanJoined(detail);
   const active = detail.state !== 'ended';
   const controls = detail.owner_actor === `human:${S.me?.id || ''}`;
@@ -197,7 +206,10 @@ function livePaintDetail(state, detail) {
     void liveChat(state, detail.id, input.value, input);
   });
   liveSubscribe(state, detail.id, detail.event_id || 0);
-  const transcript = host.querySelector('.live-transcript'); if (transcript) transcript.scrollTop = transcript.scrollHeight;
+  LIVE_LOGS.forEach((sel, i) => {
+    const el = host.querySelector(sel);
+    if (el) stickScroll(el).restore(logs[i], {fresh: !!logs[i] && el.children.length > logs[i].count});
+  });
 }
 
 function liveActor(actor) {

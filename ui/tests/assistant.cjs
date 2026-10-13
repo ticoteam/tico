@@ -166,6 +166,38 @@ function fixture() {
       await page.close();
     }
 
+    {
+      // A long chat: scrolled up, a reply that arrives moves nothing and brings the "New reply" pill; your own message
+      // takes you to the bottom, which then follows the answer.
+      const state = fixture();
+      for (let i = 0; i < 24; i++) state.messages.push(msg('h' + i, i % 2 ? 'bot:coo' : 'human:ana', `Line ${i}. ` + 'Some words to fill the line. '.repeat(10)));
+      const {page, errors} = await open(browser, {width: 1280, height: 900}, state);
+      await page.goto('https://tico-ui.test/#/assistant');
+      await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .bubble').length === 24);
+      const thread = page.locator('#conv-thread'), pill = page.locator('#conv-jump');
+      const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const gap = async () => { await frames(); return thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight); };
+      assert.ok(await gap() <= 1, 'stick: opens at the newest line');
+      const rect = await thread.boundingBox();
+      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      await page.mouse.wheel(0, -1500);
+      await page.waitForFunction(() => !V2C.stick.atBottom);
+      await frames();
+      const top = await thread.evaluate(el => el.scrollTop);
+      await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, msg('late', 'bot:coo', 'One more thing.'));
+      await frames();
+      assert.equal(await thread.evaluate(el => el.scrollTop), top, 'stick: a reply does not move a reader who scrolled up');
+      await pill.waitFor();
+      assert.match(await pill.innerText(), /New reply/, 'stick: the pill says a reply came');
+      await page.locator('#chat-composer .p-text').fill('what changed?');
+      await page.locator('#chat-composer .p-send').click();
+      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 27);
+      assert.ok(await gap() <= 1, 'stick: your own message takes you to the bottom');
+      assert.equal(await pill.isHidden(), true, 'stick: and the pill goes');
+      assert.deepEqual(errors, [], 'stick: no page errors');
+      await page.close();
+    }
+
     // Off: the page says so, and only the owner is offered the switch.
     const state = fixture();
     state.view = () => ({available: false, state: 'archived', bot: 'coo', name: 'Tico', can_turn_on: true, room_id: null,

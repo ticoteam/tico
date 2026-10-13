@@ -349,14 +349,14 @@ async function goalManagerMount(pageState) {
       else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
       const html = rows.join('') || '<p class="muted">Ask the Goal Manager about your goals.</p>';
       if (html === rendered) return;
-      const atEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 48;
-      const wasTop = thread.scrollTop;
-      thread.innerHTML = html; rendered = html;
-      const reload = snapshot;
-      if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload});
-      if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast, reload});
-      // Keep an older message in view while new replies arrive.
-      thread.scrollTop = atEnd ? thread.scrollHeight : wasTop;
+      // Keep an older message in view while new replies arrive (ui/app/stick-scroll.js).
+      stickScroll(thread).update(() => {
+        thread.innerHTML = html;
+        const reload = snapshot;
+        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload});
+        if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast, reload});
+      }, {fresh: !!rendered});
+      rendered = html;
     };
     const apply = async data => {
       if (!current()) return;
@@ -396,7 +396,7 @@ async function goalManagerMount(pageState) {
         conversation = out.conversation || conversation;
         if (out.message && !messages.some(m => m.id === out.message.id)) messages.push(out.message);
         if (lastReply === undefined) lastReply = messages.filter(isReply).at(-1)?.id ?? null;
-        pillAcknowledge(P, text, []); draw();
+        pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw();
         if (fresh || !es) watch();
         await snapshot();
       } catch (e) { fail(e.message); }

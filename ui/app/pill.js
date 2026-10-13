@@ -303,7 +303,7 @@ async function pillTask(P, text) {
     P.files.forEach(f => fd.append('files', f, f.name));
     const res = await fetch(`${API}/issues`, {method: 'POST', body: fd});
     const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || res.statusText);
-    if (CONV?.slug === slug) { CONV.pending.push({text, number: j.number, url: j.url}); convRender(CONV); }
+    if (CONV?.slug === slug) { CONV.pending.push({text, number: j.number, url: j.url}); CONV.sent = true; convRender(CONV); }
     pillClear(P); toast(`Queued as #${j.number}`);
     await refresh(true); if (BOT?.slug === slug) loadBotIssues(slug);
   } catch (e) { toast(e.message, true); }

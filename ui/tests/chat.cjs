@@ -8,6 +8,8 @@
 //  - activity fold: task and note cards in a row fold into one "N updates" row; older history loads only at the top.
 //  - side threads: the chat is the person and the bot; bot-to-bot talk, relays, notices and notes fold into one line
 //    per run, open in place, and never push the conversation's last message off the bottom.
+//  - stays at the bottom: new messages, streamed text and images keep the newest line in view; scrolled up, nothing
+//    moves and a "New reply" pill takes you down.
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -261,7 +263,7 @@ async function outlineJump(browser) {
   assert.deepEqual(pages,['h2'],'one older page, from the existing cursor');
   await page.waitForFunction(()=>{const t=document.querySelector('#conv-thread'),r=document.querySelector('[data-message="h0"]').getBoundingClientRect(),b=t.getBoundingClientRect();
     return r.top>=b.top-1&&r.bottom<=b.bottom+1;});
-  assert.equal(await page.evaluate(()=>V2C.followLatest),false,'a jump stops following the end');
+  assert.equal(await page.evaluate(()=>V2C.stick.atBottom),false,'a jump stops following the end');
   assert.equal(await page.locator('#chat-composer textarea').inputValue(),'half-written thought','the draft stays');
   assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false);
   // Phone: the same list is a bottom sheet with thumb-sized rows.
@@ -474,7 +476,7 @@ async function sideThreads(browser) {
 
   // New side traffic while reading (the open line makes the thread scroll) joins a line; a new reply brings the pill.
   await thread.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
-  await page.waitForFunction(() => !V2C.followLatest);
+  await page.waitForFunction(() => !V2C.stick.atBottom);
   await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:cmo', 'Granted.', 45));
   assert.equal(await runs.count(), 2, 'no new line for it');
   assert.equal(await runs.nth(1).getAttribute('data-side-count'), '3');
@@ -491,6 +493,88 @@ async function sideThreads(browser) {
   console.log('chat side threads fold to one line: ok');
 }
 
+// Stays at the bottom: at the newest line, a new message, a streamed chunk or an image loading keeps it in view; scrolled
+// up, nothing moves and a "New reply" pill appears, which takes you down and goes away. A poll that changed nothing
+// leaves the thread as it is.
+async function stickToBottom(browser) {
+  const page = await browser.newPage({viewport: {width: 1100, height: 760}, serviceWorkers: 'block'}), errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
+  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-ops', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
+  const messages = Array.from({length: 30}, (_, i) => i % 2
+    ? say('r' + i, 'bot:ops', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
+    : say('q' + i, 'human:ana', 'bot:ops', `Question ${i}`, i));
+  const snapshot = {messages, next_before: null, execution: null, goal: null};
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url()), p = url.pathname;
+    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
+    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/issues') return json([]);
+    if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot') ? []
+      : [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}]});
+    if (p === '/api/v2/conversations/c-ops/snapshot' || p === '/api/v2/conversations/c-ops/messages') return json(snapshot);
+    return json({});
+  });
+  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.waitForFunction(() => V2C?.rendered && V2C.loaded && document.querySelectorAll('#conv-thread .bubble').length === 30);
+  const thread = page.locator('#conv-thread'), pill = page.locator('#conv-jump');
+  const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+  const gap = async () => { await frames(); return thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight); };
+  const add = async m => { messages.push(m); await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, m); };
+  assert.ok(await thread.evaluate(el => el.scrollHeight > el.clientHeight * 2), 'the thread scrolls');
+  assert.ok(await gap() <= 1, 'it opens at the newest line');
+
+  // At the bottom: a new message, a reply streaming in and an image loading all keep the newest line in view.
+  await add(say('q30', 'human:ana', 'bot:ops', 'And the next step?', 30));
+  assert.ok(await gap() <= 1, 'a new message stays pinned');
+  await page.evaluate(() => { V2C.live = {text: 'Working on it.'}; v2ChatRender(V2C); });
+  assert.ok(await gap() <= 1, 'the start of a reply stays pinned');
+  await page.evaluate(() => { document.querySelector('#v2-live').innerHTML += '<p>More words.</p>'.repeat(20); });
+  assert.ok(await gap() <= 1, 'a streamed chunk stays pinned');
+  await page.evaluate(() => { document.querySelector('#conv-thread').lastElementChild.insertAdjacentHTML('beforeend', '<div style="height:300px">image</div>'); });
+  assert.ok(await gap() <= 1, 'content growing (an image loading) stays pinned');
+  assert.equal(await pill.isHidden(), true, 'no pill at the bottom');
+
+  // A poll that changed nothing does not rebuild the thread.
+  assert.equal(await page.evaluate(() => { const t = document.querySelector('#conv-thread'), a = t.firstElementChild; v2ChatRender(V2C); return a === t.firstElementChild; }), true,
+    'unchanged data leaves the thread alone');
+
+  // Scrolled up: nothing that arrives moves the view; a pill says a reply came.
+  const box = await thread.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -3000);
+  await page.waitForFunction(() => !V2C.stick.atBottom);
+  await frames();
+  const top = await thread.evaluate(el => el.scrollTop);
+  await page.evaluate(() => { document.querySelector('#v2-live').innerHTML += '<p>Still streaming.</p>'.repeat(10); });
+  await frames();
+  assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a streamed chunk does not move a reader who scrolled up');
+  await page.evaluate(() => { V2C.live = null; });
+  await add(say('r31', 'bot:ops', 'human:ana', 'Here is the next step.', 31, {in_reply_to: 'q30'}));
+  await frames();
+  assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a new message does not move a reader who scrolled up');
+  await pill.waitFor();
+  assert.match(await pill.innerText(), /New reply/);
+  assert.equal(await pill.evaluate(el => el.tagName === 'BUTTON' && el.type === 'button'), true, 'the pill is a button');
+  assert.ok(await gap() > 100, 'still scrolled up');
+
+  // The pill takes you to the newest line and goes away.
+  await pill.click();
+  assert.ok(await gap() <= 1, 'the pill goes to the bottom');
+  assert.equal(await pill.isHidden(), true, 'and hides');
+  assert.equal(await page.evaluate(() => V2C.stick.atBottom), true, 'and follows again');
+  await add(say('q32', 'human:ana', 'bot:ops', 'Thanks.', 32));
+  assert.ok(await gap() <= 1, 'following again after the pill');
+  assert.deepEqual(errors, []);
+  console.log('chat stays at the bottom, or where you scrolled: ok');
+}
+
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
   try {
@@ -499,5 +583,6 @@ async function sideThreads(browser) {
     await outlineJump(browser);
     await activityFold(browser);
     await sideThreads(browser);
+    await stickToBottom(browser);
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});
