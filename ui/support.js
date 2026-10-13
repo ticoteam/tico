@@ -24,9 +24,23 @@
     ? call('POST', '/support/diagnostics/capture', {browser: browserFailures})
     : call('GET', '/support/diagnostics');
   const statuses = {open: 'Open', answered: 'Answered', closed: 'Closed', gone: 'Removed'};
-  let state = {enabled: null, tickets: [], unread: 0}, selected = '', rail = null, timer, busyRefresh = null;
+  const ICON = {
+    send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
+    trash: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>',
+    back: '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3"/></svg>',
+  };
+  // `viewing`: a conversation (or a new request) is open in place of the list of requests.
+  let state = {enabled: null, tickets: [], unread: 0}, selected = '', viewing = false, rail = null, timer, busyRefresh = null;
   let owner = '', toasted = 0, compose = null, drafts = new Map(), editor = null;
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}); };
+  const short = iso => {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+  };
+  const title = t => (t.message || '').replace(/\s+/g, ' ').trim().slice(0, 90) || 'Request';
+  const last = t => (t.messages || []).at(-1)?.created || t.created;
+  const inThread = () => viewing || !state.tickets.length;
   const draft = () => {
     if (!drafts.has(selected)) drafts.set(selected, {message: '', email: compose?.email || '', ids: true, diag: !selected, bundle: null, key: uid()});
     return drafts.get(selected);
@@ -40,17 +54,35 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach support. Try again.'), {status: r.status});
     return data;
   }
+  // Keeps a scroller on its newest content only when it is already there (or `pin` asks), so a poll never moves someone
+  // reading back. A shared ui/app/stick-scroll.js can replace this one function.
+  function keepScroll(host, update, pin = false) {
+    const bottom = pin || host.scrollHeight - host.scrollTop - host.clientHeight < 40, top = host.scrollTop;
+    update();
+    host.scrollTop = bottom ? host.scrollHeight : top;
+  }
   function mark() {
-    const link = document.getElementById('help-open');
-    if (state.unread) link?.setAttribute('data-support-unread', state.unread);
-    else link?.removeAttribute('data-support-unread');
+    const link = document.getElementById('help-open'), n = state.unread;
+    if (!link) return;
+    if (n) {
+      link.setAttribute('data-support-unread', n);
+      link.setAttribute('data-support-count', n > 9 ? '9+' : String(n));
+      link.setAttribute('aria-label', `Overview and support, ${n} new support ${n === 1 ? 'reply' : 'replies'}`);
+    } else {
+      link.removeAttribute('data-support-unread'); link.removeAttribute('data-support-count');
+      link.setAttribute('aria-label', 'Overview and support');
+    }
   }
   function accept(data) {
     state = {enabled: data.enabled !== false, tickets: data.tickets || [], unread: data.unread || 0};
     if (state.unread > toasted) say('Tico support replied.');
     toasted = state.unread;
     mark();
-    if (rail?.isConnected) { renderTickets(); renderThread(); }
+    if (!rail?.isConnected) return;
+    if (selected && !current()) { selected = ''; viewing = false; renderComposer(); }
+    renderTickets(); renderThread();
+    // A reply that lands in the conversation someone has open in front of them is read.
+    if (inThread() && current()?.unread && document.hasFocus()) void readVisible();
   }
   function note(message, error = false) {
     const el = rail?.querySelector('[data-connection]');
@@ -62,7 +94,7 @@
       try {
         const data = await call('POST', '/support/tickets/refresh');
         accept(data);
-        note(data.refresh_failed ? 'Could not check replies. Try Refresh.' : 'Checked ' + new Date().toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}), !!data.refresh_failed);
+        note(data.refresh_failed ? 'Could not check for replies just now. Tico will try again.' : '', !!data.refresh_failed);
       } catch (e) { note(e.message, true); }
       finally { busyRefresh = null; }
       return state;
@@ -79,57 +111,73 @@
   }
   async function readVisible() {
     const t = current();
-    if (document.hidden || !rail?.isConnected || !t?.unread) return;
-    // Reading follows an explicit choice of thread, not a background fetch.
+    if (document.hidden || !rail?.isConnected || !inThread() || !t?.unread) return;
+    // Reading follows opening a conversation (or having it open), not a background fetch.
     try {
       const next = await call('POST', `/support/tickets/${encodeURIComponent(t.id)}/read`);
       state.tickets = state.tickets.map(x => x.id === next.id ? next : x);
       state.unread = state.tickets.reduce((n, x) => n + (x.unread || 0), 0);
       toasted = state.unread; mark(); renderTickets(); renderThread();
-    } catch (_) { /* unread remains until the next explicit read */ }
+    } catch (_) { /* unread remains until the conversation is opened again */ }
   }
+  const badge = status => `<span class="support-badge s-${statuses[status] ? status : 'other'}">${escape(statuses[status] || status)}</span>`;
   function renderTickets() {
-    const select = rail.querySelector('[data-requests]');
-    select.innerHTML = '<option value="">New request</option>' + state.tickets.map(t => `<option value="${escape(t.id)}">${t.unread ? '● ' : ''}${escape((t.message || '').replace(/\s+/g, ' ').slice(0, 65))} · ${escape(statuses[t.status] || t.status)}</option>`).join('');
-    select.value = selected;
+    const list = rail.querySelector('[data-requests]');
+    const items = [...state.tickets].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
+    list.innerHTML = items.map(t => `<li><button type="button" class="support-item${t.unread ? ' unread' : ''}" data-id="${escape(t.id)}">
+      <span class="support-item-top"><span class="support-item-title">${escape(title(t))}</span>${t.unread ? `<span class="support-dot" role="img" aria-label="${t.unread} new ${t.unread === 1 ? 'reply' : 'replies'}"></span>` : ''}</span>
+      <span class="support-item-meta">${badge(t.status)}<time datetime="${escape(last(t))}" title="${escape(when(last(t)))}">${escape(short(last(t)))}</time></span></button></li>`).join('');
+    rail.querySelector('[data-list]').hidden = inThread();
+    rail.querySelector('[data-view]').hidden = !inThread();
+    rail.querySelector('[data-new]').hidden = !state.tickets.length || (inThread() && !selected);
   }
-  function renderThread() {
+  function renderThread(pin = false) {
     const host = rail.querySelector('[data-thread]'), t = current();
-    const bottom = host.scrollHeight - host.scrollTop - host.clientHeight < 40, top = host.scrollTop;
-    const text = (body, author, at, diag) => `<div class="support-msg ${author === 'Support' ? 'staff' : ''}"><span class="support-who">${escape(author)}${at ? ', ' + escape(when(at)) : ''}</span><div>${escape(body)}</div>${diag ? '<small class="support-sent">Diagnostics attached</small>' : ''}</div>`;
-    const html = t ? text(t.message, 'You', t.created, t.sent?.diagnostics) + (t.messages || []).map(m => text(m.body, m.from === 'staff' ? 'Support' : 'You', m.created, m.has_diagnostics)).join('')
-      : '<p class="support-empty">Tell us what happened and what you expected. Recent redacted diagnostics are attached by default; you can review, edit, or remove them.</p>';
-    if (host.innerHTML !== html) { host.innerHTML = html; host.scrollTop = bottom ? host.scrollHeight : top; }
+    const bubble = (body, staff, at, diag) => `<div class="support-msg ${staff ? 'staff' : 'you'}"><span class="support-who">${staff ? 'Tico support' : 'You'}${at ? ` · <time datetime="${escape(at)}">${escape(when(at))}</time>` : ''}</span><div class="support-body">${escape(body)}</div>${diag ? '<small class="support-sent">Diagnostics attached</small>' : ''}</div>`;
+    const after = {open: 'Delivered to Tico support. Their reply will appear here.', gone: 'Tico support removed this request.'};
+    const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
+        + (after[t.status] ? `<p class="support-delivered">${after[t.status]}</p>` : '')
+      : `<div class="support-empty"><h3>Ask Tico support</h3><p>Tell us what happened and what you expected. A person on the Tico team replies here, and a number on the ? button tells you when they have.</p></div>`;
+    if (host.dataset.shown !== html) keepScroll(host, () => { host.innerHTML = html; host.dataset.shown = html; }, pin);
+    else if (pin) host.scrollTop = host.scrollHeight;
+    rail.querySelector('[data-back]').hidden = !state.tickets.length;
+    rail.querySelector('[data-title]').textContent = t ? title(t) : 'New request';
+    rail.querySelector('[data-status]').innerHTML = t ? badge(t.status) : '';
+    rail.querySelector('[data-delete]').hidden = !t;
     const closed = t && ['closed', 'gone'].includes(t.status);
     rail.querySelector('[data-compose]').hidden = !!closed;
     rail.querySelector('[data-closed]').hidden = !closed;
-    rail.querySelector('[data-delete]').hidden = !t;
-    rail.querySelector('[data-read]').hidden = !t?.unread;
-    rail.querySelector('[data-status]').textContent = t ? statuses[t.status] || t.status : 'New request';
   }
   function renderComposer() {
     const d = draft(), form = rail.querySelector('[data-compose]');
     form.innerHTML = `<label class="sr-only" for="support-message">Message to support</label>
-      <textarea id="support-message" name="message" maxlength="4000" placeholder="${selected ? 'Write back…' : 'How can we help?'}" required>${escape(d.message)}</textarea>
+      <div class="support-input"><textarea id="support-message" name="message" maxlength="4000" rows="3" placeholder="${selected ? 'Write a reply…' : 'How can we help?'}" required aria-describedby="support-keys">${escape(d.message)}</textarea>
+      <button class="support-send" type="submit" aria-label="Send" title="Send (Enter)">${ICON.send}</button></div>
+      <p class="err support-error" data-error role="alert" hidden></p>
+      <small class="sr-only" id="support-keys">Enter sends. Shift+Enter adds a new line.</small>
       <div class="support-diag"><label><input name="diag" type="checkbox" ${d.diag ? 'checked' : ''}> @diagnostics</label><button class="ghost" type="button" data-preview>Review and edit</button></div>
       ${!selected ? `<details class="support-options"><summary>Reply email and install details</summary><label>Email for a reply<input name="email" type="email" value="${escape(d.email)}" autocomplete="email"></label><label class="support-check"><input name="ids" type="checkbox" ${d.ids ? 'checked' : ''}> Include version and install ID</label></details>` : ''}
-      <p class="support-sent" data-sent></p><p class="err" data-error role="alert" hidden></p>
-      <div class="support-row"><button class="primary" type="submit">Send</button></div>`;
+      <p class="support-sent" data-sent></p>`;
     form.oninput = () => {
       d.message = form.elements.message.value;
       if (!selected) { d.email = form.elements.email.value; d.ids = form.elements.ids.checked; }
       d.diag = form.elements.diag.checked;
       d.key = uid(); updateSent();
     };
+    form.elements.message.onkeydown = e => {
+      if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+      e.preventDefault(); form.requestSubmit();
+    };
     form.querySelector('[data-preview]').onclick = () => openEditor(d);
     form.onsubmit = async e => {
       e.preventDefault();
       const err = form.querySelector('[data-error]'), submit = form.querySelector('[type=submit]');
-      err.hidden = true;
-      if (!d.message.trim()) { err.textContent = 'Write a message.'; err.hidden = false; return; }
       if (submit.disabled) return;
-      const locked = [...form.querySelectorAll('input, textarea, button'), ...rail.querySelectorAll('[data-requests], [data-new], [data-delete]')];
+      err.hidden = true;
+      if (!d.message.trim()) { err.textContent = 'Write a message first.'; err.hidden = false; return; }
+      const locked = [...form.querySelectorAll('input, textarea, button'), ...rail.querySelectorAll('[data-requests] button, [data-new], [data-back], [data-delete]')];
       locked.forEach(el => { el.disabled = true; });
+      submit.setAttribute('aria-busy', 'true');
       const thread = selected;
       try {
         if (d.diag && !d.bundle) { d.bundle = await capture(); updateSent(); }
@@ -137,11 +185,17 @@
         if (!thread) Object.assign(body, {email: d.email.trim(), include_ids: d.ids});
         const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, d.key);
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
-        drafts.delete(thread); selected = next.id;
-        if (rail?.isConnected) { renderTickets(); renderThread(); renderComposer(); }
+        drafts.delete(thread); selected = next.id; viewing = true;
         locked.forEach(el => { el.disabled = false; });
+        if (rail?.isConnected) { renderTickets(); renderThread(true); renderComposer(); rail.querySelector('[name=message]')?.focus(); }
         say(d.diag ? 'Sent with diagnostics.' : 'Sent.'); schedule();
-      } catch (error) { err.textContent = error.message; err.hidden = false; locked.forEach(el => { el.disabled = false; }); }
+      } catch (error) {
+        // Said where the person is looking: the message did not arrive and is still in the box.
+        err.textContent = 'Not sent. ' + error.message + ' Your message is still here.'; err.hidden = false;
+        locked.forEach(el => { el.disabled = false; });
+        submit.removeAttribute('aria-busy');
+        form.elements.message?.focus();
+      }
     };
     updateSent();
   }
@@ -217,42 +271,58 @@
   window.supportLeave = () => { editor?.close(); rail = null; schedule(); };
   window.supportHelp = async page => {
     const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { if (owner) browserFailures.length = 0; owner = actor; drafts = new Map(); selected = ''; compose = null; state = {enabled: null, tickets: [], unread: 0}; }
+    if (owner !== actor) { if (owner) browserFailures.length = 0; owner = actor; drafts = new Map(); selected = ''; viewing = false; compose = null; state = {enabled: null, tickets: [], unread: 0}; }
     try {
       accept(await call('GET', '/support/tickets'));
-      if (!state.enabled || !page.isConnected) { page.querySelector('.help-support-link')?.remove(); return; }
+      if (!page.isConnected) return;
+      if (!state.enabled) {
+        page.querySelector('.help-support-link')?.remove();
+        const off = document.createElement('p'); off.className = 'support-off'; off.setAttribute('data-support-off', '');
+        off.textContent = 'Contact support is turned off on this Tico server, so requests cannot be sent from here.';
+        const actions = page.querySelector('.help-actions');
+        if (actions) actions.after(off); else page.appendChild(off);
+        return;
+      }
       compose = await call('GET', '/support/compose');
       if (!page.isConnected) return;
       const main = page.parentElement; main.classList.add('help-layout');
       rail = document.createElement('aside'); rail.id = 'support-rail'; rail.className = 'support-rail'; rail.setAttribute('aria-label', 'Support');
-      rail.innerHTML = `<div class="rail-sec"><div class="support-head"><h2>Support</h2><span class="spacer"></span><button type="button" class="ghost" data-new>New request</button></div><p class="support-sent">Replies appear here. You can leave and come back.</p>
-        <label class="sr-only" for="support-requests">Your requests</label><select id="support-requests" data-requests aria-label="Your requests"></select>
-        <div class="support-head"><small data-status></small><span class="spacer"></span><button class="ghost" data-read type="button">Mark read</button><button class="ghost danger" data-delete type="button">Delete</button></div></div>
-        <div class="support-thread" data-thread aria-label="Support conversation"></div>
-        <p class="support-sent" data-closed hidden>This request is closed. Start a new request if you need more help.</p>
-        <form class="support-write rail-sec" data-compose novalidate></form>
-        <div class="support-connection"><small data-connection role="status"></small><button class="ghost" type="button" data-refresh>Refresh</button></div>`;
+      rail.innerHTML = `<div class="rail-sec support-head"><h2>Support</h2><span class="spacer"></span><button type="button" class="ghost" data-new>New request</button></div>
+        <p class="support-connection" data-connection role="status"></p>
+        <div class="support-listview" data-list><ul class="support-list" data-requests aria-label="Your requests"></ul></div>
+        <div class="support-view" data-view>
+          <div class="support-thread-head"><button type="button" class="ghost support-icon" data-back aria-label="All requests" title="All requests">${ICON.back}</button>
+            <div class="support-thread-title"><strong data-title></strong><span data-status></span></div>
+            <button type="button" class="ghost support-icon support-trash" data-delete aria-label="Delete request" title="Delete request">${ICON.trash}</button></div>
+          <div class="support-thread" data-thread aria-label="Support conversation"></div>
+          <p class="support-sent support-closed" data-closed hidden>This request is closed. Start a new request if you need more help.</p>
+          <form class="support-write rail-sec" data-compose novalidate></form>
+        </div>`;
       main.appendChild(rail);
       main.insertAdjacentHTML('beforeend', railEdgeHTML('right', 'Resize support panel', 'support-rail'));
-      const choose = id => { selected = id; renderTickets(); renderThread(); renderComposer(); void readVisible(); };
-      rail.querySelector('[data-requests]').onchange = e => choose(e.target.value);
-      rail.querySelector('[data-new]').onclick = () => choose('');
-      rail.querySelector('[data-refresh]').onclick = refresh;
-      rail.querySelector('[data-read]').onclick = readVisible;
+      const choose = id => { selected = id; viewing = true; renderTickets(); renderThread(true); renderComposer(); void readVisible(); };
+      rail.querySelector('[data-requests]').onclick = e => { const item = e.target.closest('[data-id]'); if (item) choose(item.dataset.id); };
+      rail.querySelector('[data-new]').onclick = () => { choose(''); rail.querySelector('[name=message]')?.focus(); };
+      rail.querySelector('[data-back]').onclick = () => { viewing = false; selected = ''; renderTickets(); renderThread(); };
       rail.querySelector('[data-delete]').onclick = async () => {
         const id = selected;
-        if (!id || !confirm('Delete this request and its diagnostics?')) return;
-        try { await call('DELETE', `/support/tickets/${encodeURIComponent(id)}`); state.tickets = state.tickets.filter(t => t.id !== id); drafts.delete(id); choose(''); }
-        catch (e) { say(e.message, true); }
+        if (!id || !confirm('Delete this request and its diagnostics? Tico support will no longer see it. This cannot be undone.')) return;
+        try {
+          await call('DELETE', `/support/tickets/${encodeURIComponent(id)}`);
+          state.tickets = state.tickets.filter(t => t.id !== id); drafts.delete(id);
+          selected = ''; viewing = false; renderTickets(); renderThread(); renderComposer(); say('Request deleted.');
+        } catch (e) { say(e.message, true); }
       };
-      if (selected && !current()) selected = '';
-      if (!selected && !drafts.has('') && state.tickets.length) selected = (state.tickets.find(t => t.unread) || state.tickets[0]).id;
-      renderTickets(); renderThread(); renderComposer();
+      if (selected && !current()) { selected = ''; viewing = false; }
+      renderTickets(); renderThread(true); renderComposer(); void readVisible();
       await refresh(); schedule();
     } catch (e) { if (page.isConnected) { const p = document.createElement('p'); p.className = 'err'; p.textContent = e.message; page.appendChild(p); } }
   };
   window.supportPoll = refresh;
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.enabled) { void refresh(); schedule(); } });
+  // Replies are checked when the app comes back into view or focus, and on the poll above; there is no Refresh button.
+  const wake = () => { if (state.enabled) { void refresh(); schedule(); } };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+  window.addEventListener('focus', wake);
   window.addEventListener('load', () => setTimeout(async () => {
     if (typeof S === 'undefined' || !S.me || state.enabled !== null) return;
     try { accept(await call('GET', '/support/tickets')); schedule(); } catch (_) { /* Help offers a retry */ }

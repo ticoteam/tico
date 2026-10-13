@@ -93,22 +93,53 @@
 .help-glossary dl{padding:0 18px}.help-glossary dt{font-weight:600;margin-top:12px}.help-glossary dd{margin:4px 0;color:var(--muted);font-size:var(--t-base)}
 .help-glossary>p{padding:0 18px 12px;font-size:var(--t-base)}
 #help-open[data-support-unread]{position:relative}
-#help-open[data-support-unread]::after{content:"";position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:var(--accent);border:2px solid var(--surface)}
+/* The number of unread support replies, on the ? itself (support.js sets it; absent at zero). */
+#help-open[data-support-count]::after{content:attr(data-support-count);position:absolute;top:-6px;right:-8px;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:700 var(--t-2xs)/16px var(--sans);text-align:center;border:2px solid var(--surface);pointer-events:none}
+.support-off{font-size:var(--t-base);color:var(--muted);margin:12px 0 0}
 .support-rail{font-size:var(--t-base);min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius);margin-top:20px;background:var(--surface)}
+.support-rail [hidden]{display:none!important}
 .support-rail .rail-sec{padding:12px 14px}
-.support-head{display:flex;align-items:center;gap:8px}.support-head h2{margin:0;font-size:var(--t-md)}
-.support-rail select{width:100%;min-width:0;margin:12px 0 6px}
-.support-thread{overflow-y:auto;min-height:140px;max-height:55vh;padding:12px 14px;overscroll-behavior:contain;overflow-wrap:anywhere}
-.support-msg{white-space:pre-wrap;overflow-wrap:anywhere;padding:8px 10px;border-radius:8px;background:var(--surface2);font-size:var(--t-base);margin-bottom:10px}
-.support-msg.staff{border-left:2px solid var(--accent)}
-.support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}
-.support-empty,.support-sent{font-size:var(--t-sm);color:var(--muted);line-height:1.5;overflow-wrap:anywhere;margin:6px 0}
-.support-write{display:grid;gap:8px;margin-top:auto}
-.support-write textarea{width:100%;min-height:80px;max-height:180px;resize:vertical;box-sizing:border-box}
+.support-head{display:flex;align-items:center;gap:8px}.support-head .spacer{flex:1}.support-head h2{margin:0;font-size:var(--t-md)}
+.support-connection{margin:0;padding:0 14px 8px;font-size:var(--t-sm);color:var(--muted)}.support-connection:empty{display:none}.support-connection.err{color:var(--fail)}
+/* The list of requests: title, status badge, last activity, and a dot for an unread reply. */
+.support-listview{min-height:0;overflow-y:auto;border-top:1px solid var(--line)}
+.support-list{list-style:none;margin:0;padding:0}
+.support-item{display:grid;gap:5px;width:100%;text-align:left;padding:10px 14px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;color:var(--ink);font:inherit;cursor:pointer}
+.support-item:hover{background:var(--surface2)}
+.support-item-top{display:flex;align-items:center;gap:8px;min-width:0}
+.support-item-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.support-item.unread .support-item-title{font-weight:600}
+.support-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.support-item-meta{display:flex;align-items:center;gap:8px;font-size:var(--t-xs);color:var(--muted)}
+.support-badge{display:inline-block;font-size:var(--t-2xs);font-weight:600;padding:1px 7px;border-radius:10px;background:var(--idle-bg);color:var(--muted);white-space:nowrap;letter-spacing:.01em}
+.support-badge.s-open{background:var(--run-bg);color:var(--run)}.support-badge.s-answered{background:var(--ok-bg);color:var(--ok)}
+/* One conversation: a header with back, title, status and a small delete, then the bubbles, then the composer. */
+.support-view{display:flex;flex-direction:column;min-height:0;flex:1}
+.support-thread-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-block:1px solid var(--line)}
+.support-thread-title{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.support-thread-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base)}
+.support-rail button.support-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-color:transparent;color:var(--muted)}
+.support-rail button.support-icon svg{flex:none}.support-rail button.support-icon:hover{color:var(--ink);background:var(--surface2)}.support-rail button.support-trash:hover{color:var(--fail)}
+.support-thread{display:flex;flex-direction:column;overflow-y:auto;min-height:140px;max-height:55vh;padding:12px 14px;overscroll-behavior:contain;overflow-wrap:anywhere}
+.support-msg{max-width:85%;min-width:0;overflow-wrap:anywhere;padding:8px 12px;border-radius:10px;font-size:var(--t-base);margin:0 0 10px}
+.support-msg.you{align-self:flex-end;background:var(--surface2);border:1px solid var(--line);border-bottom-right-radius:3px}
+.support-msg.staff{align-self:flex-start;background:color-mix(in srgb,var(--accent) 12%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-bottom-left-radius:3px}
+.support-body{white-space:pre-wrap}
+.support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}.support-msg.you .support-who{text-align:right}
+.support-delivered{align-self:flex-end;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
+.support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-sm);line-height:1.5}
+.support-empty h3{margin:0 0 6px;font-size:var(--t-md);color:var(--ink)}.support-empty p{margin:0}
+.support-sent{font-size:var(--t-sm);color:var(--muted);line-height:1.5;overflow-wrap:anywhere;margin:6px 0}
+.support-closed{padding:0 14px}
+.support-write{display:grid;gap:8px;margin-top:auto;border-top:1px solid var(--line)}
+.support-input{display:flex;align-items:flex-end;gap:8px}
+.support-input textarea{flex:1;min-width:0;min-height:64px;max-height:180px;resize:vertical;box-sizing:border-box}
+.support-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+.support-send:hover:not(:disabled){filter:brightness(1.06)}
+.support-error{margin:0;font-size:var(--t-sm)}
 .support-diag,.support-row,.support-check{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .support-row{justify-content:flex-end}.support-diag{font-size:var(--t-sm)}.support-diag label{display:flex;gap:6px;align-items:center}
 .support-options{font-size:var(--t-sm)}.support-options summary{color:var(--muted);cursor:pointer}.support-options label{margin-top:8px}.support-options input[type=email]{width:100%;box-sizing:border-box}
-.support-connection{padding:8px 14px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);gap:8px}
 .support-modal{width:min(760px,calc(100vw - 32px));max-height:90vh}.support-modal .tmodal-body{display:grid;gap:10px;overflow:auto}
 .support-modal p{margin:0;font-size:var(--t-base)}.support-json{width:100%;min-height:280px;box-sizing:border-box;font:var(--t-sm)/1.5 var(--mono);white-space:pre;resize:vertical}
 .support-sections{display:flex;gap:8px 16px;flex-wrap:wrap}.support-sections label{display:flex;align-items:center;gap:5px;font-size:var(--t-sm)}
@@ -116,7 +147,7 @@
   #main.help-layout{max-width:none;display:grid;grid-template-columns:minmax(0,1fr) var(--rail-right);padding:0;height:100%;overflow:hidden;position:relative}
   #main.help-layout>.help-page{width:100%;min-width:0;min-height:0;box-sizing:border-box;overflow-y:auto;padding:18px 28px 60px}
   #main.help-layout>.support-rail{margin:0;border:0;border-left:1px solid var(--line);border-radius:0;min-height:0;overflow:hidden}
-  .support-thread{flex:1;max-height:none}.support-write{flex:none}
+  .support-thread{flex:1;max-height:none}.support-write{flex:none}.support-listview{flex:1}
   #main.help-layout>.rail-edge[data-rail="right"]{display:block;position:absolute;left:auto;right:calc(var(--rail-right) - 4px)}
   body:has(#main.help-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
   .help-actions .help-support-link{display:none}

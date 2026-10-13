@@ -9,7 +9,21 @@ is sent and kept.
 
 Help (the `?` at the bottom of the sidebar) has the app overview on the left and **Support** in the right rail, using the
 same sizing and resize controls as the rest of the app. On a narrow screen, Support follows the overview; the top Support
-link jumps there. **Your requests** selects an existing conversation; **New request** starts another.
+link jumps there.
+
+- **Your requests** is a list, newest activity first. Each row shows the start of your first message, a status badge
+  (**Open**: waiting for Tico support; **Answered**: they replied; **Closed**; **Removed**: the team deleted it at HQ), when it
+  last changed, and a dot when it has a reply you haven't read. **New request** starts another.
+- Opening a request shows the conversation as bubbles, yours on the right and **Tico support**'s on the left, each with its
+  time, and the composer below. It opens at the newest message; when replies arrive while you are reading further up, it
+  doesn't move you. The back arrow returns to the list. An open request says **Delivered to Tico support** under it: a
+  request is only listed once HQ has accepted it.
+- In the composer, **Enter** sends and **Shift+Enter** adds a new line; the round arrow button (labelled Send) does the
+  same. While a message is sending the composer is locked. If it fails, **Not sent** and the reason appear under the box
+  and the message stays in it; nothing has reached Tico support. A sent message appears in the conversation at once.
+- The trash icon in the corner of a conversation deletes it, after you confirm.
+- With no requests yet, the rail is an **Ask Tico support** prompt with the composer. When support is off on the server
+  (demo, rehearsal or `TICO_SUPPORT=off`), Help says so in place of the rail.
 
 | Field | |
 |---|---|
@@ -35,9 +49,11 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in the selected thread and raise the existing notice and sidebar dot. Selecting a request or pressing
-**Mark read** clears its unread state. Background refresh preserves your draft, focus and scroll position. **Delete** removes
-the request and all its attachments at HQ and its local ticket record. Closed requests remain readable.
+Replies appear in their conversation, raise a notice, and put the number of unread replies on the `?`. Opening a
+conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
+Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
+refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
+local ticket record. Closed requests remain readable.
 
 - Any signed-in human may file a ticket from the form. A personal API token, the Assistant acting for a human, and a bot
   may not file one directly; they report through a person's yes (below).
@@ -75,7 +91,8 @@ the times, and the thread. It keeps no IP address and no log of a request. Ticke
 with **Delete**, or the team when you ask (put "delete this request" in the ticket, or open an issue). The 13 month rule is for
 the anonymous install rows only. The reference for HQ's routes is in [telemetry.md](telemetry.md#support-tickets).
 
-Your Tico asks HQ about your tickets only when the app asks: when you open Help, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
+Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back
+into view, and every 30 seconds while the support rail is open, or about every 5 minutes elsewhere while the app is open
 and you have a ticket that is not closed (at most once every 30 seconds for any one ticket). It has no timer of its own.
 
 ## How the project team works tickets
