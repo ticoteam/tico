@@ -768,6 +768,18 @@ def own_clone(repos, source, origin='git@github.com:org/one.git'):
     return path
 
 
+def test_a_persons_clone_where_a_half_clone_was_is_taken_over_not_deleted(repos, tmp_path):
+    only_one(repos)
+    source = local_source(tmp_path)
+    repos.rows['org/one'] = {'full_name': 'org/one', 'state': 'cloning', 'managed': True, 'partial': True}
+    path = own_clone(repos, source)
+    with from_local(repos, source), roomy():
+        cycle(repos)
+    row = repos.rows['org/one']
+    assert (path / 'notes.txt').read_text() == 'my uncommitted notes'
+    assert row['state'] == 'cloned' and row.get('adopted') and 'partial' not in row, row.get('error')
+
+
 def test_a_mac_takes_over_a_clone_of_the_same_repository_and_keeps_its_origin(repos, tmp_path):
     only_one(repos)
     source = local_source(tmp_path)

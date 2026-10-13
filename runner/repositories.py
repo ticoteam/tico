@@ -357,10 +357,16 @@ class Repositories:
             path = self.path(name)
             exists = path.exists()
             if exists and self.rows[name].get('partial') and not (path / '.git' / 'tico-managed').exists():
-                # A clone this runner started and never finished (it was stopped mid-clone): nothing in it is anyone's
-                # work, so it is removed and cloned again rather than refused as a broken repository forever.
-                discard_failed_clone(path, fresh=True)
-                exists = path.exists()
+                if self.adoption_problem(path, repo['full_name']):
+                    # A clone this runner started and never finished (it was stopped mid-clone): nothing in it is
+                    # anyone's work, so it is removed and cloned again rather than refused as broken forever.
+                    discard_failed_clone(path, fresh=True)
+                    exists = path.exists()
+                else:
+                    # A person's own clone of this repository now stands where the half clone was: never delete it;
+                    # it is taken over below like any other.
+                    self.rows[name].pop('partial', None)
+                    self.rows[name].pop('managed', None)
             managed = self.rows[name].get('managed') or (path / '.git' / 'tico-managed').is_file()
             if exists and (not (path / '.git').is_dir() or (path / '.git').is_symlink()):
                 raise ValueError('Repository folder already exists and is not a managed base clone; left as it is')
