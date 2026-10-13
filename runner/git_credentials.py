@@ -359,24 +359,36 @@ def clone_repository(path, repository, env=None, url=None, timeout=180):
     path = Path(path)
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         return "failed", f"{path.name} already exists here and is not an empty folder; left as it is"
+    fresh = not path.exists() or not any(path.iterdir())      # nothing in it is anyone's yet
     env = safe_git.environment(env)
     wanted = url or f"https://github.com/{repository}.git"
     try:
         done = isolation.run([*safe_git.PREFIX, "clone", "--quiet", wanted, str(path)], capture_output=True, text=True,
                              stdin=subprocess.DEVNULL, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return "failed", "timed out"
+        discard_partial(path, fresh)
+        return "failed", f"git clone timed out after {timeout} seconds; a large repository or a slow network needs longer"
     except (OSError, subprocess.SubprocessError) as exc:
+        discard_partial(path, fresh)
         return "failed", type(exc).__name__
     if done.returncode == 0:
         return "cloned", ""
-    lines = (done.stderr or done.stdout or "").strip().splitlines()
-    text = (lines[-1] if lines else f"exit {done.returncode}")[:200]
-    if any(word in text for word in ("uthentication", "403", "Permission", "denied")):
-        return "failed", "GitHub refused the bot's token"
+    discard_partial(path, fresh)
+    from .redact import env_secrets, git_failure
+    text = git_failure(done.stderr or done.stdout, env_secrets(env), limit=240) or f"exit {done.returncode}"
+    if any(word in text for word in ("uthentication", "403", "Permission to", "denied to")):
+        return "failed", f"GitHub refused the bot's token: {text}"
     if "not found" in text.lower():
-        return "failed", f"GitHub has no repository {repository} that this token can see"
+        return "failed", f"GitHub has no repository {repository} that this token can see: {text}"
     return "failed", text
+
+
+def discard_partial(path, fresh):
+    """Remove what a failed clone left in a folder that did not exist before it: otherwise every later try finds
+    a folder that "already exists and is not empty" and the checkout never arrives."""
+    path = Path(path)
+    if fresh and path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def repository_name(value):

@@ -222,5 +222,45 @@ class FetchRepository(unittest.TestCase):
         run.assert_not_called()
         self.assertEqual((target / "draft.md").read_text(), "unfinished")
 
+    def test_a_failed_clone_names_gits_reason_and_leaves_nothing_behind(self):
+        target = self.projects / "bot-helper"
+        def fails(command, **kwargs):
+            if "clone" not in command:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            (target / ".git" / "objects").mkdir(parents=True)
+            return subprocess.CompletedProcess(command, 128, "", "Cloning into 'bot-helper'...\nerror: RPC failed; HTTP 500 "
+                                               "curl 22 The requested URL returned error: 500\nfatal: expected flush after ref listing\n")
+        with mock.patch.object(git_credentials.isolation, "run", side_effect=fails):
+            state, detail = git_credentials.clone_repository(target, REPO, {"GH_TOKEN": "ghs_" + "x" * 36})
+        self.assertEqual(state, "failed")
+        self.assertIn("RPC failed; HTTP 500", detail)
+        self.assertIn("expected flush after ref listing", detail)
+        self.assertFalse(target.exists())                      # the next try is a clone, not "already exists"
+
+    def test_a_timed_out_clone_says_so_and_leaves_nothing_behind(self):
+        target = self.projects / "bot-helper"
+        def slow(command, **kwargs):
+            if "clone" not in command:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            (target / ".git").mkdir(parents=True)
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        with mock.patch.object(git_credentials.isolation, "run", side_effect=slow):
+            self.assertEqual(git_credentials.clone_repository(target, REPO, {}, timeout=180),
+                             ("failed", "git clone timed out after 180 seconds; a large repository or a slow network needs longer"))
+        self.assertFalse(target.exists())
+        with mock.patch.object(service.isolation, "run", side_effect=slow):
+            self.assertIn("timed out after 120 seconds", service.clone_shared(target, {"repo": "Acme/bot-original"}))
+        self.assertFalse(target.exists())
+
+    def test_a_refused_token_keeps_gits_words(self):
+        target = self.projects / "bot-helper"
+        refused = subprocess.CompletedProcess([], 128, "", "remote: Permission to Acme/emp-helper.git denied to app.\n"
+                                              "fatal: unable to access 'https://x-access-token:ghs_secretsecretsecretsecret@github.com/"
+                                              "Acme/emp-helper.git/': The requested URL returned error: 403\n")
+        with mock.patch.object(git_credentials.isolation, "run", return_value=refused):
+            state, detail = git_credentials.clone_repository(target, REPO, {})
+        self.assertTrue(detail.startswith("GitHub refused the bot's token: remote: Permission to Acme/emp-helper.git denied"))
+        self.assertNotIn("ghs_secretsecret", detail)
+
 if __name__ == "__main__":
     unittest.main()
