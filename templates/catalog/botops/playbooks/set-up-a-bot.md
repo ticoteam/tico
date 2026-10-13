@@ -20,9 +20,18 @@ owner's reviewed instructions and the setup answers.
 A task titled `Build a bot: <name>` carries a slug and a plain-language job
 instead of a template. Pick the closest template in the templates, and write `AGENT.md` for that job.
 
-If any of those is missing, ask once with `hub task ask <id>` and stop until it is answered. Do not
-invent a slug: it is the repository name, the value of `name:` in `bot.yaml`, and the label on
-every task the bot ever gets, so renaming it later is real work.
+If any of those is missing, choose it and go on (AGENT.md, Defaults, not questions):
+
+- **Slug:** the display name in lowercase, words joined by hyphens ("Bleacher Report Manager" is
+  `bleacher-report-manager`). Check `hub api GET bots?include_archived=true`; if it is taken, add a
+  short distinguishing word or a number. The slug is the repository name, the value of `name:` in
+  `bot.yaml`, and the label on every task the bot ever gets, so renaming it later is real work: choose
+  it predictably and name it in the report.
+- **Display name:** the name they used; otherwise a short name for the job.
+- **Template:** the closest one to the job.
+- **Repository owner:** the GitHub organization they named, otherwise the connected one.
+
+Name every choice you made in the task note, so the owner can correct it.
 
 ## 2. Create the repository
 
@@ -112,7 +121,7 @@ was not given permission to create repositories. Do not work around it or retry 
 steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
 GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
 once, and do not file another ask. Tico finishes the repository on its own once the owner acts, and the bot
-stays local until then. Never create a repository for a slug the task did not name.
+stays local until then. Never create a repository for a slug other than this bot's.
 
 ## 5c. Close what you filed for a human
 
@@ -139,7 +148,7 @@ The requester closes the task. Unless a human asked you in chat to take it live,
 ## When it goes sideways
 
 - **The slug already exists, including archived bots.** Do not overwrite a repository or restore
-  the old bot for a new-bot request. Offer a fresh slug. Restore only when explicitly requested,
+  the old bot for a new-bot request. Pick a fresh slug (§1) and name it in the note. Restore only when explicitly requested,
   and use the current request's scope rather than an older bot's Tools, repository or Routines.
 - **The template does not fit the job the answers describe.** Set it up from the closest template
   anyway, say plainly in the note which parts of the instructions you had to write from nothing, and
