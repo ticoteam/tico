@@ -1049,8 +1049,15 @@ class Worktrees:
         self.lock = threading.Lock()
 
     def bot_lock(self, bot):
+        """The bot's main checkout: a main-lane turn holds it for the whole turn, a task-lane turn only while it
+        refreshes that checkout."""
         with self.lock:
             return self.bot_locks.setdefault(bot.removeprefix('bot:'), threading.RLock())
+
+    def lane_lock(self, bot, lane):
+        """One turn at a time per (bot, lane) on this computer; a task's worktree maintenance takes its lane too."""
+        with self.lock:
+            return self.bot_locks.setdefault(bot.removeprefix('bot:') + '|' + lane, threading.RLock())
 
     def claim(self, client, assignments):
         # Coordinate selection with maintenance without adding a server field.
@@ -1066,7 +1073,12 @@ class Worktrees:
                     return result
             return {'attempt': None}
 
-    def bot_idle(self, bot):
+    def bot_idle(self, bot, task=None):
+        """No turn here that could be in this task's worktree: the bot's main lane and the task's own lane."""
+        try:
+            return self.idle(bot, task)
+        except TypeError:
+            pass
         try:
             return self.idle(bot)
         except TypeError:
@@ -1103,10 +1115,16 @@ class Worktrees:
             released = bool(action.get('release') and detail.get('release_requested'))
             if action['action'] == 'remove' and not (closed or released) or action['action'] == 'restore' and closed:
                 continue
-            bot_lock = self.bot_lock(row['owner'])
+            # A turn in the bot's main checkout or in this task's lane may be using the worktree; turns on the
+            # bot's other tasks run in their own session worktrees and do not hold maintenance back.
+            bot_lock, lane_lock = self.bot_lock(row['owner']), self.lane_lock(row['owner'], 'task:' + str(row['task_id']))
             if not bot_lock.acquire(blocking=False):
                 continue
-            if not self.bot_idle(row['owner']):
+            if not lane_lock.acquire(blocking=False):
+                bot_lock.release()
+                continue
+            if not self.bot_idle(row['owner'], row['task_id']):
+                lane_lock.release()
                 bot_lock.release()
                 continue
             with self.lock:
@@ -1135,7 +1153,7 @@ class Worktrees:
                 def still_closed():
                     fresh = next((r for r in self.client.get('runners/me/worktrees')['worktrees'] if r['id'] == row['id']), None)
                     fresh_detail = json.loads(fresh.get('detail_json') or '{}') if fresh else {}
-                    return fresh is not None and self.bot_idle(row['owner']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or fresh_detail.get('delete_requested')
+                    return fresh is not None and self.bot_idle(row['owner'], row['task_id']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or fresh_detail.get('delete_requested')
                                                                                or released and fresh_detail.get('release_requested'))
                 state = act(self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed)
                 restore_pending = action['action'] == 'restore'
@@ -1184,6 +1202,7 @@ class Worktrees:
             finally:
                 with self.lock:
                     self.maintaining.discard(row['owner'].removeprefix('bot:'))
+                lane_lock.release()
                 bot_lock.release()
         for key in failed:
             failures = self.retry.get(key, (0, 0))[1] + 1

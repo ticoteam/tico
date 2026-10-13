@@ -257,8 +257,10 @@ the cloud cooldown applies.
 **A bot's session is its own.** By default each bot has one provider thread. BotOps defaults to
 one thread per task and per chat conversation so unrelated jobs and requesters stay separate.
 Other bots can opt into that isolation with `session: task`; explicit `session: bot` keeps one
-thread. Wakes about the same task resume its thread. Sessions use the same local `bot-<slug>` checkout,
-and only that computer knows which thread
+thread. Wakes about the same task resume its thread. A bot's chat and its own thread use the local
+`bot-<slug>` checkout one turn at a time; with a session per task, each task's turns run in that
+task's own worktree (`sessions/bot-<slug>/<task>`), beside the bot's other tasks. Only that
+computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt: when the conversation fills the model's window
 the runtime compacts it, and a run carries only what the room said since the bot last answered.

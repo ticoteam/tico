@@ -551,7 +551,7 @@ def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folde
             return subprocess.CompletedProcess(args, 128, '', 'synthetic refusal')
         return real_run(args, **kwargs)
     monkeypatch.setattr(W.isolation, 'run', failed_clone)
-    with pytest.raises(ValueError, match='clone failed'):
+    with pytest.raises(ValueError, match='clone of org/product failed'):
         W.repositories.worktree_base(workspace, row, W.safe_git.process_environment())
     assert not base.exists()
 

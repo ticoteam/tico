@@ -10,6 +10,12 @@ All notable changes to Tico are recorded here. The format follows
 ### Added
 - **Copy session ID from a task's ⋯ menu.** On a task with a primary session, the menu copies that session's id, for resuming or restoring it by hand.
 - **Tasks show their sessions.** The owning bot's task session is primary, with its resume command to copy; people and bots can link other sessions to track (a thread URL or a resume command; Sessions + on the task, `hub task link --session`). Task chat still goes only to the owning bot. See [Tasks](docs/tasks.md).
+- **A bot works on several tasks at once.** A bot with a session per task (BotOps, or `session: task`) runs turns on different
+  tasks side by side on its computer, each in its own git worktree of the bot's repository (`sessions/bot-<slug>/<task>` in the
+  workspace, branch `tico-session/<task>`); chat and the bot's own thread still take turns in its main folder. At the end of a turn
+  the runner commits what it left in memory/ and knowledge/, stamps the turn's commits with `Tico-Run:`, rebases them onto the
+  bot's default branch and pushes; the worktree goes once the task is finished. A runner whose config has no `capacity` (or
+  `"auto"`) sizes it to the computer. An older server keeps giving a bot one turn at a time.
 - **Bots report Tico bugs to the Tico team with one tap from you.** A bot drafts its report with `hub support report` (MCP `hub_support_report`); you see **Send this to Tico support?** in Needs you with the whole message, what goes with it (the version and install ID, or nothing) and where it goes, and after your yes the bot sends it with `hub support send`, filed as you so the replies show on your Support page. No more copying a bot's report into the form. See [Contact support](docs/support.md#a-bots-report-after-a-persons-yes).
 - **Add teammates from Team.** The plus beside Team offers a section, bot or human according to your permissions.
   Bots come from the existing template picker or an editable, unsent BotOps request for a custom bot or help with an
