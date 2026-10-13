@@ -134,7 +134,8 @@
     // stays on the newest message only while the reader is there, so a poll never moves someone reading back
     // (ui/app/stick-scroll.js); a reply that lands while they are scrolled up shows the "New reply" pill instead
     const stick = stickScroll(host), id = t ? t.id : '';
-    if (pin) stick.toBottom();                                        // a conversation just opened, or a message just sent
+    // a conversation just opened, a message just sent, or another one (or the empty state) now in view: start at its newest
+    if (pin || host.dataset.ticket !== id) stick.toBottom();
     if (host.dataset.shown !== html) {
       const fresh = !pin && !!host.dataset.shown && host.dataset.ticket === id;
       stick.update(() => { host.innerHTML = html; host.dataset.shown = html; host.dataset.ticket = id; }, {fresh});

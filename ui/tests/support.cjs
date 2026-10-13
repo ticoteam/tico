@@ -202,6 +202,17 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     await pill.click();
     await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
     assert.equal(await pill.isVisible(), false);
+    // Scrolled up with the pill showing, then the last request is deleted: the empty state starts clean, no stale pill.
+    v.hq.tickets = [long];
+    await thread.hover();
+    await v.page.mouse.wheel(0, -600);
+    await v.page.waitForFunction(() => { const el = document.querySelector('[data-thread]'); return el.scrollHeight - el.scrollTop - el.clientHeight > 300; });
+    long.messages.push({...reply(31, 0), body: 'Another reply while you read'});
+    await v.page.evaluate(() => window.supportPoll());
+    await pill.waitFor();
+    await v.page.getByRole('button', {name: 'Delete request'}).click();
+    await v.page.locator('.support-empty').waitFor();
+    assert.equal(await pill.isVisible(), false, 'no stale pill after the conversation changes');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
