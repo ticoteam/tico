@@ -72,7 +72,8 @@ A copy of real data that must send nothing out takes `TICO_REHEARSAL=1` in `serv
 ### `runner.json`
 
 `enroll` writes `runner_id`, `token`, `operator`, `url`, `projects_dir` (the workspace),
-`capacity: 4`, and `environment`, the environment id this registration belongs to. Mode 0600 is
+and `environment`, the environment id this registration belongs to. Without `capacity` (or with
+`"auto"`) the runner sizes how many turns it runs at once to the machine; a number is kept. Mode 0600 is
 enforced on every command. Profiles add three more keys:
 
 ```json

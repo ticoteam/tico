@@ -26,8 +26,8 @@ that is already set up by `pair`.
 
 ## 2. Register the bot if it is new
 
-Skip this when the bot exists (`hub api GET bots`). Otherwise ask for a name, one line on what it does and who it reports
-to (the human by default), then:
+Skip this when the bot exists (`hub api GET bots`). Otherwise do not ask: name it after the profile, describe it from what
+they said, and have it report to them (AGENT.md, Defaults, not questions), then:
 
     hub bot create <slug> --record-only --model hermes --name "<Name>" --description "<what it does>" --reports-to <bot or human:id>
 

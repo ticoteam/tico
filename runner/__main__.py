@@ -105,7 +105,7 @@ def main(argv=None):
             parser.error("This machine is already configured; use a distinct --config to enroll another runner")
         code = json.loads(args.code_file.read_text())["code"]
         result = Client(args.url, "").post("runners/enroll", {"code": code, "label": args.label, "platform": sys.platform})
-        config = {**result, "url": args.url, "projects_dir": str(args.projects.resolve()), "capacity": 4}
+        config = {**result, "url": args.url, "projects_dir": str(args.projects.resolve())}
         if args.environment:
             config["environment"] = args.environment
         args.config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

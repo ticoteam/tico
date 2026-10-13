@@ -225,6 +225,11 @@ async function desktop(browser) {
   await sessions.nth(3).waitFor();
   assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks/t-checkout/links', body: {url: 'claude --resume 4f1e', kind: 'session'}});
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await modal.locator('.task-sessions').screenshot({path: path.join(SHOTS, 'task-sessions-dark.png')}); }
+  // The "…" menu copies the primary session's id alone, for restoring it by hand.
+  await page.evaluate(() => { window.copied = []; navigator.clipboard.writeText = async text => { window.copied.push(text); }; });
+  await modal.locator('[data-task-more]').click();
+  await modal.locator('.prop-pop .tl-mi', {hasText: 'Copy session ID'}).click();
+  assert.deepEqual(await page.evaluate(() => window.copied), ['thread-abc']);
   // Subtasks: the roll-up, one level, PR badges, expand a child.
   assert.equal(await rail.locator('.sub-sum').innerText(), '4 of 10 done · 7 PRs merged');
   assert.equal(await rail.locator('.sub-sum .sub-bar > i').evaluate(i => i.style.width), '40%', 'a thin bar beside it');
