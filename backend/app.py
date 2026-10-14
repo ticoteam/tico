@@ -168,6 +168,9 @@ def create_app(settings=None):
                     # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
                     from . import worktree_waits
                     await asyncio.to_thread(worktree_waits.tick, store, settings.github_owner)
+                    # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
+                    from . import setup_stuck
+                    await asyncio.to_thread(setup_stuck.tick, store)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -754,6 +757,9 @@ def create_app(settings=None):
                 raise Problem("routine", "Only an existing timed routine can run now", 422)
             if schedule["enabled"] != 1 or (H.bot(c, bot) or {}).get("state") != "active":
                 raise Problem("routine", "Resume the routine and bot before running it", 409)
+            setup = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            if setup and is_parked(setup["onboarding_state"]):
+                raise Problem("routine", "Finish the bot's setup before running its routines", 409)
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
@@ -4837,6 +4843,8 @@ def create_app(settings=None):
     install_support(app, store, settings, census)
     from .watchers import install as install_watchers
     install_watchers(app, store, auth, execution, mutate)
+    from .health_monitor import install as install_health_monitor
+    install_health_monitor(app, store, auth, mutate, onboarding, settings_admin, settings)
     from .route_renames import install as install_route_renames
     install_route_renames(app)           # after every route: the new spellings canonical, the old ones deprecated
 

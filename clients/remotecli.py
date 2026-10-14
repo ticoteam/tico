@@ -121,6 +121,12 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
+    if fn in ("health-monitor findings", "health-monitor report"):
+        from clients import hubtools
+        if fn == "health-monitor findings":
+            return hubtools.health_monitor_findings(client, {})
+        return hubtools.health_monitor_report(client, {"key": args.key, "process": args.process, "cpu": args.cpu,
+                                                       "mb": args.mb, "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if fn in ("support report", "support send"):
         from clients import hubtools
         key = os.environ.get("HUB_OPERATION_ID")

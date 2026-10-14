@@ -123,7 +123,8 @@ function overviewStop() {
   state.frame.contentWindow?.postMessage({type: 'tico-overview-dispose'}, location.origin);
   state.abort.abort(); state.frame.remove(); OVERVIEW_PAGE = null;
 }
-// Bots with queued work that is not starting, from the Health answer the app already polls (ui/health.js).
+// Bots with queued work that is not starting, or left in setup for a day, from the Health answer the app already
+// polls (ui/health.js).
 const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
 // "3 bots running on fallback since 10:04, 2 limited": bots whose plan ran out, from the same answer.
 function overviewFallbackLine() {

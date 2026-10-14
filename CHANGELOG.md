@@ -9,6 +9,36 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - **Needs you says what each card takes, and when.** Needs you is grouped by what an item takes, with a count per group: **Decide**, **Pay**, **Sign in or connect**, **Review and send**, **Do** (Group by **What it takes**, the new default; Asked by and the others are still in the menu). An approval says what it approves: "Send: '$200 for each rental owner you introduce' to Jennie Ooten", "Pay $1,200: LinkedIn ads", "Merge: 'Checkout redesign' (acme/web #412)". A person's task with a deadline shows it ("Due Wed", "Oct 22"), and one overdue or due within the week comes first, soonest first; a bot's own task's date is when it looks again, so it does not count. When a bot's ask says what it would do, the card's main button is **Do what you recommend** (R on Decide): one tap answers with that (picking its option if the ask has one) and the card leaves when the ask was the whole card; a side question on a task of yours is answered and the task stays yours (`POST /api/v2/needs-you/recommended`, with the card's version so a task that changed meanwhile is refused). A bot's task waiting on you for what a card below it already asks shows inside that card, with "+N" and the folded tasks under "Also waiting on this" (in Needs you, on Decide's card and in the walk-through); waits that are only siblings under one project keep their own cards. Overview shows how many items need you and how many went away on their own this week (expired, withdrawn, answered by your Assistant), and `GET /api/v2/needs-you` returns these as `need`, `due`, `recommend`, `folded` and `went_away`.
+- **Health Monitor, an optional built-in helper.** Off by default; one switch in Settings > Health turns it on. Once an
+  hour Tico checks the install with no model (computers on an older release, runner errors that point at a known
+  problem, turns stopped by a usage limit on a bot with no fallback model, bots stuck in setup, routines on paused bots,
+  queued work that does not start while its computer has room, failed task worktrees, a server busy while idle), and its
+  watcher checks the computer it runs on for processes busy two hours running. It wakes the Health Monitor only for
+  something new. A setup problem becomes a task for BotOps with the fix; a Tico bug becomes one support ticket per
+  signature, written from the check alone with the redacted diagnostics bundle (never a bot's or computer's name, task
+  or message text; a setup problem is never sent), and a "seen
+  again" message on that ticket when it comes back. The team rule "Health Monitor may file Tico bug reports without
+  asking" (on by default) skips the Needs you card. `hub health-monitor findings` and `hub health-monitor report`. See
+  [Health Monitor](docs/health-monitor.md).
+
+### Changed
+- **A bot left in setup for a day shows on Overview.** A bot still `needs_setup` a day after it was added holds its
+  routines' jobs and its tasks, and nobody saw it. It is now listed with the stuck bots on Overview and Health
+  ("Stuck in setup for 14 days", reason `setup` in `GET /api/v2/health` `stuck`), and a person who may manage it gets
+  **Finish with defaults**, the same setup-done call as `hub bot setup-done`, which now also turns the template's first
+  routine on as Start setup would have (`routine` in its answer). The person the "Finish setting up" reminder goes to
+  gets one message about it, once per bot, unless that reminder is still open. Nothing finishes setup on its own.
+- **A bot can't ask a person a question on a task that has ended.** On a task that is closed, declined or done, a new question from a bot to a person (`hub task ask`, a task comment that asks, or a message sent as an ask) is refused with "reopen it or ask on an open task"; a done task still asks for acceptance with its review questions.
+
+### Fixed
+- **Pausing a bot pauses its routines.** Pausing a bot now closes the timed routine runs it had not started, with the note "Bot paused before this routine ran", so they don't pile up and all run at once on resume. A person's own tasks for the bot, a person's Run now, event (`on:`) runs (a meeting's notes are announced only once) and runs handed to another bot stay queued. Each routine keeps its own on/off switch, so resuming the bot brings back exactly the routines that were on. A bot still in setup gets no timed runs and Run now is refused until setup is done; its event runs wait for it. The routines list says "paused with the bot", and the API has a new `held_by_bot` field (`paused`, `needs_setup`, ...) that names what holds an enabled routine.
+
+## [0.3.45] - 2026-10-14
+
+**Upgrade:** an existing GitHub App needs **Actions: Read-only** added on its GitHub settings page and accepted on the installation before bots can read workflow results. Until then, tokens are issued as before. See [GitHub App](docs/github-app.md).
+
+### Added
+- **A Rust runner, opt in per computer.** `tico-runner` is a Rust port of the runner. The Python runner stays the default. Set `"engine": "rust"` in `runner.json` or `TICO_RUNNER_ENGINE=rust` to try it on one computer; remove the setting to go back. Anything it can't do yet (a bot on grok, pi or cursor, for one) hands back to Python, and so does any start-up problem.
 - **Muse Code is a harness.** Enable the Meta provider and bots can run on Meta's coding CLI (`muse`, model Muse Spark 1.3), signed in with a Meta account (device code, from Settings) or `META_API_KEY`. Runs resume their session after a restart and reach the hub and the bot's remote MCP servers, never the operator's own Muse servers. Each subscription profile has its own Muse sign-in. Meta's Llama stays on OpenRouter. See [Harnesses](docs/harnesses.md).
 - **A bot whose plan runs out keeps working on another provider.** When a turn hits a usage or spend limit and the bot
   names no fallback of its own, the runner runs that turn once on another of the company's providers that is signed in on the
@@ -21,6 +51,7 @@ All notable changes to Tico are recorded here. The format follows
 - **Attachments can be allowed for one mailbox.** `mailboxes.<address>.allow_attachments: true` in `registry/mail-policy.yaml` lets bots attach files to drafts from that mailbox only (Legal's, say) while `defaults.allow_attachments` stays off for the rest; `false` turns one off when the default is on. `mail draft discard <draft-id>` removes an unsent draft the bot made (the older `mail discard` still works). See [Mail](docs/mail.md).
 
 ### Changed
+- **Chat replies reach the page sooner.** The runner wakes on a stream event and posts output as it arrives, and the chat page re-reads sooner: about 0.9 s to 0.3 s from Enter to the reply on screen. A reply a turn has just saved is no longer replaced by "Runner restarted during execution".
 - **Each computer installs only the model CLIs its bots use.** A runner used to install a harness for every provider the company enabled, on every computer. Now it installs the harness of each bot assigned to it (and of each bot's fallback), or the company default while it has no bot. The owner can turn any other one on or off per computer under **Settings > Computers > Model CLIs**; off removes the runner's own install once no turn uses it. Nothing already installed is removed on upgrade: it stays and keeps updating until the owner turns it off. Moving a bot to a computer that lacks its harness is no longer refused; the computer installs it and the check says "installing". A runner against an older server installs what its bots use and keeps what it has. See [Harnesses](docs/harnesses.md#choosing-what-a-computer-installs).
 - A bot's turn loads only the `hub` MCP server, its declared servers and its repository's `.mcp.json`: Claude Code bots on
   the operator's own login no longer get the operator's personal servers or claude.ai connectors, and Grok skips the ones it

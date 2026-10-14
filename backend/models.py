@@ -1357,6 +1357,7 @@ class AccessRules(Contract):
     members_store_credentials: bool | None = None
     admin_sql: bool | None = None
     member_tokens: bool | None = None
+    health_monitor_reports: bool | None = None
     bots_go_ahead: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
@@ -1638,7 +1639,7 @@ class HarnessAction(Contract):
 
 class HarnessChoice(Contract):
     harness: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=60)]
-    enabled: bool
+    enabled: StrictBool
 
 
 class HarnessActionReport(Contract):

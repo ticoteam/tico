@@ -413,6 +413,17 @@ STABLE = [
      "over or the limit is raised", "BotUsageLimit"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
+    ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
+     "Owners, admins and the Health Monitor: whether it is on, whether it files reports without asking, and what the "
+     "last hourly scan found", None),
+    ("/api/v2/health-monitor/turn-on", "post", "Health", "turnOnHealthMonitor",
+     "Owner only: add the Health Monitor from the catalog (or wake a paused one) and activate it", None),
+    ("/api/v2/health-monitor/turn-off", "post", "Health", "turnOffHealthMonitor", "Owner only: pause the Health Monitor", None),
+    ("/api/v2/health-monitor/findings/{key}/report", "post", "Health", "reportHealthFinding",
+     "The Health Monitor or the owner: report a finding (key or signature) as a Tico bug: one ticket per signature with "
+     "the redacted diagnostics, a message on it when it comes back, or a support approval when the team rule is off", None),
+    ("/api/v2/health-monitor/local-findings", "post", "Health", "recordLocalHealthFinding",
+     "The Health Monitor: record a process or container its watcher saw busy, as a finding it can report", None),
 ]
 
 
@@ -553,7 +564,11 @@ SCHEMAS = {
                      required=["slug", "display_name", "state", "owners", "access"]),
     "Routine": obj({"id": "s", "bot": "s", "key": "n", "title": "s", "cron": "s", "on": "s", "kind": "s",
                     "timezone": "s", "enabled": "b", "text": "s", "last_fired": "n", "next_due": "n",
-                    "deleted_at": "n", "updated_at": "n", "active": "b"},
+                    "deleted_at": "n", "updated_at": "n", "active": "b",
+                    "held_by_bot": {"type": ["string", "null"], "description":
+                                    "Set while an enabled routine waits on its bot rather than its own switch: the "
+                                    "bot's state (paused, planned, quarantined, archived) or needs_setup. The routine "
+                                    "stays enabled and fires again once the bot is active and set up."}},
                    required=["id", "bot", "title", "cron", "on", "kind", "timezone", "enabled", "active"]),
     "RoutineList": obj({"routines": items(ref("Routine"))}, required=["routines"]),
     "Audience": obj({"everyone": "b", "people": items({"type": "string"}), "teams": items({"type": "string"}),
@@ -575,7 +590,9 @@ SCHEMAS = {
     "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "org_groups": "a", "teams": "o"}),
     "BotList": items(ref("Bot")),
     "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
-    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "changed": "b"}, required=["bot", "onboarding_state", "changed"]),
+    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "changed": "b", "routine": {
+                            "type": ["string", "null"], "description": "The template's first routine when this call "
+                            "armed it (on, unless a person turned it off); null when setup had armed it already"}}, required=["bot", "onboarding_state", "changed"]),
     "BotTool": obj({"id": "s", "service": "s", "name": "s", "logo_key": "n", "identity": "s", "can": items({"type": "string"}),
                     "scope": {"type": "object", "description": "Service-specific fields, a string or a list of strings each: "
                               "database, channels, project, mailbox, sites, repo, effort ..."},
@@ -722,9 +739,11 @@ SCHEMAS = {
                   required=["audience", "checks", "attention", "checked"],
                   storage={**ref("Storage"), "description": "Read-only file storage usage and copy progress; Team owners only"},
                   stuck={"type": "array", "items": {"type": "object"}, "description":
-                         "Bots with queued work that is not starting (the caller may read them): bot, name, queued, oldest, "
-                         "computer, reason (not_ready, computer_offline, no_computer, slow), why, and fix (label plus "
-                         "href/tab, login or move; null unless the caller administers bots)"},
+                         "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
+                         "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
+                         "slow, limit, setup), why, since (setup only: when the bot was added), and fix (label plus "
+                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
+                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":
                                "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
                                "them): bot, harness, since (when the unbroken run of fallback turns began)"},

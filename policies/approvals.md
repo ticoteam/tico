@@ -16,6 +16,8 @@ redraft) with `--supersedes <id>`, or on the same task for the same `url`, recip
 pull request or spend; and after 14 days undecided. A withdrawn approval can't be decided or spent.
 Ask again if it is still needed. A task that has ended takes no new approval, and `--supersedes`
 can't replace an approval that was already approved and not yet spent.
+Nor does it take a new question to a person: reopen the task, or ask on an open one. A done task
+still asks for acceptance of what it delivered with its review questions.
 
 A `publish` payload names the `url` and the `content_sha256` of what will be published. If it also
 carries the `text` the person reads, that text must be exactly what will be published:

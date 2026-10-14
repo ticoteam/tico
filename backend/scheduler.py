@@ -33,6 +33,7 @@ class Scheduler:
         self.stall_checked = None
         self.goals_checked = None
         self.go_lives_checked = None
+        self.health_scanned = None
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -182,6 +183,16 @@ class Scheduler:
                     G.refresh(c)
             except Exception as exc:
                 failures.append({"goals": type(exc).__name__})
+        if self.health_scanned is None or at - self.health_scanned >= timedelta(hours=1):
+            # Every hour, only while the owner has it on: the Health Monitor's scan (backend/health_monitor.py). Plain
+            # code; it wakes the bot only for a finding the last scan did not have.
+            self.health_scanned = at
+            try:
+                from . import health_monitor
+                with self.store.transaction() as c:
+                    health_monitor.scan(c, self.execution.auth, self.store.settings)
+            except Exception as exc:
+                failures.append({"health_monitor": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at

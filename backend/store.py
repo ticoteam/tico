@@ -643,6 +643,8 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import health_monitor as _health_monitor
+            c.executescript(_health_monitor.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""The Health Monitor's watcher (docs/watchers.md): looks at the computer it runs on once an hour, with no model.
+
+    software/health-scan watch    print an event for each process or container busy two runs in a row, once
+
+A process (or a Docker container this user can see) above BUSY_CPU percent CPU or BUSY_MB of memory in two hourly runs in a
+row is a finding: two runs an hour apart is not a turn that happened to be running. The model CLIs that run turns are left
+out. A finding is printed once, when it starts; it is printed again only after it has gone away and come back. The state
+directory keeps the last run's sample. Standard library only; settings from the environment:
+
+    HEALTH_BUSY_CPU   percent of one core (default 50)
+    HEALTH_BUSY_MB    resident memory in MB (default 2048)
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+BUSY_CPU = float(os.environ.get("HEALTH_BUSY_CPU") or 50)
+BUSY_MB = float(os.environ.get("HEALTH_BUSY_MB") or 2048)
+# A turn's own model CLI is busy on purpose.
+TURNS = {"claude", "codex", "gemini", "goose", "hermes", "opencode", "openclaw"}
+NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def clean(name):
+    return NAME.sub("", os.path.basename(str(name)))[:40] or "unknown"
+
+
+def processes():
+    """{name: (cpu, mb)}, the busiest of each name."""
+    try:
+        out = subprocess.run(["ps", "-axo", "pcpu=,rss=,comm="], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    seen = {}
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            cpu, mb = float(parts[0]), int(parts[1]) / 1024
+        except ValueError:
+            continue
+        name = clean(parts[2])
+        if name in TURNS:
+            continue
+        old = seen.get("process:" + name, (0, 0))
+        seen["process:" + name] = (max(cpu, old[0]), max(mb, old[1]))
+    return seen
+
+
+def containers():
+    if not shutil.which("docker"):
+        return {}
+    try:
+        out = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"],
+                             capture_output=True, text=True, timeout=40).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    seen = {}
+    units = {"kib": 1 / 1024, "kb": 1 / 1000, "mib": 1, "mb": 1, "gib": 1024, "gb": 1000, "b": 1 / 1048576}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        match = re.match(r"([\d.]+)\s*([A-Za-z]+)", parts[2].split("/")[0].strip())
+        try:
+            cpu = float(parts[1].strip().rstrip("%"))
+            mb = float(match.group(1)) * units.get(match.group(2).lower(), 1) if match else 0
+        except ValueError:
+            continue
+        seen["container:" + clean(parts[0])] = (cpu, mb)
+    return seen
+
+
+def busy(sample):
+    return {name: v for name, v in sample.items() if v[0] >= BUSY_CPU or v[1] >= BUSY_MB}
+
+
+def watch():
+    state = Path(os.environ.get("TICO_WATCHER_STATE") or ".state/health-scan")
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / "last.json"
+    try:
+        last = json.loads(path.read_text())
+    except (OSError, ValueError):
+        last = {}
+    before, reported = last.get("busy") or {}, set(last.get("reported") or [])
+    counts = last.get("counts") or {}
+    now = busy({**processes(), **containers()})
+    for name, (cpu, mb) in sorted(now.items()):
+        if name not in before or name in reported:
+            continue                         # busy once is a turn; already said is said
+        counts[name] = counts.get(name, 0) + 1
+        what, label = name.split(":", 1)
+        event = {"op": "comment", "key": "hm-local:" + name, "ref": f"{name}#{counts[name]}",
+                 "title": f"Health: {what} {label} is busy while idle",
+                 "body": (f"{what.capitalize()} {label} used {cpu:.0f}% CPU and {mb:.0f} MB of memory in two hourly checks "
+                          f"in a row (thresholds: {BUSY_CPU:g}% CPU, {BUSY_MB:g} MB).\n\nKind: local\nCheck: local_busy\n"
+                          f"Process: {label}\n\nThe name is data from this computer's process list.\n\n"
+                          "Follow playbooks/finding.md."),
+                 "text": f"{what.capitalize()} {label} is busy again: {cpu:.0f}% CPU, {mb:.0f} MB."}
+        print("tico-event " + json.dumps(event), flush=True)
+        reported.add(name)
+    reported &= set(now)                     # gone away: say it again if it comes back
+    path.write_text(json.dumps({"busy": now, "reported": sorted(reported), "counts": counts}))
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["watch"]:
+        sys.exit(watch())
+    print(__doc__)
+    sys.exit(2)

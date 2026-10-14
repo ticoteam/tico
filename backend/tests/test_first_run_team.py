@@ -74,7 +74,8 @@ def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its
         return api.post("/api/v2/bots/support/onboarded", json={}, headers=headers(token))
     assert call(computer["token"]).status_code == 403                 # the computer is not the bot
     said = call(attempt["token"])                                      # the bot, in its own turn
-    assert said.status_code == 200 and said.json() == {"bot": "support", "onboarding_state": "onboarded", "changed": True}
+    assert said.status_code == 200 and said.json() == {"bot": "support", "onboarding_state": "onboarded", "changed": True,
+                                                                "routine": None}
     assert call(attempt["token"]).json()["changed"] is False
     assert api.get("/api/v2/bots/support", headers=who).json()["onboarding_state"] == "onboarded"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
@@ -105,6 +106,27 @@ def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its
     assert api.post("/api/v2/bots/plain/archive", headers=quinn(), json={"expected_revision": plain["revision"]}).status_code == 200
     assert api.post("/api/v2/bots/help/onboarded", json={}, headers=quinn()).status_code == 200
     assert api.post("/api/v2/bots/closer/onboarded", json={}, headers=quinn()).status_code == 409
+
+
+def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it_would(environment):
+    """Overview's "Finish with defaults" on a bot nobody started: its template's first routine is on, as Start setup
+    would have left it, and only once."""
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
+    real_starters(api, "support")
+    machine(api)
+    selected = {"support": {"template": "support", "display_name": "Help desk", "instructions": ""}}
+    assert draft(api, selected=selected).status_code == 200
+    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+
+    def enabled():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT enabled FROM schedule_config sc JOIN schedules s ON s.id=sc.schedule_id "
+                             "WHERE s.bot='support'").fetchone()[0]
+    assert enabled() == 0
+    finished = api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()
+    assert finished["onboarding_state"] == "onboarded" and finished["routine"] and enabled() == 1
+    again = api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()
+    assert again["changed"] is False and enabled() == 1
 
 
 def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_not(environment):

@@ -2799,7 +2799,7 @@ class Runner:
                             tracked, session_problem = worktree()
                     if session_problem:
                         # Without a worktree of its own the task's turn waits for the main checkout like any other.
-                        log(f"Tico runner: {bot}: task {session_task} runs in the bot's checkout ({session_problem})")
+                        log(f"Tico runner: {bot}: task {session_task} runs in the bot's checkout ({session_problem})", diagnostic=True)
                         session_path = None
                         if checkout_lock not in held:
                             hold_checkout()

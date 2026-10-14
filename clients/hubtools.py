@@ -2502,6 +2502,29 @@ def support_send(api, args):
     return api.post("support/tickets/from-approval", {"approval": args["approval"]}, key=_key(args))
 
 
+@tool("hub_health_monitor_findings", "The Health Monitor: what the last hourly scan of this install found, and the report "
+      "filed for each signature.", {})
+def health_monitor_findings(api, args):
+    return api.get("health-monitor")
+
+
+@tool("hub_health_monitor_report", "The Health Monitor: report a finding as a Tico bug. The server writes the report from the "
+      "finding and attaches the redacted diagnostics bundle; one ticket per signature, a message on it when it happens again. "
+      "With the team rule off it drafts a support approval instead.",
+      {"key": _s("The finding's key or signature, from its task"),
+       "process": _s("Instead of a key: what the watcher saw busy, process:<name> or container:<name>"),
+       "cpu": {"type": "number"}, "mb": {"type": "number"}}, writes=True)
+def health_monitor_report(api, args):
+    key = args.get("key") or ""
+    if args.get("process"):
+        key = api.post("health-monitor/local-findings", {"process": args["process"], "cpu": args.get("cpu") or 0,
+                                                         "mb": args.get("mb") or 0}, key=_key(args))["key"]
+    if not key:
+        raise ValueError("name a finding's key, or --process")
+    from urllib.parse import quote
+    return api.post("health-monitor/findings/" + quote(key, safe="") + "/report", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- approvals
 @tool("hub_approval_request", "Ask a person for a yes or no on one exact action. Only a person "
       "decides; an approval is spent once. If the owner already told you in Tico to send a "

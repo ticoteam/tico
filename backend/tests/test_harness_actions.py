@@ -81,6 +81,8 @@ def test_the_owners_on_off_per_harness_is_kept_per_computer_and_handed_to_its_ru
                                                  {"harness": harness, "enabled": enabled}, **kw)
     choose("grok", True, token="ben-test", expected=403)
     choose("nothing", True, expected=404)                         # a harness the computer never reported
+    for loose in ("yes", "off", 1, 0, None):                      # a real true/false only, never "off" read as off
+        choose("grok", loose, expected=422)
     assert choose("grok", True)["enabled"] is True
     choose("codex", False)
     choose("grok", False)

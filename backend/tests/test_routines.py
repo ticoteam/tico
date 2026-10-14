@@ -149,6 +149,67 @@ def test_run_now_during_another_task_stays_queued_for_its_own_run(api):
         assert c.execute("SELECT state FROM jobs WHERE id=?", (next_attempt["job_id"],)).fetchone()[0] == "leased"
 
 
+def control(api, bot, action):
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+    post(api, f"bots/{bot}/control", {"action": action, "expected_revision": revision})
+
+
+def test_pausing_a_bot_holds_its_routines_and_resuming_brings_back_the_enabled_ones(api):
+    r = setup(api)
+    queued = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"][0]
+    direct = post(api, "tasks", {"title": "Write a report", "body": "Write the report", "owner": "ops"})
+    post(api, "routines/ops:weekly", {"enabled": False})
+    control(api, "ops", "pause")
+    with api.app.state.store.read() as c:
+        # The routine run nobody started is closed with a reason; a person's own work stays for the bot.
+        assert H.task(c, queued)["status"] == "closed" and "paused" in H.task(c, queued)["note"]
+        assert H.task(c, direct["id"])["status"] == "open"
+    listed = {row["key"]: row for row in rows(api)}
+    assert listed["audit"]["enabled"] is True and listed["audit"]["held_by_bot"] == "paused"
+    assert listed["weekly"]["held_by_bot"] is None and not listed["audit"]["active"]
+    assert scheduler(api).tick(datetime(2026, 9, 15, 14, tzinfo=timezone.utc))["fired"] == []
+    control(api, "ops", "resume")
+    listed = {row["key"]: row for row in rows(api)}
+    assert listed["audit"]["active"] and listed["audit"]["held_by_bot"] is None
+    assert listed["weekly"]["enabled"] is False     # a routine a person turned off stays off
+    fired = scheduler(api).tick(datetime(2026, 9, 16, 14, tzinfo=timezone.utc))["fired"]
+    assert [get(api, "tasks/" + tid)["task"]["routine_id"] for tid in fired] == ["ops:audit"]
+
+
+def test_a_bot_still_in_setup_gets_no_timed_runs_and_keeps_its_event_runs(api):
+    setup(api)
+    create(api, "ops", DEBRIEF)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='ops'")
+        from backend import routines
+        # A meeting's notes are announced once, so its run waits for the bot instead of being dropped.
+        assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
+    assert tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"] == []
+    assert {row["held_by_bot"] for row in rows(api)} == {"needs_setup"}
+    post(api, "routines/ops:audit/run", {}, expected=409)     # as the page, which offers no Run now
+
+
+def test_pausing_keeps_event_runs_run_now_and_runs_handed_to_another_bot(api):
+    setup(api)
+    create(api, "ops", DEBRIEF)
+    queued = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"][0]
+    from backend import routines
+    with api.app.state.store.transaction() as c:
+        event_run = routines.emit(c, "meeting.ready", "rec-1", title="Planning", content="Ship Friday")[0]
+        moved = routines.open_task(c, None, routines.row(c, "ops:weekly"), "Weekly backlog", "Review", H.now())
+        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", ("ops:weekly", "2026-09-11T16:30", moved["id"], "created"))
+        c.execute("UPDATE tasks SET owner='bot:other' WHERE id=?", (moved["id"],))
+        asked = routines.open_task(c, None, routines.row(c, "ops:weekly"), "Weekly backlog", "Review", H.now())
+        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", ("ops:weekly", "manual:x", asked["id"], "created"))
+    control(api, "ops", "pause")
+    with api.app.state.store.read() as c:
+        assert H.task(c, queued)["status"] == "closed"
+        assert H.task(c, event_run)["status"] == "open"      # one-off content, never announced again
+        assert H.task(c, moved["id"])["status"] == "open"    # the other bot's now
+        assert H.task(c, asked["id"])["status"] == "open"    # a person's Run now
+
+
 def test_a_routine_run_stays_company_scope_and_a_private_next_run_task_gets_its_own_run(api):
     from backend import task_privacy as privacy
     from backend.auth import Identity
