@@ -19,11 +19,17 @@ MAX_GOAL_TRIES = 30
 MAX_CODEX_GOAL_TRIES = 100
 # Both harnesses keep a goal until it is met, so waiting on others has to count as done for now, or the bot polls.
 # Claude Code's goal judge reads this as part of the condition; Codex's model reads it with the objective.
-WAITING_CLAUSE = ("Also done for now: the only work left is waiting on someone or something else (an answer, a review "
-                  "or merge, another bot, a deploy, a set time) and the last message says \"Waiting on: <what>\". "
-                  "Don't poll for it: a reply, a task answer, a watcher or a routine wakes the bot.")
+# Worded as an alternative: a judge read the earlier "Also done for now: ... and ..." as a second required condition.
+WAITING_CLAUSE = ("Or, if the only work left is waiting on someone or something else (an answer, a review or merge, "
+                  "another bot, a deploy, a set time), the goal also holds for now when the last message says "
+                  "\"Waiting on: <what>\". Don't poll for it: a reply, a task answer, a watcher or a routine wakes the bot.")
+# Clauses earlier runners appended, still on native goals set before an update.
+OLD_WAITING_CLAUSES = ("Also done for now: the only work left is waiting on someone or something else (an answer, a review "
+                       "or merge, another bot, a deploy, a set time) and the last message says \"Waiting on: <what>\". "
+                       "Don't poll for it: a reply, a task answer, a watcher or a routine wakes the bot.",)
 NATIVE_GOAL_LIMIT = 4000      # Claude Code's /goal limit, and the server's
-WAITING_LINE = re.compile(r"waiting on:[*_\s]*([^\"\n]+)", re.I)
+# To the end of the line, quotes and all; a judge quoting the line opens it with a (maybe JSON-escaped) quote.
+WAITING_LINE = re.compile(r"(\\?\")?waiting on:[*_\s]*([^\n]+)", re.I)
 REPO_COMMAND_NAME = re.compile(r"^[a-z0-9][a-z0-9_:-]{0,63}$")
 _FRONTMATTER = {}     # (path, mtime_ns, size) -> parsed fields: readiness runs every heartbeat, files rarely change
 
@@ -156,16 +162,21 @@ def task_goal_set(state, thread, goal):
 
 def tico_objective(text):
     """The person's objective back from what the harness reports."""
-    if isinstance(text, str) and text.endswith(WAITING_CLAUSE):
-        return text[:-len(WAITING_CLAUSE)].rstrip()
+    if isinstance(text, str):
+        for clause in (WAITING_CLAUSE, *OLD_WAITING_CLAUSES):
+            if text.endswith(clause):
+                return text[:-len(clause)].rstrip()
     return text
 
 
 def waiting_on(*texts):
-    """The bot's "Waiting on: <what>" line, from the judge's reason or its last message."""
+    """The bot's "Waiting on: <what>" line, from its last message or the judge's reason, first found."""
     for text in texts:
         for match in WAITING_LINE.finditer(text or ""):
-            what = match.group(1).strip(" *_'")
+            what = match.group(2).replace('\\"', '"')
+            if match.group(1) and '"' in what:
+                what = what.rsplit('"', 1)[0]           # quoted: the line ends at the closing quote
+            what = what.strip().rstrip("\\").strip(" *_'")
             if what and not what.startswith("<"):        # not the clause's own "<what>", quoted back
                 return "Waiting on: " + what[:300]
     return ""

@@ -27,6 +27,7 @@ class Scheduler:
         self.store, self.execution = store, execution
         self.swept = None
         self.stranded = None
+        self.still_wanted = None
         self.stall_checked = None
         self.goals_checked = None
         self.go_lives_checked = None
@@ -184,12 +185,14 @@ class Scheduler:
             self.stall_checked = at
             with self.store.transaction() as c:
                 H.wake_stalled(c, stamp(at))
-        if self.stranded is None or at - self.stranded >= timedelta(days=1):
-            # Once a day: bot tasks parked as waiting with nothing left to wait on.
+        if self.stranded is None or at - self.stranded >= timedelta(hours=1):
+            # Every hour: bot tasks parked as waiting with nothing left to wait on.
             self.stranded = at
             with self.store.transaction() as c:
                 H.sweep_stranded(c, stamp(at))
-            # And a task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
+        if self.still_wanted is None or at - self.still_wanted >= timedelta(days=1):
+            self.still_wanted = at
+            # Once a day: a task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
             try:
                 from . import still_wanted
                 with self.store.transaction() as c:

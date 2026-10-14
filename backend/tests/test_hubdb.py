@@ -607,6 +607,25 @@ class WaitingWithDependency(HubCase):
         parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
         self.assertEqual(parked['status'], 'waiting')
         self.assertIn('goes back to open', parked['warnings'][0])
+        self.assertIn('hub task create --parent', parked['warnings'][0])
+
+    def test_a_note_only_wait_on_a_person_requested_task_warns_and_reopens_in_hours(self):
+        # Seen live: a person's task parked "waiting on BotOps's snapshot" that BotOps never heard of.
+        task = H.task_create(self.conn, ANA, 'Check the box resources', '', CMO)
+        parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note="Waiting on BotOps's snapshot")
+        self.assertIn(f"--parent {task['id']}", parked['warnings'][0])
+        soon = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS - 1)
+        self.assertEqual(H.sweep_stranded(self.conn, at=soon), [])
+        later = H.shift(H.now(), hours=H.STRANDED_GRACE_HOURS + 1)
+        self.assertEqual(H.sweep_stranded(self.conn, at=later), [(task['id'], 'open')])
+        # A due date says when to look again; a subtask is something to wait on.
+        other = H.task_create(self.conn, ANA, 'Check the crawl', '', CMO)
+        H.task_update(self.conn, CMO, other['id'], status='waiting', note='Waiting on the crawl',
+                      due=H.shift(H.now(), hours=48))
+        sub = H.task_create(self.conn, ANA, 'Check the disk', '', CMO)
+        H.task_create(self.conn, CMO, 'Send the disk snapshot', '', SEO, parent_id=sub['id'])
+        H.task_update(self.conn, CMO, sub['id'], status='waiting', note='Waiting on the snapshot')
+        self.assertEqual(H.sweep_stranded(self.conn, at=later), [])
 
     def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
         parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)

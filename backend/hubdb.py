@@ -3689,16 +3689,18 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # A move to waiting starts with nobody waited on unless this update names someone.
         waiting_row["waiting_on"] = (waiting_on or None) if waiting_on is not None else None
         if (status == "waiting" and row["status"] != "waiting" and is_bot(row["owner"])
-                and row["owner"] == row["requester"] and not waiting_for(conn, waiting_row)):
-            if not str(note or "").strip():
+                and not waiting_for(conn, waiting_row)):
+            if row["owner"] == row["requester"] and not str(note or "").strip():
                 refuse(conn, actor, "lint",
                        "You asked for this task yourself, so nobody will answer it: say what you are waiting on "
                        "in a note, file the child task, blocker or approval first, name the person with --on, "
                        "or keep working")
-            # A note naming what it waits on is enough to park it; the hint goes back with the write.
-            self_wait = ["you asked for this task yourself and nothing it waits on is recorded, so it goes back to "
-                         "open after a day: file the child task, blocker or approval you wait on, or name the "
-                         "person with --on"]
+            # A note naming what it waits on parks it, but a note wakes nobody (bots parked tasks "waiting on
+            # BotOps" that BotOps never heard of): the hint goes back with the write.
+            self_wait = [f"nothing this task waits on is recorded, so it goes back to open in "
+                         f"{STRANDED_GRACE_HOURS} hours: file a subtask for whoever must act (hub task create "
+                         f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
+                         "or set --due for when to look again"]
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
     wanted = {k: v for k, v in (("lane", lane), ("labels", labels), ("number", number)) if v is not None}
@@ -4022,8 +4024,11 @@ def waiting_for(conn, row):
     return None
 
 
-def sweep_stranded(conn, at=None, grace_hours=24):
-    """Daily: a bot's `waiting` task with nothing to wait on goes back to work.
+STRANDED_GRACE_HOURS = 2     # a bot's task waiting on nothing goes back to open after this (sweep_stranded)
+
+
+def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
+    """Hourly: a bot's `waiting` task with nothing to wait on goes back to work.
 
     Bot tasks were found waiting with no live blocker, some for days on nothing at all. A waiting routine task is worse than idle: the scheduler lets it
     absorb every later occurrence without a word, so the routine stops. A routine's task that a
@@ -4036,7 +4041,8 @@ def sweep_stranded(conn, at=None, grace_hours=24):
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
                                   "AND updated<=? ORDER BY updated", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
-            if waiting_for(conn, row) or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active":
+            if (waiting_for(conn, row) or not_yet_due(row, at)
+                    or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("
@@ -4570,7 +4576,7 @@ def wake_stalled(conn, at=None):
                     repair = repair or task_create(conn, KEEPER, title[:150],
                                 f"Task {row['id']} ({row['title'][:120]}) has been {row['status']} with nothing moving it; "
                                 f"{count} wake-ups today did not move it. Fix the cause (routine, runner, instructions) "
-                                "or set it waiting with the reason. Complete this diagnostic when the cause is known; "
+                                "or file a subtask for whoever must act and set it waiting. Complete this diagnostic when the cause is known; "
                                 "record any remaining repair dependency on the original task.", owner,
                                 deduplicate=False, lint=False)
                     event(conn, KEEPER, "task.stall_escalated", row["id"],
@@ -4591,8 +4597,8 @@ def wake_stalled(conn, at=None):
                 conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
             _wake(conn, row, row["owner"],
                   f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
-                  "or set it waiting with the reason (hub task update --status waiting --note; add --on <person> "
-                  "when a person must act).",
+                  f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
+                  "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.",
                   {"wake": "stalled"})
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})

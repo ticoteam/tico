@@ -317,6 +317,43 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
         assert H.task(c, task['id'])['status'] != 'done'
 
 
+def run_task_goal(api, live, tmp_path, machine, judged, reply, during=None):
+    class JudgedHost(FakeHost):
+        def start_goal_turn(self, thread, objective, text, effort=None):
+            turn = super().start_goal_turn(thread, objective, text, effort)
+            if during:
+                during()
+            self.goal_met(thread, judged)
+            return turn
+    service = Runner({'url': live, 'token': machine['token'], 'projects_dir': str(tmp_path)}, tmp_path / 'runner',
+                     host_factory=lambda *a: JudgedHost(replies=[reply]), push=lambda *a, **k: None)
+    try:
+        service.execute(claim(api, machine))
+    finally:
+        service.pool.shutdown()
+
+
+def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api, live, tmp_path):
+    machine, task = task_goal_world(api)
+    def mark_done():                      # the bot marks its task done, then says what it waits on elsewhere
+        with api.app.state.store.transaction() as c:
+            H.task_update(c, 'bot:ops', task['id'], status='done', note='Published.')
+    run_task_goal(api, live, tmp_path, machine, 'The task is done.',
+                  'Published.\n\nWaiting on: Ana to "close" it.', during=mark_done)
+    goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
+    assert goal['status'] == 'met' and goal['note'] == 'Waiting on: Ana to "close" it.'
+    assert get(api, 'tasks/' + task['id'])['task']['status'] == 'done'
+
+
+def test_an_open_tasks_goal_pauses_on_the_bots_whole_waiting_line(api, live, tmp_path):
+    machine, task = task_goal_world(api)
+    run_task_goal(api, live, tmp_path, machine, 'It says \\"Waiting on: Ana\'s \\"yes',
+                  'Drafted.\n\nWaiting on: Ana\'s "yes" on the draft.')
+    goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
+    assert goal['status'] == 'paused' and goal['note'] == 'Waiting on: Ana\'s "yes" on the draft.'
+    assert get(api, 'tasks/' + task['id'])['task']['status'] not in ('done', 'closed')
+
+
 def test_a_persons_clear_of_a_task_goal_stands_while_task_goals_stay_on(api):
     from backend.tests.test_member_bots import finish
     machine, task = task_goal_world(api)

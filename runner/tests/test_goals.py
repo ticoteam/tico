@@ -169,3 +169,21 @@ def test_codex_clear_verification_failure_does_not_invent_active_goal():
     event = {"status": "active", "objective": "Acme summary"}
     assert goals.reconcile_codex_clear(host, "thread", event, "Acme summary") is event
     host.request.assert_not_called()
+
+
+def test_waiting_on_keeps_quotes_and_reads_the_judges_escaped_quote():
+    line = 'Waiting on: my other tasks to finish so their "done" lines post, then a look at my main chat.'
+    assert goals.waiting_on('All set.\n\n' + line) == line
+    assert goals.waiting_on('**Waiting on:** Ana\'s "yes" on the draft') == 'Waiting on: Ana\'s "yes" on the draft'
+    judged = ('The bot stopped and its last message says \\"Waiting on: my other tasks to finish so their '
+              '\\"done\\" lines post, then a look at my main chat.\\" The condition holds.')
+    assert goals.waiting_on(judged) == line
+    assert goals.waiting_on('Its message must say "Waiting on: <what>". Not met.') == ''
+    assert goals.waiting_on('Done, nothing left.', 'It says "Waiting on: the deploy".') == 'Waiting on: the deploy'
+    assert goals.waiting_on('Waiting on: the deploy', 'It says "Waiting on: the deploy\\') == 'Waiting on: the deploy'
+
+
+def test_goals_set_with_an_earlier_waiting_clause_still_report_their_objective():
+    assert goals.tico_objective(goals.native_objective('Ship it')) == 'Ship it'
+    for old in goals.OLD_WAITING_CLAUSES:
+        assert goals.tico_objective('Ship it ' + old) == 'Ship it'

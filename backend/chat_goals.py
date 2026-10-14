@@ -98,6 +98,12 @@ def report(c, attempt, payload):
     if status == "cleared":
         # Explicit clears already changed the row; an active native goal clearing itself stops here.
         status, note = "stopped", note or "The harness cleared the goal"
+    if status == "paused" and "waiting on:" in note.lower() and room.get("kind") == "task" and room.get("task_id"):
+        # The runner pauses a goal whose bot signed off "Waiting on: ...". A task already marked done is met:
+        # what it still waits on is not this task's work.
+        row = H.task(c, room["task_id"])
+        if row and row["status"] in ("done", "closed"):
+            status = "met"
     now = H.now()
     c.execute("UPDATE chat_goals SET status=?,note=?,updated_at=?,ended_at=? WHERE id=?",
               (status, note, now, now if status in ("met", "stopped", "cleared") else None, goal["id"]))

@@ -86,6 +86,17 @@ and be accessible; a finished blocker does not justify waiting. An unanswered qu
 child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency
 and wakes the waiting bot. **Waiting** does not mean a person must review the code.
 
+When another bot must act, file a subtask for it; finishing the subtask wakes the waiting task:
+
+```sh
+hub task create --parent <task> --owner botops --title "Send the disk usage snapshot"
+hub task update <task> --status waiting --note "Needs BotOps's disk snapshot"
+```
+
+A note alone wakes nobody. A bot's task waiting with no blocker, subtask, approval, question or
+person goes back to open after two hours (unless its due date says to look later), and the update
+that parks it warns the bot.
+
 For unblocked open or doing tasks, automatic stalled-task wakes are limited to three in a rolling
 24 hours, spaced at least 30 minutes apart. Updating a note does not reset that limit. Repeated
 stalls are escalated to BotOps with a separate diagnostic for each source task. If BotOps itself is

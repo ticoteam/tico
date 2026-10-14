@@ -2733,7 +2733,8 @@ class Runner:
                                         event["objective"] = goals.tico_objective(event["objective"])
                                     if event.get("status") in ("met", "paused") and not clearing:
                                         # Waiting on others is done for now: paused, so a person can resume it.
-                                        waiting = goals.waiting_on(event.get("note"), reply)
+                                        # The bot's own line first: the judge may quote it cut short or escaped.
+                                        waiting = goals.waiting_on(reply, event.get("note"))
                                         if waiting:
                                             event.update(status="paused", note=waiting)
                                     self.state.append(aid, "goal", {**redact(event), "goal_id": goal["id"], "revision": revision})

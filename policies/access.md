@@ -17,7 +17,7 @@ Verbs: `read`, `draft` (prepare but never send or publish), `send`, `post`, `wri
 (a tool with no account of its own, like a web search or an AI model API).
 
 Rules:
-- Every bot implicitly has Tico Tico tasks, its own prefix in the S3 bucket, and read/write
+- Every bot implicitly has Tico tasks, its own prefix in the S3 bucket, and read/write
   access to its own `bot-<slug>` GitHub repository, including its branches and pull requests.
   Do not list them. Access to another bot's or a product repository still needs a declaration.
 - Messages to outsiders (`send`, `post`, `publish`) stay drafts while `outbound_send` is false. When it is true, act within the requested work and the declared Tools. An approval does not turn sending on. Spending follows the requested budget and Tools; it does not depend on the send switch.
