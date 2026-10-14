@@ -61,6 +61,15 @@ class Attach(Contract):
     branch: str | None = Field(default=None, max_length=200)
 
 
+class SessionTask(Contract):
+    bot: str = Field(min_length=1, max_length=100)
+    task: str = Field(min_length=1, max_length=100)
+
+
+class SessionTasks(Contract):
+    sessions: list[SessionTask] = Field(max_length=500)
+
+
 class Update(Contract):
     state: Literal['pending', 'present', 'missing', 'removed', 'unknown'] | None = None
     path: str | None = Field(default=None, max_length=1000)
@@ -555,6 +564,25 @@ def install(app, store, auth, mutate):
                 raise Problem('forbidden', 'This bot needs write access to save its worktree', 403)
         value, expires = service.mint([link['repo']], {'contents': 'write', 'metadata': 'read'})
         return {'token': value, 'expires_at': expires}
+
+    @app.post('/api/v2/runners/me/session-tasks')
+    def session_tasks(request: Request, body: SessionTasks):
+        """The status of each task a bot's session checkout on this computer is kept for (runner/task_sessions.py),
+        so the computer can take away the checkouts of finished tasks between turns. Only a task this computer ran
+        a turn of that bot in that task's lane is answered; any other is left out, and the computer keeps it."""
+        who = request.state.identity
+        with store.read() as c:
+            validate_identity(c, who)
+            if who.role != 'runner':
+                raise Problem('forbidden', 'A registered computer is required', 403)
+            out = []
+            for item in body.sessions:
+                row = c.execute("SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
+                                "WHERE a.runner_id=? AND a.bot=? AND a.lane=?)",
+                                (item.task, who.runner_id, item.bot, 'task:' + item.task)).fetchone()
+                if row:
+                    out.append({'bot': item.bot, 'task': item.task, 'status': row['status']})
+            return {'sessions': out}
 
     @app.get('/api/v2/runners/me/worktrees')
     def listing(request: Request):

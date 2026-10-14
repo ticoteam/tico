@@ -454,3 +454,26 @@ def test_human_pending_link_stops_repeating_restore_after_checkout_progress(prep
     second = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert second.status_code == 200, second.text
     assert second.json()['worktree_actions'] == []
+
+
+def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(prepared):
+    api, tid, other = prepared
+    path = 'runners/me/session-tasks'
+    with api.app_state.store.transaction() as c:
+        cols = [r[1] for r in c.execute('PRAGMA table_info(runners)')]
+        fresh = {'id': 'r2', 'token_hash': 'synthetic-r2'}
+        c.execute(f"INSERT INTO runners({','.join(cols)}) SELECT {','.join('?' if col in fresh else col for col in cols)} "
+                  "FROM runners WHERE id='r1'", [fresh[col] for col in cols if col in fresh])
+        job = c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
+        for aid, runner, lane in (('a2', 'r1', 'task:' + tid), ('a3', 'r2', 'task:' + other)):
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+                      "VALUES(?,?,'cmo',?,1,?,'completed',?,?,?)", (aid, job, runner, 'synthetic-' + aid, H.now(), H.now(), lane))
+        c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (tid, other))
+    asked = {'sessions': [{'bot': 'cmo', 'task': tid}, {'bot': 'cpo', 'task': tid},
+                          {'bot': 'cmo', 'task': other}, {'bot': 'cmo', 'task': 'no-such-task'}]}
+    response = post(api, path, asked, 'runner-test')
+    assert response.status_code == 200, response.text
+    # Another bot's lane, another computer's turn and an unknown task are left out, not refused.
+    assert response.json() == {'sessions': [{'bot': 'cmo', 'task': tid, 'status': 'done'}]}
+    assert post(api, path, asked, 'bot-test').status_code == 403
+    assert post(api, path, {'sessions': [{'bot': 'cmo', 'task': tid}] * 501}, 'runner-test').status_code == 422

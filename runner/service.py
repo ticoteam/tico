@@ -159,6 +159,8 @@ def from_person(message):
 
 
 CHECKOUT_EVERY_S = 600
+# How often finished tasks' session checkouts are looked for between turns (Runner.sweep_sessions).
+SESSION_SWEEP_S = 600
 
 # Keys whose values move on every report without anything having changed: left out when deciding
 # whether a heartbeat has news (runner/service.py `maintain`).
@@ -2473,6 +2475,57 @@ class Runner:
             return False
         return row.get("status") in task_sessions.CLOSED
 
+    def sweep_sessions(self, assignments):
+        """Take away the session checkouts of finished tasks that no turn's end will: another bot's copy of a task
+        its owner finished, or one whose last turn ended with a file still to upload. The rules are the turn's own
+        (task_sessions.remove): a clean tree with every commit on a remote, no file waiting to upload from it, and
+        no turn in its lane. A task the server does not answer for stays."""
+        now = time.monotonic()
+        if now < getattr(self, "_sessions_swept_after", 0) or not hasattr(self, "worktrees"):
+            return
+        self._sessions_swept_after = now + SESSION_SWEEP_S
+        configs = {entry["bot"]: entry.get("config") for entry in assignments or ()
+                   if entry.get("bot") and self.assigned_here(entry) and task_sessions.SLUG.fullmatch(entry["bot"])}
+        if not configs:
+            return
+        root = Path(self.config["projects_dir"]) / "sessions"
+        found = {}
+        for bot in configs:
+            folder = root / ("bot-" + bot)
+            for path in sorted(folder.iterdir()) if folder.is_dir() else ():
+                if path.is_dir() and not path.is_symlink() and task_sessions.task_of("task:" + path.name) == path.name:
+                    found[(bot, path.name)] = path
+        if not found:
+            return
+        try:
+            reply = self.client.post("runners/me/session-tasks",
+                                     {"sessions": [{"bot": bot, "task": task} for bot, task in list(found)[:500]]})
+        except APIError as exc:
+            if exc.status in (404, 405):
+                self._sessions_swept_after = now + 6 * SESSION_SWEEP_S      # a server without the read
+            else:
+                log(f"Tico runner: could not read which tasks' worktrees are finished ({describe(exc)}); will retry")
+            return
+        running = {(bot, lane) for bot, lane, _task in list(self.attempt_lanes.values())}
+        for row in (reply or {}).get("sessions") or []:
+            bot, task = row.get("bot"), row.get("task")
+            path = found.get((bot, task))
+            if path is None or row.get("status") not in task_sessions.CLOSED or (bot, "task:" + task) in running:
+                continue
+            lane = self.worktrees.lane_lock(bot, "task:" + task)
+            if not lane.acquire(blocking=False):
+                continue                    # a turn is in it; its own end removes the worktree
+            try:
+                # A file still waiting to upload is read from the worktree, so the worktree waits for it.
+                if files_publish.pending_under(self.state, path):
+                    continue
+                main = self.local_path(bot, configs[bot])
+                with self.session_git_lock(main):
+                    if task_sessions.remove(main, path, task):
+                        log(f"Tico runner: {bot}: task {task} is finished; removed its worktree")
+            finally:
+                lane.release()
+
     def execute(self, attempt):
         aid, bot = attempt["id"], attempt["bot"]
         self.state.record(attempt)
@@ -3205,6 +3258,7 @@ class Runner:
             (self.state.directory / "runtimes.json").write_text(json.dumps(runtimes))
             self.recover_output()
             memory_history.due(self, assignments)
+            self.sweep_sessions(assignments)
             return
         try:
             beat = self.report_heartbeat(body)
@@ -3236,6 +3290,7 @@ class Runner:
         (self.state.directory / "runtimes.json").write_text(json.dumps(runtimes))
         self.recover_output()
         memory_history.due(self, assignments)
+        self.sweep_sessions(assignments)
 
     def report_heartbeat(self, body):
         return self._report_heartbeat(body)

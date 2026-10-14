@@ -1155,6 +1155,8 @@ class Store:
                                    ("attempts_bot_created", "attempts(bot, created)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
+                                   # A computer asking after the tasks its session checkouts are kept for.
+                                   ("attempts_bot_lane", "attempts(bot, lane)"),
                                    ("events_action_target", "events(action, target, ts)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
                                    # version of every file a bot's Files tab lists and for each download.

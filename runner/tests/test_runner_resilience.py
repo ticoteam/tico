@@ -554,6 +554,97 @@ class Pushing(unittest.TestCase):
             self.runner.execute({**turn, "id": "att-2"})
         self.assertFalse(path.exists())
 
+    def sweep(self, statuses):
+        """One sweep of the session checkouts, the server answering `statuses` (task -> status) for bot coo."""
+        asked = []
+
+        def post(path, body=None, key=None):
+            if path == "runners/me/session-tasks":
+                asked.extend(body["sessions"])
+                return {"sessions": [{**item, "status": statuses[item["task"]]} for item in body["sessions"]
+                                     if item["task"] in statuses]}
+            return FakeClient.post(self.client, path, body, key)
+        self.runner.config["runner_id"] = "pny"
+        self.runner._sessions_swept_after = 0
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(self.client, "post", post), \
+                mock.patch("runner.service.log") as log:
+            self.runner.sweep_sessions([{"bot": "coo", "runner_id": "pny", "config": {}},
+                                        {"bot": "elsewhere", "runner_id": "other", "config": {}}])
+        return asked, [call.args[0] for call in log.call_args_list]
+
+    def test_a_finished_tasks_worktree_left_by_another_bots_turn_is_swept_between_turns(self):
+        # The reviewer's last turn ended before the owner finished the task, so no turn's end removes its copy.
+        from runner import task_sessions
+        sessions = Path(self.tmp.name) / "sessions" / "bot-coo"
+        with mock.patch.dict(os.environ, self.env):
+            for task in ("done1", "open1", "unknown1", "dirty1", "busy1"):
+                self.assertEqual(task_sessions.ensure(self.repo, sessions / task, task, self.env)[1], "")
+        (sessions / "dirty1" / "draft.md").write_text("not saved anywhere")
+        busy = self.runner.worktrees.lane_lock("coo", "task:busy1")
+        held, release = threading.Event(), threading.Event()
+
+        def turn():
+            with busy:
+                held.set()
+                release.wait(10)
+        threading.Thread(target=turn, daemon=True).start()
+        held.wait(10)
+        try:
+            asked, said = self.sweep({"done1": "closed", "open1": "doing", "dirty1": "done", "busy1": "declined"})
+        finally:
+            release.set()
+        self.assertEqual({item["task"] for item in asked}, {"done1", "open1", "unknown1", "dirty1", "busy1"})
+        self.assertFalse((sessions / "done1").exists())
+        self.assertNotIn("tico-session/done1", git(self.repo, "branch", "--list", env=self.env).stdout)
+        self.assertEqual(said, ["Tico runner: coo: task done1 is finished; removed its worktree"])
+        for kept in ("open1", "unknown1", "dirty1", "busy1"):
+            self.assertTrue((sessions / kept).exists(), kept)
+        self.assertEqual((sessions / "dirty1" / "draft.md").read_text(), "not saved anywhere")
+        asked, said = self.sweep({"done1": "closed"})
+        self.assertNotIn("done1", {item["task"] for item in asked})
+        self.assertEqual(said, [])
+
+    def test_a_finished_tasks_worktree_kept_for_an_upload_is_swept_once_the_file_has_gone(self):
+        class Reporting(FakeHost):
+            def start_turn(host, thread_id, text, effort=None):
+                cwd = Path(host.threads[thread_id]["settings"]["cwd"])
+                (cwd / "reports").mkdir(exist_ok=True)
+                (cwd / "reports" / "summary.md").write_text("the summary")
+                git(cwd, "add", "reports", env=env)
+                git(cwd, "commit", "-q", "-m", "Summary", env=env)
+                return FakeHost.start_turn(host, thread_id, text, effort)
+        env = self.env
+        turn = {**attempt("att-1"), "config": {"runtime": "codex", "max_run_minutes": 1, "session": "task"},
+                "task": {"id": "t1"}, "lane": "task:t1"}
+        self.runner.host_factory = lambda attempt, env: Reporting(replies=["done"])
+        self.runner.task_closed = lambda attempt: True
+        path = Path(self.tmp.name) / "sessions" / "bot-coo" / "t1"
+        with mock.patch.dict(os.environ, self.env), mock.patch("runner.service.files_publish.drain"):
+            self.runner.execute(turn)       # the task is done, and its file has not uploaded yet
+        self.assertTrue(path.exists())
+        self.sweep({"t1": "done"})
+        self.assertTrue((path / "reports" / "summary.md").exists(), "the upload still reads it")
+        with self.runner.state.connect() as c:
+            c.execute("UPDATE file_outbox SET phase='done'")
+        _asked, said = self.sweep({"t1": "done"})
+        self.assertFalse(path.exists())
+        self.assertEqual(said, ["Tico runner: coo: task t1 is finished; removed its worktree"])
+
+    def test_a_server_without_the_session_read_leaves_every_worktree_and_is_asked_again_later(self):
+        from runner import task_sessions
+        path = Path(self.tmp.name) / "sessions" / "bot-coo" / "t2"
+        with mock.patch.dict(os.environ, self.env):
+            self.assertEqual(task_sessions.ensure(self.repo, path, "t2", self.env)[1], "")
+        self.runner.config["runner_id"] = "pny"
+        with mock.patch.object(self.client, "post", side_effect=APIError("not_found", "Not found", 404)) as post, \
+                mock.patch("runner.service.log") as log:
+            self.runner.sweep_sessions([{"bot": "coo", "runner_id": "pny", "config": {}}])
+            self.runner.sweep_sessions([{"bot": "coo", "runner_id": "pny", "config": {}}])
+        self.assertTrue(path.exists())
+        post.assert_called_once()
+        log.assert_not_called()
+        self.assertGreater(self.runner._sessions_swept_after - time.monotonic(), service.SESSION_SWEEP_S)
+
     def test_a_branch_tracking_a_local_branch_is_not_counted_as_pushed(self):
         git(self.repo, "checkout", "-q", "-b", "draft", "--track", "main", env=self.env)
         self.commit("draft-note")
