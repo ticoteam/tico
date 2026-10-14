@@ -174,3 +174,39 @@ class RealCli(unittest.TestCase):
                 h.start_turn(tid, text)
                 got = events(h, timeout=120)
                 self.assertEqual([e["text"] for e in got if e["kind"] == "message"], ["echo: " + text])
+
+
+class Hardening(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_a_terminal_without_text_still_ends_with_the_streamed_answer(self):
+        lines = [line(10, "run.output.delta", {"text": "Looking"}),
+                 line(11, "tool.call.started", {"tool_name": "hub"}),
+                 line(12, "run.output.delta", {"text": "The answer"}),
+                 line(13, "run.terminal.completed", {"terminal": "completed", "reason": None})]
+        h = MuseCodeHost(bot="coo", spawn=lambda argv, **kw: FakeProc(lines, 0), state_dir=self.tmp.name)
+        h.start()
+        h.start_turn(h.start_thread("coo", {"cwd": "/repo", "env": {"HOME": "/home/x"}}), "x")
+        got = events(h)
+        self.assertEqual([e["text"] for e in got if e["kind"] == "message" and e["final"]], ["The answer"])
+
+    def test_an_unreadable_config_folder_is_a_failed_check_not_a_raised_heartbeat(self):
+        folder = Path(self.tmp.name) / ".config" / "muse"
+        folder.mkdir(parents=True)
+        (folder / "auth.json").write_text("{}")
+        os.chmod(folder, 0)
+        self.addCleanup(os.chmod, folder, 0o700)
+        if os.access(folder / "auth.json", os.F_OK):
+            self.skipTest("running as root")
+        from runner import service as S
+        runner = S.Runner.__new__(S.Runner)
+        runner.team_model_keys = lambda *a: None
+        runner.headless_login = lambda *a: ""
+        with mock.patch.dict(os.environ, {"HOME": self.tmp.name}), \
+                mock.patch.object(S.shutil, "which", return_value="/nonexistent/muse"):
+            os.environ.pop("XDG_CONFIG_HOME", None)
+            os.environ.pop("MUSE_AUTH_PATH", None)
+            row = runner.runtime_readiness("musecode", [])
+        self.assertEqual(row["authenticated"], "failed")

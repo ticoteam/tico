@@ -1988,10 +1988,16 @@ class Runner:
             env = {**(env or os.environ), **MUSE_QUIET}
             if profile is None:
                 self.team_model_keys("musecode")
+            try:
+                signed = muse_auth_file(env).is_file()
+            except OSError:           # the bot user's 0700 config folder: not "signed out", and never a failed heartbeat
+                signed = None
             if self.headless_login("musecode"):
                 authenticated, detail = "ready", "Signed in with META_API_KEY"
-            elif muse_auth_file(env).is_file():
+            elif signed:
                 authenticated, detail = "ready", "Signed in with a Meta account"
+            elif signed is None:
+                authenticated, detail = "failed", "Muse sign-in could not be checked (its config folder is not readable)"
             else:
                 authenticated, detail = "missing", "Muse login required (muse login) or META_API_KEY"
         elif runtime == "pi":

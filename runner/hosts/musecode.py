@@ -233,7 +233,7 @@ class MuseCodeHost(Host):
         return turn
 
     def _read_loop(self, proc, tid, turn, stderr, prompt):
-        state = {"reply": "", "terminal": "", "reason": "", "usage": None}
+        state = {"reply": "", "streamed": "", "terminal": "", "reason": "", "usage": None}
         try:
             for line in proc.stdout:
                 try:
@@ -287,9 +287,11 @@ class MuseCodeHost(Host):
         if kind == "run.output.delta":
             text = payload.get("text")
             if isinstance(text, str) and text:
+                state["streamed"] += text
                 self.emit("delta", tid, turn, text=text, delta_kind="text")
         elif kind.startswith("tool.") and kind.endswith(".started"):
             name = str(payload.get("tool_name") or payload.get("name") or payload.get("tool") or "tool")
+            state["streamed"] = ""         # text before a tool call is progress, not the answer
             self.emit("tool", tid, turn, name=name, tool=name, phase="tool_execution_start")
         elif kind.startswith("run.terminal."):
             state["terminal"] = str(payload.get("terminal") or kind.rsplit(".", 1)[-1])
@@ -313,8 +315,10 @@ class MuseCodeHost(Host):
         if interrupted:
             self.emit("turn_completed", tid, turn, status="interrupted")
         elif state["terminal"] == "completed" and rc == 0:
-            if state["reply"]:
-                self.emit("message", tid, turn, text=state["reply"], final=True)
+            # A terminal without its own text still ends with what the model streamed after its last tool call.
+            reply = state["reply"] or state["streamed"].strip()
+            if reply:
+                self.emit("message", tid, turn, text=reply, final=True)
             self.emit("turn_completed", tid, turn, status="completed")
         else:
             text = (state["reason"] or stderr
