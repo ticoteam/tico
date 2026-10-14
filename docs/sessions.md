@@ -75,7 +75,8 @@ an update, a computer being set up) to anyone who can read the task.
 
 Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot can hold
 up to 30 worktrees, or fewer when the computer gets under 5 GB free. Nothing is removed to make room: at the limit
-the bot, or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
+the bot ends its turn and Tico wakes the task when its worktree is ready ([Task worktrees](worktrees.md)), or the bot,
+or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
 See [Task worktrees](worktrees.md) for code worktrees and cleanup.

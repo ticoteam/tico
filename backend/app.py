@@ -165,6 +165,9 @@ def create_app(settings=None):
                     # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
                     from . import repo_waits
                     await asyncio.to_thread(repo_waits.tick, app.state.github_app)
+                    # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
+                    from . import worktree_waits
+                    await asyncio.to_thread(worktree_waits.tick, store, settings.github_owner)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -854,6 +857,8 @@ def create_app(settings=None):
             value["attachments"] = [brief(r) for r in c.execute(
                 "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],))]
             value["links"] = H.task_links(c, row["id"])
+            from .worktree_waits import for_task as worktree_waits_for
+            value["worktree_waits"] = worktree_waits_for(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
             if parts is None:

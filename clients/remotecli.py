@@ -891,6 +891,10 @@ def sql_csv(result):
     return out.getvalue().rstrip("\n")
 
 
+# `hub task worktree add` at the bot's worktree limit: Tico recorded a wait and wakes the task; end the turn.
+WORKTREE_WAIT_EXIT = 3
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
@@ -917,6 +921,11 @@ def main(args, who=None):
             print("hub: " + str(result["warning"]), file=sys.stderr)
         return 0
     except APIError as exc:
+        if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):
+            # Not a failure to retry: Tico holds this task's place and wakes it when the worktree is ready. The
+            # status is its own so a script or harness can tell "end the turn" from an error.
+            print(f"{exc.detail}")
+            return WORKTREE_WAIT_EXIT
         if exc.code == "repository_waiting_for_permission":
             # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
             print(f"{exc.detail}.")

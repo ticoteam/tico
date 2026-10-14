@@ -18,10 +18,12 @@ CLIENT_VERSION = "0.2.1"
 
 
 class APIError(Exception):
-    def __init__(self, code, detail, status=0, retryable=False, operation_id=None):
+    def __init__(self, code, detail, status=0, retryable=False, operation_id=None, extra=None):
         super().__init__(detail)
         self.code, self.detail, self.status = code, detail, status
         self.retryable, self.operation_id = retryable, operation_id
+        # What the server put beside code and detail (backend/store.py Problem.extra), such as a worktree wait.
+        self.extra = extra or {}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -125,7 +127,8 @@ class Client:
                 detail = error.get("detail") or (f"HTTP {exc.code}" + (": " + str(payload["title"])[:200]
                                                                         if payload.get("title") else ""))
                 retryable = exc.code == 429 or 500 <= exc.code < 600
-                failure = APIError(error.get("code", "http_error"), detail, exc.code, retryable, key)
+                failure = APIError(error.get("code", "http_error"), detail, exc.code, retryable, key,
+                                   {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")})
             except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                 failure = APIError("unavailable", "Tico could not confirm this request; retry with the same operation ID",
                                    retryable=True, operation_id=key)

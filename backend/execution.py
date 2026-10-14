@@ -1612,6 +1612,9 @@ class Execution:
             H.say(c, H.KEEPER, actor, f"Stopped by {name}", conversation_id=conv["id"], kind="notice",
                   refs={"quiet": True, "stopped_by": person, "turn_id": aid})
             H.event(c, H.KEEPER, "attempt.stopped", aid, {"bot": row["bot"], "job_id": row["job_id"], "by": person})
+            # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
+            from .worktree_waits import cancel_for_attempt
+            cancel_for_attempt(c, aid, f"Stopped by {name}")
         elif limited:
             streak = limit_streak(c, row["bot"])
             hit = H.now()
