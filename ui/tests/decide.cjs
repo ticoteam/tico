@@ -140,7 +140,8 @@ const comments = {
 
     // Tapping the name goes to the chat and does nothing to the card
     const writes = [];
-    page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+    // Opening the chat may save a view preference (org.history); only a write to the card's task, approval or answer counts.
+    page.on('request', r => { if (r.method() !== 'GET' && !new URL(r.url()).pathname.startsWith('/api/v2/preferences/')) writes.push(r.url()); });
     await page.locator('.decide .dc-who-link').click();
     await page.waitForFunction(() => location.hash === '#/bot/writer');
     assert.deepEqual(writes, [], 'no card action was sent');
