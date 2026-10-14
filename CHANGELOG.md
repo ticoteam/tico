@@ -48,6 +48,9 @@ All notable changes to Tico are recorded here. The format follows
 - **A computer with no bots no longer shows CLIs it will never install as "not installed".** When the company has no
   default model, the computer's list named every enabled provider's CLI, but it installs only one (the same
   `default_runtime` as `GET /api/v2/config`). It now lists that one.
+- **Health asks a computer with no bots to sign in on the CLI it installs.** With no company default model, Health
+  never asked anyone to sign that computer in, and its Model CLIs counted every enabled provider's as needed. Both now
+  use the one `default_runtime` the computer installs.
 
 ## [0.3.45] - 2026-10-14
 

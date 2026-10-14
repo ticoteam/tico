@@ -382,6 +382,26 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
     assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
 
 
+def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_the_one_cli_it_installs(environment):
+    """No default model: the computer installs only providers.default_runtime (Claude before Codex), so that is the
+    one it is asked to sign in on and the one it needs; Codex, installed anyway, is only signable."""
+    from backend.store import encode
+    api = environment()
+    with api.app.state.store.transaction() as c:      # a stored record with no default model
+        c.execute("DELETE FROM registry_metadata WHERE key='providers'")
+        c.execute("INSERT INTO registry_metadata VALUES('providers',?)",
+                  (encode({"revision": 1, "enabled": ["openai", "anthropic"], "runtime": "", "model": ""}),))
+    runner = enrolled(api)
+    heartbeat(api, runner, runtimes={"codex": {"installed": True, "authenticated": "missing"},
+                                     "claude": {"installed": True, "authenticated": "missing"}})
+    body, checks = health_of(api)
+    runtimes = {r["name"]: r for r in body["computers"][0]["runtimes"]}
+    assert runtimes["claude"]["sign_in"] and runtimes["claude"]["needed"]
+    assert not runtimes["codex"]["sign_in"] and not runtimes["codex"]["needed"] and runtimes["codex"]["signable"]
+    assert "sign in to Claude Code" in checks["computer_signin"]["summary"]
+    assert "Codex" not in checks["computer_signin"]["summary"]
+
+
 def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     """Uncached input only: cache reads are cheap and would dominate the count."""
     api = environment()

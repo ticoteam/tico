@@ -47,8 +47,11 @@ def _plural(n, one, many=None):
 def _computers(c, runners_online, settings):
     since = {r["id"] for r in runners_online}
     rows, fleet = [], runner_versions.load(c)
-    wanted, assigned = providers.runtimes_needed(c, settings)
-    default = providers.load(c, settings)["runtime"]
+    _, assigned = providers.runtimes_needed(c, settings)
+    # The one default a computer installs for its first sign-in (providers.default_runtime), not every provider's
+    # runtime while the company has no default model: the runner installs only that one.
+    default = providers.default_runtime(providers.load(c, settings))
+    wanted = {default} - {""}
     for r in c.execute("SELECT r.id,r.label,r.last_seen,r.platform,r.readiness_json,coalesce(nullif(h.name,''),r.operator) "
                        "AS operator FROM runners r LEFT JOIN humans h ON h.id=r.operator WHERE r.revoked_at IS NULL "
                        "ORDER BY r.label"):
