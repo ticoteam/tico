@@ -7,6 +7,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-10-14
+
+**Upgrade:** an existing GitHub App needs **Actions: Read-only** added on its GitHub settings page and accepted on the installation before bots can read workflow results. Until then, tokens are issued as before. See [GitHub App](docs/github-app.md).
+
 ### Added
 - **Muse Code is a harness.** Enable the Meta provider and bots can run on Meta's coding CLI (`muse`, model Muse Spark 1.3), signed in with a Meta account (device code, from Settings) or `META_API_KEY`. Runs resume their session after a restart and reach the hub and the bot's remote MCP servers. Meta's Llama stays on OpenRouter. See [Harnesses](docs/harnesses.md).
 - **Bots can check a workflow run's result.** A bot's GitHub token now reads Actions (workflow runs and their logs) in every repository it can read, so a bot that watches a deploy reads `gh run list` / `gh run view` itself instead of asking a person. It can't start, rerun or cancel a run. New GitHub Apps ask for Actions read; **an existing App needs Actions: Read-only added on its GitHub settings page and accepted on the installation**, and until then tokens are issued without it as before. See [GitHub App](docs/github-app.md#permissions-and-why).
