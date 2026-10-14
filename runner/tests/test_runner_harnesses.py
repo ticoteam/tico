@@ -61,7 +61,8 @@ class RunnerHarnesses(unittest.TestCase):
 
     def runner(self, client):
         runner = Runner(self.config, self.root / "state", client=client, config_path=self.root / "runner.json")
-        self.addCleanup(runner.tools.stop)
+        # stop() doesn't wait; an install still writing into the temp dir would break its cleanup.
+        self.addCleanup(runner.tools.pool.shutdown, wait=True, cancel_futures=True)
         return runner
 
     def maintain(self, runner):

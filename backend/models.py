@@ -1628,7 +1628,7 @@ class HarnessAction(Contract):
 
 class HarnessChoice(Contract):
     harness: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=60)]
-    enabled: bool
+    enabled: StrictBool
 
 
 class HarnessActionReport(Contract):
