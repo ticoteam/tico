@@ -154,7 +154,8 @@ volume, so harnesses survive a restart or a new image. The directory is put last
 ## Choosing what a computer installs
 
 **Settings > Computers > Model CLIs** lists every harness on each computer with an **On** switch for the owner.
-A harness a bot on that computer runs on is always on (the switch is locked). Any other one can be turned on, for
+A harness a bot on that computer runs on, as its own or its fallback, is always on: the switch is locked and the
+server refuses an off for it (409; `bot_runtimes` in `GET /api/v2/operations` lists them). Any other one can be turned on, for
 example to sign it in before moving bots there, or off. Turning one off removes the runner's own install (its
 `<tools>/<id>` directory and its `bin` link) at a moment no turn uses it; a copy the person installed outside Tico is
 never touched. The choice is kept per computer on the server (`runner_harness_choices`,

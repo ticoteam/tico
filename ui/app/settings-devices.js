@@ -265,7 +265,9 @@ function renderSettingsMachines() {
     // computer applies them between turns (backend/harness_actions.py, runner/harness_tools.py).
     // It installs what its bots run on by itself; the owner turns any other one on or off here.
     const choices = machine.harness_choices || {};
-    const botRuntimes = (machine.bots || []).length ? new Set(machine.needed_runtimes || []) : new Set();
+    // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
+    // no bot_runtimes, only its bots' own runtimes.
+    const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
     const asked = new Set((machine.harness_actions || []).filter(row => ['requested', 'running'].includes(row.state)).map(row => `${row.harness}:${row.action}`));
     const harnessAction = (id, action, label, value) => {
       const waiting = asked.has(`${id}:${action}`);

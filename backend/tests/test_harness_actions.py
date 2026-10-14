@@ -1,7 +1,7 @@
 """Keeping a computer's model CLIs current from Settings: owner-only, audited, and relayed to the
 runner the way the browser sign-in is."""
 
-from backend.tests.test_api import api, get, post, put, runner  # noqa: F401
+from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
 from backend.tests.test_model_login import stored  # noqa: F401  (a row reader shared with the sign-in tests)
 
 HARNESS = {"name": "Codex", "runtime": "codex", "installed": True, "version": "0.158.0", "managed": True,
@@ -91,6 +91,59 @@ def test_the_owners_on_off_per_harness_is_kept_per_computer_and_handed_to_its_ru
     machine = next(m for m in get(api, "operations")["machines"] if m["id"] == r["runner_id"])
     assert machine["harness_choices"] == {"grok": False, "codex": False}
     assert [e["actor"] for e in events(api, "runner.harness.off")] == ["human:ana", "human:ana"]
+
+
+def company(api, **record):
+    from backend.store import encode
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='providers'")
+        c.execute("INSERT INTO registry_metadata VALUES('providers',?)", (encode({"revision": 1, **record}),))
+
+
+def machine(api, r):
+    return next(m for m in get(api, "operations")["machines"] if m["id"] == r["runner_id"])
+
+
+def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api):
+    from backend.store import encode
+    company(api, enabled=["openai", "google", "xai"], runtime="codex", model="gpt-6-sol")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode(
+            {"name": "cpo", "fallback": {"harness": "antigravity", "model": "gemini-3-pro"}}),))
+    r = runner(api)
+    assign(api, r, "cpo")
+    beat(api, r, codex=HARNESS, antigravity={**HARNESS, "name": "Antigravity", "runtime": "gemini"},
+         grok={**HARNESS, "name": "Grok Build", "runtime": "grok"})
+    choose = lambda harness, enabled, **kw: post(api, f"runners/{r['runner_id']}/harness-choices",
+                                                 {"harness": harness, "enabled": enabled}, **kw)
+    choose("codex", False, expected=409)                          # the bot's own
+    choose("antigravity", False, expected=409)                    # its fallback
+    assert choose("antigravity", True)["enabled"] is True
+    choose("grok", False)
+    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"antigravity": True, "grok": False}
+    # The page locks both; the fallback alone is not needed for the computer to be ready.
+    assert (machine(api, r)["bot_runtimes"], machine(api, r)["needed_runtimes"]) == (["codex", "gemini"], ["codex"])
+    assert machine(api, runner(api))["bot_runtimes"] == []
+
+
+def test_a_computer_with_no_bots_needs_only_the_one_default_it_installs(api):
+    # No company default: the runner installs one runtime (config default_runtime), not every enabled provider's.
+    company(api, enabled=["xai", "openai"], runtime="", model="")
+    r = runner(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE runner_id=?", (r["runner_id"],))      # the first computer's built-in bots
+    assert get(api, "config")["default_runtime"] == "codex"
+    assert machine(api, r)["needed_runtimes"] == ["codex"]
+    company(api, enabled=["xai"], runtime="grok", model="grok-5")
+    assert machine(api, r)["needed_runtimes"] == ["grok"]
+    company(api, enabled=[], runtime="", model="")
+    assert machine(api, r)["needed_runtimes"] == []
+    # With a bot, what it runs on: here the company's first provider's.
+    company(api, enabled=["xai", "openai"], runtime="", model="")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json='{\"name\": \"cpo\"}' WHERE bot='cpo'")
+    assign(api, r, "cpo")
+    assert machine(api, r)["needed_runtimes"] == ["grok"]
 
 
 def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_there(api):

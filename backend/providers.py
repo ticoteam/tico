@@ -13,7 +13,7 @@ way a stale bot definition is, and every change leaves an event with the before 
 
 import json
 
-from .harnesses import attach_harnesses
+from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
 
 KEY = "providers"
@@ -467,6 +467,32 @@ def wanted_runtimes(record):
     if record["runtime"]:
         return {record["runtime"]}
     return {row["runtime"] for row in PROVIDERS if row["id"] in record["enabled"]}
+
+
+def default_runtime(record):
+    """The one runtime a computer with no bots installs and is signed in on first: the company's default, else the
+    first of its providers' runtimes by name. Empty before a provider is chosen."""
+    return next(iter(sorted(wanted_runtimes(record))), "")
+
+
+def runtimes_run_on(c, settings):
+    """{runner id: runtimes} the bots on each computer run on, each bot's own and its fallback's: what that computer
+    installs for them (runner/service.py harness_runtimes), so the owner cannot turn one off there."""
+    from .shared_bots import follow
+    record, found = load(c, settings), {}
+    for row in c.execute("SELECT a.runner_id, a.bot, bc.config_json FROM assignments a "
+                         "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+        try:
+            config = follow(c, row["bot"], json.loads(row["config_json"] or "{}"))
+        except ValueError:
+            config = {}
+        try:
+            runtime = resolve(record, config)[0]
+        except ProviderError:
+            runtime = ""
+        fallback = normalize_fallback(config.get("fallback")) or {}
+        found.setdefault(row["runner_id"], set()).update({runtime, fallback.get("runtime")} - {None, ""})
+    return found
 
 
 def runtimes_needed(c, settings):

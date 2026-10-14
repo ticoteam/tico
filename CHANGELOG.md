@@ -39,6 +39,13 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 - **Pausing a bot pauses its routines.** Pausing a bot now closes the timed routine runs it had not started, with the note "Bot paused before this routine ran", so they don't pile up and all run at once on resume. A person's own tasks for the bot, a person's Run now, event (`on:`) runs (a meeting's notes are announced only once) and runs handed to another bot stay queued. Each routine keeps its own on/off switch, so resuming the bot brings back exactly the routines that were on. A bot still in setup gets no timed runs and Run now is refused until setup is done; its event runs wait for it. The routines list says "paused with the bot", and the API has a new `held_by_bot` field (`paused`, `needs_setup`, ...) that names what holds an enabled routine.
+- **A bot's fallback model CLI stays on in Settings > Computers > Model CLIs.** The On switch was locked only for a bot's
+  own CLI; its fallback's could be switched off, which did nothing until the bot left. Both are locked now, and turning
+  either off through `POST /api/v2/computers/{id}/harness-choices` is refused (409). `GET /api/v2/operations` lists them
+  per computer as `bot_runtimes`.
+- **A computer with no bots no longer shows CLIs it will never install as "not installed".** When the company has no
+  default model, the computer's list named every enabled provider's CLI, but it installs only one (the same
+  `default_runtime` as `GET /api/v2/config`). It now lists that one.
 
 ## [0.3.45] - 2026-10-14
 

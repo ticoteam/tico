@@ -3877,7 +3877,7 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/harness-choices")
     def harness_choice(request: Request, rid: str, body: M.HarnessChoice):
         return mutate(request, body, lambda c: harness_actions.choose(
-            c, request.state.identity, rid, body.harness, body.enabled))
+            c, request.state.identity, rid, body.harness, body.enabled, settings))
 
     @app.get("/api/v2/runner-harness-actions")
     def runner_harness_actions(request: Request):

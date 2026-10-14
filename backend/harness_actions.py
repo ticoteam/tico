@@ -12,6 +12,8 @@ needs it. The choice is kept per computer here and handed to the runner with its
 a harness never chosen is neither, and the runner keeps whatever it already has.
 """
 
+from . import providers
+from .harnesses import runtime_of
 from .model_login import ONLINE_SECONDS, redact
 from .store import H, Problem, readiness_document
 
@@ -68,14 +70,18 @@ def request(c, who, rid, harness, action):
     return view(c.execute("SELECT * FROM runner_harness_actions WHERE id=?", (aid,)).fetchone())
 
 
-def choose(c, who, rid, harness, enabled):
+def choose(c, who, rid, harness, enabled, settings=None):
     if who.role != "owner":
         raise Problem("forbidden", "Only the owner can change the tools on a computer", 403)
     runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not runner:
         raise Problem("not_found", "That computer is not registered", 404)
-    if harness not in (readiness_document(runner["readiness_json"]).get("harnesses") or {}):
+    report = (readiness_document(runner["readiness_json"]).get("harnesses") or {}).get(harness)
+    if report is None:
         raise Problem("not_found", "That computer has not reported this harness", 404)
+    # The runner keeps what a bot there runs on, its fallback included, so an "off" for it would only wait to apply.
+    if not enabled and (report.get("runtime") or runtime_of(harness)) in providers.runtimes_run_on(c, settings).get(rid, ()):
+        raise Problem("needed", "A bot on this computer runs on this tool, so it stays on", 409)
     now = H.now()
     c.execute("INSERT INTO runner_harness_choices(runner_id,harness,enabled,updated,updated_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(runner_id,harness) DO UPDATE SET enabled=excluded.enabled, updated=excluded.updated, "

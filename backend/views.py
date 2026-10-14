@@ -1399,7 +1399,9 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(who)
         with store.read() as c:
             machines, fleet = [], runner_versions.load(c)
-            wanted, assigned = providers.runtimes_needed(c, store.settings)
+            _, assigned = providers.runtimes_needed(c, store.settings)
+            default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
+            run_on = providers.runtimes_run_on(c, store.settings)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
@@ -1420,8 +1422,10 @@ def install_views(app, store, auth, mutate, task_view):
                     report.pop("tools", None)
                 from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
-                # the company's default, which it installs for its first sign-in.
-                machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or wanted),
+                # the company's one default, which it installs for its first sign-in (config_view default_runtime).
+                # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
+                machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
+                                 "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
                                  "harness_choices": choices(c, row["id"])})
