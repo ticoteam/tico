@@ -124,10 +124,14 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.locator('#set-prov-save').waitFor();
     assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
     assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);
+    // The default fallback is on until the owner turns it off; the save says so.
+    assert.equal(await page.locator('#set-prov [data-provider-fallback]').isChecked(), true);
+    await page.locator('#set-prov [data-provider-fallback]').uncheck();
     await page.locator('#set-prov [data-provider]').uncheck();
     await page.locator('#set-prov-save').click();
     await page.waitForFunction(() => !S.config.providers_configured);
     assert.deepEqual(writes.find(row => row.p === '/api/v2/providers').body.enabled, []);
+    assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
     await page.locator('#set-providers .muted', {hasText: 'Bots wait'}).waitFor();
     assert.match(await page.locator('#set-providers').innerText(), /Bots wait/);
     await page.locator('[data-settings-tab=people]').click();
