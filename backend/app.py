@@ -3207,7 +3207,12 @@ def create_app(settings=None):
                 if refs.get("comment") and not relayed and handed is not None and initial["from_actor"] == task["requester"]:
                     raise Problem("on_behalf_of", "A bot gave this task to BotOps, so your comment doesn't lend your rights; "
                                   "move it to BotOps yourself or ask in your BotOps chat", 403)
-                if refs.get("comment") or relayed:
+                if (refs.get("comment") and not relayed and H.is_bot(requester) and H.is_human(initial["from_actor"])
+                        and task["owner"] == who.actor and open_task(task)):
+                    # A person's comment on a task a bot asked BotOps for lends nothing: BotOps keeps that bot's rights,
+                    # and what they can't do becomes a Confirm card for the person who commented (confirm_for_carried).
+                    pass
+                elif refs.get("comment") or relayed:
                     raise Problem("on_behalf_of", "Only the task's requester's own comment lends their rights; "
                                   "other comments and routed messages lend nothing", 403)
             if initial and (task or str(requester).startswith("bot:")) and requester != H.KEEPER:
@@ -3400,6 +3405,12 @@ def create_app(settings=None):
             if (not found and task and H.is_human(task["requester"]) and task["owner"] == who.actor
                     and handed_over(c, task, who.actor) == acting.actor):
                 found = {"person": task["requester"]}      # the bot gave BotOps a task this person asked for
+            said = (start or {}).get("refs") or {}
+            commented = (not found and task and task["requester"] == acting.actor and task["owner"] == who.actor
+                         and said.get("comment") and H.is_human(start["from_actor"])
+                         and not any(said.get(k) for k in ("via", "assistant", "slack", "routing")))
+            if commented:
+                found = {"person": start["from_actor"]}   # a person commented on the task this bot asked for
             if not found or not open_task(task):
                 return None
             try:
@@ -3409,8 +3420,10 @@ def create_app(settings=None):
             if botops_act.admin_only(request.method, path) and person.role != "owner" and not auth.bot_admin(person):
                 return None
             asker = (H.bot(c, H.actor_id(acting.actor)) or {}).get("name") or H.actor_id(acting.actor)
+            summary = (("BotOps needs your OK to do this on " + asker + "'s task: ") if commented
+                       else (asker + " asked BotOps for this for you: ")) + task["title"]
             return propose_card(c, person, request.method, path, {k: v for k, v in body.items() if k != "on_behalf_of"},
-                                (asker + " asked BotOps for this for you: " + task["title"])[:300])
+                                summary[:300])
 
     def followed_task(c, ref):
         """The task `ref` names (its id, or an unambiguous prefix of eight or more), or None when it names none."""
@@ -3471,14 +3484,30 @@ def create_app(settings=None):
     def botops_owns_task(path, body=None):
         """A note, comment or status on a task BotOps owns is BotOps' own work: it needs no one's rights and is BotOps'
         words, so it is never recorded as the person who asked (their rights still apply to everyone else's tasks).
-        Closing is the exception: only the requester or a human closes, so a close keeps the person's rights."""
-        found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|ask|links))?", path)
-        if not found or (isinstance(body, dict) and body.get("close")):
-            return False
-        with store.read() as c:
+        Closing is the exception: only the requester or a human closes, so a close keeps the person's rights.
+        Its own task's worktrees are its own work too: the route checks the owning bot's repository access, which no
+        one's rights change. So is a question or a subtask for a person under its own task (one ask, one card): the
+        ask grants nothing by itself, whoever asked for the task."""
+        body = body if isinstance(body, dict) else {}
+        if path == "/api/v2/task-questions":
+            return True                     # always the bot's own task, put to the person (media.task_question)
+        person = None
+        if path in ("/api/v2/tasks", "/api/v2/tasks/dry-run"):
+            person = body.get("owner")
+            ref = next((r.get("task") for r in body.get("relations") or []
+                        if isinstance(r, dict) and r.get("kind") == "parent"), None)
+            if not ref or not person:
+                return False
+        else:
+            found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|ask|links|worktrees(?:/attach)?))?", path)
+            if not found or body.get("close"):
+                return False
             ref = found.group(1)
+        with store.read() as c:
             row = c.execute("SELECT owner FROM tasks WHERE id=? OR (length(?)>=8 AND id LIKE ? || '%') LIMIT 1",
-                            (ref, ref, ref)).fetchone()
+                            (str(ref), str(ref), str(ref))).fetchone()
+            if person is not None and not H.is_human(H.resolve_actor(c, person) or ""):
+                return False
         return bool(row and row["owner"] == "bot:" + BOTOPS)
 
     def act_for_requester(request, ref):

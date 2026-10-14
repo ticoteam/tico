@@ -373,6 +373,12 @@ def fix(path, code, status, acting, names, base=""):
         # in chat would not help. Say who sets it and where.
         text = mail_settings_hint(bot, slug)
         link = "#/settings"
+    elif re.fullmatch(API + rf"tasks/{_S}/worktrees(?:/attach)?", normalize(path) or ""):
+        # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
+        # request lends it: say who gives that access.
+        text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "
+                "Repositories; then BotOps can add the worktree itself")
+        link = "#/repositories"
     elif code == "on_behalf_of":
         # The cited request lends nothing (closed, too old, another person's, words others wrote): the detail says why.
         text = ("BotOps can't act on that earlier request: ask it again in your BotOps chat so it acts with your "

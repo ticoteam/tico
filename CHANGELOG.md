@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **BotOps can work a task another bot gave it.** On its own task BotOps now adds the task's worktree with its own repository access and files a question or subtask for a person without borrowing anyone's rights, whoever asked for the task. A person's comment on a task a bot asked BotOps for no longer stops the run: BotOps keeps that bot's rights, and what needs the person's comes to them as a Confirm card in their BotOps chat. A worktree refused for missing access says an owner or admin gives it in Settings > Repositories. See [Permissions](docs/permissions.md).
+
 ## [0.3.43] - 2026-10-14
 
 ### Added

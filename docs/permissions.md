@@ -191,6 +191,11 @@ closed or declined, moving it back to open lends nothing again unless the reques
 A chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
 A comment the task's human requester writes on their open BotOps task, in their own words (not through the Assistant, Slack or
 routing), is them asking: the run it wakes has their rights. Anyone else's comment lends nothing.
+On a task another bot asked BotOps for, a person's comment lends nothing either: the run keeps that bot's rights, and
+what they can't do comes to the person who commented as a Confirm card in their BotOps chat.
+On its own task BotOps never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
+owner or admin gives it in Settings > Repositories) or to file a question or subtask for a person under it; that ask grants
+nothing by itself.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a room another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
