@@ -128,6 +128,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ring-bg{fill:none;stroke:var(--line);stroke-width:2}
 .ring-fg{fill:none;stroke:var(--run);stroke-width:2;stroke-linecap:round}
 .tl-sub.all .ring-fg{stroke:var(--accent)}
+.tl-folded{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;padding:0 4px;border:1px solid var(--line);border-radius:999px}
+.tl-rec{flex:none;font-size:var(--t-sm);padding:1px 8px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap}
+.tl-rec:hover{background:var(--accent);color:var(--accent-ink)}
+.need-rec>span{color:var(--muted);margin-right:4px}
+.need-folded ul{margin:4px 0 0;padding-left:18px}
 .tl-due{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .tl-parent{flex:0 1 auto;min-width:0;max-width:28%;display:inline-flex;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden}
 .tl-parent-t{overflow:hidden;text-overflow:ellipsis}

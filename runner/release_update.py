@@ -87,6 +87,15 @@ def checkout_commit(root=ROOT, run=subprocess.run):
     return commit if not done.returncode and re.fullmatch(r"[0-9a-f]{40,64}", commit) else ""
 
 
+def manifest_commit(root=ROOT):
+    """The commit an image was built from (release-manifest.json beside the code), or "" without one."""
+    try:
+        commit = str(json.loads((Path(root) / "release-manifest.json").read_text()).get("commit") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return commit if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) else ""
+
+
 def current_release(env=os.environ, root=ROOT, run=subprocess.run):
     if kind(env) == "docker":
         value = env.get("TICO_VERSION", "").strip().lstrip("v")   # the image sets it; `latest` and `dev` are no release
@@ -472,6 +481,8 @@ class Follower:
         # company environments may share one checkout, and the first to update moves it under the others.
         self.release = current_release(env, root, run)
         self.started = "" if self.kind == "docker" else checkout_commit(root, run)
+        self.commit = manifest_commit(root) or self.started
+        self.features = {}           # what the server said it accepts, from its last `runners/desired` answer
         self.state, self.error, self.target = "idle", "", ""
         self.pending = None          # a release to move to as soon as nothing runs
         self.pending_since = None
@@ -494,8 +505,11 @@ class Follower:
         """`desired`: the release the server's event stream named, so it need not be asked."""
         from clients.tico import APIError
         try:
-            self.desired = str(desired if desired is not None else
-                               (self.client.get("runners/desired") or {}).get("version") or "")
+            if desired is None:
+                answer = self.client.get("runners/desired") or {}
+                self.features = answer.get("features") or {}
+                desired = answer.get("version")
+            self.desired = str(desired or "")
         except APIError as exc:
             if exc.status not in (404, 405):
                 return                   # a blip: keep what we knew
@@ -611,6 +625,7 @@ class Follower:
         if self.desired is None:
             return {}
         return {"release": self.release or "dev", "kind": self.kind,
+                **({"commit": self.commit} if self.features.get("runner_commit") else {}),
                 "update": {"state": self.state, "target": self.target, "error": self.error[:300]}}
 
 

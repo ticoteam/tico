@@ -27,6 +27,7 @@ from .release_update import Follower
 from .login import POLL_S as LOGIN_POLL_S, Logins
 from .hosts.base import HostError, SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
 from .hosts.cursor import MODELS as CURSOR_HOST_MODELS
+from .hosts.musecode import MODELS as MUSE_HOST_MODELS, QUIET as MUSE_QUIET
 from .hosts.pi import MODELS as PI_HOST_MODELS
 from .outage import RECENT, Outage, describe, log
 from .state import BOT_THREAD, State, lane as turn_lane, session_key, session_task
@@ -38,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _UNSELECTED = object()
 
 RUNNER_VERSION = "0.5.4"
-RUNTIMES = ("codex", "grok", "claude", "gemini", "pi", "cursor")
+RUNTIMES = ("codex", "grok", "claude", "gemini", "pi", "cursor", "musecode")
 # Claude Code has no local model catalog command, so readiness reports these ids.
 # Verified against Claude Code 2.1.212 with a one-word prompt each; claude-fable-5-1
 # was refused by that CLI and accepted from 2.1.230, and the cloud catalog lists it.
@@ -55,7 +56,7 @@ CLAUDE_AUTH_TIMEOUT_SECONDS = 30
 # Environment variables that sign a CLI in without a browser, checked in this order.
 REJECT_RECHECK_S = 300      # how long a refused key or sign-in is trusted before one turn tries again
 HEADLESS_LOGIN = {"claude": ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"), "cursor": ("CURSOR_API_KEY",),
-                  "codex": ("OPENAI_API_KEY",)}
+                  "codex": ("OPENAI_API_KEY",), "musecode": ("META_API_KEY",)}
 # Codex reads its key from a login, not the environment, so the runner makes the login. A key it could not log in with
 # is not tried again for this long (a heartbeat asks every few seconds), unless the key or the home changes.
 CODEX_LOGIN_RETRY_S = 600
@@ -87,13 +88,22 @@ DEFAULT_NAMES = {"company_name": "the company", "app_name": "Tico", "assistant_n
 BOOTSTRAP_TEMPLATES = {"coo": "assistant", "botops": "botops", "librarian": "librarian", "goal-manager": "goal-manager"}
 OWN_INTERRUPT = ("Lease expired", "Execution interrupted after stop")
 FALLBACK_RUNTIME = {"antigravity": "gemini", "gemini": "gemini", "codex": "codex",
-                    "claude": "claude", "grok": "grok", "pi": "pi", "cursor": "cursor"}
+                    "claude": "claude", "grok": "grok", "pi": "pi", "cursor": "cursor", "musecode": "musecode"}
 PI_MODELS = sorted(PI_HOST_MODELS)
 CURSOR_MODELS = sorted(CURSOR_HOST_MODELS)
+MUSE_MODELS = sorted(MUSE_HOST_MODELS)
 # The server resolves a bot's runtime from its own config, then the company default; this is what
 # a runner sees when neither exists.
 # Prefix of the readiness warning that says a bot's history did not reach GitHub; backend/health.py reads it.
 PUBLISH_WARNING = "GitHub history not published: "
+
+
+def muse_auth_file(env):
+    """Where Muse Code keeps its Meta-account login for this environment (MUSE_AUTH_PATH, else the XDG config)."""
+    if env.get("MUSE_AUTH_PATH"):
+        return Path(env["MUSE_AUTH_PATH"])
+    config = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or str(Path.home()), ".config")
+    return Path(config) / "muse" / "auth.json"
 
 
 def reserved_credential(key):
@@ -175,6 +185,10 @@ def from_person(message):
 CHECKOUT_EVERY_S = 600
 # How often finished tasks' session checkouts are looked for between turns (Runner.sweep_sessions).
 SESSION_SWEEP_S = 600
+# How long a task turn that is not a person's waits for its worktree, retrying, before it runs in the bot's checkout:
+# in the checkout it would hold every chat with the bot behind it for its whole turn.
+WORKTREE_WAIT_S = 120
+WORKTREE_RETRY_S = 10
 
 # Keys whose values move on every report without anything having changed: left out when deciding
 # whether a heartbeat has news (runner/service.py `maintain`).
@@ -677,6 +691,7 @@ class Runner:
         self.attempt_lanes = {}              # attempt id -> (bot, lane, task id) while its turn may still be running
         self.session_git_locks = {}          # main checkout -> lock over adding, syncing and removing its task worktrees
         self.session_git_guard = threading.Lock()
+        self.person_waits = {}               # bot -> turns from a person waiting for its main checkout
         self.product_refreshed = set()       # the built-in bots whose product files were checked since this runner started
         self.goal_tries = {}                 # (bot, session key) -> [goal continuations since a person last wrote, the last reason given]
         self._weekly_usage = subscription_usage.Reports()
@@ -860,6 +875,17 @@ class Runner:
         requested = next((row.get("profile") for row in getattr(self, "assignments_seen", [])
                           if row["bot"] == bot), None)
         return profiles.select(self.config, bot, requested)
+
+    def muse_config_home(self, profile=None):
+        """Muse Code's XDG_CONFIG_HOME for bot turns, sign-in and readiness: a subscription profile's own
+        folder, else the runner's. Never the operator's ~/.config, whose Muse MCP servers would load in every
+        bot turn (runner/hosts/musecode.py)."""
+        home = profile.home("musecode") if profile else None
+        if home:
+            return Path(home)
+        # `doctor` builds a Runner without __init__, so without host_state.
+        state = self.__dict__.get("host_state") or isolation.bot_state(self.state.directory)
+        return Path(state) / "musecode" / "config"
 
     def subscription_problem(self, name, signed_out=False, computer=None):
         label = (computer or self.config.get("label") or next((row.get("computer_label") for row in
@@ -1314,7 +1340,7 @@ class Runner:
                     values[key] = value
             runtime_keys = {"claude": ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
                             "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "cursor": ("CURSOR_API_KEY",),
-                            "pi": ("OPENROUTER_API_KEY",)}
+                            "pi": ("OPENROUTER_API_KEY",), "musecode": ("META_API_KEY",)}
             runtimes = {config.get("runtime"), (configured_fallback(config) or {}).get("runtime")}
             for runtime in runtimes:
                 for key in runtime_keys.get(runtime, ()):
@@ -1452,6 +1478,13 @@ class Runner:
         # the host process and the turn's shell commands get.
         if profile:
             env = profile.environment((attempt.get("config") or {}).get("runtime") or "", env)
+        bot_config = attempt.get("config") or {}
+        if "musecode" in (bot_config.get("runtime"), (configured_fallback(bot_config) or {}).get("runtime")):
+            # Muse reads META_API_KEY from its environment only. A key on this computer (the runner's environment,
+            # `_shared.env` or the company's) reports Muse ready, so it reaches the turn unless a grant set one.
+            name, key = self.headless_secret("musecode") if profile is None or profile.share_operator else ("", "")
+            if key and not env.get(name):
+                env[name] = key
         env.update({"HUB_API_URL": self.config["url"], "HUB_TOKEN": attempt["token"],
                     "HUB_BOT": attempt["bot"], "HUB_EMPLOYEE": attempt["bot"],
                     "HUB_TASK_ID": str((attempt.get("task") or {}).get("id") or ""), "HUB_DIR": str(ROOT),
@@ -1553,6 +1586,11 @@ class Runner:
                     except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
                         pass
                 runtimes[runtime] = {"signed_in": False if self.rejection(runtime, name) else signed}
+            try:
+                signed = (self.muse_config_home(profile) / "muse" / "auth.json").is_file()
+            except OSError:
+                signed = None
+            runtimes["musecode"] = {"signed_in": False if self.rejection("musecode", name) else signed}
             result.append({"name": name, "runtimes": runtimes})
             if len(result) == 100:
                 break
@@ -1568,12 +1606,14 @@ class Runner:
         home = Path.home()
         files = [Path(os.environ.get("CODEX_HOME") or home / ".codex") / "auth.json", home / ".claude.json",
                  home / ".claude" / ".credentials.json", *sorted((Path(self.config["projects_dir"]) / "secrets").glob("*.env"))]
+        files.append(self.muse_config_home() / "muse" / "auth.json")
         selected = (profile if isinstance(profile, profiles.Profile) else
                     profiles.select(self.config, requested=profile) if profile else None)
         if selected:
             seen.append((str(selected.directory), selected.share_operator))
             files = [selected.directory / "codex" / "auth.json", selected.directory / "claude" / ".claude.json",
-                     selected.directory / "claude" / ".claude" / ".credentials.json"]
+                     selected.directory / "claude" / ".claude" / ".credentials.json",
+                     selected.directory / "musecode" / "muse" / "auth.json"]
         for path in files:
             try:
                 stat = path.stat()
@@ -1673,7 +1713,7 @@ class Runner:
                 if not shutil.which("agy"):
                     problems.append("Antigravity CLI is not on PATH")
             elif not runtimes[runtime]["installed"]:
-                problems.append("Runtime executable is not on PATH")
+                problems.append(self.installing(runtime) or "Runtime executable is not on PATH")
             elif status.get("authenticated") == "rejected":
                 problems.append(self.subscription_problem(entry["profile"], signed_out=True, computer=entry.get("computer_label")) if entry.get("profile")
                                 else status["detail"])
@@ -1967,6 +2007,27 @@ class Runner:
                     authenticated, detail = "failed", "Cursor sign-in check timed out"
                 except OSError:
                     authenticated, detail = "failed", "Cursor sign-in could not be checked"
+        elif runtime == "musecode":
+            # Muse Code keeps a Meta-account login in auth.json (`muse login`) and has no status command, so
+            # the file's presence is the sign-in. Its contents are never read. META_API_KEY wins over it.
+            # Turns run on Tico's own Muse folder (muse_config_home), so that is where the login is looked for.
+            env = {**(env or os.environ), **MUSE_QUIET, "XDG_CONFIG_HOME": str(self.muse_config_home(profile))}
+            env.pop("MUSE_AUTH_PATH", None)
+            shared_key = profile is None or profile.share_operator
+            if profile is None:
+                self.team_model_keys("musecode")
+            try:
+                signed = muse_auth_file(env).is_file()
+            except OSError:           # the bot user's 0700 config folder: not "signed out", and never a failed heartbeat
+                signed = None
+            if shared_key and self.headless_login("musecode"):
+                authenticated, detail = "ready", "Signed in with META_API_KEY"
+            elif signed:
+                authenticated, detail = "ready", "Signed in with a Meta account"
+            elif signed is None:
+                authenticated, detail = "failed", "Muse sign-in could not be checked (its config folder is not readable)"
+            else:
+                authenticated, detail = "missing", "Muse sign-in required (sign in from Tico) or META_API_KEY"
         elif runtime == "pi":
             relevant = [row for row in assignments if row.get("config", {}).get("runtime") == "pi"]
             missing = sorted(row["bot"] for row in relevant
@@ -1983,7 +2044,8 @@ class Runner:
                   list(CLAUDE_MODELS) if runtime == "claude" else
                   list(GEMINI_MODELS) if runtime == "gemini" else
                   list(PI_MODELS) if runtime == "pi" else
-                  list(CURSOR_MODELS) if runtime == "cursor" else [])
+                  list(CURSOR_MODELS) if runtime == "cursor" else
+                  list(MUSE_MODELS) if runtime == "musecode" else [])
         return {"installed": bool(executable), "authenticated": authenticated, "version": version,
                 "models": models, "controls": ["interrupt", "new-session"] if executable else [],
                 "detail": detail, **goals.capabilities(runtime, executable, version)}
@@ -2127,6 +2189,10 @@ class Runner:
         if runtime == "cursor":
             from .hosts.cursor import CursorHost
             return CursorHost(bot=attempt["bot"])
+        if runtime == "musecode":
+            from .hosts.musecode import MuseCodeHost
+            return MuseCodeHost(bot=attempt["bot"], state_dir=self.host_state / "musecode",
+                                config_home=self.muse_config_home(profile))
         raise RuntimeError(NO_RUNTIME if not runtime else f"Unsupported local runtime: {runtime}")
 
     def prompt(self, attempt, after=None, *, resumed=False):
@@ -2478,6 +2544,11 @@ class Runner:
                 return False
         return True
 
+    def person_waiting(self, bot):
+        """Whether a turn from a person is waiting for the bot's main checkout (Runner.execute)."""
+        with self.session_git_guard:
+            return self.__dict__.setdefault("person_waits", {}).get(bot, 0) > 0
+
     def session_git_lock(self, main):
         """One git step at a time on a checkout's task worktrees: adding, syncing, rebasing and removing them
         all write the repository they share."""
@@ -2592,13 +2663,42 @@ class Runner:
         session_task = self.task_session(attempt, config, lane)
         held = []                                   # the locks this turn holds, released last-first
 
+        # A person's turn goes first: every other turn waiting for the checkout lets it by, and a task turn skips
+        # its refresh of the checkout while one waits.
+        person = from_person(attempt.get("message"))
+
         def hold(lock):
             acquired = False
             while not acquired and not lost.is_set():
+                yields = lock is checkout_lock and not person
+                if yields and self.person_waiting(bot):
+                    lost.wait(0.2)
+                    continue
                 acquired = lock.acquire(timeout=1)
+                if acquired and yields and self.person_waiting(bot):
+                    lock.release()          # a person started waiting while this turn did
+                    acquired = False
             if not acquired:
                 raise RuntimeError('Attempt lease lost while waiting for worktree maintenance')
             held.append(lock)
+
+        def hold_checkout():
+            if not person:
+                return hold(checkout_lock)
+            with self.session_git_guard:
+                waits = self.__dict__.setdefault("person_waits", {})
+                waits[bot] = waits.get(bot, 0) + 1
+            try:
+                hold(checkout_lock)
+            finally:
+                with self.session_git_guard:
+                    waits[bot] -= 1
+
+        def try_checkout():
+            if self.person_waiting(bot) or not checkout_lock.acquire(blocking=False):
+                return False
+            held.append(checkout_lock)
+            return True
 
         checkout_lock = self.worktrees.bot_lock(bot)
         session_path, session_problem = None, ""
@@ -2606,10 +2706,10 @@ class Runner:
         try:
             try:
                 hold(self.worktrees.lane_lock(bot, lane))
-                if session_task and checkout_lock.acquire(blocking=False):
-                    held.append(checkout_lock)
-                elif not session_task:
-                    hold(checkout_lock)
+                if session_task:
+                    try_checkout()
+                else:
+                    hold_checkout()
                 main_path = self.local_path(bot, config)
                 selected_profile = self.turn_profile(attempt)
                 attempt["_subscription_profile"] = selected_profile
@@ -2649,20 +2749,39 @@ class Runner:
                     self.refresh_product_files(bot, config, execution_path, env if session_task else None)
                 if session_task:
                     session_path = task_sessions.path_for(self.config["projects_dir"], bot, session_task)
-                    if bot in self.__dict__.get("product_unpushed", ()):
-                        # The worktree would sync from an upstream without the refreshed product files.
-                        session_problem = "its refreshed product files are not pushed yet"
-                    else:
+
+                    def worktree():
+                        if bot in self.__dict__.get("product_unpushed", ()):
+                            # The worktree would sync from an upstream without the refreshed product files.
+                            return "", "its refreshed product files are not pushed yet"
                         with self.session_git_lock(main_path):
-                            tracked, session_problem = task_sessions.ensure(main_path, session_path, session_task, env)
-                            if not session_problem:
+                            tracked, problem = task_sessions.ensure(main_path, session_path, session_task, env)
+                            if not problem:
                                 attempt["branch_sync_problem"] = sync_shared(session_path, env)
+                        return tracked, problem
+                    tracked, session_problem = worktree()
+                    if session_problem and not person and session_problem not in task_sessions.LASTING:
+                        # In the checkout this turn would hold the bot's chats behind it for the whole turn, so it waits
+                        # for its worktree first, holding nothing a chat needs, and pushes the product files it waits on.
+                        log(f"Tico runner: {bot}: task {session_task} waits for its worktree ({session_problem})")
+                        if checkout_lock in held:
+                            held.remove(checkout_lock)
+                            checkout_lock.release()
+                        waited = time.monotonic() + WORKTREE_WAIT_S
+                        while session_problem and time.monotonic() < waited and not lost.wait(WORKTREE_RETRY_S):
+                            if bot in self.__dict__.get("product_unpushed", ()) and try_checkout():
+                                try:
+                                    self.refresh_product_files(bot, config, main_path, env)
+                                finally:
+                                    held.remove(checkout_lock)
+                                    checkout_lock.release()
+                            tracked, session_problem = worktree()
                     if session_problem:
                         # Without a worktree of its own the task's turn waits for the main checkout like any other.
-                        log(f"Tico runner: {bot}: task {session_task} runs in the bot's checkout ({session_problem})")
+                        log(f"Tico runner: {bot}: task {session_task} runs in the bot's checkout ({session_problem})", diagnostic=True)
                         session_path = None
                         if checkout_lock not in held:
-                            hold(checkout_lock)
+                            hold_checkout()
                             if is_shared(config):
                                 attempt["branch_sync_problem"] = sync_shared(execution_path, env)
                             else:
@@ -2694,6 +2813,9 @@ class Runner:
                     """Drain the host until the turn ends: (outcome, reply, tokens, limited, retryable)."""
                     reply, tokens, outcome, limited, retryable = "", {}, "interrupted", False, False
                     acted, last_flush, complete = False, 0, False
+                    sent_at, unsent = 0, False   # the last flush that carried output; output appended since
+                    spoke = False                # the turn's first text went out: it is not held behind a status post
+                    wait_events = getattr(host, "wait_events", None) or done.wait
                     earlier = ""                 # the replies of turns before a carried one, kept in the answer
                     earlier_tokens = {}          # and their token counts, summed into the run's
 
@@ -2783,6 +2905,9 @@ class Runner:
                             if kind in ("delta", "message", "tokens", "status", "error", "tool", "diagnostic", "turn_failed"):
                                 clean = redact(event)
                                 self.state.append(aid, "error" if kind == "turn_failed" else kind, clean)
+                                unsent = True
+                                if kind in ("delta", "message") and not spoke:
+                                    spoke, sent_at = True, 0
                                 if kind == "message" and (event.get("final") or not reply):
                                     reply = clean.get("text", "")
                                 if kind == "tokens":
@@ -2818,10 +2943,23 @@ class Runner:
                             turn = self.carry_inputs(aid, host, thread, carried, config.get("reasoning_effort"))
                             outcome, complete, earlier, reply = "interrupted", False, answer(), ""
                             earlier_tokens, tokens = spent(), {}
+                        if unsent and not complete and time.monotonic() - sent_at >= 1:
+                            # Leading edge: output after a quiet second, and the turn's first text, go out now
+                            # rather than at the next 1 s mark. At most one more post a turn than before.
+                            try:
+                                self.flush(aid)
+                                unsent = False
+                            except APIError as exc:
+                                if not exc.retryable:
+                                    raise
+                            sent_at = time.monotonic()   # a failed post is retried a second later, not every pass
                         if time.monotonic() - last_flush >= 1:
                             try:
                                 host.poll_goal(thread)
-                                self.flush(aid)
+                                if time.monotonic() - sent_at >= 1:
+                                    self.flush(aid)
+                                    if unsent:
+                                        sent_at, unsent = time.monotonic(), False
                                 if goal_running:
                                     latest = self.client.get(f"attempts/{aid}/goal").get("goal")
                                     if not latest or latest["id"] != goal["id"] or latest["updated_at"] != revision:
@@ -2840,7 +2978,8 @@ class Runner:
                             complete = True
                         if not host.alive() and not complete:
                             raise RuntimeError("Local runtime exited unexpectedly")
-                        done.wait(0.1)
+                        if not complete:          # a finished turn goes straight to its last flush and complete
+                            wait_events(0.1)
                     text = answer()
                     if goal_paused[0]:
                         text = (text + "\n\n" if text else "") + goal_paused[0]
@@ -2978,7 +3117,7 @@ class Runner:
                     settings = host_settings(execution_path, model=hop["model"], shared=is_shared(config),
                                              effort=hop["reasoning_effort"], env=hop_env, slug=bot,
                                              compact_at=config.get("compact_at"),
-                                             add_dirs=[str(path) for _, path in worktree_dirs],
+                                                 add_dirs=[str(path) for _, path in worktree_dirs],
                                              mcp_servers=self.mcp_for_run(attempt, execution_path, hop_env, hop["runtime"],
                                                                           hop["harness"], diagnose))
                     thread = host.start_thread(bot, settings)
@@ -3191,10 +3330,10 @@ class Runner:
                 continue
             try:
                 self.flush(row["id"])
-                if row["completion"]:
-                    completion = json.loads(row["completion"])
-                else:
-                    completion = self.state.finish(row["id"], {"outcome": "interrupted", "text": "Runner restarted during execution"})
+                # The snapshot is stale by now: a turn that finished meanwhile keeps the result it saved.
+                completion = self.state.settled(row["id"], "Runner restarted during execution")
+                if completion is None:
+                    continue
                 self.complete(row["id"], completion)
                 self.state.phase(row["id"], "synced")
             except APIError as exc:
@@ -3225,13 +3364,15 @@ class Runner:
             self.assignments_seen = assignments
         else:
             repository_rows, assignments = None, self.assignments_seen
+        # Install on demand: what this computer's bots run on, plus what the owner turned on here. Until one full read,
+        # assignments_seen is only the empty start value, so nothing is removed yet (harness_tools turned_off).
+        if full or self.tools.loaded:
+            self.want_harnesses(assignments, fetch=full)
         candidates = self.readiness_candidates(assignments)
         runtimes = self.runtime_report(candidates)
         self.runtime_rows = runtimes
         checks = self.preflight(candidates, runtimes)
         agent_instructions, instruction_versions = self.changed_agent_instructions(assignments)
-        # Install on demand: only what the enabled providers and this runner's bots need.
-        self.tools.want(self.enabled_providers(fetch=full), {row["config"].get("runtime") for row in assignments})
         # The server's release, not main, is what a runner follows once the server names one; the stream says it too.
         release = getattr(getattr(self, "events", None), "release", None)
         self.follower.poll(None if full else release)
@@ -3302,6 +3443,12 @@ class Runner:
             beat = self.report_heartbeat(body)
         self._beat_printed, self._beat_sent = printed, time.monotonic()
         actions = (beat or {}).get("worktree_actions", [])
+        skipped = (beat or {}).get("worktree_actions_skipped", 0)
+        if skipped != self.__dict__.get("_worktree_actions_skipped", 0):
+            # Said when the count changes, not on every heartbeat.
+            if skipped:
+                log(f"Tico runner: readiness skipped {skipped} worktree action(s) for tasks this computer's bots can no longer read")
+            self._worktree_actions_skipped = skipped
         if hasattr(self, "worktrees") and (full or actions):
             self.worktrees.poll(actions)
         self._reports_credential_source = bool((beat or {}).get("runtime_credential_source"))
@@ -3365,6 +3512,13 @@ class Runner:
                     # A server from before stamped reports still gets every worktree report, unstamped.
                     body["worktrees"] = [{k: v for k, v in r.items() if k != "record_updated"} for r in body["worktrees"]]
                     self._reports_worktree_stamp = False
+                    continue
+                if exc.status == 422 and "commit" in body and re.search(r"(?:^|[ ;])body\.commit(?:[.: ;]|$)", detail):
+                    # A server rolled back since it said it takes the commit: the rest still goes, and the commit
+                    # waits until `runners/desired` says so again.
+                    body.pop("commit")
+                    if getattr(self, "follower", None) is not None:
+                        self.follower.features = {**self.follower.features, "runner_commit": False}
                     continue
                 if exc.status == 422 and "capabilities" in detail and "task_goals_v1" in body.get("capabilities", []):
                     # A server from before task goals never hands a task room's goal; only the new one goes.
@@ -3519,9 +3673,13 @@ class Runner:
             self.maintenance = None
         if self.maintenance is None:
             # Readiness is worked out every 15 s as before; the server reads behind it run on the stream's word.
-            if self.wants("config", None):
-                self._providers_at = float("-inf")     # the company's providers changed: read them now
-            full = self.wants("sync", 15)
+            changed = self.wants("config", None)
+            if changed:
+                # The company's providers changed: read them, and the default runtime a computer with no bots
+                # installs, in a full pass now.
+                self._providers_at = float("-inf")
+                self._default_runtime_at = float("-inf")
+            full = self.wants("sync", 15) or changed
             forced = self.wants("heartbeat", None)
             if full or forced or time.monotonic() - self.last_heartbeat >= 15:
                 self.maintenance = self.maintenance_pool.submit(self.maintain, full, forced)
@@ -3665,18 +3823,42 @@ class Runner:
                 self._watcher_error = describe(exc)
                 log(f"Tico runner: watcher step failed ({self._watcher_error}); will retry")
 
-    def enabled_providers(self, fetch=True):
-        """The company's enabled AI providers, from the server; the last answer when it cannot be reached
-        or was not asked (`fetch` false: a pass the event stream said nothing for)."""
-        if fetch and time.monotonic() - getattr(self, "_providers_at", -60) >= 60:
+    def installing(self, runtime):
+        """The bot problem while this runner installs the runtime's harness ("Codex is installing"), else ''."""
+        tools = getattr(self, "tools", None)
+        manifest = tools.harness_for_runtime(runtime) if tools is not None else None
+        if manifest is None or manifest.id not in tools.wanted or tools.backing_off(manifest):
+            return ""
+        return f"{manifest.name} is installing"
+
+    def harness_runtimes(self, assignments):
+        """The runtimes this computer's bots run on: each assigned bot's, and its fallback's."""
+        found = set()
+        for row in assignments or ():
+            config = row.get("config") or {}
+            found |= {config.get("runtime"), (configured_fallback(config) or {}).get("runtime")}
+        found.discard(None)
+        found.discard("")
+        return found
+
+    def want_harnesses(self, assignments, fetch=True):
+        """Install what this computer's bots run on. A computer with no bots yet takes the company's default, so it
+        can be signed in before its first bot arrives; the owner's "off" for it here wins over that default."""
+        runtimes = self.harness_runtimes(assignments)
+        return self.tools.want(runtimes, default=() if runtimes else {self.default_runtime(fetch)} - {""})
+
+    def default_runtime(self, fetch=True):
+        """The company's default runtime, from the server; the last answer when it cannot be reached or was not
+        asked (`fetch` false: a pass the event stream said nothing for)."""
+        if fetch and time.monotonic() - getattr(self, "_default_runtime_at", -60) >= 60:
             try:
-                value = (self.client.get("config") or {}).get("enabled_providers")
-                if isinstance(value, list):
-                    self._providers = [str(item) for item in value]
-                    self._providers_at = time.monotonic()
+                value = (self.client.get("config") or {}).get("default_runtime")
+                if isinstance(value, str):
+                    self._default_runtime = value
+                    self._default_runtime_at = time.monotonic()
             except Exception:
                 pass
-        return list(getattr(self, "_providers", []))
+        return getattr(self, "_default_runtime", "")
 
     def poll_logins(self):
         """Browser sign-ins are best effort: a failed poll is tried again, never a runner outage. One under
@@ -3728,6 +3910,16 @@ class Runner:
             value = body = None
         log(f"Tico runner: credential import for {bot} {'sent' if not problem else 'could not be read'}")
 
+    def idle(self, delay):
+        """Wait out one loop pause, but tick at once when the stream asks for something (a `work` event is a
+        chat message waiting: up to 0.25 s saved on every reply). A backoff after an error is waited in full."""
+        wake = getattr(getattr(self, "events", None), "wake", None)
+        if wake is None or delay > 0.25:
+            self.stop.wait(delay)
+            return
+        wake.wait(delay)
+        wake.clear()
+
     def run(self):
         try:
             self.revision = record_revision(self.state.directory)
@@ -3747,7 +3939,7 @@ class Runner:
                     delay = self.cloud.failed(exc)
                 except Exception as exc:
                     delay = self.loop.failed(exc)
-                self.stop.wait(delay)
+                self.idle(delay)
         finally:
             self.stop.set()
             self.events.close()

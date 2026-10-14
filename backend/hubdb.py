@@ -5431,6 +5431,10 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         live = "idle"
     elif state in ("paused", "quarantined"):
         conn.execute("UPDATE bots SET state=? WHERE slug=?", (state, slug))
+        if state == "paused":
+            # Queued routine runs would only pile up while paused; a person's direct work stays.
+            from . import routines
+            routines.hold_for_paused_bot(conn, slug)
     row = {"bot": slug,
            "state": live if live is not None else (old or {}).get("state") or "idle",
            "focus": focus if focus is not None else (old or {}).get("focus") or "",

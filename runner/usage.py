@@ -44,7 +44,7 @@ API_KEY = re.compile(r"api[ _-]?key", re.I)
 
 
 def billing_for(runtime, detail):
-    """`subscription` when `runtime` is signed in with a ChatGPT, Claude or Cursor account, else `api`."""
+    """`subscription` when `runtime` is signed in with a ChatGPT, Claude, Cursor or Meta account, else `api`."""
     text = str(detail or "")
     if not text.lower().startswith("signed in") or API_KEY.search(text):
         return "api"
@@ -55,4 +55,6 @@ def billing_for(runtime, detail):
         return "subscription"
     if runtime == "cursor":
         return "subscription"
+    if runtime == "musecode":
+        return "subscription" if "meta account" in text.lower() else "api"
     return "api"

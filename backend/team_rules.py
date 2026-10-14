@@ -22,6 +22,7 @@ DEFAULTS = {
     "admin_sql": True,              # Admins see the SQL page
     "member_tokens": True,          # members make personal tokens
     "bots_go_ahead": True,          # an ask with a reversible, internal default goes ahead after `go_ahead_days`
+    "health_monitor_reports": True,  # the Health Monitor, once turned on, files Tico bug reports without a card
 }
 # Numbers the owner sets, with their default and bounds.
 NUMBERS = {

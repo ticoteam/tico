@@ -131,7 +131,9 @@ class Readiness(unittest.TestCase):
         self.runner._profile_report_cache = None
         with mock.patch('runner.service.shutil.which', return_value='codex'), \
                 mock.patch('runner.service.isolation.run', side_effect=subprocess.TimeoutExpired('probe', 3)):
-            self.assertTrue(all(status['signed_in'] is None for row in self.runner.profile_report() for status in row['runtimes'].values()))
+            # Every probe timed out; Muse's sign-in is a file, not a probe.
+            self.assertTrue(all(status['signed_in'] is None for row in self.runner.profile_report()
+                                for runtime, status in row['runtimes'].items() if runtime != 'musecode'))
 
     def test_named_profile_is_persisted_without_replacing_local_assignments(self):
         import json

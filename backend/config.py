@@ -144,6 +144,10 @@ class Settings:
     token_alert_input: int = 100_000_000
     session_idle_seconds: int = 30 * 86400
     session_absolute_seconds: int = 90 * 86400
+    # How often a quiet event stream (a page's, a computer's) sends a keepalive (TICO_STREAM_KEEPALIVE_SECONDS,
+    # 5 to 50): under the idle limits of the proxies in front (Cloudflare 100 s, a load balancer's 60 s) and well
+    # under the runner's read timeout (runner/runner_events.py READ_TIMEOUT_S). None keeps events.KEEPALIVE_SECONDS.
+    stream_keepalive_seconds: int | None = None
     # Origins of browser apps allowed to call the API from another address (TICO_CORS_ORIGINS,
     # backend/cors.py): exact origins only, checked in __post_init__.
     cors_origins: tuple[str, ...] = ()
@@ -349,6 +353,8 @@ class Settings:
             token_alert_input=int(os.environ.get("TICO_TOKEN_ALERT_INPUT", "").strip() or 100_000_000),
             session_idle_seconds=max(60, int(os.environ.get("TICO_SESSION_IDLE_SECONDS", "") or 30 * 86400)),
             session_absolute_seconds=max(60, int(os.environ.get("TICO_SESSION_ABSOLUTE_SECONDS", "") or 90 * 86400)),
+            stream_keepalive_seconds=(min(50, max(5, int(os.environ["TICO_STREAM_KEEPALIVE_SECONDS"])))
+                                      if os.environ.get("TICO_STREAM_KEEPALIVE_SECONDS", "").strip() else None),
             cors_origins=os.environ.get("TICO_CORS_ORIGINS", ""),
             scheduler_enabled=not rehearsal and os.environ.get("TICO_SCHEDULER", "1") == "1",
             flight_recorder=os.environ.get("TICO_FLIGHT_RECORDER", "1") != "0",

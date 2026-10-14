@@ -472,6 +472,7 @@ def install(app, store, settings, census):
 
     vault = app.state.vault
     support = Support(store, settings, census, vault)
+    app.state.support = support          # the Health Monitor files its reports through it (backend/health_monitor.py)
     try:
         seal_plaintext_secrets(store, vault)
     except Exception as exc:              # KMS unreachable, or credential.key missing: Health names the vault's state

@@ -60,7 +60,8 @@ health check and automatic rollback described below.
 - The server knows its release (`GET /api/v2/runners/desired` returns it, and Settings > Computers shows it) and the
   oldest computer release it accepts, `MIN_RUNNER_RELEASE` in `backend/runner_versions.py`. The release that changes
   the contract between runner and server raises that number.
-- Every heartbeat carries the computer's release, its kind (`mac`, `linux` or `docker`) and how its update stands.
+- Every heartbeat carries the computer's release, the commit it runs (an image's `release-manifest.json`, else the
+  checkout's HEAD), its kind (`mac`, `linux` or `docker`) and how its update stands.
   **Settings > Health** and **Settings > Computers** show one state per computer:
 
   | State | Meaning |
@@ -69,10 +70,15 @@ health check and automatic rollback described below.
   | Updating | switching now; it takes no new work meanwhile |
   | Needs update | older than the server but still accepted. It updates when no run is going, or it says why it cannot (pinned, local changes, no updater, no supervisor) next to the last update error |
   | Incompatible (bots paused) | older than the minimum. It takes no work, and says why, instead of failing runs. Its queued work waits and runs after it updates |
-  | Version not reported | a computer that predates this, or a development build. It is never paused |
+  | Release not reported | a computer that predates this, or a development build. It is never paused |
 
 - A server that is a development build (no release) has nothing to compare, so computers keep following `main` as
   before and Settings > Health shows no version line. A computer talking to a server from before this existed does the same.
+
+A computer behind the server's release, or on no release at all, is **outdated**: its row in Settings > Computers carries
+an Outdated badge, and the page opens with a banner naming the online ones and whose they are. When a computer has stayed
+outdated for an hour (time for the self-update that normally follows), its owner gets one notice; the next notice comes
+only with the next server release.
 
 Health names computers that did not report a version and shows a newer computer's actual release separately.
 Computers lists team service status once, alongside the computer reports. Archived bots are left out of readiness.

@@ -1,0 +1,24 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "echo: Say hi\n",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "echo: Say hi\n",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

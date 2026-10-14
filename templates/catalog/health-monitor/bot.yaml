@@ -1,0 +1,21 @@
+name: health-monitor             # the slug: it matches the repository bot-health-monitor and the label owner:health-monitor
+display_name: "Health Monitor"
+labels: [owner:health-monitor]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: low
+max_run_minutes: 20
+
+# It sends nothing outside the team itself: its bug reports go through Tico's support route (docs/health-monitor.md).
+outbound_send: false
+
+# No routines: it never thinks on a schedule. The server scans the install once an hour (backend/health_monitor.py) and
+# this watcher looks at the computer it runs on; each opens a task, or wakes it, only for something new.
+watchers:
+  - name: health-scan
+    run: software/health-scan watch
+    every: 1h
+    timeout: 60s
+
+tools: []

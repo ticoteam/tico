@@ -39,7 +39,7 @@ STALE = [
 ]
 STALE_MAX = 20                               # keep a messy repo from burying the rest of the report
 RUNTIME_BIN = {"codex": "codex", "claude": "claude", "gemini": "gemini", "grok": "grok",
-               "pi": "pi", "cursor": "cursor-agent"}
+               "pi": "pi", "cursor": "cursor-agent", "musecode": "muse"}
 
 
 class Report:

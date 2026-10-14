@@ -24,7 +24,7 @@ from clients.tico import CLIENT_VERSION
 BACKUP_POLL_S = 300        # every read runs at least this often while the stream is up
 RECONNECT_MAX_S = 60
 LEGACY_RETRY_S = 1800      # a server without the stream is asked again this often
-READ_TIMEOUT_S = 45        # the server sends a keepalive every 15 s
+READ_TIMEOUT_S = 90        # the server sends a keepalive every 15 s by default and at most every 50 s (backend/events.py)
 HEARTBEAT_LIVE_S = 60      # the full readiness report while the stream is up; 15 s otherwise
 
 # What each event kind asks the runner to read again (runner/service.py `wants`).
@@ -101,6 +101,7 @@ class Events:
         self.legacy_until = 0.0
         self.thread = None
         self.stop = threading.Event()
+        self.wake = threading.Event()   # set on every ask, so the runner's loop acts now, not at its next 0.25 s tick
 
     @property
     def live(self):
@@ -117,6 +118,7 @@ class Events:
     def ask(self, *channels):
         with self.lock:
             self.pending.update(channels)
+        self.wake.set()
 
     def start(self):
         self.thread = threading.Thread(target=self.run, name="runner-events", daemon=True)

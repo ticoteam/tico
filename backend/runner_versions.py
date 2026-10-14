@@ -6,14 +6,20 @@ A runner reports its release (`0.3.0`, or "" for a checkout that is not on a rel
 oldest runner this server accepts: raise it in the release that changes the runner/server contract.
 A runner below it is paused (it gets no work, with the reason) instead of failing turns. A runner that
 does not report a release (before this existed, or a development checkout) is never paused.
+
+A computer behind the server's release, or on no release at all, is outdated: Computers flags it, and its
+owner gets one notice per server release once it has stayed outdated for `NUDGE_AFTER_S`. The wait leaves
+room for the self-update that normally follows a server release within minutes, so only a computer that is
+stuck gets a nudge.
 """
 from . import releases
 from .store import H
 
 MIN_RUNNER_RELEASE = "0.1.0"
+NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {"current": "Up to date", "updating": "Updating", "needs_update": "Needs update",
-          "incompatible": "Incompatible (bots paused)", "unknown": "Version not reported"}
+          "incompatible": "Incompatible (bots paused)", "unknown": "Release not reported"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runner_versions(
@@ -21,6 +27,15 @@ CREATE TABLE IF NOT EXISTS runner_versions(
  kind TEXT NOT NULL DEFAULT '', update_state TEXT NOT NULL DEFAULT '', update_target TEXT NOT NULL DEFAULT '',
  update_error TEXT NOT NULL DEFAULT '', reported TEXT NOT NULL);
 """
+
+
+def ensure_schema(c):
+    """Columns added after the table first shipped: the commit it runs, since when it has been outdated,
+    and the server release its owner was last told about."""
+    H.add_column(c, "runner_versions", "commit_sha", "TEXT NOT NULL DEFAULT ''")
+    H.add_column(c, "runner_versions", "outdated_since", "TEXT")
+    H.add_column(c, "runner_versions", "nudged", "TEXT NOT NULL DEFAULT ''")
+    H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
 
 
 def clean(value):
@@ -49,6 +64,13 @@ def at_least(c, runner_id, minimum):
     return bool(have and want and have >= want)
 
 
+def outdated(release, server=None):
+    """Behind the server's release, or on none it can compare. Never on a development server, which has no release."""
+    want = releases.parse(releases.version() if server is None else server)
+    have = releases.parse(release)
+    return bool(want and (not have or have < want))
+
+
 def state(release, update_state="", server=None):
     """One of current, updating, needs_update, incompatible, unknown."""
     server = releases.version() if server is None else server
@@ -66,14 +88,48 @@ def record(c, runner_id, body):
     """Store what a heartbeat reported. Called only when the runner sent a release."""
     release = clean(body.release)
     update = body.update
-    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported) "
-              "VALUES(?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
+    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported,commit_sha) "
+              "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
               "kind=excluded.kind,update_state=excluded.update_state,update_target=excluded.update_target,"
-              "update_error=excluded.update_error,reported=excluded.reported",
+              "update_error=excluded.update_error,reported=excluded.reported,commit_sha=excluded.commit_sha",
               (runner_id, release, body.kind or "", update.state if update else "", update.target if update else "",
-               update.error if update else "", H.now()))
+               update.error if update else "", H.now(), body.commit or ""))
     if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
         c.execute("UPDATE runners SET checkout_json=NULL WHERE id=?", (runner_id,))
+    nudge(c, runner_id)
+
+
+def nudge(c, runner_id, server=None):
+    """Tell the computer's owner once per server release that it is outdated, after NUDGE_AFTER_S of it behind that
+    release: the wait starts again with each server release, so a computer gets its usual chance to update itself
+    first. A computer its owner pinned to a release is not nudged; its row still says Outdated.
+    Returns whether a notice went out."""
+    server = releases.version() if server is None else server
+    row = c.execute("SELECT v.release,v.update_error,v.update_state,v.outdated_since,v.outdated_for,v.nudged,r.label,"
+                    "r.operator FROM runner_versions v JOIN runners r ON r.id=v.runner_id WHERE v.runner_id=?",
+                    (runner_id,)).fetchone()
+    if not row:
+        return False
+    if not outdated(row["release"], server):
+        if row["outdated_since"]:
+            c.execute("UPDATE runner_versions SET outdated_since=NULL,outdated_for='' WHERE runner_id=?", (runner_id,))
+        return False
+    now = H.now()
+    since = row["outdated_since"] if row["outdated_since"] and row["outdated_for"] == server else None
+    if not since:
+        since = now
+        c.execute("UPDATE runner_versions SET outdated_since=?,outdated_for=? WHERE runner_id=?", (since, server, runner_id))
+    if (row["nudged"] == server or H.shift(since, seconds=NUDGE_AFTER_S) > now or not row["operator"]
+            or row["update_state"] == "pinned"):
+        return False
+    c.execute("UPDATE runner_versions SET nudged=? WHERE runner_id=?", (server, runner_id))
+    have = f"Tico {row['release']}" if releases.parse(row["release"]) else "a build that is not a Tico release"
+    why = f" Its last update error: {row['update_error']}" if row["update_error"] else ""
+    H.notice(c, H.KEEPER, H.human_actor(row["operator"]),
+             f"Your computer {row['label']} runs {have}; this server runs Tico {server}. It updates itself between "
+             f"turns; when it stays behind, Settings > Computers says why.{why}")
+    H.event(c, H.KEEPER, "runner.outdated", "runner:" + runner_id, {"release": row["release"], "server": server})
+    return True
 
 
 def paused(c, runner_id):
@@ -98,7 +154,10 @@ def view(row, server=None):
     row = row or {}
     release = row.get("release") or ""
     found = state(release, row.get("update_state") or "", server) if row else "unknown"
-    return {"release": release, "kind": row.get("kind") or "", "state": found, "label": LABELS[found],
+    server = releases.version() if server is None else server
+    return {"release": release, "commit": row.get("commit_sha") or "", "kind": row.get("kind") or "", "state": found,
+            "label": LABELS[found], "outdated": outdated(release, server),
+            "server_release": server if releases.parse(server) else "",
             "update_state": row.get("update_state") or "", "target": row.get("update_target") or "",
             "error": NO_SUPERVISOR if str(row.get("update_error") or "").startswith("nothing would start this runner")
             else row.get("update_error") or "", "min_runner": MIN_RUNNER_RELEASE}
@@ -121,7 +180,7 @@ def health_check(computers, server=None):
              and releases.parse(x["update"]["release"]) > releases.parse(server)]
     notes = []
     if unknown:
-        notes.append(f"Version not reported: {names(unknown)}.")
+        notes.append(f"Release not reported: {names(unknown)}.")
     if newer:
         notes.append("Newer than this server: " + ", ".join(
             f"{x['label']} ({x['update']['release']})" for x in newer[:5]) + ".")

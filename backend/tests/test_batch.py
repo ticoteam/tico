@@ -58,7 +58,7 @@ def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_per
     post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "close", "text": "Not needed any more."})
     post(api, f"batch/{bid}/respond", {"kind": "rule", "text": "Always archive postcard complaints.", "item": 4})
     end = post(api, f"batch/{bid}/next", {})
-    assert end["end"] and end["summary"]["approving"] == ["Approve this spend"]
+    assert end["end"] and end["summary"]["approving"] == ["Pay 1200: LinkedIn ads"]
     assert end["summary"]["counts"] == {"approve": 1, "answer": 1, "done": 1, "close": 1, "rule": 1}
     assert end["summary"]["responses"] == 5 and end["summary"]["items"] == 4, "a rule beside a decision is two responses"
     assert get(api, f"tasks/{chore['id']}")["task"]["status"] == "open", "still nothing applied"
@@ -137,4 +137,5 @@ def test_what_a_person_asked_for_leads_unless_a_bots_item_presses(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE approvals SET created=? WHERE id=?", (H.shift(H.now(), days=-2), approval["id"]))
     order = [i["id"] for i in get(api, "needs-you")["items"]]
-    assert order[0] == approval["id"] and order.index(overdue["id"]) < order.index(chore["id"])
+    # Anything with a due date leads, then a pressing item.
+    assert order[:2] == [overdue["id"], approval["id"]] and order.index(overdue["id"]) < order.index(chore["id"])

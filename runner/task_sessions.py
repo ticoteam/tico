@@ -21,6 +21,11 @@ from . import isolation, safe_git
 SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 BRANCH = "tico-session/"
 CLOSED = ("done", "closed", "declined")
+# Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
+# then runs in the main checkout; any other problem is worth waiting out first (runner/service.py WORKTREE_WAIT_S).
+MISSING = "the bot's checkout is missing"
+NO_UPSTREAM = "the bot's checkout has no upstream to share between tasks"
+LASTING = (MISSING, NO_UPSTREAM)
 
 
 def task_of(lane):
@@ -51,11 +56,11 @@ def ensure(main, path, task, turn_env=None):
     main, path = Path(main), Path(path)
     env = safe_git.environment(turn_env)
     if not (main / ".git").exists():
-        return "", "the bot's checkout is missing"
+        return "", MISSING
     try:
         tracked = upstream(main, env)
         if not tracked:
-            return "", "the bot's checkout has no upstream to share between tasks"
+            return "", NO_UPSTREAM
         common = _git(main, "rev-parse", "--path-format=absolute", "--git-common-dir", env=env).stdout.strip()
         if (path / ".git").exists():
             mine = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir", env=env).stdout.strip()

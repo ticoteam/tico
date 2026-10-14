@@ -290,6 +290,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            you (the version and install ID go with it unless --no-ids). Prints its id
     hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
                                            same ticket, never a second one
+    hub health-monitor findings            the Health Monitor: what the last hourly scan found
+    hub health-monitor report <key> | --process process:<name> --cpu N --mb N
+                                           report a finding as a Tico bug, one ticket per signature
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -1727,6 +1730,14 @@ def parser():
     s = support.add_parser("send", help="send a report a person approved; filed as the person who approved it")
     s.add_argument("--approval", required=True, help="the approval id `support report` printed")
     s.set_defaults(fn="support send")
+    monitor = sub.add_parser("health-monitor", help="the Health Monitor's findings and reports (docs/health-monitor.md)").add_subparsers(dest="sub")
+    monitor.add_parser("findings", help="what the last hourly scan found, and each signature's report").set_defaults(fn="health-monitor findings")
+    s = monitor.add_parser("report", help="report a finding as a Tico bug: one ticket per signature, with the redacted diagnostics")
+    s.add_argument("key", nargs="?", help="the finding's key or signature, from its task")
+    s.add_argument("--process", help="instead of a key: what the watcher saw busy, process:<name> or container:<name>")
+    s.add_argument("--cpu", type=float, default=0, help="with --process: its CPU percent")
+    s.add_argument("--mb", type=float, default=0, help="with --process: its memory in MB")
+    s.set_defaults(fn="health-monitor report")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")

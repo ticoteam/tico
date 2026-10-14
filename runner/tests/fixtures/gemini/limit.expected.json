@@ -1,0 +1,15 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "turn_failed",
+  "error": "[API Error: UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash]",
+  "limit": true
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

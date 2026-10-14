@@ -18,7 +18,8 @@ function routineItems(state) {
     .sort((a, b) => (a.active ? 0 : 1) - (b.active ? 0 : 1) || String(a.next || '~').localeCompare(String(b.next || '~')) || a.title.localeCompare(b.title));
 }
 function routineNextHTML(r) {
-  return !r.active ? '<span class="pill">not armed</span>'
+  return r.held_by_bot ? '<span class="pill">paused with the bot</span>'
+    : !r.active ? '<span class="pill">not armed</span>'
     : r.on ? '<span class="pill">on event</span>'
     : `<strong>${esc(until(r.next))}</strong><span class="muted">${esc(fmt(r.next))}</span>`;
 }

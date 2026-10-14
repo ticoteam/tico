@@ -71,3 +71,43 @@ def test_one_runner_cannot_report_on_or_read_anothers_requests(api):
     post(api, f"runner-harness-actions/{request['id']}/report", {"state": "done"}, token=other["token"], expected=404)
     assert get(api, "runner-harness-actions", token=other["token"])["actions"] == []
 
+
+
+def test_the_owners_on_off_per_harness_is_kept_per_computer_and_handed_to_its_runner(api):
+    r, other = runner(api), online(api)
+    beat(api, r, codex=HARNESS, grok={**HARNESS, "name": "Grok Build", "runtime": "grok", "installed": False})
+    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {}
+    choose = lambda harness, enabled, **kw: post(api, f"runners/{r['runner_id']}/harness-choices",
+                                                 {"harness": harness, "enabled": enabled}, **kw)
+    choose("grok", True, token="ben-test", expected=403)
+    choose("nothing", True, expected=404)                         # a harness the computer never reported
+    for loose in ("yes", "off", 1, 0, None):                      # a real true/false only, never "off" read as off
+        choose("grok", loose, expected=422)
+    assert choose("grok", True)["enabled"] is True
+    choose("codex", False)
+    choose("grok", False)
+    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"grok": False, "codex": False}
+    assert get(api, "runner-harness-actions", token=other["token"])["choices"] == {}
+    machine = next(m for m in get(api, "operations")["machines"] if m["id"] == r["runner_id"])
+    assert machine["harness_choices"] == {"grok": False, "codex": False}
+    assert [e["actor"] for e in events(api, "runner.harness.off")] == ["human:ana", "human:ana"]
+
+
+def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_there(api):
+    from backend.readiness import can_run
+    from backend.tests.test_settings_transitions import _company_default
+    _company_default(api, "cpo")
+    there = runner(api, "ben", "Ben Mac")
+    missing = {**HARNESS, "installed": False, "version": "", "managed": False, "source": "", "wanted": False}
+
+    def verdict(**codex):
+        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+            "schema_version": 1, "runtimes": {"codex": {"installed": False, "authenticated": "missing"}},
+            "bots": {}, "harnesses": {"codex": {**missing, **codex}}}}, token=there["token"])
+        with api.app.state.store.read() as c:
+            return can_run(c, "cpo", "codex", runner=there["runner_id"])
+
+    answer = verdict()
+    assert (answer["can_run"], answer["problem"]) == (None, "Codex is installing on Ben Mac")
+    answer = verdict(state="failed", detail="npm is not installed on this computer")
+    assert answer["can_run"] is False and "could not be installed" in answer["problem"]

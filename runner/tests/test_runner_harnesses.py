@@ -17,15 +17,19 @@ from runner.tests.test_harness_tools import FAKE_NPM, script
 
 
 class Client:
-    def __init__(self, providers=("openai",), actions=(), refuse_harnesses=False):
+    def __init__(self, providers=("openai",), actions=(), refuse_harnesses=False, assignments=(), choices=None,
+                 default="codex"):
         self.posts, self.providers, self.actions = [], list(providers), list(actions)
-        self.refuse = refuse_harnesses
+        self.refuse, self.assignments, self.choices, self.default = refuse_harnesses, list(assignments), choices, default
 
     def get(self, path, **query):
         if path == "config":
-            return {"enabled_providers": self.providers}
+            return {"enabled_providers": self.providers, "default_runtime": self.default}
+        if path == "runners/assignments":
+            return self.assignments
         if path == "runner-harness-actions":
-            return {"actions": self.actions}
+            # An older server sends no `choices`.
+            return {"actions": self.actions, **({"choices": self.choices} if self.choices is not None else {})}
         if path == "runner-credential-migration":
             return {"bots": []}
         if path == "runner-credential-grants":
@@ -57,7 +61,8 @@ class RunnerHarnesses(unittest.TestCase):
 
     def runner(self, client):
         runner = Runner(self.config, self.root / "state", client=client, config_path=self.root / "runner.json")
-        self.addCleanup(runner.tools.stop)
+        # stop() doesn't wait; an install still writing into the temp dir would break its cleanup.
+        self.addCleanup(runner.tools.pool.shutdown, wait=True, cancel_futures=True)
         return runner
 
     def maintain(self, runner):
@@ -96,22 +101,45 @@ class RunnerHarnesses(unittest.TestCase):
         self.assertIn("Tool report rejected", client.report["readiness"]["bots"]["alpha"]["warnings"][0])
         self.assertEqual(runner._tools_after, 0)
 
-    def test_the_runner_installs_what_the_servers_enabled_providers_need_into_its_own_dir(self):
-        client = Client(providers=["openai", "deepseek"])
+    def test_the_runner_installs_what_its_bots_run_on_and_the_owners_opt_ins_into_its_own_dir(self):
+        bot = {"bot": "coo", "config": {"runtime": "codex", "fallback": {"harness": "gemini", "model": "m"}}}
+        # Every provider enabled, yet only the bot's harnesses and the one the owner turned on are installed.
+        client = Client(providers=["openai", "anthropic", "google", "xai", "deepseek"], assignments=[bot],
+                        choices={"pi": True})
         runner = self.runner(client)
         self.assertEqual(runner.tools.tools, self.root / "tools")
         self.maintain(runner)
-        self.assertEqual(runner.tools.wanted, {"codex", "pi"})
-        for _ in range(3):
+        self.drain(runner)
+        self.assertEqual(runner.tools.wanted, {"codex", "gemini-cli", "pi"})
+        for _ in range(4):
             self.drain(runner)
         found = {p.name for p in (self.root / "tools" / "bin").iterdir()}
-        self.assertEqual(found, {"codex", "pi"})
+        self.assertEqual(found, {"codex", "gemini", "pi"})
         self.maintain(runner)
         beat = [body for path, body in client.posts if path == "runners/heartbeat"][-1]
         harnesses = beat["readiness"]["harnesses"]
         self.assertEqual((harnesses["codex"]["installed"], harnesses["codex"]["version"], harnesses["codex"]["managed"]),
                          (True, "1.0.0", True))
         self.assertFalse(harnesses["claude-code"]["installed"])
+
+    def test_an_older_server_sends_no_choices_so_the_bots_runtimes_or_the_default_decide(self):
+        runner = self.runner(Client(providers=["openai", "anthropic"], choices=None, default="claude"))
+        self.maintain(runner)
+        self.drain(runner)
+        self.assertEqual((runner.tools.wanted, runner.tools.choices), ({"claude-code"}, {}))
+        runner.client.assignments = [{"bot": "coo", "config": {"runtime": "codex"}}]
+        self.maintain(runner)
+        self.assertEqual(runner.tools.wanted, {"codex"})
+
+    def test_off_wins_over_the_no_bot_default_but_never_over_a_bots_harness(self):
+        runner = self.runner(Client(providers=["openai"], choices={"codex": False}, default="codex"))
+        self.maintain(runner)
+        self.drain(runner)
+        self.assertEqual(runner.tools.wanted, set())
+        runner.client.assignments = [{"bot": "coo", "config": {"runtime": "codex"}}]
+        self.maintain(runner)
+        self.assertEqual(runner.tools.wanted, {"codex"})
+        self.assertFalse(runner.tools.turned_off("codex"))
 
     @pytest.mark.slow
     def test_an_update_waits_for_the_running_turn_then_goes_in_between_turns(self):

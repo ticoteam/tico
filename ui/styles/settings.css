@@ -289,6 +289,7 @@ p:empty{display:none}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
 .machine-harness-item .ghost{padding:1px 8px;font-size:var(--t-sm)}
+.machine-harness-toggle{display:inline-flex;align-items:center;gap:3px;font-size:var(--t-sm)}
 .model-login{width:min(520px,calc(100vw - 32px))}
 .model-login header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 0}
 .model-login h2{margin:0;font-size:var(--t-md)}
@@ -302,6 +303,7 @@ p:empty{display:none}
 .model-login-body pre{max-height:200px;overflow:auto;white-space:pre-wrap;background:var(--surface2);padding:8px;border-radius:6px;font-size:var(--t-sm)}
 .model-login-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px 16px}
 /* one row on a desktop: owner, kind, name, then the button; every control 32px */
+.machine-outdated-banner{margin:var(--s2) 0;padding:var(--s2) var(--s3);border-radius:8px;background:var(--wait-bg);color:var(--wait)}
 .machine-enroll{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
 .machine-enroll>select.settings-inline-select{flex:0 1 200px;max-width:none;padding:5px 28px 5px 9px;font-size:var(--t-base)}
 .machine-enroll>input{flex:1 1 180px;width:auto;min-width:180px}

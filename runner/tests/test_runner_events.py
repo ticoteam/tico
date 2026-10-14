@@ -82,6 +82,20 @@ def test_claims_wait_for_work_and_follow_up_an_empty_one_backing_off():
         assert r.claim_due()
 
 
+def test_an_event_wakes_the_loop_at_once_and_a_backoff_still_waits():
+    events = up()
+    r = runner(events)
+    r.stop = mock.Mock()
+    events.ask("claim")
+    r.idle(5)                                  # an error backoff is waited in full, event or not
+    r.stop.wait.assert_called_once_with(5)
+    events.wake.clear()
+    threading.Timer(0.02, events.ask, ("claim",)).start()
+    started = service.time.monotonic()
+    r.idle(0.25)
+    assert service.time.monotonic() - started < 0.2 and not events.wake.is_set()
+
+
 def test_stream_down_polls_as_before_and_reconnects_from_the_last_event():
     clock = Clock()
     seen, gate = [], threading.Event()
@@ -136,6 +150,29 @@ def test_a_server_without_the_stream_is_polled_as_before():
         clock.now += service.CREDENTIAL_IMPORT_POLL_S
         r.poll_credential_imports()
     assert r.client.gets == ["runner-credential-imports"] * 2
+
+
+def test_the_stream_reader_ignores_keepalive_comments_and_waits_longer_than_the_server_is_quiet():
+    lines = [b"retry: 1000\n", b"\n", b": keepalive\n", b"\n", b"event: runner\n", b": keepalive\n",
+             b"id: 9\n", b'data: {"seq": 9, "kind": "work"}\n', b"\n"]
+    opened = []
+
+    class Response(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Opener:
+        def open(self, request, timeout):
+            opened.append(timeout)
+            return Response(lines)
+
+    client = mock.Mock(url="https://tico.acme.example", token="t", opener=Opener())
+    got = [item for item in RE.connect(client) if item[0] != "keepalive"]
+    assert got == [("runner", "9", {"seq": 9, "kind": "work"})]
+    assert opened[0] >= 50 * 1.5                     # the longest keepalive interval the server allows, with room
 
 
 def test_an_unset_capacity_runs_five_turns_per_core_as_memory_allows_and_a_set_one_is_kept():

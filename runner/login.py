@@ -29,6 +29,7 @@ from .outage import log
 # Read from the harness manifests (runner/harnesses/*.toml), keyed by host name.
 COMMANDS = {m.host: (m.login["command"], m.login["terminal"])
             for m in harness_tools.load_all().values() if m.login}
+LOGIN_ENV = {m.host: dict(m.env) for m in harness_tools.load_all().values() if m.login and m.env}
 LIFETIME_S = 15 * 60
 POLL_S = 2
 KEEP_RAW = 60_000
@@ -161,8 +162,11 @@ class Session:
     def environment(self):
         profile = self.manager.profile(self.profile)
         env = profile.environment(self.runtime) if profile else dict(os.environ)
+        if self.runtime == "musecode":
+            # Bot turns read Muse's login from Tico's own Muse folder, never the operator's (runner/service.py).
+            env["XDG_CONFIG_HOME"] = str(self.manager.runner.muse_config_home(profile))
         # The person opens the link on their own screen, not on this machine.
-        env.update({"BROWSER": "true", "NO_COLOR": "1"})
+        env.update({"BROWSER": "true", "NO_COLOR": "1", **LOGIN_ENV.get(self.runtime, {})})
         return env
 
     def spawn(self, executable):
@@ -309,7 +313,8 @@ class Logins:
             session.finish("failed", "Browser sign-in is not available for " + session.runtime)
         elif any(other.live and other.key() == session.key() for other in self.sessions.values()):
             session.finish("failed", "Another sign-in is already running for " + session.runtime)
-        elif self.profile(session.profile) and self.profile(session.profile).share_operator:
+        elif (self.profile(session.profile) and self.profile(session.profile).share_operator
+              and session.runtime != "musecode"):         # Muse bots never use the operator's Muse login
             session.finish("failed", f"Profile {session.profile} shares the operator's own logins; sign in normally")
         else:
             try:

@@ -1,0 +1,54 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Acme ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tool",
+  "server": "",
+  "tool": "run_shell_command",
+  "status": "started",
+  "item_id": "run_shell_command-1"
+ },
+ {
+  "kind": "tool",
+  "server": "",
+  "tool": "tool",
+  "status": "completed",
+  "item_id": "run_shell_command-1"
+ },
+ {
+  "kind": "delta",
+  "text": "reply.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tokens",
+  "input": 12,
+  "output": 3,
+  "total": 15,
+  "usage": {
+   "input": 12,
+   "cached": 4,
+   "output": 3
+  }
+ },
+ {
+  "kind": "message",
+  "text": "Acme reply.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

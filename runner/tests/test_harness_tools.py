@@ -82,10 +82,10 @@ class Base(unittest.TestCase):
 class Manifests(unittest.TestCase):
     def test_the_shipped_manifests_are_valid_and_complete(self):
         found = H.load_all()
-        self.assertEqual(set(found), {"codex", "claude-code", "gemini-cli", "grok", "pi", "cursor-agent"})
+        self.assertEqual(set(found), {"codex", "claude-code", "gemini-cli", "grok", "pi", "cursor-agent", "muse-code"})
         self.assertEqual([m.id for m in found.values() if m.catch_all], ["pi"])
         for manifest in found.values():
-            self.assertEqual(manifest.method, "script" if manifest.id == "cursor-agent" else "npm")
+            self.assertEqual(manifest.method, "script" if manifest.id in ("cursor-agent", "muse-code") else "npm")
             self.assertTrue((H.HOSTS_DIR / f"{manifest.host}.py").is_file())
             self.assertEqual(manifest.policy, "latest")
 
@@ -112,7 +112,7 @@ class Planning(Base):
 
     def test_a_harness_already_on_path_is_used_and_never_installed_or_touched(self):
         script(self.mine / "codex", 'echo "codex-cli 0.99.0"')
-        self.tools.want(providers=["openai"])
+        self.tools.want(runtimes=["codex"])
         self.assertEqual(self.tools.install_plan(), [])
         (self.root / "latest").write_text("2.0.0")
         self.now += H.CHECK_EVERY_S * 2
@@ -129,7 +129,7 @@ class Planning(Base):
 
 class Installing(Base):
     def test_a_wanted_harness_is_installed_into_the_tools_dir_and_found_on_path(self):
-        self.tools.want(providers=["openai"])
+        self.tools.want(runtimes=["codex"])
         self.settle()
         self.assertEqual(self.version(), "1.0.0")
         path, source = self.tools.locate(self.tools.manifests["codex"])
@@ -140,9 +140,49 @@ class Installing(Base):
         self.assertTrue(os.environ["PATH"].endswith(str(self.root / "tools" / "bin")))
         self.assertEqual(self.tools.install_plan(), [])
 
+class Choosing(Base):
+    def test_only_bot_runtimes_and_owner_opt_ins_are_installed_and_off_removes_only_when_idle(self):
+        # No provider list at all: the bots' runtimes (a fallback's too) and the owner's opt-in decide.
+        self.tools.choose({"pi": True, "grok": False, "unknown": True})
+        self.assertEqual(self.tools.want(runtimes=["codex", "gemini"]), {"codex", "gemini-cli", "pi"})
+        for _ in range(4):
+            self.settle()
+        bin_dir = self.root / "tools" / "bin"
+        self.assertEqual({p.name for p in bin_dir.iterdir()}, {"codex", "gemini", "pi"})
+        # No bot needs codex any more: its install stays and is kept current, nothing is removed.
+        self.tools.want(runtimes=["gemini"])
+        self.settle()
+        self.assertTrue((bin_dir / "codex").exists())
+        # Turned off while a turn uses it: kept until the turn ends, then removed.
+        self.tools.choose({"codex": False, "pi": True})
+        self.settle(busy={"codex"})
+        self.assertTrue((bin_dir / "codex").exists())
+        self.settle()
+        self.assertFalse((bin_dir / "codex").exists())
+        self.assertFalse((self.root / "tools" / "codex").exists())
+        self.assertFalse(self.tools.report()["codex"]["installed"])
+        # Off never overrides a bot that runs on it.
+        self.tools.choose({"gemini-cli": False})
+        self.settle()
+        self.assertTrue((bin_dir / "gemini").exists())
+
+    def test_after_a_restart_a_saved_off_removes_nothing_until_the_bots_are_read(self):
+        self.tools.want(runtimes=["codex"])
+        self.settle()
+        restarted = H.Harnesses(self.root / "tools", self.root / "state.json", clock=lambda: self.now)
+        self.addCleanup(restarted.stop)
+        self.tools = restarted
+        restarted.choose({"codex": False})          # the server's choices arrive before the bots
+        self.settle()
+        self.assertTrue((self.root / "tools" / "bin" / "codex").exists())
+        restarted.want(runtimes=["codex"])          # a bot runs on it: off never removes it
+        self.settle()
+        self.assertTrue((self.root / "tools" / "bin" / "codex").exists())
+
+
 class Updating(Base):
-    def installed(self, providers=("openai",)):
-        self.tools.want(providers=list(providers))
+    def installed(self, runtimes=("codex",)):
+        self.tools.want(runtimes=list(runtimes))
         self.settle()
         self.switched.clear()
 
@@ -201,7 +241,7 @@ class BinaryInstall(Base):
         data, _ = self.archive()
         self.tools.fetch = lambda url: data
         self.tools.manifests = {"acme": self.manifest("0" * 64)}
-        self.tools.want(providers=["acme"])
+        self.tools.want(runtimes=["codex"])
         self.settle()
         row = self.tools.report()["acme"]
         self.assertEqual((row["installed"], row["state"]), (False, "failed"))

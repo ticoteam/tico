@@ -5,6 +5,7 @@
 let HL = null;
 let HL_LOAD = 0;
 let HL_METRICS = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
+let HL_MONITOR = null;   // the owner: the Health Monitor's switch and what it found (GET /api/v2/health-monitor)
 
 async function hlRefresh() {
   if (!S.me?.cloud) return null;
@@ -17,6 +18,11 @@ async function hlRefresh() {
     if (seq !== HL_LOAD) return HL;
     HL_METRICS = metrics && metrics.requests ? metrics : null;
   } else HL_METRICS = null;
+  if (HL?.audience === 'owner') {
+    const monitor = await v2Get('/v2/health-monitor');
+    if (seq !== HL_LOAD) return HL;
+    HL_MONITOR = monitor && 'on' in monitor ? monitor : null;
+  } else HL_MONITOR = null;
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
   hlNav();
@@ -99,6 +105,30 @@ function hlStorageHtml(st) {
     ${s3 ? '' : `<a class="hl-s3" href="${GH}/blob/main/docs/files.md#storage" target="_blank" rel="noopener noreferrer">Set up S3</a>`}</div></div>`;
 }
 
+// The owner: the optional Health Monitor (backend/health_monitor.py). One switch turns it on or off; the second is the team
+// rule that lets it file Tico bug reports without a Needs you card.
+function hlMonitorHtml(m) {
+  if (!m) return '';
+  const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
+    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))}</span></li>`).join('');
+  return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
+    <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
+      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, has BotOps fix setup problems and reports Tico bugs to the Tico team. It wakes a model only when it finds something new.</span></span></label>
+    <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-rule${m.reports_without_asking ? ' checked' : ''}${m.on ? '' : ' disabled'}>
+      <span>Health Monitor may file Tico bug reports without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>
+    ${m.on && found ? `<ul class="hl-bots">${found}</ul>` : ''}</section>`;
+}
+
+async function hlMonitorToggle(box) {
+  box.disabled = true;
+  try {
+    if (box.matches('[data-hl-monitor-rule]')) await put('/v2/access/rules', {health_monitor_reports: box.checked});
+    else await post(`/v2/health-monitor/${box.checked ? 'turn-on' : 'turn-off'}`, {});
+    toast(box.matches('[data-hl-monitor-rule]') ? 'Saved' : box.checked ? 'The Health Monitor is on' : 'The Health Monitor is off');
+  } catch (e) { toast(e.message, true); }
+  await hlRefresh();
+}
+
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
 // one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
@@ -143,7 +173,7 @@ function hlPageDraw() {
   const notes = (typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.issues || []).filter(issue => !needsPerson(issue));
   host.innerHTML = `<p class="muted" id="hl-summary">${HL.attention ? `${HL.attention} issue${HL.attention === 1 ? '' : 's'} to look at`
     : notes.length ? `Nothing urgent. ${notes.length} note${notes.length === 1 ? '' : 's'} below.` : 'Everything looks fine.'}</p>
-    <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>
+    <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>${hlMonitorHtml(HL_MONITOR)}
     ${stuck.length ? `<h2>Stuck</h2><ul class="hl-bots">${hlStuckHtml(stuck)}</ul>` : ''}${hlStorageHtml(HL.storage)}
     ${notes.length ? `<h2>Not urgent</h2><ul class="hl-notes">${notes.map(issue => `<li><strong>${esc(issue.title)}</strong> <span class="muted">${esc(issue.detail || '')}</span></li>`).join('')}</ul>` : ''}
     ${hlMetricsHtml(HL_METRICS)}
@@ -224,6 +254,11 @@ window.hlBoot = function () {
   setInterval(() => { if (!document.hidden && S.me?.cloud) void hlRefresh(); }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
 };
+
+document.addEventListener('change', event => {
+  const box = event.target.closest?.('[data-hl-monitor-switch], [data-hl-monitor-rule]');
+  if (box) void hlMonitorToggle(box);
+});
 
 document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }

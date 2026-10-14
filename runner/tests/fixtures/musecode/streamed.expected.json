@@ -1,0 +1,40 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Let me check the repo.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tool",
+  "name": "shell",
+  "tool": "shell",
+  "phase": "tool_execution_start"
+ },
+ {
+  "kind": "delta",
+  "text": "Two files ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "changed.\n",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "Two files changed.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

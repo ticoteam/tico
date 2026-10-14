@@ -34,6 +34,11 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `hub doc ask`. Also:
 - **Bug:** one task for engineering (`hub task create --owner issue-triage`, or whoever `knowledge/escalation.md` names)
   with the version, what the human did and what they saw, the diagnostics finding, and nothing personal (the labels stay labels). Search `software/hq-tickets list --status all`
   and `knowledge/known-issues.md` first; a repeat is a count on the existing entry.
+- **Health Monitor report:** a ticket that starts `[Health Monitor]` and has a `Signature: hm-...` line came from an
+  install's Health Monitor, not a person: there is no one to reply to beyond a short "thanks, tracked". Every install sends
+  the same signature for the same problem, so group by it: one engineering task per signature, titled with the signature,
+  and each new ticket or "Seen again" message with that signature is a comment on that task (which install, the version,
+  how many times), never a second task. Keep the ticket ids on the task so the release that fixes it can close them.
 - **Question:** answer from the docs; a `covered: false` is a task to the Librarian.
 - **Feature request:** a line for the product owner, no promise.
 - **Security report:** a human at once, as a task; never quote the detail anywhere public and never in a reply.

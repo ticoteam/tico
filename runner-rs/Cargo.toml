@@ -1,0 +1,42 @@
+[package]
+name = "tico-runner"
+version = "0.5.4"
+edition = "2021"
+rust-version = "1.85"
+description = "The Tico local runner (step 1: the chat path)"
+license-file = "../LICENSE"
+publish = false
+
+[[bin]]
+name = "tico-runner"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync", "signal", "net", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
+ring = "0.17"
+regex = { version = "1", default-features = false, features = ["std", "unicode-case", "unicode-perl", "perf"] }
+aho-corasick = "1"
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+url = "2"
+yaml-rust2 = { version = "0.10", default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = 3
+# Unwind, not abort: a bug in one turn ends that turn's task (saved as interrupted), not the runner and every turn.
+panic = "unwind"

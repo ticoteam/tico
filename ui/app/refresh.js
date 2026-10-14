@@ -92,8 +92,10 @@ function liveWire() {
   });
   liveOn('needs', d => {
     S.v2.needs = d.items || [];
+    if (d.went_away) S.v2.wentAway = d.went_away;
     liveSoon('needs', () => {
       renderTree();
+      if (OVERVIEW_PAGE) overviewNeedsDraw();
       if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
       if (BOT && isKeeper(BOT.slug) && BOT.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
     }, 200);

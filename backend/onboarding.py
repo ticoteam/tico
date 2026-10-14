@@ -292,11 +292,11 @@ def config_view(c, settings, who=None):
     value["onboarding_needed"] = needed(c, who, record)
     chosen = providers.load(c, settings)
     value["providers_configured"] = providers.configured(chosen)
-    # The model a computer's sign-in is for; empty until a provider is chosen, so no sign-in is asked before then.
+    # The model a computer's sign-in is for; empty until a provider is chosen, so no sign-in is asked before then. A
+    # computer with no bots yet installs this one's harness (runner/service.py want_harnesses).
     value["default_runtime"] = next(iter(sorted(providers.wanted_runtimes(chosen))), "")
     if who is not None:
-        # A runner installs only the harnesses these providers need (runner/harness_tools.py).
-        value["enabled_providers"] = list(chosen["enabled"])
+        value["enabled_providers"] = list(chosen["enabled"])      # older runners install these providers' harnesses
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one
@@ -636,6 +636,11 @@ class Onboarding:
             except ValueError:
                 pass
         return True
+
+    def turn_on_health_monitor(self, c, who):
+        """Settings > Health's switch: the optional Health Monitor (docs/health-monitor.md). Never added on its own."""
+        from .health_monitor import NAME, SLUG
+        return self._turn_on(c, who, SLUG, SLUG, NAME, "health_monitor.turned_on")
 
     def turn_on_goal_manager(self, c, who):
         """The same for the built-in Goal Manager (docs/goals-and-kpis.md)."""

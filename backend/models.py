@@ -94,6 +94,11 @@ class Answer(Contract):
     unknown: bool = False
 
 
+class TakeRecommendation(Contract):
+    ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]     # the bot's ask the person says yes to
+    version: Annotated[int, Field(strict=True, ge=1)] | None = None     # the card's task version: a changed task is refused
+
+
 Lane = Literal["company", "product"]
 # A task's number: one sequence for the whole team, like one board's ticket numbers.
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
@@ -920,6 +925,8 @@ class Heartbeat(Contract):
     checkout: "Checkout | None" = None
     # Which release the runner is on and how its self-update stands (backend/runner_versions.py).
     release: str | None = Field(default=None, max_length=100)
+    # The commit it runs: an image's release-manifest.json, else its checkout's HEAD; "" when it cannot say.
+    commit: str | None = Field(default=None, pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})?$")
     kind: Literal["mac", "linux", "docker"] | None = None
     update: "RunnerUpdate | None" = None
 
@@ -1348,6 +1355,7 @@ class AccessRules(Contract):
     members_store_credentials: bool | None = None
     admin_sql: bool | None = None
     member_tokens: bool | None = None
+    health_monitor_reports: bool | None = None
     bots_go_ahead: bool | None = None
     go_ahead_days: Annotated[int, Field(strict=True, ge=1, le=14)] | None = None
 
@@ -1624,6 +1632,11 @@ class LoginReport(Contract):
 class HarnessAction(Contract):
     harness: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=60)]
     action: Literal["update", "pin", "unpin"]
+
+
+class HarnessChoice(Contract):
+    harness: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$", max_length=60)]
+    enabled: StrictBool
 
 
 class HarnessActionReport(Contract):
