@@ -101,7 +101,7 @@ $HUB_DIR/scripts/mail.sh draft --to ava@creator.example \
   --subject "Ava, 6 months of Acme on us" --body-file out/ava.txt --issue 128 [--dry-run]
 $HUB_DIR/scripts/mail.sh draft --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt --issue 128 \
   --attach out/response-letter.pdf
-$HUB_DIR/scripts/mail.sh discard r-882... --issue 128
+$HUB_DIR/scripts/mail.sh draft discard r-882... --issue 128
 ```
 
 `--reply-to <thread>` fills in the recipient and the subject from the thread and keeps
@@ -114,8 +114,9 @@ command twice **updates the same Gmail draft** instead of leaving two. Change a 
 new draft. The thread gets `hub/drafted`, so Ana can see it in Gmail.
 
 `--attach <path>` adds a file; repeat it for several, up to 25 MB in all (Gmail's limit, checked
-from the file sizes before anything is read). Attachments are off unless the mail policy sets
-`defaults.allow_attachments: true`. A file must be inside your own folder (`bot-<slug>`, or an
+from the file sizes before anything is read). Attachments are off unless the mail policy turns them on for the
+mailbox: `mailboxes.<address>.allow_attachments: true` for one mailbox, or
+`defaults.allow_attachments: true` for every mailbox that does not set its own. A file must be inside your own folder (`bot-<slug>`, or an
 older bot's `emp-<slug>`), after following symlinks; a relative path starts there, and `..` is
 refused. Files that look like keys or passwords are refused wherever they are: `.env*`, `*.pem`,
 `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `.netrc`, `.npmrc`, `.pypirc`,
@@ -140,7 +141,7 @@ approval card; the send ignores `file_id` and matches on name, size and sha256. 
 file only to the version on the task whose stored sha256 and size are the approved ones. Attached
 files become readable by everyone who can read the task.
 
-`discard <draft-id>` deletes an unsent draft you made with `mail draft`, and nothing else: a
+`draft discard <draft-id>` (or `discard <draft-id>`) deletes an unsent draft you made with `mail draft`, and nothing else: a
 draft someone else wrote, a draft already sent, or a message id is refused (exit 2). It needs
 the `draft` verb and is audited.
 

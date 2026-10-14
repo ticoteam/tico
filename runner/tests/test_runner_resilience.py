@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from clients.tico import APIError
-from runner import goals, service
+from runner import goals, safe_git, service
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -473,6 +473,21 @@ class Pushing(unittest.TestCase):
         log.assert_not_called()
         self.assertEqual(self.head(self.origin, "main"), self.head(self.repo))
         self.assertTrue((self.repo / "elsewhere").exists() and (self.repo / "memory").exists())
+
+    def test_a_catch_up_without_any_git_identity_still_rebases(self):
+        # emp-botops on the Tico Team box: the startup push ran with no identity, so the rebase died on
+        # "unable to auto-detect email address" and the bot's memory commits stayed unpushed.
+        other = Path(self.tmp.name) / "other"
+        git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
+        self.commit("elsewhere", other)
+        git(other, "push", "-q", "origin", "main", env=self.env)
+        bare = {k: v for k, v in self.env.items() if not k.startswith(("GIT_AUTHOR", "GIT_COMMITTER", "EMAIL"))}
+        bare["HOME"] = self.tmp.name
+        git(self.repo, "config", "user.useConfigOnly", "true", env=self.env)   # no hostname guess, as in Docker
+        with mock.patch.dict(os.environ, bare, clear=True):
+            self.assertEqual(service.catch_up(self.repo, safe_git.process_environment()), "")
+        self.assertEqual(self.head(self.repo, "HEAD~1"), self.head(other))
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%an", env=self.env).stdout.strip(), "t")
 
     def test_two_tasks_of_one_bot_run_at_once_in_their_own_worktrees_and_both_land(self):
         both = threading.Barrier(2, timeout=30)

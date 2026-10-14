@@ -84,6 +84,8 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             if self.refuse:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
+            if "actions" in body.get("permissions", {}) and "actions" not in (self.permissions or {}):
+                return httpx.Response(422, json={"message": "The permissions requested are not granted to this installation."})
             if body and any(name in self.missing for name in body.get("repositories", [])):
                 return httpx.Response(403 if self.forbidden else 422, json={"message": "Validation Failed"})
             if body and self.selection == "selected" and any(
@@ -307,13 +309,26 @@ def test_jwt_claims_and_repo_scoped_token(api, gh):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["repository"] == "Acme/emp-cpo" and data["token"].startswith("ghs_")
-    method, path, body, header = gh.of("/access_tokens")[0]
+    method, path, body, header = gh.of("/access_tokens")[-1]
     assert path == "/app/installations/77/access_tokens"
     assert body == {"repositories": ["emp-cpo"], "permissions": {"contents": "write", "pull_requests": "write",
                                                                    "issues": "write", "metadata": "read"}}
     claims = jwt.decode(header.removeprefix("Bearer "), KEY.public_key(), algorithms=["RS256"], options={"verify_exp": False})
     assert claims["iss"] == "4242" and claims["exp"] - claims["iat"] <= 660 and claims["iat"] <= time.time() - 59
     assert claims["exp"] <= time.time() + 600
+
+
+def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh):
+    assert manifest(api)["manifest"]["default_permissions"]["actions"] == "read"
+    connect(api)
+    runner_token(api, "cpo")
+    # An installation that has not accepted Actions yet still gets its token, without it.
+    assert turn_token(api).status_code == 200
+    assert "actions" not in gh.of("/access_tokens")[-1][2]["permissions"]
+    gh.permissions = {"actions": "read"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert turn_token(api).status_code == 200
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"
 
 
 def runner_token(api, bot):
@@ -982,3 +997,27 @@ def test_a_refusal_says_when_github_could_not_be_checked(api, gh, monkeypatch):
     monkeypatch.setattr(api.app_state.github_app, "repository_history", lambda name: None)
     refused = _go_live(api, computer="box")
     assert refused.status_code == 409 and "Tico could not check GitHub's copy" in refused.json()["error"]["detail"]
+
+
+def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says_it_changed(api, gh):
+    import hashlib, hmac
+    from backend import github as GH
+    connect(api)
+    runner_token(api, "cpo")
+    # The webhook also queues a repository sync that mints its own token, so read only the turn's asks.
+    turns = lambda: [call[2]["permissions"] for call in gh.of("/access_tokens")
+                     if call[2].get("repositories") == ["emp-cpo"]]
+    assert turn_token(api).status_code == 200
+    before = len(turns())
+    api.app_state.github_app.cache.clear()             # past the token cache: the next turn mints again
+    assert turn_token(api).status_code == 200
+    asked = turns()[before:]
+    assert len(asked) == 1 and "actions" not in asked[0]  # no second refused ask while it is remembered
+    gh.permissions = {"actions": "read"}                 # the owner accepts; GitHub says so by webhook
+    body = json.dumps({"action": "new_permissions_accepted", "installation": {"id": 77}}).encode()
+    sig = "sha256=" + hmac.new(b"whs", body, hashlib.sha256).hexdigest()
+    r = api.post(GH.PATH, content=body, headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": "installation",
+                                                  "Content-Type": "application/json"})
+    assert r.status_code == 200, r.text
+    assert turn_token(api).status_code == 200
+    assert turns()[-1]["actions"] == "read"

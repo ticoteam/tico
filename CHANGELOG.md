@@ -7,6 +7,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Bots can check a workflow run's result.** A bot's GitHub token now reads Actions (workflow runs and their logs) in every repository it can read, so a bot that watches a deploy reads `gh run list` / `gh run view` itself instead of asking a person. It can't start, rerun or cancel a run. New GitHub Apps ask for Actions read; **an existing App needs Actions: Read-only added on its GitHub settings page and accepted on the installation**, and until then tokens are issued without it as before. See [GitHub App](docs/github-app.md#permissions-and-why).
+- **Attachments can be allowed for one mailbox.** `mailboxes.<address>.allow_attachments: true` in `registry/mail-policy.yaml` lets bots attach files to drafts from that mailbox only (Legal's, say) while `defaults.allow_attachments` stays off for the rest; `false` turns one off when the default is on. `mail draft discard <draft-id>` removes an unsent draft the bot made (the older `mail discard` still works). See [Mail](docs/mail.md).
+
 ### Changed
 - **A bot left in setup for a day shows on Overview.** A bot still `needs_setup` a day after it was added holds its
   routines' jobs and its tasks, and nobody saw it. It is now listed with the stuck bots on Overview and Health
@@ -22,8 +26,18 @@ All notable changes to Tico are recorded here. The format follows
   The Release Manager asks for a release by its release page, so a re-cut replaces the first ask. A task that has
   ended takes no new approval.
 - **A bot at its worktree limit ends its turn and is woken when its worktree is ready.** When a bot's turn asks for a task worktree while the bot already holds 30, Tico records that the task waits for one and `hub task worktree add` says so and exits with status 3: the bot ends its turn instead of waiting, so its finished worktrees can free themselves. When a place frees, Tico reserves the worktree (checking access, owner and computer again), the bot's computer checks it out and runs setup while the bot is idle, and Tico wakes the task once, in its own session, naming the ready worktree; a failed checkout or setup wakes it once with the reason. Finishing the task, a new owner or stopping the turn ends the wait. The task and Health show "Waiting for a worktree" with its age. The limit is unchanged, nothing is removed to make room, and a computer from before this release gets the old answer. See [Task worktrees](docs/worktrees.md).
+- **Computers run more turns at once by default.** A runner without a set `capacity` now runs 5 turns per CPU core
+  (as memory allows, 3 per GB; at least 4, at most 64) instead of about 1 per core. Turns mostly wait on the model
+  provider. A number in `runner.json` is still kept (up to 256), so an owner can go higher. After a rollback to a server
+  that accepts at most 32, the runner reports 32 and keeps working.
 
 ### Fixed
+- **A bot's unpushed commits rebase when the runner catches up on its own.** On a Docker runner, the catch-up after a refused push and the shared-branch sync ran git with no identity, so the rebase failed with "unable to auto-detect email address" and the commits stayed unpushed. On the Tico Team box this left BotOps's memory 2 commits ahead and 3 behind. These rebases now commit as the bot when its turn set one, and as Tico otherwise.
+- **An idle computer no longer burns CPU on archived bots.** A runner tried to set up every assigned bot on each
+  readiness pass, archived ones included, and re-read the whole bot catalog each time; with 22 archived test bots
+  whose repositories were gone, the Tico Team mail runner used most of a core while idle and kept the server busy.
+  Archived bots are skipped, and the catalog is read again only when a card changes.
+- **The backup status check lists only the newest level of the database copy.** Every 30 seconds the server's backup loop listed every level of the Litestream replica to find when it last moved. With the 30-day history that is about 46,000 S3 objects per check: about 6 seconds of CPU and about 47 LIST requests each time, about 135,000 a day. It now stops at the first level that has files (level 0 in practice), which costs one or two requests. The reported time is unchanged.
 - **Closing a bot's question card settles it.** When you close the small card a bot gave you instead of answering it, the bot's task no longer stays "Blocked on" you: it opens again with your note, and the bot hears it once.
 - **Slack file downloads cope with long or odd names and keep to a private folder.** `connectors/slack.py file` cuts a shared file's name to 200 bytes and drops control characters, so a long name or one with a NUL byte no longer crashes the download; a name the file system still refuses is a clear failure that saves nothing. The default folder is now the user's own `slack-files-<uid>` under the temp folder, made private, and one another local user owns (or a link) is refused. The `saved` line prints on one line. See [Slack](integrations/slack.md).
 - **BotOps can work a task another bot gave it.** On its own task BotOps now adds the task's worktree with its own repository access and files a question or subtask for a person without borrowing anyone's rights, whoever asked for the task. A person's comment on a task a bot asked BotOps for no longer stops the run: BotOps keeps that bot's rights, and what needs the person's comes to them as a Confirm card in their BotOps chat. A worktree refused for missing access says an owner or admin gives it in Settings > Repositories. See [Permissions](docs/permissions.md).
@@ -31,6 +45,8 @@ All notable changes to Tico are recorded here. The format follows
   the runner's own user, so `git` (run as the bot user) couldn't add the worktree; every task turn fell back to the
   bot's checkout and waited for the bot's other turns, so a quick chat waited behind a long task. The folder is now
   the bot user's, including ones an older runner made.
+- **A routine's run no longer fails to publish because of an unrelated private task.** A private task waiting for its bot's next run used to ride along into a routine's run, which made the whole run private, so the Librarian's "Refresh the map of the docs" was refused every write to the shared docs. A routine's run now leaves private next-run tasks out and gives each one a run of its own, so it is never left waiting on a bot that only runs routines.
+- **Bots don't wait on a person for a Tico limit.** The shared bot rules say that a bot blocked by a Tico limit (a missing token permission, a policy switch, a refusal) files it as a support report or a task for BotOps and waits on that, never on a person who can't lift it.
 
 ## [0.3.43] - 2026-10-14
 

@@ -34,6 +34,23 @@ def clean_environment(source=None):
     return env
 
 
+IDENTITY = ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL')
+
+
+def committing_environment(source=None):
+    """`environment()` for a rebase or merge the runner makes, which writes commits: the bot's identity when the turn
+    set one, else Tico's. A clean environment has none, and git then refuses ("unable to auto-detect email address"),
+    leaving the bot's unpushed commits stuck behind its remote."""
+    source = os.environ if source is None else source
+    env = environment(source)
+    env.update({k: source[k] for k in IDENTITY if source.get(k)})
+    env.setdefault('GIT_COMMITTER_NAME', env.get('GIT_AUTHOR_NAME') or 'Tico')
+    env.setdefault('GIT_COMMITTER_EMAIL', env.get('GIT_AUTHOR_EMAIL') or 'runner@bots.tico.invalid')
+    env.setdefault('GIT_AUTHOR_NAME', env['GIT_COMMITTER_NAME'])
+    env.setdefault('GIT_AUTHOR_EMAIL', env['GIT_COMMITTER_EMAIL'])
+    return env
+
+
 def prefix(path):
     return [*PREFIX, '-c', 'safe.directory=' + str(path)]
 

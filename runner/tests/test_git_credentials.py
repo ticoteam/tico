@@ -8,6 +8,8 @@ from runner import git_credentials as G
 
 import pytest
 
+HANG = 120  # stops a hung helper; never a speed check: a loaded machine can take many seconds to start Python
+
 
 class Hub:
     def __init__(self, answer=None, error=None):
@@ -51,7 +53,7 @@ class HubServer:
 
 def fill(env, tmp_path):
     return subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n", env=env,
-                          capture_output=True, text=True, timeout=30, cwd=tmp_path).stdout
+                          capture_output=True, text=True, timeout=HANG, cwd=tmp_path).stdout
 
 
 def test_git_gets_a_fresh_token_on_every_credential_request_and_nothing_is_written(tmp_path):
@@ -74,7 +76,7 @@ def test_git_gets_a_fresh_token_on_every_credential_request_and_nothing_is_writt
         assert sorted(p.name for p in tmp_path.rglob("*")) == before
         # An unrelated host gets nothing, and neither does a store or erase.
         other = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=example.com\n\n",
-                               env={**env, "GIT_ASKPASS": "true"}, capture_output=True, text=True, timeout=30, cwd=tmp_path)
+                               env={**env, "GIT_ASKPASS": "true"}, capture_output=True, text=True, timeout=HANG, cwd=tmp_path)
         assert "ghs_" not in other.stdout and hub.count == 2
     finally:
         hub.close()
@@ -89,7 +91,7 @@ def test_mixed_grants_select_the_remote_token_without_persisting_it(tmp_path, mo
     for repo, expected in (("Acme/product.git", "write-token"), ("acme/docs.git", "read-token")):
         result = subprocess.run(["git", "credential", "fill"],
                                 input=f"protocol=https\nhost=github.com\npath={repo}\n\n",
-                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10)
+                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=HANG)
         assert result.returncode == 0, result.stderr
         assert f"password={expected}" in result.stdout
     assert list(tmp_path.iterdir()) == []
@@ -176,7 +178,7 @@ def test_gh_wrapper_uses_the_read_token_for_explicit_and_local_repositories(tmp_
     for args, expected in ((["repo", "view"], "read-token"),
                            (["repo", "view", "-R", "Acme/product"], "write-token")):
         result = subprocess.run([shutil.which("gh", path=env["PATH"]), *args], env=env, cwd=tmp_path,
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=HANG)
         assert result.returncode == 0, result.stderr
         assert result.stdout == expected
     assert "token" not in (tmp_path / ".git" / "config").read_text()
@@ -220,7 +222,7 @@ def test_app_token_failure_blocks_machine_helpers_and_askpass(tmp_path):
         env = {'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_ASKPASS': str(askpass)}
         assert not G.apply(env, hub, 'alpha')
         result = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
-                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=10)
+                                env=env, cwd=tmp_path, capture_output=True, text=True, timeout=HANG)
         assert result.returncode != 0
         # The hub's own reason reaches git's error, so a failed clone names why there was no token.
         assert "Tico could not get a GitHub token for this bot's repositories: App token failed" in result.stderr
@@ -253,7 +255,7 @@ def test_app_token_wins_in_the_org_and_a_stored_gh_token_serves_only_other_owner
     assert env["GH_TOKEN"] == env["GITHUB_TOKEN"] == "write-token"
     assert env[G.TURN_PATH_KEY] == env["PATH"]           # what a login shell puts back (docker/profile-turn.sh)
     run = lambda *args: subprocess.run([shutil.which("gh", path=env["PATH"]), *args], env=env, cwd=tmp_path,
-                                       capture_output=True, text=True, timeout=10)
+                                       capture_output=True, text=True, timeout=HANG)
     assert run("pr", "view", "-R", "Acme/product").stdout == "write-token"
     assert run("pr", "view", "-R", "Other/tool").stdout == "ghp_stale"
     refused = run("pr", "view", "-R", "Acme/elsewhere")  # in the org but not granted: never the stored token
@@ -302,7 +304,7 @@ def test_mac_login_shells_keep_the_wrapper_and_refresh_after_the_starting_token_
             command = inner + "; " + shlex.join([shell, *flags, inner]) + "; printf '%s\\n' \"$STARTUP_ENV\""
             before = hub.count
             result = subprocess.run([shell, *flags, command], env=env, cwd=home,
-                                    capture_output=True, text=True, timeout=15)
+                                    capture_output=True, text=True, timeout=HANG)
             wrapper = str(G.ROOT / "runner" / "credential_bin" / "gh")
             assert result.returncode == 0, result.stderr
             assert result.stdout.splitlines() == [wrapper, f"ghs_fresh{before + 1}",

@@ -424,3 +424,32 @@ def test_a_new_key_never_overwrites_the_backups_only_good_copy(tmp_path):
     # The same key again (another fresh process) keeps nothing more aside.
     replication.sync_credential_key(live / "slack.key", mirror, {}, replication.key_copy("slack.key"))
     assert len(list((tmp_path / "backups" / "credential-key").glob("slack.key.replaced-*"))) == 1
+
+
+def test_the_backup_status_lists_only_the_newest_level(tmp_path):
+    s3, listed = FakeS3(), []
+    paginator = s3.get_paginator
+
+    def counting(name):
+        pages = paginator(name)
+        original = pages.paginate
+        pages.paginate = lambda Bucket, Prefix: (listed.append(Prefix), original(Bucket, Prefix))[1]
+        return pages
+    s3.get_paginator = counting
+    mirror = replication.S3Mirror(s3, "bucket", "tico")
+    s3.objects.update({"tico/0001/a.ltx": b"", "tico/0009/b.ltx": b""})
+    assert mirror.newest(replication.DB_LEVELS) is not None and listed == ["tico/0000/", "tico/0001/"]
+    listed.clear()
+    s3.objects["tico/0000/c.ltx"] = b""
+    assert mirror.newest(replication.DB_LEVELS) is not None and listed == ["tico/0000/"]
+    assert replication.S3Mirror(FakeS3(), "bucket", "tico").newest(replication.DB_LEVELS) is None
+
+    local = replication.LocalMirror(tmp_path)
+    (tmp_path / "0003").mkdir()
+    (tmp_path / "0003/old.ltx").write_text("x")
+    os.utime(tmp_path / "0003/old.ltx", (100, 100))
+    assert local.newest(replication.DB_LEVELS) == 100
+    (tmp_path / "0000").mkdir()
+    (tmp_path / "0000/new.ltx").write_text("x")
+    os.utime(tmp_path / "0000/new.ltx", (50, 50))
+    assert local.newest(replication.DB_LEVELS) == 50

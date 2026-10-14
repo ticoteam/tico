@@ -207,13 +207,13 @@ scheduling:                                     # the one mailbox that may use t
   booking_url: ''                               # optional link offered when neither time works
   meeting_title: Meeting                        # the calendar event title
 mailboxes:
-  ana@acme.example: { paused: false }         # per-mailbox pause
+  ana@acme.example: { paused: false }         # per-mailbox pause; allow_attachments: true|false overrides the default for it
 defaults:                                   # the stricter of these and an allowance wins
   max_sends_per_day: 20
   per_recipient_cooldown_days: 14
   max_external_recipients: 1
   allow_cc_external: false
-  allow_attachments: false                  # opt-in; true lets `draft --attach` add files from the bot's folder
+  allow_attachments: false                  # opt-in; true lets `draft --attach` add files from the bot's folder (a mailbox may set its own)
 blocklist: { addresses: [], domains: [] }                  # never written to, in any verb
 owner_handles_personally: { addresses: [], domains: [] }   # forces hub/needs-owner
 allowances:

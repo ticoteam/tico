@@ -79,7 +79,7 @@ Always:
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `hub task show <id>`. Read docs with `hub doc search
 "<counterparty>"`. Where the contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search
-"<counterparty>"` reads a thread; leave a draft only with `mail.sh draft --reply-to`, never `send`. A question
+"<counterparty>"` reads a thread; leave a draft only with `mail.sh draft --reply-to`, never `send`; remove one you no longer want with `mail.sh draft discard <draft-id>`. A question
 for the requester is `hub task ask <id>`, one open question per task. A deadline someone must act on is
 `hub task create --owner <person>`. Finish every task.
 
