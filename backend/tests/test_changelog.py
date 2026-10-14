@@ -1,9 +1,26 @@
-"""One shipped-history flow and the per-person acknowledgement/privacy boundary."""
+"""One shipped-history flow, the per-person acknowledgement/privacy boundary and shipped notes staying as tagged."""
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
 from backend import changelog, releases
 from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_openapi_v2 import conforms
+from scripts.changelog_notes import section
+
+ROOT = Path(__file__).resolve().parents[2]
+# Shipped notes corrected on purpose after their tag (a renamed bot, a moved docs anchor) are compared with the
+# commit that corrected them instead, so they stay guarded from then on.
+REVISED = {
+    "0.2.13": "d1d4a7e2f8ae3af933f28af83a511cadd3bc96df",
+    "0.2.15": "e6e2b8544f1d8548e4181932e60b6e0fcd3f4aa3",
+    "0.3.24": "8d55fe27e343e06a5661cb7b074efba1b81c956c",
+}
 
 NOTES = """# Changelog
 ## [Unreleased]
@@ -78,3 +95,41 @@ def test_read_state_is_personal_and_only_acknowledges_shown_changes(api, monkeyp
     assert {r["id"] for r in unread["entries"]} >= {"release-0.3.0"}
     tools = {r["name"] for r in rpc(api, "tools/list")["result"]["tools"]}
     assert {"hub_changelog_list", "hub_changelog_mark_read"} <= tools
+
+
+def released_edits(root):
+    """Released versions whose CHANGELOG section here differs from the one at their tag, or None when no tag is readable.
+
+    A branch made before a release's notes landed has no section for that release yet; merging it would put its
+    line under the nearest heading, which is the released one, so a missing section counts as an edit when this
+    branch changes CHANGELOG.md, unless it is part of that release's history (an older commit checked out on purpose).
+    """
+    git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
+    text = (root / "CHANGELOG.md").read_text()
+    here = set(re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, re.M))
+    tags = git("tag", "--list", "v[0-9]*").stdout.decode().split()
+    refs = "".join(REVISED.get(t[1:], "refs/tags/" + t) + ":CHANGELOG.md\n" for t in tags)
+    out = git("cat-file", "--batch", input=refs.encode()).stdout
+    edited, read = [], 0
+    for tag in tags:
+        header, _, out = out.partition(b"\n")
+        if header.split()[1:2] == [b"blob"]:
+            size = int(header.split()[2])
+            shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1:]
+            read += 1
+            if tag[1:] in here:
+                edited += [tag[1:]] if section(text, tag[1:]) != shipped else []
+            elif shipped and git("merge-base", "--is-ancestor", "HEAD", tag).returncode == 1:
+                fork = git("merge-base", "HEAD", tag).stdout.decode().strip()
+                # Only a branch that adds its own CHANGELOG line can have it land in the released section.
+                if not fork or git("diff", "--quiet", fork, "--", "CHANGELOG.md").returncode:
+                    edited.append(tag[1:])
+    return edited if read else None
+
+
+def test_released_changelog_sections_match_their_tags():
+    edited = released_edits(ROOT) if shutil.which("git") else None
+    if edited is None:
+        pytest.skip("no release tags in this checkout (shallow clone or tags not fetched)")
+    assert not edited, "your CHANGELOG line landed in the released %s section; merge main and move it under ## [Unreleased]" % (
+        ", ".join("[%s]" % v for v in edited))

@@ -73,4 +73,6 @@ A release is a version tag. Maintainers move the `[Unreleased]` notes in [CHANGE
 under the new version, run the full suite locally, then push a tag `vX.Y.Z` on `main`. The tag builds
 the Docker images and publishes the GitHub release, with that CHANGELOG section as its notes, and
 running installs then offer the update. Contributors do not tag; add your change to `[Unreleased]` in
-the CHANGELOG instead. The steps are in [docs/releasing.md](docs/releasing.md).
+the CHANGELOG instead. Before merging a PR branched before the last release's notes landed, merge main
+and check its CHANGELOG line sits under `[Unreleased]`, not the released section (`backend/tests/test_changelog.py`
+fails until it does). The steps are in [docs/releasing.md](docs/releasing.md).
