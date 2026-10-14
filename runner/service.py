@@ -1673,7 +1673,7 @@ class Runner:
                 if not shutil.which("agy"):
                     problems.append("Antigravity CLI is not on PATH")
             elif not runtimes[runtime]["installed"]:
-                problems.append("Runtime executable is not on PATH")
+                problems.append(self.installing(runtime) or "Runtime executable is not on PATH")
             elif status.get("authenticated") == "rejected":
                 problems.append(self.subscription_problem(entry["profile"], signed_out=True, computer=entry.get("computer_label")) if entry.get("profile")
                                 else status["detail"])
@@ -3225,13 +3225,13 @@ class Runner:
             self.assignments_seen = assignments
         else:
             repository_rows, assignments = None, self.assignments_seen
+        # Install on demand: what this computer's bots run on, plus what the owner turned on here.
+        self.tools.want(self.harness_runtimes(assignments, fetch=full))
         candidates = self.readiness_candidates(assignments)
         runtimes = self.runtime_report(candidates)
         self.runtime_rows = runtimes
         checks = self.preflight(candidates, runtimes)
         agent_instructions, instruction_versions = self.changed_agent_instructions(assignments)
-        # Install on demand: only what the enabled providers and this runner's bots need.
-        self.tools.want(self.enabled_providers(fetch=full), {row["config"].get("runtime") for row in assignments})
         # The server's release, not main, is what a runner follows once the server names one; the stream says it too.
         release = getattr(getattr(self, "events", None), "release", None)
         self.follower.poll(None if full else release)
@@ -3665,18 +3665,37 @@ class Runner:
                 self._watcher_error = describe(exc)
                 log(f"Tico runner: watcher step failed ({self._watcher_error}); will retry")
 
-    def enabled_providers(self, fetch=True):
-        """The company's enabled AI providers, from the server; the last answer when it cannot be reached
-        or was not asked (`fetch` false: a pass the event stream said nothing for)."""
-        if fetch and time.monotonic() - getattr(self, "_providers_at", -60) >= 60:
+    def installing(self, runtime):
+        """The bot problem while this runner installs the runtime's harness ("Codex is installing"), else ''."""
+        tools = getattr(self, "tools", None)
+        manifest = tools.harness_for_runtime(runtime) if tools is not None else None
+        if manifest is None or manifest.id not in tools.wanted or tools.backing_off(manifest):
+            return ""
+        return f"{manifest.name} is installing"
+
+    def harness_runtimes(self, assignments, fetch=True):
+        """The runtimes this computer installs a harness for: each assigned bot's, and its fallback's. A computer with
+        no bots yet takes the company's default, so it can be signed in before its first bot arrives."""
+        found = set()
+        for row in assignments or ():
+            config = row.get("config") or {}
+            found |= {config.get("runtime"), (configured_fallback(config) or {}).get("runtime")}
+        found.discard(None)
+        found.discard("")
+        return found or ({self.default_runtime(fetch)} - {""})
+
+    def default_runtime(self, fetch=True):
+        """The company's default runtime, from the server; the last answer when it cannot be reached or was not
+        asked (`fetch` false: a pass the event stream said nothing for)."""
+        if fetch and time.monotonic() - getattr(self, "_default_runtime_at", -60) >= 60:
             try:
-                value = (self.client.get("config") or {}).get("enabled_providers")
-                if isinstance(value, list):
-                    self._providers = [str(item) for item in value]
-                    self._providers_at = time.monotonic()
+                value = (self.client.get("config") or {}).get("default_runtime")
+                if isinstance(value, str):
+                    self._default_runtime = value
+                    self._default_runtime_at = time.monotonic()
             except Exception:
                 pass
-        return list(getattr(self, "_providers", []))
+        return getattr(self, "_default_runtime", "")
 
     def poll_logins(self):
         """Browser sign-ins are best effort: a failed poll is tried again, never a runner outage. One under

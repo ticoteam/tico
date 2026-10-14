@@ -1178,10 +1178,13 @@ def install_views(app, store, auth, mutate, task_view):
                                              if bot in assigned_here}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
-                from .harness_actions import recent
-                machines.append({**value, "bots": bots, "needed_runtimes": sorted(wanted | assigned.get(row["id"], set())),
+                from .harness_actions import choices, recent
+                # A computer installs only what its bots run on, so only those are its business; with no bot yet,
+                # the company's default, which it installs for its first sign-in.
+                machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or wanted),
                                  "update": runner_versions.view(fleet.get(row["id"])),
-                                 "harness_actions": recent(c, row["id"]) if who.role == "owner" else []})
+                                 "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
+                                 "harness_choices": choices(c, row["id"])})
             health = [{**dict(r), "name": SERVICE_NAMES.get(r["service"], r["service"])}
                       for r in c.execute("SELECT service,last_success,last_error FROM service_health")]
             from .agents import listing as agent_listing

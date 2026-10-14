@@ -302,6 +302,11 @@ RUNNER_TRIGGERS = [
      _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
     ("changes_runner_harness_update", "UPDATE", "runner_harness_actions", None,
      _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
+    # The owner turned a model CLI on or off on a computer: its runner reads the choices with its harness actions.
+    ("changes_runner_harness_choice_insert", "INSERT", "runner_harness_choices", None,
+     _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
+    ("changes_runner_harness_choice_update", "UPDATE", "runner_harness_choices", None,
+     _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
     ("changes_runner_restart", "UPDATE", "runners",
      "NEW.restart_requested IS NOT NULL AND OLD.restart_requested IS NULL", _tell("restart", "SELECT NEW.id AS rid")),
 ]

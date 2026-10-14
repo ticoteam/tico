@@ -1,9 +1,15 @@
-"""Keeping a computer's model CLIs current from Settings: Update, Pin to this version, Resume updates.
+"""Keeping a computer's model CLIs current from Settings: Update, Pin to this version, Resume updates, and
+which ones the computer installs at all.
 
 The owner asks for one action on one harness of one computer; the runner asks the server what is
 waiting (the same shape as the browser sign-in relay in model_login.py), applies it between turns
 and reports back. Update waits until no running turn uses the harness. Only the owner may ask, and
 every request leaves an event.
+
+A computer installs the harnesses its bots run on by itself. The owner can turn any other one on for a computer
+(to sign it in before moving bots there) or turn one off, which uninstalls the runner's own copy once no bot there
+needs it. The choice is kept per computer here and handed to the runner with its pending actions (`choices`);
+a harness never chosen is neither, and the runner keeps whatever it already has.
 """
 
 from .model_login import ONLINE_SECONDS, redact
@@ -60,6 +66,28 @@ def request(c, who, rid, harness, action):
     H.event(c, who.actor, "runner.harness." + action, rid,
             {"harness": harness, "version": report.get("version", "")})
     return view(c.execute("SELECT * FROM runner_harness_actions WHERE id=?", (aid,)).fetchone())
+
+
+def choose(c, who, rid, harness, enabled):
+    if who.role != "owner":
+        raise Problem("forbidden", "Only the owner can change the tools on a computer", 403)
+    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    if not runner:
+        raise Problem("not_found", "That computer is not registered", 404)
+    if harness not in (readiness_document(runner["readiness_json"]).get("harnesses") or {}):
+        raise Problem("not_found", "That computer has not reported this harness", 404)
+    now = H.now()
+    c.execute("INSERT INTO runner_harness_choices(runner_id,harness,enabled,updated,updated_by) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(runner_id,harness) DO UPDATE SET enabled=excluded.enabled, updated=excluded.updated, "
+              "updated_by=excluded.updated_by", (rid, harness, int(bool(enabled)), now, who.actor))
+    H.event(c, who.actor, "runner.harness." + ("on" if enabled else "off"), rid, {"harness": harness})
+    return {"runner_id": rid, "harness": harness, "enabled": bool(enabled)}
+
+
+def choices(c, rid):
+    """{harness: True | False} the owner set for this computer; a harness not listed was never chosen."""
+    return {r["harness"]: bool(r["enabled"]) for r in c.execute(
+        "SELECT harness,enabled FROM runner_harness_choices WHERE runner_id=?", (rid,))}
 
 
 def recent(c, rid):

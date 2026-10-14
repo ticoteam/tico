@@ -3854,12 +3854,18 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: harness_actions.request(
             c, request.state.identity, rid, body.harness, body.action))
 
+    @app.post("/api/v2/runners/{rid}/harness-choices")
+    def harness_choice(request: Request, rid: str, body: M.HarnessChoice):
+        return mutate(request, body, lambda c: harness_actions.choose(
+            c, request.state.identity, rid, body.harness, body.enabled))
+
     @app.get("/api/v2/runner-harness-actions")
     def runner_harness_actions(request: Request):
         who = request.state.identity
         with store.transaction() as c:
             execution.runner(c, who)
-            return {"actions": harness_actions.pending(c, who.runner_id)}
+            return {"actions": harness_actions.pending(c, who.runner_id),
+                    "choices": harness_actions.choices(c, who.runner_id)}
 
     @app.post("/api/v2/runner-harness-actions/{aid}/report")
     def report_harness_action(request: Request, aid: str, body: M.HarnessActionReport):

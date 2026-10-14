@@ -162,7 +162,7 @@ def main(argv=None):
         service.tools = harness_tools.Harnesses(harness_tools.tools_dir(config, args.config),
                                                 args.config.parent / "harnesses-doctor.json")
         service.tools.expose_path()
-        service.tools.want(service.enabled_providers(), {e["config"].get("runtime") for e in assignments})
+        service.tools.want(service.harness_runtimes(assignments))
         from .container_probe import ContainerProbe
         service.container_probe = ContainerProbe(background=False)     # one run: wait for the result
         candidates = service.readiness_candidates(assignments, eligible)

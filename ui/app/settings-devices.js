@@ -213,8 +213,8 @@ async function enrollmentDownload(operator, label) {
   return filename;
 }
 // One chip per AI tool on a computer: its version and whether it is signed in, from the computer's readiness
-// (`harnesses` per tool, `runtimes` per runtime; an older runner sends only `runtimes`). Only what the team's providers
-// or an assigned bot use, plus anything installed anyway. Codex and Claude Code sign in from here: the computer runs
+// (`harnesses` per tool, `runtimes` per runtime; an older runner sends only `runtimes`). Only what its bots use (with no bot
+// yet, the team's default), plus anything installed anyway. Codex and Claude Code sign in from here: the computer runs
 // the login as the bot user and relays only the link and one-time code (backend/model_login.py, runner/login.py).
 // The others have no login the computer can relay, so the chip says what to run there.
 const MACHINE_SIGNIN = ['codex', 'claude'];
@@ -263,6 +263,9 @@ function renderSettingsMachines() {
     const tools = machineToolsHtml(machine, online);
     // The model CLIs the computer runs: version, pin, and the owner's Update / Pin actions. The
     // computer applies them between turns (backend/harness_actions.py, runner/harness_tools.py).
+    // It installs what its bots run on by itself; the owner turns any other one on or off here.
+    const choices = machine.harness_choices || {};
+    const botRuntimes = (machine.bots || []).length ? new Set(machine.needed_runtimes || []) : new Set();
     const asked = new Set((machine.harness_actions || []).filter(row => ['requested', 'running'].includes(row.state)).map(row => `${row.harness}:${row.action}`));
     const harnessAction = (id, action, label, value) => {
       const waiting = asked.has(`${id}:${action}`);
@@ -277,9 +280,14 @@ function renderSettingsMachines() {
         value.update_available ? harnessAction(id, 'update', 'Update') : '',
         value.pinned ? harnessAction(id, 'unpin', 'Resume updates') : (value.version ? harnessAction(id, 'pin', 'Pin to this version') : '')].join('') : '';
       const title = [value.detail, value.managed ? '' : (value.installed ? 'Installed outside Tico; update it where it was installed' : '')].filter(Boolean).join(' · ');
-      return `<span class="machine-harness-item" data-harness-chip="${esc(id)}"><span class="pill ${tone}" title="${esc(title)}">${esc(text)}</span>${buttons}</span>`;
+      const needed = botRuntimes.has(value.runtime);
+      const on = needed || (choices[id] ?? (value.wanted || value.installed));
+      const toggle = S.me?.role === 'owner' && !machine.revoked_at
+        ? ` <label class="machine-harness-toggle"${needed ? ' title="Its bots use it"' : ''}><input type="checkbox" data-harness-choice="${esc(id)}" data-runner="${esc(machine.id)}"${on ? ' checked' : ''}${needed ? ' disabled' : ''}> On</label>` : '';
+      return `<span class="machine-harness-item" data-harness-chip="${esc(id)}"><span class="pill ${tone}" title="${esc(title)}">${esc(text)}</span>${toggle}${buttons}</span>`;
     };
-    const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
+    // The owner sees every model CLI, to turn one on; everyone else what is there.
+    const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => S.me?.role === 'owner' || value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
     const failures = Object.values(machine.readiness?.bots || {}).filter(value => !value.ready).length;
     const bots = machine.bots || [];
     const botNames = bots.map(settingsBotName);
@@ -292,11 +300,21 @@ function renderSettingsMachines() {
     return `<tr class="machine-card"><td><strong>${esc(machine.label)}</strong><span class="settings-cell-note">${esc(machine.version || 'version not reported')}${machine.platform ? ` · ${esc(machine.platform)}` : ''}</span>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}</td>
       <td data-label="Operator">${esc(settingsPersonName(machine.operator))}${!machine.revoked_at && machine.accepts_member_bots ? '<span class="settings-cell-note">Accepts members\' bots</span>' : ''}</td>
       <td data-label="Bots">${bots.length ? `<a href="#/settings" class="machine-bots" data-computer-bots="${esc(machine.id)}" title="${esc(botNames.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong><span class="settings-cell-note">${esc(botNames.join(', '))}</span></a>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
-      <td data-label="AI tools"><div class="machine-runtime" aria-label="AI tools on ${esc(machine.label)}">${tools || '<span class="muted">No AI tools reported</span>'}</div>${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
+      <td data-label="AI tools"><div class="machine-runtime" aria-label="AI tools on ${esc(machine.label)}">${tools || '<span class="muted">No AI tools reported</span>'}</div>${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Model CLIs</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
       <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span></td>
       <td class="settings-row-actions"><div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div></td></tr>`;
   }).join('');
   el.onchange = async event => {
+    const choice = event.target.closest('[data-harness-choice]');
+    if (choice) {
+      choice.disabled = true;
+      try {
+        await post(`/v2/computers/${encodeURIComponent(choice.dataset.runner)}/harness-choices`, {harness: choice.dataset.harnessChoice, enabled: choice.checked});
+        toast(choice.checked ? 'Installing' : 'Turned off');
+        await loadSettings();
+      } catch (error) { toast(error.message, true); choice.checked = !choice.checked; choice.disabled = false; }
+      return;
+    }
     const box = event.target.closest('[data-member-bots]');
     if (!box) return;
     box.disabled = true;

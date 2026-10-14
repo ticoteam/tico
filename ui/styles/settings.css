@@ -289,6 +289,7 @@ p:empty{display:none}
 .machine-harnesses{display:flex;gap:5px 10px;flex-wrap:wrap;margin-top:6px}
 .machine-harness-item{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
 .machine-harness-item .ghost{padding:1px 8px;font-size:var(--t-sm)}
+.machine-harness-toggle{display:inline-flex;align-items:center;gap:3px;font-size:var(--t-sm)}
 .model-login{width:min(520px,calc(100vw - 32px))}
 .model-login header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 0}
 .model-login h2{margin:0;font-size:var(--t-md)}
