@@ -14,6 +14,7 @@ with `hub bot create` (clients/hubcli.py), and an operator can do it by hand wit
 where the cards are read from, so a test or a second checkout can hold its own.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -80,10 +81,23 @@ def free_slug(name, taken, fallback="bot"):
     return slug
 
 
+_CARDS = {}       # catalog folder -> (each card's path, mtime and size; the parsed cards)
+
+
 def cards(directory=None):
-    """Every card in the catalog, by template name. A catalog that is not there is an empty one."""
+    """Every card in the catalog, by template name. A catalog that is not there is an empty one. Parsed cards are
+    kept until a card file changes: a runner reads the catalog on every readiness pass."""
+    root = catalog_dir(directory)
+    paths = sorted(root.glob("*/" + CARD))
+    try:
+        signature = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
+    except OSError:
+        signature = None
+    kept = _CARDS.get(str(root))
+    if signature is not None and kept and kept[0] == signature:
+        return copy.deepcopy(kept[1])
     found = []
-    for path in sorted(catalog_dir(directory).glob("*/" + CARD)):
+    for path in paths:
         try:
             card = yaml.safe_load(path.read_text()) or {}
         except (OSError, yaml.YAMLError):
@@ -91,6 +105,8 @@ def cards(directory=None):
         if isinstance(card, dict):
             # The folder is the template's name: that is what `--template` takes.
             found.append({**card, "template": path.parent.name})
+    if signature is not None:
+        _CARDS[str(root)] = (signature, copy.deepcopy(found))
     return found
 
 

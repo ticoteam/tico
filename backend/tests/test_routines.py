@@ -208,3 +208,22 @@ def test_pausing_keeps_event_runs_run_now_and_runs_handed_to_another_bot(api):
         assert H.task(c, event_run)["status"] == "open"      # one-off content, never announced again
         assert H.task(c, moved["id"])["status"] == "open"    # the other bot's now
         assert H.task(c, asked["id"])["status"] == "open"    # a person's Run now
+
+
+def test_a_routine_run_stays_company_scope_and_a_private_next_run_task_gets_its_own_run(api):
+    from backend import task_privacy as privacy
+    from backend.auth import Identity
+    r = setup(api)
+    secret = post(api, "tasks", {"owner": "ops", "title": "Review the settlement", "body": "Private.",
+                                 "next_run": True, "private": True})
+    assert secret["private"] is True
+    fired = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"]
+    attempt = post(api, "jobs/claim", {"next_run": True}, token=r["token"])["attempt"]
+    assert attempt["task"]["id"] == fired[0] and not attempt.get("next_run")
+    with api.app.state.store.read() as c:
+        assert not privacy.private_execution(c, Identity("bot:ops", "bot", attempt_id=attempt["id"]))
+    # It gets a run of its own rather than waiting for one that may never come.
+    assert not get(api, "tasks/" + secret["id"])["task"].get("next_run_waiting")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+                         "AND j.state='queued' AND json_extract(m.refs_json,'$.task')=?", (secret["id"],)).fetchone()

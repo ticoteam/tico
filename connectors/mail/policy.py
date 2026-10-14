@@ -185,13 +185,15 @@ def validate(data):
 
     boxes = data.get("mailboxes") or {}
     if not isinstance(boxes, dict):
-        _bad("`mailboxes:` must be a map of address -> {paused: bool}")
+        _bad("`mailboxes:` must be a map of address -> {paused: bool, allow_attachments: bool}")
     for addr, cfg in boxes.items():
         if "@" not in str(addr):
             _bad(f"{addr!r} under `mailboxes:` is not an email address")
         if not isinstance(cfg or {}, dict):
             _bad(f"mailboxes.{addr} must be a mapping")
-        _keys(f"mailboxes.{addr}", cfg or {}, ("paused",))
+        _keys(f"mailboxes.{addr}", cfg or {}, ("paused", "allow_attachments"))
+        if not isinstance((cfg or {}).get("allow_attachments", False), bool):
+            _bad(f"mailboxes.{addr}.allow_attachments must be true or false")
 
     d = dict(FALLBACK_DEFAULTS)
     got = data.get("defaults") or {}
@@ -238,7 +240,8 @@ def validate(data):
         "sandbox_mailbox": str(data.get("sandbox_mailbox") or "").strip().lower(),
         "internal_domains": [str(x).strip().lower().lstrip("@")
                              for x in (data.get("internal_domains") or ["acme.example"])],
-        "mailboxes": {str(a).strip().lower(): {"paused": bool((c or {}).get("paused", False))}
+        "mailboxes": {str(a).strip().lower(): {"paused": bool((c or {}).get("paused", False)),
+                                               "allow_attachments": (c or {}).get("allow_attachments")}
                       for a, c in boxes.items()},
         "defaults": d,
         "blocklist": {k: _addrs((data.get("blocklist") or {}).get(k), f"blocklist.{k}")
@@ -360,6 +363,12 @@ def paused(pol, mailbox):
     return bool((pol["mailboxes"].get(str(mailbox).strip().lower()) or {}).get("paused"))
 
 
+def attachments_allowed(pol, mailbox=None):
+    """The mailbox's own allow_attachments when it sets one, else the default for every mailbox."""
+    own = (pol["mailboxes"].get(str(mailbox or "").strip().lower()) or {}).get("allow_attachments")
+    return pol["defaults"]["allow_attachments"] if own is None else bool(own)
+
+
 def allowance_for(pol, slug, mailbox=None):
     """The allowance for this employee on this mailbox. No mailbox: its only allowance, if one."""
     box = str(mailbox or "").strip().lower()
@@ -372,8 +381,8 @@ def allowance_for(pol, slug, mailbox=None):
     return None
 
 
-def caps_for(pol, allowance):
-    """The stricter of the defaults and the allowance."""
+def caps_for(pol, allowance, mailbox=None):
+    """The stricter of the defaults and the allowance; attachments as the mailbox sets them."""
     d = pol["defaults"]
     per_day, cooldown = d["max_sends_per_day"], d["per_recipient_cooldown_days"]
     if allowance:
@@ -385,7 +394,7 @@ def caps_for(pol, allowance):
     return {"max_sends_per_day": per_day, "per_recipient_cooldown_days": cooldown,
             "max_external_recipients": d["max_external_recipients"],
             "allow_cc_external": d["allow_cc_external"],
-            "allow_attachments": d["allow_attachments"]}
+            "allow_attachments": attachments_allowed(pol, mailbox)}
 
 
 # ---------------------------------------------------------------- the recipient table
@@ -813,18 +822,21 @@ def check_draft(pol, slug, mailbox, to, cc=(), attachments=0, is_reply=False):
                 "Label the thread hub/needs-owner, put one line about it on your Issue, and "
                 "stop. Do not draft it, and do not route round it.")
     if attachments:
-        check_attachments_allowed(pol)
+        check_attachments_allowed(pol, mailbox)
     return everyone
 
 
-def check_attachments_allowed(pol):
-    """Refuses (exit 2) any attachment unless the policy opts in. Checked before a file is read."""
-    if not pol["defaults"]["allow_attachments"]:
-        raise Refused("attachments are not allowed on mail the hub writes "
-                      "(defaults.allow_attachments is false in registry/mail-policy.yaml; "
+def check_attachments_allowed(pol, mailbox=None):
+    """Refuses (exit 2) any attachment unless the policy opts in for this mailbox. Checked before a
+    file is read."""
+    if not attachments_allowed(pol, mailbox):
+        box = str(mailbox or "").strip().lower() or "<mailbox>"
+        raise Refused(f"attachments are not allowed on mail the hub writes from {box} "
+                      "(allow_attachments is off for it in registry/mail-policy.yaml; "
                       "it is off unless the team turns it on).",
-                      "Draft it without --attach and put the file on the task, or ask the owner "
-                      "to set defaults.allow_attachments: true.")
+                      "Draft it without --attach and put the file on the task. To change it, file a "
+                      f"task for BotOps to set mailboxes.{box}.allow_attachments: true; it is a "
+                      "registry change, not something to wait on a person for.")
 
 
 # ---------------------------------------------------------------- the send chain
@@ -965,14 +977,14 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                       + ". With outbound_send on, only internal addresses, the forward targets approved in Tico and "
                         "the sender of the thread being replied to go without one")
 
-    caps = caps_for(pol, allowance)
+    caps = caps_for(pol, allowance, mailbox)
     if attachments:
         # A file can carry anything the bot's computer holds, and a reviewer only sees its name and
         # size, so no standing path (an internal address, a forward target, the thread's sender or an
         # allowance) covers it: every attached send needs the owner's per-message yes.
         if not caps["allow_attachments"]:
-            return no("attachments", "attachments are not allowed (defaults.allow_attachments is "
-                                     "false in registry/mail-policy.yaml)")
+            return no("attachments", "attachments are not allowed from this mailbox (allow_attachments "
+                                     "is off for it in registry/mail-policy.yaml)")
         seen = appr
         if seen is not None and not seen["ok"] and not ext and not ext_cc:
             seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal
@@ -1042,7 +1054,7 @@ def describe(pol, slug, mailbox=None, root=None):
     """What `mail policy show --as <slug>` prints."""
     box = str(mailbox or "").strip().lower()
     a = allowance_for(pol, slug, box) if box else None
-    caps = caps_for(pol, a)
+    caps = caps_for(pol, a, box)
     sw = switch(slug)
     out = {"employee": slug, "mailbox": box, "send_enabled": pol["send_enabled"],
            "mailbox_paused": paused(pol, box) if box else None,

@@ -72,7 +72,9 @@ A copy of real data that must send nothing out takes `TICO_REHEARSAL=1` in `serv
 
 `enroll` writes `runner_id`, `token`, `operator`, `url`, `projects_dir` (the workspace),
 and `environment`, the environment id this registration belongs to. Without `capacity` (or with
-`"auto"`) the runner sizes how many turns it runs at once to the machine; a number is kept. Mode 0600 is
+`"auto"`) the runner sizes how many turns it runs at once to the machine: 5 per CPU core, as memory allows (3 per
+GB), at least 4 and at most 64. Turns mostly wait on their model provider, so this is well above the core count. A
+number is kept (up to 256), so set `"capacity": 80` to go higher. Mode 0600 is
 enforced on every command. Profiles add three more keys:
 
 ```json

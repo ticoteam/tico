@@ -99,7 +99,8 @@ const comments = {
     await shot('yes-no');
     await tap('yes');
     await page.locator('.decide .dc-card[data-key="task:t-person"]').waitFor();
-    await page.waitForFunction(() => !DEC.pending, null, {timeout: 8000});
+    // The pending action clears as its send starts; the outbox empties once the server has the write.
+    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
     // A person's card: the request leads, and the name is plain, with no link.

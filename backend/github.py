@@ -520,6 +520,8 @@ def install_github(app, settings, store):
             return {"ok": True}
         if event in ("installation", "installation_repositories"):
             from .repositories import queue_sync
+            # Accepting new permissions arrives here: a turn asks for Actions again at once.
+            app.state.github_app.live.pop("no-actions", None)
             queue_sync(app.state.github_app, refresh=True)
             return {"ok": True}
         with store.transaction() as c:

@@ -186,9 +186,9 @@ class LocalMirror:
         return (self.root / key).is_file()
 
     def newest(self, prefixes):
-        times = [p.stat().st_mtime for prefix in prefixes if (self.root / prefix).is_dir()
-                 for p in (self.root / prefix).rglob("*") if p.is_file()]
-        return max(times) if times else None
+        return _first_level_newest(
+            [p.stat().st_mtime for p in (self.root / prefix).rglob("*") if p.is_file()]
+            if (self.root / prefix).is_dir() else [] for prefix in prefixes)
 
 
 class S3Mirror:
@@ -224,8 +224,17 @@ class S3Mirror:
             raise
 
     def newest(self, prefixes):
-        times = [modified.timestamp() for prefix in prefixes for _, modified in self._objects(prefix)]
-        return max(times) if times else None
+        return _first_level_newest([modified.timestamp() for _, modified in self._objects(prefix)] for prefix in prefixes)
+
+
+def _first_level_newest(levels):
+    """The newest time in the first level that has any file. Litestream writes level 0 first and compacts upward,
+    so the lowest non-empty level holds the latest copy; the higher levels keep the 30-day history (tens of
+    thousands of files) that a status check run every 30 seconds must not list each time."""
+    for times in levels:
+        if times:
+            return max(times)
+    return None
 
 
 def mirror_from_env(env=None):

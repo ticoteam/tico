@@ -125,3 +125,26 @@ def test_readiness_candidates_only_include_assigned_bots():
                 {"bot": "ops", "config": {"runtime": "other"}}]
     assert Runner.readiness_candidates(assigned, eligible) == assigned
     assert Runner.readiness_candidates([], eligible) == []
+
+
+def test_an_archived_assignment_is_not_set_up_or_checked():
+    live = {"bot": "ops", "runner_id": "this-computer", "state": "active", "config": {"runtime": "fake"}}
+    gone = {"bot": "qa-old", "runner_id": "this-computer", "state": "archived", "config": {"runtime": "fake"}}
+    assert Runner.readiness_candidates([gone, live]) == [live]
+
+
+def test_the_catalog_is_parsed_again_only_when_a_card_changes(tmp_path, monkeypatch):
+    import os
+    from clients import catalog
+    card = tmp_path / "helper" / catalog.CARD
+    card.parent.mkdir()
+    card.write_text("title: Helper\n")
+    parses = []
+    real = catalog.yaml.safe_load
+    monkeypatch.setattr(catalog.yaml, "safe_load", lambda text: parses.append(1) or real(text))
+    assert catalog.cards(tmp_path)[0]["title"] == "Helper"
+    catalog.cards(tmp_path)[0]["title"] = "changed by a caller"
+    assert catalog.cards(tmp_path)[0]["title"] == "Helper" and len(parses) == 1
+    card.write_text("title: Assistant helper\n")
+    os.utime(card, ns=(card.stat().st_atime_ns, card.stat().st_mtime_ns + 10**9))
+    assert catalog.cards(tmp_path)[0]["title"] == "Assistant helper" and len(parses) == 2

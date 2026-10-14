@@ -1677,7 +1677,7 @@ def draft_text(p):
 def cmd_draft(args):
     ctx = Ctx(args, "draft")
     if args.attach:                                     # the policy says no before any file is read
-        pl.check_attachments_allowed(ctx.policy)
+        pl.check_attachments_allowed(ctx.policy, ctx.mailbox)
     payload, _ = make_draft(ctx, args.to, args.subject, body_of(args.body_file),
                             reply_to=args.reply_to, cc=args.cc or [],
                             approval=args.approval_issue,
@@ -2706,7 +2706,7 @@ def build_parser():
     df.add_argument("--attach", action="append", default=None, metavar="PATH",
                     help="a file in this bot's own folder to attach (relative paths start "
                          "there); repeat for several (25 MB in all). Needs allow_attachments in "
-                         "the policy, and sending it needs --approval-issue")
+                         "the mailbox's policy, and sending it needs --approval-issue")
     df.set_defaults(func=cmd_draft)
 
     dc = writes(base(sub.add_parser("discard", help="delete an unsent draft this employee made")))
@@ -2879,6 +2879,9 @@ def build_parser():
 
 def main(argv=None):
     import connectors.mail as pkg
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:2] == ["draft", "discard"]:                # a draft's own verb reads as `draft discard`
+        argv = ["discard", *argv[2:]]
     args = build_parser().parse_args(argv)
     if getattr(args, "untriaged", False) and (getattr(args, "new", False)
                                               or getattr(args, "since", None)):

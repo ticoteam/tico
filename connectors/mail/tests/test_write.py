@@ -146,7 +146,7 @@ class AttachAndDiscard(Writing):
         (self.home / "notes.pdf").symlink_to(self.home / ".env")        # a harmless name pointing at one
         self.assertIn("never attached", self.refused(self.home / "notes.pdf"))
 
-    def test_the_policy_default_refuses_and_an_explicit_true_allows_a_workspace_file(self):
+    def test_the_policy_default_refuses_and_the_mailbox_can_allow_a_workspace_file(self):
         pdf = self.home / "out" / "letter.pdf"
         pdf.parent.mkdir()
         pdf.write_bytes(b"%PDF-1.4 response letter")
@@ -154,10 +154,18 @@ class AttachAndDiscard(Writing):
         with mock.patch.object(cli, "open", create=True, side_effect=AssertionError("read")) as opened:
             self.assertIn("allow_attachments", self.refused(pdf))
         opened.assert_not_called()
-        self.allow()
+        # Off for every mailbox but this one.
+        self.write_policy(harness.POLICY.replace("ana@acme.example: { paused: false }",
+                                                 "ana@acme.example: { paused: false, allow_attachments: true }"))
         for path in (pdf, "out/letter.pdf"):                           # a relative path starts in the bot's folder
             rc, d, err = self.draft("--attach", str(path))
             self.assertEqual((rc, [a["name"] for a in d["attachments"]]), (0, ["letter.pdf"]), err)
+        # On for every mailbox but this one: its own false wins over the default.
+        self.service.drafts_by_id.clear()
+        self.write_policy(harness.POLICY.replace("  allow_attachments: false\n", "  allow_attachments: true\n")
+                          .replace("ana@acme.example: { paused: false }",
+                                   "ana@acme.example: { paused: false, allow_attachments: false }"))
+        self.assertIn("allow_attachments", self.refused(pdf))
 
     def test_an_oversized_file_is_refused_before_it_is_read(self):
         self.allow()
@@ -191,7 +199,7 @@ class AttachAndDiscard(Writing):
             self.assertEqual(rc, 2)
         self.assertIn(did, self.service.drafts_by_id)
         self.assertIn("m-ava", self.service.store)
-        rc, out, err = self.run_json("discard", did, "--as", "influencer", "--json")
+        rc, out, err = self.run_json("draft", "discard", did, "--as", "influencer", "--json")
         self.assertEqual((rc, out["discarded"]), (0, True), err)
         self.assertEqual(self.service.deleted_drafts, [did])
         self.assertIsNone(db.draft_by_gmail_id(self.conn(), "ana@acme.example", did))

@@ -49,6 +49,11 @@ GIT_CALL_REFRESH_MARGIN = 10 * 60
 REFRESH_MARGIN = TURN_START_REFRESH_MARGIN
 # What a bot's turn needs in its own repository, and nothing else.
 TURN_PERMISSIONS = {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
+READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
+# Lets a bot read workflow runs (a deploy's result) in any repository it can read. GitHub refuses a token naming
+# a permission the installation has not accepted, so turns fall back to asking without it (mint_turn).
+ACTIONS_READ = {"actions": "read"}
+ACTIONS_RETRY = 6 * 3600   # until the installation webhook or Check permissions says it changed
 CREATE_PERMISSIONS = {"administration": "write", "contents": "read"}
 PRODUCT_CREATE_PERMISSIONS = {"administration": "write", "metadata": "read"}
 ORG = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
@@ -380,6 +385,22 @@ class GitHubApp:
             with self.store.transaction() as c:
                 c.execute("UPDATE github_app SET administration=? WHERE id='app'", (int(allowed),))
         return allowed
+
+    def mint_turn(self, repos, base, **kw):
+        """`mint_reachable` for a bot's turn: `base` plus Actions (read), or `base` alone when the installation
+        has not accepted Actions yet. That refusal is remembered, so an older installation costs one extra
+        request every few hours and a token served from the cache costs none."""
+        with self.lock:
+            skip = self.live.get("no-actions", 0) > time.time()
+        if not skip:
+            try:
+                return self.mint_reachable(repos, {**base, **ACTIONS_READ}, **kw)
+            except Problem as problem:
+                if problem.code != "github_app_permissions":
+                    raise
+                with self.lock:
+                    self.live["no-actions"] = time.time() + ACTIONS_RETRY
+        return self.mint_reachable(repos, base, **kw)
 
     def delete_repo(self, repository):
         row = self.row()
@@ -794,7 +815,7 @@ def _said(response):
 
 def manifest(settings, name, administration):
     public = settings.public_url
-    permissions = {**TURN_PERMISSIONS, "checks": "read", "statuses": "read"}
+    permissions = {**TURN_PERMISSIONS, **ACTIONS_READ, "checks": "read", "statuses": "read"}
     if administration:
         permissions["administration"] = "write"
     return {"name": name[:34], "url": public, "redirect_url": public + "/api/v2/github/app/callback",
@@ -919,6 +940,7 @@ def install_github_app(app, settings, store):
         any bot whose repository was waiting for them."""
         owner(request)
         from .repo_waits import resume
+        service.live.pop("no-actions", None)
         view = status_view(refresh=True)
         if view.get("connected"):
             view["resumed"] = resume(service)
@@ -1056,7 +1078,7 @@ def install_github_app(app, settings, store):
         try:
             # GitHub permissions are token-wide. Never put read grants in a write token.
             if write_repos:
-                value, expires, write_repos, cached, reachability_changed = service.mint_reachable(
+                value, expires, write_repos, cached, reachability_changed = service.mint_turn(
                     write_repos, TURN_PERMISSIONS, diagnose_empty=write_repos == [repo], own=repo,
                     refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
                 if value:
@@ -1064,8 +1086,8 @@ def install_github_app(app, settings, store):
                                    'access': 'write', 'cached': cached,
                                    'reachability_changed': reachability_changed})
             if read_repos:
-                read_value, read_expires, read_repos, cached, reachability_changed = service.mint_reachable(
-                    read_repos, {'contents': 'read', 'metadata': 'read'}, refresh_margin=refresh_margin,
+                read_value, read_expires, read_repos, cached, reachability_changed = service.mint_turn(
+                    read_repos, READ_PERMISSIONS, refresh_margin=refresh_margin,
                     include_cache_status=True, missing=missing)
                 if read_value:
                     tokens.append({'token': read_value, 'expires_at': read_expires, 'repositories': read_repos,

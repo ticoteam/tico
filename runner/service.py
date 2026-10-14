@@ -283,20 +283,26 @@ def self_update(root=None, running=None, run=subprocess.run):
     return bool(running and head and head != running), ""
 
 
+TURNS_PER_CPU = 5        # a turn mostly waits on its model provider, not on this computer's CPU
+TURNS_PER_GB = 3         # a model CLI and its tools take about 300 MB
+MAX_AUTO_TURNS = 64
+MAX_TURNS = 256          # the most the server accepts
+
+
 def machine_capacity(configured=None):
-    """How many turns this computer runs at once. A number in the config is kept as written; missing or "auto"
-    is sized to the machine, since a bot's task lanes now run side by side: a core and about 2 GB of memory per
-    turn, never below the 4 every runner had, and at most 16 so one large server does not take a whole team's queue."""
+    """How many turns this computer runs at once. A number in the config is kept as written (up to MAX_TURNS), so an
+    owner may go higher; missing or "auto" is sized to the machine: TURNS_PER_CPU per core, as memory allows (TURNS_PER_GB),
+    never below the 4 every runner had and at most MAX_AUTO_TURNS."""
     if configured not in (None, "", "auto"):
         try:
-            return max(1, int(configured))
+            return max(1, min(int(configured), MAX_TURNS))
         except (TypeError, ValueError):
             pass
     try:
-        memory_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // 2**30
+        memory_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
     except (AttributeError, OSError, ValueError):
         memory_gb = 8
-    return max(4, min(os.cpu_count() or 4, memory_gb // 2, 16))
+    return max(4, min((os.cpu_count() or 1) * TURNS_PER_CPU, int(memory_gb * TURNS_PER_GB), MAX_AUTO_TURNS))
 
 
 def supervised():
@@ -1247,8 +1253,10 @@ class Runner:
 
     @staticmethod
     def readiness_candidates(assignments, eligible=()):
-        """Only live assignments are readiness candidates; eligible rows are placement options."""
-        candidates = {entry["bot"]: entry for entry in assignments}
+        """Only live assignments are readiness candidates; eligible rows are placement options. An archived bot
+        keeps its assignment but is never set up or checked: its repository may be gone, and retrying it on every
+        maintenance pass kept an idle computer busy."""
+        candidates = {entry["bot"]: entry for entry in assignments if entry.get("state") != "archived"}
         return [candidates[bot] for bot in sorted(candidates)]
 
     def assigned_here(self, entry):
@@ -3372,6 +3380,11 @@ class Runner:
                     # A server from before task lanes knows the other capabilities; only the new one goes.
                     body["capabilities"].remove("task_lanes_v2")
                     self._task_lanes_after = time.monotonic() + 600
+                    continue
+                if exc.status == 422 and re.search(r"(?:^|[ ;])(?:body\.)?capacity:", detail) and (body.get("capacity") or 0) > 32:
+                    # A server from before larger capacities accepts at most 32 and never hands out more turns than
+                    # the runner reports, so after a rollback the runner keeps working at 32.
+                    body["capacity"] = 32
                     continue
                 root_fields = ("worktrees", "profiles", "repositories", "capabilities")
                 field = next((name for name in root_fields if name in body and re.search(
