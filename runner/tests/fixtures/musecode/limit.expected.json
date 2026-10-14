@@ -1,0 +1,20 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Let me",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "turn_failed",
+  "error": "provider error: rate limit exceeded (status 429)",
+  "limit": true
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

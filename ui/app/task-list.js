@@ -6,8 +6,10 @@
 // ---- filters: chips over the loaded tasks, kept in the address (#/tasks?owner=bot:eng&tag=bug) so a view can be shared
 const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['tag', 'Tag'], ['repo', 'Repo'], ['pr', 'Has PR'], ['due', 'Due'], ['asked', 'Asked by']];
 const TASK_FILTER_WORDS = {pr: {yes: 'Yes', no: 'No'}, due: {overdue: 'Overdue', week: 'Next 7 days', any: 'Has a date', none: 'No date'}};
-const TASK_GROUPS = [['status', 'Status'], ['owner', 'Owner'], ['team', 'Team'], ['parent', 'Parent task'], ['tag', 'Tag'], ['requester', 'Asked by']];
-const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'requester'};
+const TASK_GROUPS = [['need', 'What it takes'], ['status', 'Status'], ['owner', 'Owner'], ['team', 'Team'], ['parent', 'Parent task'], ['tag', 'Tag'], ['requester', 'Asked by']];
+const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
+// What it takes groups Needs you only: elsewhere the list holds work nobody is asked for.
+const taskGroupsFor = view => TASK_GROUPS.filter(([k]) => k !== 'need' || view === 'foryou');
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
 const isTasksRoute = r => [TASKS, BOARD, ISSUES, RECURRING].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
@@ -181,7 +183,7 @@ function taskItems(state, view = state.view) {
     if (view === 'board' && pipelineSelectedType(state)) return true;
     if (view === 'done') return it.col === 'done';
     if (it.col === 'done') return false;
-    return view === 'foryou' ? taskNeedsViewer(it.task) || taskOlderAsk(it.task) : true;
+    return view === 'foryou' ? (taskNeedsViewer(it.task) && !needsFolded(it.id)) || taskOlderAsk(it.task) : true;
   });
   state.memo?.set(view, out);
   return out;
@@ -189,7 +191,7 @@ function taskItems(state, view = state.view) {
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
-  return {foryou: active.filter(it => taskNeedsViewer(it.task)).length + looseAsks().length + pendingApprovals().length, list: active.length,
+  return {foryou: active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length, list: active.length,
     snoozed: taskItems(state, 'snoozed').length, recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
 }
 
@@ -224,7 +226,7 @@ function tasksFilterOptions(state, field) {
 function tasksGroupBy(state) {
   if (state.view === 'done') return 'none';
   const by = state.group?.[state.view] || TASK_GROUP_DEFAULT[state.view] || 'status';
-  return TASK_GROUPS.some(([k]) => k === by) ? by : 'status';
+  return taskGroupsFor(state.view).some(([k]) => k === by) ? by : 'status';
 }
 const tagHue = key => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const tasksById = state => {
@@ -237,6 +239,14 @@ function tasksGroupsFor(items, by, state) {
   const groups = new Map();
   const add = (key, make, it) => { if (!groups.has(key)) groups.set(key, {key, items: [], ...make()}); groups.get(key).items.push(it); };
   const me = myActor();
+  if (by === 'need') {
+    // In the server's order (what is due first), each card under what it takes; approvals and questions asked
+    // outside any task join their group (tasksListHTML).
+    const at = it => needsIndex().byId.get(String(it.id))?.i ?? Infinity;
+    const buckets = new Map(NEED_GROUPS.map(([k, label]) => [k, {key: 'need:' + k, label, items: []}]));
+    for (const it of items.slice().sort((a, b) => at(a) - at(b))) buckets.get(needsItem(it.id)?.need || 'do').items.push(it);
+    return [...buckets.values()];
+  }
   if (by === 'requester' && state.view === 'foryou') {
     return companyNeedGroups(items).map(g => ({key: 'a:' + g.actor, label: actorLabel(g.actor), icon: actorFace(g.actor, 16), items: g.items,
       chat: chatOf(g.actor), chatName: actorLabel(g.actor)}));
@@ -326,6 +336,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
   const when = ctx.done ? (it.closed || it.updated) : it.updated;
+  const need = state.view === 'foryou' ? needsItem(t.id) : null;
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
@@ -335,7 +346,8 @@ function taskListRowHTML(it, ctx, depth = 0) {
     <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
     ${parent?.title ? `<span class="tl-parent" title="Part of ${esc(parent.title)}"><span aria-hidden="true">↳ </span><span class="tl-parent-t">${esc(parent.title)}</span></span>` : ''}
     ${note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
-    <span class="tl-chips">${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : ''}${taskChipsHTML(t)}</span>
+    <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : ''}${taskChipsHTML(t)}</span>
+    ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskStatusText(t)}
     <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${ctx.done ? 'Done' : 'Updated'} ${esc(fmt(when))}">${esc(ageShort(when))}</time>
@@ -350,9 +362,17 @@ function tasksEmptyHTML(state, what) {
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = state.view === 'done';
   // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
-  const asks = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state) ? approvalsHTML() + looseAsksHTML() : '';
+  const cards = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state);
+  // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
+  const byNeed = by === 'need' && state.view === 'foryou';
+  const asks = cards && !byNeed ? approvalsHTML() + looseAsksHTML() : '';
+  const extra = new Map();
+  if (cards && byNeed) for (const it of [...pendingApprovals(), ...looseAsks()]) {
+    const k = 'need:' + (it.need || 'do');
+    extra.set(k, [...(extra.get(k) || []), it]);
+  }
   if (!items.length && asks) return `<div class="tl">${asks}</div>`;
-  if (!items.length) {
+  if (!items.length && !extra.size) {
     const emptyWhat = state.view === 'foryou' ? 'Nothing needs you.' : state.view === 'snoozed' ? 'Nothing snoozed.'
       : done ? state.doneNext != null ? 'No matching finished tasks on this page.' : 'Nothing finished yet.' : 'Nothing open.';
     const empty = tasksEmptyHTML(state, emptyWhat);
@@ -370,10 +390,11 @@ function tasksListHTML(items, state) {
   const select = tasksCanSelect();
   return `<div class="tl${select ? ' can-select' : ''}" data-group-by="${esc(by)}">${asks}${groups.map((g, i) => {
     const {tops: raw, kids} = tasksNest(g.items, nest);
-    const tops = raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated)) : byRank);
-    if (!tops.length) return '';
+    const tops = byNeed ? raw : raw.slice().sort(done ? byNewest : g.key === 'scheduled' ? (a, b) => String(a.updated).localeCompare(String(b.updated)) : byRank);
+    const more = extra.get(g.key) || [];
+    if (!tops.length && !more.length) return '';
     const ctx = {state, kids, done, by, select};
-    const count = tops.reduce((n, it) => n + 1 + tasksDescendants(it.key, kids), 0);
+    const count = more.length + tops.reduce((n, it) => n + 1 + tasksDescendants(it.key, kids), 0);
     const ck = `${state.view}:${by}:${g.key}`, collapsed = state.collapsed.has(ck) !== !!g.folded;
     const id = `tl-g-${i}`;
     const head = g.label ? `<header class="tl-ghead">
@@ -384,7 +405,7 @@ function tasksListHTML(items, state) {
         ${g.create ? `<button type="button" class="tl-gact" data-group-add="${esc(g.key)}" aria-label="New task in ${esc(g.label)}" title="New task">${TL_ICON.plus}</button>` : ''}
       </header>` : '';
     return `<section class="tl-group${collapsed ? ' collapsed' : ''}" data-group="${esc(g.key)}">${head}
-      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
+      <div class="tl-rows" id="${id}" role="list"${g.label ? ` aria-label="${esc(g.label)}"` : ' aria-label="Tasks"'}${collapsed ? ' hidden' : ''}>${more.map(it => it.kind === 'ask' ? looseAskRow(it) : needsV2Item(it, false)).join('')}${tops.map(it => taskListRowHTML(it, ctx)).join('')}</div></section>`;
   }).join('')}${done && state.doneNext != null ? '<button class="ghost tl-more" type="button" id="board-more">Show more</button>' : ''}</div>`;
 }
 // Done: everything finished, newest first, a page at a time (routine runs live under Recurring).
@@ -522,7 +543,7 @@ function tasksFieldMenu(state, anchor) {
 function tasksGroupMenu(state, anchor) {
   const by = tasksGroupBy(state);
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Group by"><div class="tl-menu-h" aria-hidden="true">Group by</div>
-    ${TASK_GROUPS.map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi" data-pick-group="${k}"><span>${esc(label)}</span>${k === by ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
+    ${taskGroupsFor(state.view).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi" data-pick-group="${k}"><span>${esc(label)}</span>${k === by ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
     pop.onclick = ev => {
       const b = ev.target.closest('[data-pick-group]'); if (!b) return;
       pop.hidePopover();

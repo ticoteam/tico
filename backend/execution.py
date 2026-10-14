@@ -515,11 +515,16 @@ class Execution:
                           (bot, content, who.runner_id, now))
         from . import worktrees
         worktree_actions = worktrees.heartbeat(c, who, body.worktrees, readiness.get('worktrees', False), self.store.settings.github_owner)
+        # A worktree whose task neither this computer nor its owning bot here can read is left out and counted, so one
+        # such task cannot fail the whole readiness report (task_privacy.require_payload refuses the response).
+        sendable = [a for a in worktree_actions if privacy.worktree_action_readable(c, who, a)]
+        skipped = len(worktree_actions) - len(sendable)
         # A Restart a person pressed goes to the runner once; it restarts when no turn is running.
         restart = c.execute("SELECT restart_requested FROM runners WHERE id=?", (who.runner_id,)).fetchone()
         if restart and restart["restart_requested"]:
             c.execute("UPDATE runners SET restart_requested=NULL WHERE id=?", (who.runner_id,))
-        return {"server_time": H.now(), "assignments": self.assigned(c, who), "runtime_credential_source": True, "worktree_record_stamp": True, "worktree_actions": worktree_actions,
+        return {"server_time": H.now(), "assignments": self.assigned(c, who), "runtime_credential_source": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+                **({"worktree_actions_skipped": skipped} if skipped else {}),
                 **({"restart": True} if restart and restart["restart_requested"] else {})}
 
     def assigned(self, c, who):

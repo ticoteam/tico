@@ -89,6 +89,7 @@ class Host:
 
     def __init__(self, log=None):
         self._events = queue.Queue()
+        self._ready = threading.Event()     # set on every emit; the runner's turn loop wakes on it
         self._lock = threading.RLock()
         self._log = log or (lambda msg: None)
 
@@ -100,7 +101,13 @@ class Host:
         ev = {"kind": kind, "thread_id": thread_id, "turn_id": turn_id}
         ev.update(fields)
         self._events.put(ev)
+        self._ready.set()
         return ev
+
+    def wait_events(self, timeout):
+        """Block until an event is emitted or `timeout` passes; the next drain then has it."""
+        self._ready.wait(timeout)
+        self._ready.clear()
 
     def drain(self, limit=500):
         """Every event waiting, oldest first, at most `limit` of them."""
@@ -179,7 +186,7 @@ def is_limit(text):
 # It wins over AUTH_RETRY_RE, whose 401 pattern is a lost token renewal, not a wrong key.
 AUTH_REJECTED_RE = re.compile(r"incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)"
                               r"|not logged in|please run /login|invalid authentication credentials|authentication_error"
-                              r"|oauth session expired and could not be refreshed", re.I)
+                              r"|oauth session expired and could not be refreshed|missing meta credentials", re.I)
 _SECRETISH = re.compile(r"\b(?:sk|pk|xai|gsk|key|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,}")
 
 

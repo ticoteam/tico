@@ -5,7 +5,7 @@ name = "pi (multi-provider)"
 host = "pi"
 executable = "pi"
 catch_all = true
-providers = ["deepseek", "moonshot", "meta", "mistral", "openrouter"]
+providers = ["deepseek", "moonshot", "mistral", "openrouter"]
 
 [install]
 method = "npm"

@@ -1,0 +1,46 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Acme ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tool",
+  "tool": "run_command",
+  "state": "running"
+ },
+ {
+  "kind": "delta",
+  "text": "reply.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tokens",
+  "input": 120,
+  "output": 8,
+  "cached": 64,
+  "total": 128,
+  "usage": {
+   "input": 120,
+   "cached": 64,
+   "output": 8
+  }
+ },
+ {
+  "kind": "message",
+  "text": "Acme reply.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

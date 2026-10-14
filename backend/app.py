@@ -2238,6 +2238,20 @@ def create_app(settings=None):
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
+    @app.post("/api/v2/needs-you/recommended")
+    def take_recommendation(request: Request, body: M.TakeRecommendation):
+        """One tap on "Do what you recommend": answers the bot's ask with its recommendation and closes the card."""
+        who = request.state.identity
+        views.human_only(who)
+        def work(c):
+            asked = H.message(c, body.ask)
+            if not asked or asked["kind"] != "ask":
+                raise Problem("not_found", "Question not found", 404)
+            auth.conversation(c, who, asked["conversation_id"])
+            privacy.require_message(c, who, asked)
+            return views.take_recommendation(c, auth, who, asked, body.version)
+        return mutate(request, body, work)
+
     @app.get("/api/v2/tasks")
     def tasks(request: Request, response: Response, owner: str | None = None, requester: str | None = None,
               status: str | None = None, lane: str | None = None, label: str | None = None, limit: int = 500,
@@ -3746,7 +3760,7 @@ def create_app(settings=None):
     def desired_runner_release(request: Request):
         with store.read() as c:
             execution.runner(c, request.state.identity)
-        return {**runner_versions.desired(), "features": {"task_files_multipart": True}}
+        return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -3857,12 +3871,18 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: harness_actions.request(
             c, request.state.identity, rid, body.harness, body.action))
 
+    @app.post("/api/v2/runners/{rid}/harness-choices")
+    def harness_choice(request: Request, rid: str, body: M.HarnessChoice):
+        return mutate(request, body, lambda c: harness_actions.choose(
+            c, request.state.identity, rid, body.harness, body.enabled))
+
     @app.get("/api/v2/runner-harness-actions")
     def runner_harness_actions(request: Request):
         who = request.state.identity
         with store.transaction() as c:
             execution.runner(c, who)
-            return {"actions": harness_actions.pending(c, who.runner_id)}
+            return {"actions": harness_actions.pending(c, who.runner_id),
+                    "choices": harness_actions.choices(c, who.runner_id)}
 
     @app.post("/api/v2/runner-harness-actions/{aid}/report")
     def report_harness_action(request: Request, aid: str, body: M.HarnessActionReport):

@@ -249,6 +249,21 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             principal = "bot:" + attempt["bot"]
             if not attempt_readable(c, principal, attempt.get("id")):
                 raise Problem("privacy", "This execution is no longer available", 403)
+    if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
+            and isinstance(payload.get("worktree_actions"), list)):
+        # A computer is never a task participant, so its heartbeat's worktree actions are each read as the bot
+        # it hosts that owns the worktree; the rest of the heartbeat is still read as the computer.
+        if not all(worktree_action_readable(c, who, action) for action in payload["worktree_actions"]):
+            raise Problem("privacy", "This response contains a task you can no longer read", 403)
+        require_payload(c, who, {k: v for k, v in payload.items() if k != "worktree_actions"}, principal, checked_for)
+        return payload
+    if (who.role == "runner" and principal == who.actor and isinstance(payload, dict)
+            and payload.get("kind") == "worktree" and payload.get("id") and payload.get("computer_id") == who.runner_id
+            and c.execute("SELECT 1 FROM task_links WHERE id=? AND kind='worktree' AND computer_id=?",
+                          (payload["id"], who.runner_id)).fetchone()):
+        if not worktree_link_readable(c, who, payload):
+            raise Problem("privacy", "This response contains a task you can no longer read", 403)
+        return payload
     if principal != checked_for and not readable(c, principal, references(c, payload)):
         raise Problem("privacy", "This response contains a task you can no longer read", 403)
     if isinstance(payload, dict):
@@ -279,6 +294,43 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             if isinstance(value, (dict, list)):
                 require_payload(c, who, value, principal, principal)
     return payload
+
+
+def worktree_action_readable(c, who, action):
+    """Whether a computer may be sent this worktree action: its task is readable by the computer, or by the bot that
+    owns the worktree while that bot is hosted on this computer. A removal of a worktree on this computer is always
+    sent: the computer's own worktree list already names its task, path and branch, and withholding it would leave
+    the private checkout on disk and its place counted against the bot for good."""
+    ids = references(c, action)
+    if readable(c, who.actor, ids):
+        return True
+    if not isinstance(action, dict):
+        return False
+    if action.get("action") == "remove" and c.execute(
+            "SELECT 1 FROM task_links WHERE id=? AND kind='worktree' AND computer_id=?",
+            (action.get("link_id"), who.runner_id)).fetchone():
+        return True
+    return hosted_owner_reads(c, who, action.get("owner"), ids)
+
+
+def worktree_link_readable(c, who, link):
+    """A computer's own write to a worktree link on it answers with the link row, read like its actions: by the bot
+    that owns the worktree while that bot is hosted on this computer."""
+    ids = references(c, link)
+    if readable(c, who.actor, ids):
+        return True
+    detail = H._json(link.get("detail_json"), {}) or {}
+    owner = detail.get("owner")
+    if not owner and link.get("task_id"):
+        task = c.execute("SELECT owner FROM tasks WHERE id=?", (link["task_id"],)).fetchone()
+        owner = task and task["owner"]
+    return hosted_owner_reads(c, who, H.actor_id(owner) if isinstance(owner, str) else None, ids)
+
+
+def hosted_owner_reads(c, who, owner, ids):
+    hosted = isinstance(owner, str) and c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?",
+                                                  (owner, who.runner_id)).fetchone()
+    return bool(hosted) and readable(c, "bot:" + owner, ids)
 
 
 def attempt_readable(c, actor, aid, memo=None):

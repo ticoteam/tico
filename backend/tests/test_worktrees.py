@@ -546,3 +546,45 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
     assert response.json() == {'sessions': [{'bot': 'cmo', 'task': tid, 'status': 'done'}]}
     assert post(api, path, asked, 'bot-test').status_code == 403
     assert post(api, path, {'sessions': [{'bot': 'cmo', 'task': tid}] * 501}, 'runner-test').status_code == 422
+
+
+def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_its_bot_can(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    quiet = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+             'worktrees': []}
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1,title='Secret plan' WHERE id=?", (tid,))
+    # The computer is no task participant, but the bot it hosts owns this private task: its checkout is sent.
+    beat = post(api, 'runners/heartbeat', quiet, 'runner-test')
+    assert beat.status_code == 200, beat.text
+    assert [(a['task_id'], a['action']) for a in beat.json()['worktree_actions']] == [(tid, 'restore')]
+    assert 'worktree_actions_skipped' not in beat.json()
+    # Owned by a bot this computer does not host: readiness still passes, counts the skip and says nothing of it.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.owner','bot:cpo') WHERE id=?", (link['link_id'],))
+    beat = post(api, 'runners/heartbeat', quiet, 'runner-test')
+    assert beat.status_code == 200, beat.text
+    assert beat.json()['worktree_actions'] == [] and beat.json()['worktree_actions_skipped'] == 1
+    assert tid not in beat.text and tid[:8] not in beat.text and 'Secret plan' not in beat.text
+    # Back with the hosted bot, the computer's report on its own worktree is answered, not refused.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='bot:cmo' WHERE id=?", (tid,))
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.owner','bot:cmo') WHERE id=?", (link['link_id'],))
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    # A removal always reaches the computer holding the worktree, even once nobody it hosts can read the task.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='closed',owner='human:bea' WHERE id=?", (tid,))
+    present = {**quiet, 'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
+                                       'branch': link['branch']}]}
+    beat = post(api, 'runners/heartbeat', present, 'runner-test')
+    assert beat.status_code == 200, beat.text
+    assert [a['action'] for a in beat.json()['worktree_actions']] == ['remove']
+    assert 'worktree_actions_skipped' not in beat.json() and 'Secret plan' not in beat.text
+    from backend import task_privacy
+    from backend.auth import Identity
+    computer = Identity('runner:r1', 'runner', runner_id='r1')
+    with api.app_state.store.read() as c, pytest.raises(task_privacy.Problem):
+        task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner': 'cmo', 'action': 'restore'}]})
+

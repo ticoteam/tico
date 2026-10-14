@@ -1,0 +1,32 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "tool",
+  "name": "shell",
+  "tool": "shell",
+  "phase": "tool_execution_start"
+ },
+ {
+  "kind": "tokens",
+  "input": 100,
+  "output": 7,
+  "total": 107,
+  "usage": {
+   "input": 100,
+   "cached": 40,
+   "output": 7
+  }
+ },
+ {
+  "kind": "turn_failed",
+  "error": "invalid run configuration: Required MCP server `hub` failed during startup",
+  "limit": false
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

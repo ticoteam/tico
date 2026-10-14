@@ -15,7 +15,7 @@ import re
 
 from .store import H, Problem
 
-RUNTIMES = ("codex", "claude")
+RUNTIMES = ("codex", "claude", "musecode")
 # Only the runtimes whose CLI asks for a code to be pasted back.
 PASTE_RUNTIMES = ("claude",)
 LIFETIME = 15 * 60
@@ -111,7 +111,7 @@ def _login(c, rid, lid):
 def start(c, who, rid, runtime, profile="", auth=None):
     _operator(c, who, rid, auth)
     if runtime not in RUNTIMES:
-        raise Problem("kind", "Browser sign-in works for " + " and ".join(RUNTIMES)
+        raise Problem("kind", "Browser sign-in works for " + ", ".join(RUNTIMES[:-1]) + " and " + RUNTIMES[-1]
                       + "; set other runtimes up from the computer's terminal", 422)
     runner = _runner(c, rid)
     sweep(c)

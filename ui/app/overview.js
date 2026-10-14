@@ -74,6 +74,7 @@ async function overviewLoadComputers() {
 function pageOverview() {
   const main = $('#main'); main.classList.add('overview-layout');
   main.innerHTML = `<section class="overview-page" aria-label="Company overview">
+    <a class="overview-needs" id="overview-needs" href="#/tasks" hidden></a>
     <div class="overview-stuck" id="overview-stuck" role="status" hidden></div>
     <iframe id="overview-frame" class="overview-frame" title="Interactive campus of your computers, bots and human teammates" src="/tico/ui/overview/index.html" allow="fullscreen"></iframe>
   </section>`;
@@ -89,6 +90,7 @@ function pageOverview() {
     if (ev.data?.type === 'tico-overview-replay-load') void overviewReplayLoad(state);
   }, {signal: state.abort.signal});
   overviewStuckDraw();
+  overviewNeedsDraw();
   void overviewLoadComputers().then(() => { if (OVERVIEW_PAGE === state) overviewRefresh(); });
 }
 // The campus replay reads the same history as the Replay page (GET /api/v2/replay), with the viewer's own rights,
@@ -129,4 +131,18 @@ function overviewStuckDraw() {
   el.hidden = !rows.length;
   el.innerHTML = rows.length ? `<strong>Stuck · ${rows.length}</strong><ul class="hl-bots">${hlStuckHtml(rows.slice(0, 5))}</ul>${rows.length > 5 ? `<a href="#/health">${rows.length - 5} more</a>` : ''}` : '';
   overviewRefresh();
+}
+// The person's Needs you count, with how many items left it this week without them (expired, withdrawn, or answered by
+// their Assistant), so the number is read against what is already going away on its own.
+function overviewNeedsDraw() {
+  const el = OVERVIEW_PAGE && $('#overview-needs'); if (!el) return;
+  if (S.me?.role === 'bot') { el.hidden = true; return; }
+  const n = (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
+  if (w?.expired) parts.push(`${w.expired} expired`);
+  if (w?.withdrawn) parts.push(`${w.withdrawn} withdrawn`);
+  if (w?.assistant) parts.push(`${w.assistant} answered by your Assistant`);
+  el.hidden = false;
+  el.innerHTML = `<strong>Needs you <span class="tnum">${n}</span></strong>${w?.total
+    ? `<span class="muted">${w.total} went away on their own this week (${esc(parts.join(', '))})</span>` : ''}`;
+  el.setAttribute('aria-label', `Needs you: ${n}${w?.total ? `. ${w.total} went away on their own this week` : ''}`);
 }

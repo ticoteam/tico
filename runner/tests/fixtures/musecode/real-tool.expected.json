@@ -1,0 +1,36 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "tool",
+  "name": "tool_search",
+  "tool": "tool_search",
+  "phase": "tool_execution_start"
+ },
+ {
+  "kind": "tool",
+  "name": "mcp__hub__hub_task_list",
+  "tool": "mcp__hub__hub_task_list",
+  "phase": "tool_execution_start"
+ },
+ {
+  "kind": "delta",
+  "text": "done",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "done",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

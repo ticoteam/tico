@@ -1,0 +1,1170 @@
+//! Computer-owned task worktrees (runner/worktrees.py): the heartbeat's report of each worktree the server
+//! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
+//! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
+//! preserving its history. Adding and setting up a worktree stay in the hub CLI (`hub worktree add`), which
+//! takes the same task lock (`tasks/.locks/<sha[:2]>`) and writes the same markers.
+
+use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use regex::Regex;
+use serde_json::{json, Map, Value};
+
+use crate::client::{ApiError, Client};
+use crate::env::Env;
+use crate::gitrun::{self, Fault, Out};
+use crate::repositories::{self, GB};
+use crate::util::text_of;
+
+/// A failure: a message for a person (with git's own words for network commands), a cleanup to retry
+/// later, or an operating-system error named by kind.
+#[derive(Debug, Clone)]
+pub enum WtErr {
+    Msg(String, Option<String>),
+    Deferred(String),
+    Os(String),
+}
+
+impl WtErr {
+    fn msg(text: impl Into<String>) -> WtErr {
+        WtErr::Msg(text.into(), None)
+    }
+
+    pub fn text(&self) -> String {
+        match self {
+            WtErr::Msg(m, _) | WtErr::Deferred(m) | WtErr::Os(m) => m.clone(),
+        }
+    }
+}
+
+impl From<String> for WtErr {
+    fn from(m: String) -> WtErr {
+        WtErr::Msg(m, None)
+    }
+}
+
+impl From<std::io::Error> for WtErr {
+    fn from(e: std::io::Error) -> WtErr {
+        WtErr::Os(format!("OSError ({e})"))
+    }
+}
+
+type R<T> = Result<T, WtErr>;
+
+const SHA: &str = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$";
+
+fn is_sha(text: &str) -> bool {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(SHA).unwrap()).is_match(text)
+}
+
+fn is_symlink(p: &Path) -> bool {
+    p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Lexically normal absolute path with symlinks resolved for the part that exists (Python `Path.resolve()`).
+fn resolve(path: &Path) -> PathBuf {
+    if let Ok(p) = path.canonicalize() {
+        return p;
+    }
+    let mut tail = vec![];
+    let mut head = path.to_path_buf();
+    while !head.exists() {
+        match (head.file_name().map(|n| n.to_os_string()), head.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.push(name);
+                head = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+    let mut out = head.canonicalize().unwrap_or(head);
+    for name in tail.into_iter().rev() {
+        out.push(name);
+    }
+    out
+}
+
+/// A worktree's place in the team workspace: relative, no `..`, no symlinks, never in or under `repos/`
+/// (compared case-insensitively on a case-insensitive volume).
+pub fn safe_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
+    let root = resolve(workspace);
+    if relative.len() > 1000 || relative.chars().any(|c| (c as u32) < 32) {
+        return Err("Invalid worktree path".into());
+    }
+    let raw = Path::new(relative);
+    let path = root.join(raw);
+    let parts: Vec<_> = raw.components().collect();
+    let dotdot = parts.iter().any(|c| matches!(c, std::path::Component::ParentDir));
+    if raw.is_absolute() || dotdot || relative.is_empty() || parts.is_empty() || is_symlink(&path) {
+        return Err("Use a worktree inside the team workspace".into());
+    }
+    let resolved = resolve(&path);
+    let normal: PathBuf = path.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect();
+    if resolved != normal {
+        return Err("Worktree path must not contain symlinks".into());
+    }
+    let swapped: String = root.display().to_string().chars().map(|c| if c.is_lowercase() { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() }).collect();
+    let insensitive = same_file(&root, Path::new(&swapped));
+    let mut repo_path = root.join("repos").display().to_string();
+    let mut candidate = resolved.display().to_string();
+    if insensitive {
+        repo_path = repo_path.to_lowercase();
+        candidate = candidate.to_lowercase();
+    }
+    if candidate == repo_path || candidate.starts_with(&format!("{repo_path}/")) {
+        return Err("Worktree must stay outside repos".into());
+    }
+    if resolved == root || !resolved.starts_with(&root) || resolved.starts_with(root.join("repos")) {
+        return Err("Worktree must stay inside the team workspace, outside repos".into());
+    }
+    Ok(resolved)
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+pub fn disk_floor(workspace: &Path) -> R<()> {
+    let free = crate::readiness::disk_usage(workspace).map(|d| d.1).unwrap_or(u64::MAX);
+    let floor = 5.0 * GB;
+    if (free as f64) < floor {
+        return Err(WtErr::msg(format!("Not enough disk to create worktree: {:.1} GB free, needs 5 GB. Free space on this volume", free as f64 / GB)));
+    }
+    Ok(())
+}
+
+/// Runner git in a worktree or base clone (worktrees.git): the restricted environment, at most 120 s.
+pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
+    if args.len() >= 2 && args[0] == "worktree" && args[1] == "prune" && is_symlink(&path.join(".git").join("worktrees")) {
+        return Err(WtErr::msg("Worktree registrations point outside the base clone; left as they are"));
+    }
+    let done = gitrun::git(path, &crate::safegit::environment(env), args, 120).await.map_err(|f| match f {
+        Fault::Timeout(_) => WtErr::Os("TimeoutExpired".into()),
+        Fault::Stopped => WtErr::msg(gitrun::STOPPED),
+        Fault::Io(e) => WtErr::Os(format!("OSError ({e})")),
+    })?;
+    if check && !done.ok() {
+        let detail = ["push", "fetch", "ls-remote"].contains(&args[0]).then(|| if done.stderr.is_empty() { format!("exit {}", done.code) } else { done.stderr.clone() });
+        return Err(WtErr::Msg(format!("Git {} failed (exit {}); check access, network, disk space and repository state", args[0], done.code), detail));
+    }
+    Ok(done)
+}
+
+/// The task lock the hub CLI takes too: one worktree step at a time per task path on this computer.
+pub struct TaskLock(#[allow(dead_code)] std::fs::File);
+
+pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
+    let folder = workspace.join("tasks").join(".locks");
+    std::fs::create_dir_all(&folder)?;
+    let name = &gitrun::sha256_hex(task.as_bytes())[..2];
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(folder.join(name))?;
+    let file = tokio::task::spawn_blocking(move || {
+        use std::os::fd::AsRawFd;
+        // SAFETY: flock on a file this process holds open.
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc == 0 { Ok(file) } else { Err(std::io::Error::last_os_error()) }
+    })
+    .await
+    .map_err(|e| WtErr::Os(e.to_string()))??;
+    Ok(TaskLock(file))
+}
+
+fn detail(row: &Value) -> Map<String, Value> {
+    match &row["detail_json"] {
+        Value::String(s) if !s.is_empty() => serde_json::from_str::<Value>(s).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default(),
+        Value::Object(m) => m.clone(),
+        _ => Map::new(),
+    }
+}
+
+/// A formerly-present link an old heartbeat demoted, recognized for verification (_demoted_legacy_history).
+fn legacy_demoted(row: &Value, d: &Map<String, Value>) -> bool {
+    let last = d.get("last_commit").and_then(|v| v.as_str()).unwrap_or("");
+    row["state"] == "pending"
+        && d.get("checkout_state").is_none_or(|v| v.is_null() || v == "unverified")
+        && !crate::util::truthy(d.get("setup_pending"))
+        && ["expected_head", "checkout_target", "expected_base"].iter().all(|k| !crate::util::truthy(d.get(*k)))
+        && !text_of(&row["branch"]).is_empty()
+        && d.get("current_branch") == Some(&row["branch"])
+        && is_sha(last)
+        && d.get("dirty_files").and_then(|v| v.as_i64()).is_some_and(|n| n >= 0)
+}
+
+async fn common_dir(path: &Path, env: &Env) -> R<PathBuf> {
+    let out = git(path, env, &["rev-parse", "--path-format=absolute", "--git-common-dir"], true).await?;
+    Ok(resolve(Path::new(out.stdout.trim())))
+}
+
+/// The service needs only a stable comparison token for the base clone, never the runner's path.
+fn base_identity(common: &Path) -> String {
+    gitrun::sha256_hex(resolve(common).display().to_string().as_bytes())
+}
+
+fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBuf>> {
+    if link_id.is_empty() || link_id.len() > 200 {
+        return Err(WtErr::msg("Worktree initialization has an invalid link identity; left as it is"));
+    }
+    let tasks = resolve(workspace).join("tasks");
+    let folder = tasks.join(".checkout-state");
+    if is_symlink(&tasks) || is_symlink(&folder) {
+        return Err(WtErr::msg("Worktree initialization state points through a symlink; left as it is"));
+    }
+    if create {
+        std::fs::create_dir_all(&folder)?;
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+    }
+    if !folder.exists() {
+        return Ok(None);
+    }
+    let marker = folder.join(format!("{}.json", gitrun::sha256_hex(link_id.as_bytes())));
+    if is_symlink(&marker) {
+        return Err(WtErr::msg("Worktree initialization marker is a symlink; left as it is"));
+    }
+    Ok(Some(marker))
+}
+
+pub fn read_marker(workspace: &Path, link_id: &str) -> R<Option<Map<String, Value>>> {
+    let Some(marker) = marker_path(workspace, link_id, false)? else { return Ok(None) };
+    if !marker.exists() {
+        return Ok(None);
+    }
+    if !marker.is_file() {
+        return Err(WtErr::msg("Worktree initialization marker is not a regular file; left as it is"));
+    }
+    let value: Value = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .ok_or_else(|| WtErr::msg("Worktree initialization marker cannot be read; left as it is"))?;
+    match value {
+        Value::Object(m) if m.get("schema") == Some(&json!(1)) => Ok(Some(m)),
+        _ => Err(WtErr::msg("Worktree initialization marker is invalid; left as it is")),
+    }
+}
+
+/// Temp file (O_EXCL, O_NOFOLLOW, 0600), fsync, then replace: a crash leaves the old marker or the new one.
+pub fn write_marker(workspace: &Path, value: &Map<String, Value>) -> R<()> {
+    let link = text_of(&value["link_id"]);
+    let marker = marker_path(workspace, &link, true)?.ok_or_else(|| WtErr::msg("Worktree initialization marker directory is unavailable"))?;
+    let name = marker.file_name().unwrap().to_string_lossy().to_string();
+    let temp = marker.with_file_name(format!("{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let written = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&temp)?;
+        f.write_all(gitrun::compact_sorted(&Value::Object(value.clone())).as_bytes())?;
+        f.flush()?;
+        f.sync_all()?;
+        std::fs::rename(&temp, &marker)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(WtErr::msg("Worktree initialization marker could not be committed atomically"));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn marker_identity(link_id: &str, task: &str, path: &str, repo: &str, branch: &str, head: &str, target: &str, base: &str) -> Map<String, Value> {
+    let mut m = Map::new();
+    for (k, v) in [
+        ("schema", json!(1)),
+        ("link_id", json!(link_id)),
+        ("task_id", json!(task)),
+        ("path", json!(path)),
+        ("repo", json!(repo)),
+        ("branch", json!(branch)),
+        ("expected_head", json!(head)),
+        ("checkout_target", json!(target)),
+        ("expected_base", json!(base)),
+    ] {
+        m.insert(k.into(), v);
+    }
+    m
+}
+
+fn check_marker(marker: Option<&Map<String, Value>>, expected: &Map<String, Value>) -> R<()> {
+    let Some(marker) = marker else { return Err(WtErr::msg("Worktree has no local initialization proof; kept unchanged for inspection")) };
+    if expected.iter().any(|(k, v)| marker.get(k).unwrap_or(&Value::Null) != v) {
+        return Err(WtErr::msg("Worktree initialization marker does not match this task registration; kept unchanged"));
+    }
+    Ok(())
+}
+
+pub async fn checked_branch(branch: &str) -> R<String> {
+    if branch.is_empty() || branch.len() > 200 || branch.starts_with('-') {
+        return Err(WtErr::msg("Invalid or oversized worktree branch"));
+    }
+    let env = crate::safegit::clean_environment(&crate::env::process_environment());
+    match gitrun::bare(&env, &["check-ref-format", "--branch", branch], 15).await {
+        Ok(o) if o.ok() => Ok(branch.into()),
+        _ => Err(WtErr::msg("Invalid worktree branch")),
+    }
+}
+
+fn repo_matches(origin: &str, repo: &str, machine_git: bool) -> bool {
+    if machine_git { repositories::matches(origin, repo) } else { repositories::same_repository(origin, repo) }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn verify_worktree(path: &Path, workspace: &Path, repo: &str, machine_git: bool, branch: &str, env: &Env, expected_base: Option<&str>, detached_ok: bool) -> R<PathBuf> {
+    if !path.join(".git").is_file() {
+        return Err(WtErr::msg("Tracked path is not a Git worktree; left as it is"));
+    }
+    let origin = git(path, env, &["config", "--get", "remote.origin.url"], true).await?.stdout.trim().to_string();
+    if !repo_matches(&origin, repo, machine_git) {
+        return Err(WtErr::msg("Worktree repository does not match its task link; left as it is"));
+    }
+    if detached_ok {
+        let head = git(path, env, &["symbolic-ref", "--short", "-q", "HEAD"], false).await?.stdout.trim().to_string();
+        if !head.is_empty() && head != branch {
+            return Err(WtErr::msg("Worktree branch does not match its task link; left as it is"));
+        }
+    } else if git(path, env, &["symbolic-ref", "--short", "HEAD"], true).await?.stdout.trim() != branch {
+        return Err(WtErr::msg("Worktree branch does not match its task link; left as it is"));
+    }
+    let common = common_dir(path, env).await?;
+    if !common.starts_with(resolve(workspace)) || common == resolve(workspace) {
+        return Err(WtErr::msg("Worktree base must be inside the team workspace"));
+    }
+    if expected_base.is_some_and(|b| !b.is_empty() && base_identity(&common) != b) {
+        return Err(WtErr::msg("Worktree is attached to a different managed base clone; left as it is"));
+    }
+    Ok(common.parent().map(Path::to_path_buf).unwrap_or(common))
+}
+
+async fn worktree_registered(base: &Path, path: &Path, env: &Env) -> R<bool> {
+    let expected = resolve(path);
+    let listed = git(base, env, &["worktree", "list", "--porcelain"], true).await?;
+    Ok(listed.stdout.lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| resolve(Path::new(p)) == expected)))
+}
+
+fn field(row: &Value, d: &Map<String, Value>, key: &str) -> String {
+    let own = text_of(&row[key]);
+    if own.is_empty() { d.get(key).map(text_of).unwrap_or_default() } else { own }
+}
+
+async fn verify_ready_registration(workspace: &Path, row: &Value, d: &Map<String, Value>, repo: &str) -> R<()> {
+    let link_id = Some(text_of(&row["id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| text_of(&row["link_id"]));
+    let head = field(row, d, "expected_head");
+    let target = field(row, d, "checkout_target");
+    let base = field(row, d, "expected_base");
+    let marker = read_marker(workspace, &link_id)?;
+    let task = Some(text_of(&row["task_id"])).filter(|t| !t.is_empty()).or_else(|| marker.as_ref().map(|m| own(m, "task_id"))).unwrap_or_default();
+    let (path, branch) = (text_of(&row["path"]), text_of(&row["branch"]));
+    if [&link_id, &task, &path, &branch, &head, &target, &base].iter().any(|s| s.is_empty()) {
+        return Err(WtErr::msg("Ready worktree has no complete registration proof; kept unverified"));
+    }
+    let identity = marker_identity(&link_id, &task, &path, repo, &branch, &head, &target, &base);
+    check_marker(marker.as_ref(), &identity)?;
+    if marker.unwrap().get("phase") != Some(&json!("ready")) {
+        return Err(WtErr::msg("Ready worktree has no completed local setup record; kept unverified"));
+    }
+    Ok(())
+}
+
+/// Certify a checkout a person or the CLI attached (worktrees._record_attached_checkout): its branch at its
+/// current commit, registered in its base, nothing deleted. Returns (expected_head, checkout_target, base).
+async fn record_attached(workspace: &Path, row: &Value, branch: &str, repo: &str, machine_git: bool, env: &Env) -> R<(String, String, String)> {
+    let rel = text_of(&row["path"]);
+    let path = safe_path(workspace, &rel)?;
+    let branch = checked_branch(branch).await?;
+    let common = common_dir(&path, env).await?;
+    let expected_base = base_identity(&common);
+    verify_worktree(&path, workspace, repo, machine_git, &branch, env, Some(&expected_base), false).await?;
+    let target = format!("refs/heads/{branch}");
+    let link_id = text_of(&row["id"]);
+    let task_id = text_of(&row["task_id"]);
+    if link_id.is_empty() || task_id.is_empty() {
+        return Err(WtErr::msg("Attached worktree has no task registration identity; kept unchanged"));
+    }
+    if crate::util::truthy(row.get("setup_pending")) || crate::util::truthy(detail(row).get("setup_pending")) {
+        return Err(WtErr::msg("Attached worktree setup is still pending; kept unchanged"));
+    }
+    if repo.is_empty() {
+        return Err(WtErr::msg("Attached worktree repository is not identified; kept unchanged"));
+    }
+    if !worktree_registered(common.parent().unwrap_or(&common), &path, env).await? {
+        return Err(WtErr::msg("Attached path is not registered in its managed base; kept unchanged"));
+    }
+    if let Some(marker) = read_marker(workspace, &link_id)? {
+        // A prior local proof may outlive a lost heartbeat: replay it; a later commit must not rewrite it.
+        let mut stable = Map::new();
+        for (k, v) in [("schema", json!(1)), ("link_id", json!(link_id)), ("task_id", json!(task_id)), ("path", json!(rel)), ("repo", json!(repo)), ("branch", json!(branch)), ("expected_base", json!(expected_base))] {
+            stable.insert(k.into(), v);
+        }
+        check_marker(Some(&marker), &stable)?;
+        let expected = own(&marker, "expected_head");
+        let recorded = own(&marker, "checkout_target");
+        let mut valid = recorded == target;
+        if !valid {
+            if let Some(remote) = recorded.strip_prefix("refs/remotes/origin/") {
+                valid = checked_branch(remote).await.is_ok_and(|b| b == remote);
+            }
+        }
+        if marker.get("phase") != Some(&json!("ready")) || !is_sha(&expected) || !valid {
+            return Err(WtErr::msg("Attached worktree has no matching completed local proof; kept unchanged"));
+        }
+        return Ok((expected, recorded, expected_base));
+    }
+    // An attachment cannot tell an unfinished checkout from a deletion: refuse to certify, change nothing.
+    if !git(&path, env, &["ls-files", "--deleted", "-z"], true).await?.stdout.is_empty() {
+        return Err(WtErr::msg("Attached worktree has missing tracked files; kept unchanged and unverified"));
+    }
+    let expected = git(&path, env, &["rev-parse", "HEAD"], true).await?.stdout.trim().to_string();
+    if git(&path, env, &["rev-parse", "--verify", &target], true).await?.stdout.trim() != expected {
+        return Err(WtErr::msg("Attached worktree branch does not point at its current commit; kept unchanged"));
+    }
+    let mut identity = marker_identity(&link_id, &task_id, &rel, repo, &branch, &expected, &target, &expected_base);
+    identity.insert("phase".into(), json!("ready"));
+    write_marker(workspace, &identity)?;
+    Ok((expected, target, expected_base))
+}
+
+async fn record_restored(workspace: &Path, row: &Value, repo: &mut Map<String, Value>, env: &Env) -> R<(String, String, String)> {
+    let rel = text_of(&row["path"]);
+    let path = safe_path(workspace, &rel)?;
+    let (base, _) = repositories::worktree_base(workspace, repo, env).await?;
+    let expected_base = base_identity(&common_dir(&base, env).await?);
+    let branch = checked_branch(&text_of(&row["branch"])).await?;
+    let name = text_of(&row["repo"]);
+    verify_worktree(&path, workspace, &name, crate::util::truthy(repo.get("machine_git")), &branch, env, Some(&expected_base), false).await?;
+    let expected = git(&path, env, &["rev-parse", "HEAD"], true).await?.stdout.trim().to_string();
+    let target = format!("refs/heads/{branch}");
+    if !git(&base, env, &["rev-parse", "--verify", &target], false).await?.ok() {
+        return Err(WtErr::msg("Restored task branch is missing from its managed base; kept worktree"));
+    }
+    let mut identity = marker_identity(&text_of(&row["id"]), &text_of(&row["task_id"]), &rel, &name, &branch, &expected, &target, &expected_base);
+    identity.insert("phase".into(), json!("restored"));
+    write_marker(workspace, &identity)?;
+    Ok((expected, target, expected_base))
+}
+
+pub type SizeCache = HashMap<String, (Instant, f64, f64)>;
+
+/// The heartbeat's row for one tracked worktree (worktrees.inspect). Never changes the tree, except that an
+/// attached checkout is certified here (its marker written) the first time it is seen whole.
+pub async fn inspect(workspace: &Path, row: &Value, env: &Env, cache: Option<&mut SizeCache>) -> Value {
+    let mut result = json!({"link_id": text_of(&row["id"]).chars().take(100).collect::<String>(), "state": "unknown", "branch": null});
+    if let Some(updated) = row["updated"].as_str().filter(|u| u.len() <= 40) {
+        result["record_updated"] = json!(updated);
+    }
+    let env = crate::safegit::environment(env);
+    let mut step = "find it";
+    let outcome = inspect_inner(workspace, row, &env, cache, &mut result, &mut step).await;
+    if let Err(e) = outcome {
+        let reason = e.text();
+        result["error"] = json!(format!("Could not {step}: {reason}").chars().take(300).collect::<String>());
+    }
+    result
+}
+
+async fn inspect_inner(workspace: &Path, row: &Value, env: &Env, cache: Option<&mut SizeCache>, result: &mut Value, step: &mut &'static str) -> R<()> {
+    let path = safe_path(workspace, &text_of(&row["path"]))?;
+    let d = detail(row);
+    let checkout_state = d.get("checkout_state").map(text_of).unwrap_or_default();
+    let legacy_recorded = checkout_state == "legacy_present" && (row["state"] == "present" || row["state"] == "unknown");
+    let legacy_candidate = ((checkout_state.is_empty() && row["state"] == "present") || legacy_demoted(row, &d)) && !crate::util::truthy(d.get("setup_pending"));
+    let legacy = legacy_recorded || legacy_candidate;
+    let mut not_ready = (checkout_state != "ready" && !legacy_recorded) || crate::util::truthy(d.get("setup_pending"));
+    result["checkout_state"] = json!(if checkout_state.is_empty() { "unverified" } else { &checkout_state });
+    let expected_base = d.get("expected_base").map(text_of).unwrap_or_default();
+    let expected_head = d.get("expected_head").map(text_of).unwrap_or_default();
+    let checkout_target = d.get("checkout_target").map(text_of).unwrap_or_default();
+    for key in ["expected_head", "checkout_target", "expected_base"] {
+        if let Some(v) = d.get(key).filter(|v| !v.is_null()) {
+            result[key] = v.clone();
+        }
+    }
+    if !path.exists() {
+        if legacy_recorded {
+            result["checkout_state"] = json!("legacy_present");
+        }
+        result["state"] = json!(if row["state"] == "removed" { "removed" } else if not_ready { "pending" } else { "missing" });
+        return Ok(());
+    }
+    if !path.join(".git").is_file() {
+        return Err(WtErr::msg("Tracked path is not a Git worktree; left as it is"));
+    }
+    *step = "read its remote";
+    let origin = git(&path, env, &["config", "--get", "remote.origin.url"], true).await?.stdout.trim().to_string();
+    let actual = crate::gitcred::repository_name(&origin).unwrap_or_else(|| origin.clone());
+    let machine_git = crate::util::truthy(row.get("machine_git"));
+    let mut repo = Some(text_of(&row["repo"])).filter(|r| !r.is_empty()).unwrap_or(actual);
+    if checkout_state == "attached_pending" {
+        let expected = text_of(&row["repo"]);
+        if !expected.is_empty() && !repo_matches(&origin, &expected, machine_git) {
+            return Err(WtErr::msg("Attached worktree repository does not match its task link"));
+        }
+    }
+    result["repo"] = json!(repo);
+    if !repo.is_empty() && (repo.len() > 200 || !repositories::valid_repository(&repo)) {
+        result["repo"] = Value::Null;
+        result["error"] = json!("Invalid or oversized repository name");
+        repo.clear();
+    }
+    *step = "read its branch";
+    // A detached HEAD (a review checkout of a commit) is a normal state: no branch to report.
+    let branch = git(&path, env, &["symbolic-ref", "--short", "-q", "HEAD"], false).await?.stdout.trim().to_string();
+    *step = "check its base clone";
+    let common = common_dir(&path, env).await?;
+    if !expected_base.is_empty() && base_identity(&common) != expected_base {
+        return Err(WtErr::msg("Worktree is attached to a different managed base clone"));
+    }
+    if legacy {
+        *step = "verify the legacy worktree";
+        let (rrepo, rbranch) = (text_of(&row["repo"]), text_of(&row["branch"]));
+        if rrepo.is_empty() || rbranch.is_empty() {
+            return Err(WtErr::msg("Legacy worktree has no registered repository or branch; kept unverified"));
+        }
+        verify_worktree(&path, workspace, &rrepo, !repositories::same_repository(&origin, &rrepo), &rbranch, env, None, true).await?;
+        if !git(&path, env, &["ls-files", "--deleted", "-z"], true).await?.stdout.is_empty() {
+            result["state"] = json!("pending");
+            result["checkout_state"] = json!("unverified");
+            result["error"] = json!("Legacy worktree has missing tracked files; kept unchanged and unverified");
+            return Ok(());
+        }
+        result["checkout_state"] = json!("legacy_present");
+        not_ready = crate::util::truthy(d.get("setup_pending"));
+    }
+    if checkout_state == "ready" && (expected_base.is_empty() || expected_head.is_empty() || checkout_target.is_empty()) {
+        not_ready = true;
+        result["checkout_state"] = json!("unverified");
+    } else if checkout_state == "ready" {
+        *step = "verify its checkout";
+        let mut merged = row.clone();
+        for (k, v) in &d {
+            merged[k] = v.clone();
+        }
+        verify_ready_registration(workspace, &merged, &d, &repo).await?;
+    }
+    *step = "read its changes";
+    result["state"] = json!(if not_ready { "pending" } else { "present" });
+    result["dirty_files"] = json!(git(&path, env, &["status", "--porcelain"], true).await?.stdout.lines().count());
+    result["last_commit"] = json!(git(&path, env, &["rev-parse", "HEAD"], true).await?.stdout.trim().chars().take(100).collect::<String>());
+    if !branch.is_empty() {
+        match checked_branch(&branch).await {
+            Ok(b) => result["branch"] = json!(b),
+            Err(_) => result["error"] = json!("Invalid or oversized worktree branch"),
+        }
+    }
+    if checkout_state == "attached_pending" {
+        *step = "record the attached checkout";
+        if result.get("error").is_some() {
+            return Err(WtErr::msg("Attached worktree metadata is invalid; left as it is"));
+        }
+        let reported = text_of(&result["branch"]);
+        if !text_of(&row["branch"]).is_empty() && text_of(&row["branch"]) != reported {
+            return Err(WtErr::msg("Attached worktree branch does not match its task link"));
+        }
+        let (head, target, base) = record_attached(workspace, row, &reported, &repo, machine_git, env).await?;
+        result["checkout_state"] = json!("ready");
+        result["expected_head"] = json!(head);
+        result["checkout_target"] = json!(target);
+        result["expected_base"] = json!(base);
+        result["state"] = json!("present");
+    }
+    *step = "compare it with the remote";
+    let task_branch = text_of(&row["branch"]);
+    let remote = if task_branch.is_empty() { String::new() } else { format!("refs/remotes/origin/{task_branch}") };
+    if !remote.is_empty() && git(&path, env, &["show-ref", "--verify", &remote], false).await?.ok() {
+        let counts = git(&path, env, &["rev-list", "--left-right", "--count", &format!("HEAD...{remote}")], true).await?.stdout;
+        let mut it = counts.split_whitespace().map(|n| n.parse::<i64>().unwrap_or(0));
+        result["ahead"] = json!(it.next().unwrap_or(0));
+        result["behind"] = json!(it.next().unwrap_or(0));
+    } else {
+        let out = git(&path, env, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"], true).await?;
+        result["ahead"] = json!(out.stdout.trim().parse::<i64>().map_err(|_| WtErr::msg("invalid literal for int()"))?);
+        result["behind"] = json!(0);
+    }
+    // File statistics are expensive on dependency folders; refresh at most every ten minutes.
+    *step = "measure its size";
+    let id = text_of(&row["id"]);
+    let fresh = |c: &(Instant, f64, f64)| c.0.elapsed() < Duration::from_secs(600);
+    let cached = cache.as_ref().and_then(|c| c.get(&id).cloned()).filter(fresh);
+    let entry = match cached {
+        Some(c) => c,
+        None => {
+            let (bytes, newest) = repositories::tree_size(&path);
+            let made = (Instant::now(), (bytes as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0, newest);
+            if let Some(c) = cache {
+                c.insert(id, made);
+            }
+            made
+        }
+    };
+    result["size_mb"] = json!(entry.1);
+    result["last_activity"] = json!(entry.2);
+    Ok(())
+}
+
+const BUILD: &[&str] = &[
+    "node_modules", ".venv", "venv", "dist", "build", "target", ".next", "__pycache__", ".cache", "coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".gradle",
+    ".turbo", ".parcel-cache", ".DS_Store", ".idea", ".vscode", "out",
+];
+
+pub fn build_file(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
+    parts.iter().any(|p| BUILD.contains(p) || p.ends_with(".egg-info") || p.ends_with(".pyc"))
+        || parts.windows(2).any(|w| w[0] == ".terraform" && (w[1] == "providers" || w[1] == "plugin-cache"))
+}
+
+/// fnmatch of a lowercased file name against `.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.p12`.
+fn secret_name(name: &str) -> bool {
+    [".env", "id_rsa", "credentials"].iter().any(|p| name.starts_with(p)) || [".pem", ".key", ".p12"].iter().any(|s| name.ends_with(s))
+}
+
+pub fn wip_branch(row: &Value) -> String {
+    let link = Some(text_of(&row["id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| text_of(&row["link_id"]));
+    format!("wip/{}-{}", text_of(&row["task_id"]).chars().take(8).collect::<String>(), link.chars().take(6).collect::<String>())
+}
+
+async fn remote_branch(base: &Path, branch: &str, env: &Env) -> R<Option<String>> {
+    checked_branch(branch).await?;
+    let listed = git(base, env, &["ls-remote", "--exit-code", "origin", &format!("refs/heads/{branch}")], false).await?;
+    if listed.code == 2 {
+        return Ok(None);
+    }
+    if !listed.ok() {
+        let detail = if listed.stderr.is_empty() { format!("exit {}", listed.code) } else { listed.stderr };
+        return Err(WtErr::Msg("Git fetch failed; cannot determine remote branch, retry later".into(), Some(detail)));
+    }
+    git(base, env, &["fetch", "--no-tags", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")], true).await?;
+    Ok(Some(format!("refs/remotes/origin/{branch}")))
+}
+
+async fn fast_forward(path: &Path, branch: &str, target: &str, env: &Env) -> R<()> {
+    let r#ref = format!("refs/heads/{}", checked_branch(branch).await?);
+    let old = git(path, env, &["rev-parse", "--verify", &r#ref], false).await?;
+    let head = git(path, env, &["rev-parse", target], true).await?.stdout.trim().to_string();
+    let previous = if old.ok() {
+        let previous = old.stdout.trim().to_string();
+        if !git(path, env, &["merge-base", "--is-ancestor", &previous, &head], false).await?.ok() {
+            return Err(WtErr::msg("Task branch has separate history; kept worktree"));
+        }
+        if git(path, env, &["worktree", "list", "--porcelain"], true).await?.stdout.lines().any(|l| l == format!("branch {}", r#ref)) {
+            return Err(WtErr::msg("Task branch is checked out elsewhere; kept worktree"));
+        }
+        previous
+    } else {
+        "0".repeat(head.len())
+    };
+    // A concurrent branch update must fail rather than discard its new commits.
+    git(path, env, &["update-ref", &r#ref, &head, &previous], true).await?;
+    Ok(())
+}
+
+async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
+    Ok(git(path, env, args, true).await?.stdout.trim().parse::<i64>().unwrap_or(0))
+}
+
+/// A remove or restore (worktrees._act). `still_closed` is asked again just before the tree goes.
+/// A field of an action's row, "" when it has none (a Map index would panic).
+fn own(row: &Map<String, Value>, key: &str) -> String {
+    row.get(key).map(text_of).unwrap_or_default()
+}
+
+pub async fn act<F, Fut>(workspace: &Path, row: &mut Map<String, Value>, action: &str, env: &Env, vault: &[String], still_closed: F) -> R<&'static str>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let _lock = locked(workspace, &own(row, "path")).await?;
+    let done = act_inner(workspace, row, action, env, vault, &still_closed).await;
+    match done {
+        Err(WtErr::Msg(_, Some(detail))) if crate::util::truthy(row.get("machine_git")) => Err(WtErr::msg(repositories::machine_error(&own(row, "repo"), &detail, &Env::new()))),
+        other => other,
+    }
+}
+
+async fn act_inner<F, Fut>(workspace: &Path, row: &mut Map<String, Value>, action: &str, env: &Env, vault: &[String], still_closed: &F) -> R<&'static str>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let env = &crate::safegit::environment(env);
+    let path = safe_path(workspace, &own(row, "path"))?;
+    let value = Value::Object(row.clone());
+    let repo = own(row, "repo");
+    if action == "remove" {
+        if !still_closed().await {
+            return Err(WtErr::Deferred("Task reopened or bot is running; retry cleanup later".into()));
+        }
+        if !path.exists() {
+            // Prune even when the folder was removed outside Tico.
+            if repo.is_empty() {
+                return Ok("removed");
+            }
+            let base = workspace.join("repos").join(repositories::base_folder(&repo));
+            let parent = base.parent().unwrap();
+            if is_symlink(parent) || is_symlink(&base) || is_symlink(&base.join(".git")) || resolve(&base).parent() != Some(resolve(parent).as_path()) {
+                return Err(WtErr::msg("Worktree base points outside repos"));
+            }
+            if base.exists() {
+                git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
+            }
+            return Ok("removed");
+        }
+        if repo.is_empty() {
+            return Err(WtErr::msg("Repository not identified; kept worktree"));
+        }
+        let branch = checked_branch(&own(row, "branch")).await?;
+        if !path.join(".git").is_file() {
+            return Err(WtErr::msg("Tracked path is not a worktree; left as it is"));
+        }
+        let common = common_dir(&path, env).await?;
+        if !common.starts_with(resolve(workspace)) {
+            return Err(WtErr::msg("Worktree base is outside the team workspace"));
+        }
+        let base = common.parent().unwrap().to_path_buf();
+        let origin_head = git(&base, env, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], false).await?.stdout.trim().trim_start_matches("origin/").to_string();
+        let defaults: HashSet<String> = [own(row, "default_branch"), origin_head].into_iter().filter(|n| !n.is_empty()).collect();
+        if defaults.is_empty() {
+            return Err(WtErr::msg("Repository default branch is unknown; refresh Repositories before cleanup"));
+        }
+        git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
+        let ignored = git(&path, env, &["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], true).await?.stdout;
+        if ignored.split('\0').any(|n| !n.is_empty() && !build_file(n)) {
+            return Err(WtErr::msg("kept: ignored files"));
+        }
+        let dirty = !git(&path, env, &["status", "--porcelain"], true).await?.stdout.trim().is_empty();
+        let wip = wip_branch(&value);
+        if defaults.contains(&wip) {
+            return Err(WtErr::msg("Snapshot branch matches the default branch; kept worktree"));
+        }
+        let current = git(&path, env, &["symbolic-ref", "--short", "HEAD"], false).await?.stdout.trim().to_string();
+        let unpushed = ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"];
+        if crate::util::truthy(row.get("release")) {
+            // Released while its task is open: the bot may still use it, so nothing is saved on its behalf.
+            if dirty {
+                return Err(WtErr::msg("kept: unsaved changes; commit and push them, or discard them, to free this worktree"));
+            }
+            if count(&path, env, &unpushed).await? > 0 {
+                return Err(WtErr::msg("kept: unpushed commits; push them to free this worktree"));
+            }
+        } else if dirty {
+            let mut names_text = git(&path, env, &["diff", "HEAD", "--name-only", "-z"], true).await?.stdout;
+            names_text += &git(&path, env, &["ls-files", "--others", "--exclude-standard", "-z"], true).await?.stdout;
+            let names: Vec<&str> = names_text.split('\0').filter(|n| !n.is_empty()).collect();
+            let skipped: Vec<String> = names
+                .iter()
+                .filter(|n| {
+                    let file = path.join(n);
+                    let leaf = Path::new(n).file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    secret_name(&leaf) || is_symlink(&file) || std::fs::metadata(&file).is_ok_and(|m| m.len() > 20 * 1024 * 1024)
+                })
+                .map(|n| n.to_string())
+                .collect();
+            if !skipped.is_empty() {
+                row.insert("skipped_files".into(), json!(skipped.iter().take(100).map(|n| n.chars().take(1000).collect::<String>()).collect::<Vec<_>>()));
+                return Err(WtErr::msg(format!("kept: skipped unsafe or oversized files: {}", skipped.join(", ").chars().take(150).collect::<String>())));
+            }
+            // Divergent HEAD must never replace the task branch, even after a successful snapshot push.
+            let exists = git(&path, env, &["show-ref", "--verify", &format!("refs/heads/{branch}")], false).await?.ok();
+            if exists && !git(&path, env, &["merge-base", "--is-ancestor", &branch, "HEAD"], false).await?.ok() {
+                return Err(WtErr::msg("Task branch has separate history; kept worktree to preserve unpushed commits"));
+            }
+            let mut patch = git(&path, env, &["diff", "--no-ext-diff", "--no-textconv", "HEAD"], true).await?.stdout;
+            for n in &names {
+                if path.join(n).is_file() {
+                    patch += &String::from_utf8_lossy(&std::fs::read(path.join(n)).unwrap_or_default());
+                }
+            }
+            let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let known = crate::redact::for_turn(&pairs, vault);
+            static SECRET: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+            let shaped = SECRET.get_or_init(|| {
+                Regex::new(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}").unwrap()
+            });
+            if crate::redact::scrub_log(&patch) != patch || known.is_some_and(|k| k.holds(patch.as_bytes())) || shaped.is_match(&patch) {
+                return Err(WtErr::msg("Possible secret in unsaved changes; kept worktree"));
+            }
+            if current != wip {
+                if git(&path, env, &["show-ref", "--verify", &format!("refs/heads/{wip}")], false).await?.ok()
+                    && !git(&path, env, &["merge-base", "--is-ancestor", &wip, "HEAD"], false).await?.ok()
+                {
+                    return Err(WtErr::msg("Saved work has separate history; kept worktree"));
+                }
+                git(&path, env, &["switch", "-C", &wip], true).await?;
+            }
+            git(&path, env, &["add", "--all"], true).await?;
+            git(&path, env, &["-c", "user.name=Tico", "-c", "user.email=bot@example.com", "commit", "-m", "Save task work before cleanup"], true).await?;
+            git(&path, env, &["push", "origin", &format!("HEAD:refs/heads/{wip}")], true).await?;
+            if !defaults.contains(&branch) {
+                let moved = fast_forward(&path, &branch, "HEAD", env).await;
+                git(&path, env, &["switch", &branch], true).await?;
+                moved?;
+            }
+        } else if current == wip {
+            // Retrying a failed snapshot push must still save its history.
+            git(&path, env, &["push", "origin", &format!("HEAD:refs/heads/{wip}")], true).await?;
+            if !defaults.contains(&branch) {
+                if !git(&path, env, &["merge-base", "--is-ancestor", &branch, "HEAD"], false).await?.ok() {
+                    return Err(WtErr::msg("Task branch has separate history; kept worktree"));
+                }
+                let moved = fast_forward(&path, &branch, "HEAD", env).await;
+                git(&path, env, &["switch", &branch], true).await?;
+                moved?;
+            }
+        } else if count(&path, env, &unpushed).await? > 0 {
+            if crate::util::truthy(row.get("prs_finished")) || current.is_empty() {
+                git(&path, env, &["push", "origin", &format!("HEAD:refs/heads/{wip}")], true).await?;
+            } else if current != branch || defaults.contains(&branch) {
+                return Err(WtErr::msg("Unpushed history on another or default branch; kept worktree"));
+            } else {
+                git(&path, env, &["push", "origin", &format!("{branch}:refs/heads/{branch}")], true).await?;
+            }
+        }
+        if !still_closed().await {
+            if !defaults.contains(&branch) && git(&path, env, &["symbolic-ref", "--short", "HEAD"], false).await?.stdout.trim() == wip {
+                git(&path, env, &["switch", &branch], true).await?;
+            }
+            return Err(WtErr::Deferred("Task reopened or bot is running; retry cleanup later".into()));
+        }
+        git(&base, env, &["worktree", "remove", &path.display().to_string()], true).await?;
+        return Ok("removed");
+    }
+    let branch = checked_branch(&own(row, "branch")).await?;
+    disk_floor(workspace)?;
+    if path.exists() {
+        let mut probe = value.clone();
+        if text_of(&probe["id"]).is_empty() {
+            probe["id"] = row.get("link_id").cloned().unwrap_or(Value::Null);
+        }
+        if inspect(workspace, &probe, env, None).await["state"] != "present" {
+            return Err(WtErr::msg("Restore path already exists and is not a worktree"));
+        }
+        return Ok("present");
+    }
+    let (base, default) = repositories::worktree_base(workspace, row, env).await?;
+    if let Some(w) = row.get("fetch_warning").cloned() {
+        row.insert("restore_source".into(), w);
+    }
+    git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let local = git(&base, env, &["show-ref", "--verify", &format!("refs/heads/{branch}")], false).await?.ok();
+    let task = own(row, "task_id");
+    let found: R<(Option<String>, Option<String>)> = async {
+        let task_remote = remote_branch(&base, &branch, env).await?;
+        let mut saved = remote_branch(&base, &wip_branch(&value), env).await?;
+        if saved.is_none() {
+            saved = remote_branch(&base, &format!("wip/{}", task.chars().take(8).collect::<String>()), env).await?;
+        }
+        Ok((task_remote, saved))
+    }
+    .await;
+    let (task_remote, saved) = match found {
+        Ok(f) => f,
+        Err(e) if !local => return Err(e),
+        Err(_) => {
+            row.insert("restore_source".into(), json!("local (remote unavailable)"));
+            (None, None)
+        }
+    };
+    let mut start = if local { branch.clone() } else { task_remote.clone().unwrap_or_else(|| format!("origin/{default}")) };
+    if let Some(saved) = saved {
+        if !(local || task_remote.is_some()) || git(&base, env, &["merge-base", "--is-ancestor", &start, &saved], false).await?.ok() {
+            start = saved;
+        } else {
+            row.insert("snapshot_skipped".into(), json!(saved));
+        }
+    }
+    let p = path.display().to_string();
+    if local {
+        if start != branch {
+            fast_forward(&base, &branch, &start, env).await?;
+        }
+        git(&base, env, &["worktree", "add", &p, &branch], true).await?;
+    } else {
+        git(&base, env, &["worktree", "add", "--no-track", "-b", &branch, &p, &start], true).await?;
+    }
+    Ok("present")
+}
+
+fn server_lacks_checkout_fields(e: &ApiError) -> bool {
+    let d = e.detail.to_lowercase();
+    e.status == 422
+        && ["checkout_state", "expected_head", "checkout_target", "expected_base"].iter().any(|n| d.contains(n))
+        && ["extra", "unknown field", "unexpected field", "not permitted"].iter().any(|m| d.contains(m))
+}
+
+fn closed(row: &Value) -> bool {
+    let d = detail(row);
+    ["done", "closed", "declined"].contains(&text_of(&row["task_status"]).as_str()) || row["bot_state"] == "archived" || crate::util::truthy(d.get("delete_requested"))
+}
+
+/// What the manager needs from the runner: whether a bot's turn could be in a task's worktree, the bot's
+/// checkout and lane locks (held without waiting), and the vault values last granted to the bot.
+pub trait Host: Send + Sync + 'static {
+    fn idle(&self, bot: &str, task: &str) -> bool;
+    fn try_locks(&self, bot: &str, lane: &str) -> Option<Box<dyn Send>>;
+    fn vault(&self, bot: &str) -> Vec<String>;
+    fn retain_vault(&self, owners: &HashSet<String>);
+    fn repositories(&self) -> Option<Arc<repositories::Repositories>>;
+}
+
+#[derive(Default)]
+struct Inner {
+    reports: Vec<Value>,
+    actions: Map<String, Value>,
+    errors: HashMap<String, String>,
+    retry: HashMap<String, (Instant, u32)>,
+    stats: SizeCache,
+}
+
+/// The computer's worktree reports and the one background pass that refreshes them (worktrees.Worktrees).
+pub struct Worktrees {
+    workspace: PathBuf,
+    client: Client,
+    inner: Mutex<Inner>,
+    pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Bots whose worktree maintenance is running: no claim names them meanwhile.
+    pub maintaining: Mutex<HashSet<String>>,
+}
+
+impl Worktrees {
+    pub fn new(workspace: &Path, client: Client) -> Worktrees {
+        Worktrees { workspace: workspace.to_path_buf(), client, inner: Mutex::new(Inner::default()), pending: Mutex::new(None), maintaining: Mutex::new(HashSet::new()) }
+    }
+
+    /// Queue the heartbeat reply's actions and start a pass if none is running; the last reports meanwhile.
+    pub fn poll(self: &Arc<Self>, host: Arc<dyn Host>, actions: &[Value]) -> Vec<Value> {
+        let mut inner = self.inner.lock().unwrap();
+        for a in actions {
+            inner.actions.insert(text_of(&a["link_id"]), a.clone());
+        }
+        let mut pending = self.pending.lock().unwrap();
+        if pending.as_ref().is_none_or(|p| p.is_finished()) {
+            let queued: Vec<Value> = std::mem::take(&mut inner.actions).into_values().collect();
+            let me = self.clone();
+            *pending = Some(tokio::spawn(async move { me.sync(host, queued).await }));
+        }
+        inner.reports.clone()
+    }
+
+    pub fn latest(&self) -> Vec<Value> {
+        self.inner.lock().unwrap().reports.clone()
+    }
+
+    /// Wait for the running pass (tests and shutdown).
+    pub async fn settle(&self) {
+        let handle = self.pending.lock().unwrap().take();
+        if let Some(h) = handle {
+            let _ = h.await;
+        }
+    }
+
+    pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, actions: Vec<Value>) {
+        let Ok(reply) = self.client.get("runners/me/worktrees").await else { return };
+        let mut rows: Vec<Value> = reply["worktrees"].as_array().cloned().unwrap_or_default();
+        let owners: HashSet<String> = rows.iter().map(|r| text_of(&r["owner"]).trim_start_matches("bot:").to_string()).collect();
+        host.retain_vault(&owners);
+        let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
+        let mut errors: HashMap<String, String> = self.inner.lock().unwrap().errors.iter().filter(|(k, _)| ids.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut failed: HashSet<String> = HashSet::new();
+        for action in &actions {
+            let link = text_of(&action["link_id"]);
+            let Some(index) = rows.iter().position(|r| text_of(&r["id"]) == link) else { continue };
+            if self.inner.lock().unwrap().retry.get(&link).is_some_and(|(at, _)| Instant::now() < *at) {
+                continue;
+            }
+            let row = rows[index].clone();
+            let d = detail(&row);
+            let is_closed = closed(&row);
+            let released = crate::util::truthy(action.get("release")) && crate::util::truthy(d.get("release_requested"));
+            let kind = text_of(&action["action"]);
+            if (kind == "remove" && !(is_closed || released)) || (kind == "restore" && is_closed) {
+                continue;
+            }
+            let owner = text_of(&row["owner"]);
+            let bot = owner.trim_start_matches("bot:").to_string();
+            let task = text_of(&row["task_id"]);
+            // A turn in the bot's main checkout or this task's lane may be using the worktree.
+            let Some(guards) = host.try_locks(&bot, &format!("task:{task}")) else { continue };
+            if !host.idle(&bot, &task) {
+                continue;
+            }
+            self.maintaining.lock().unwrap().insert(bot.clone());
+            let mut action_row = Map::new();
+            let outcome = self.act_on(&host, &row, action, &kind, released, &mut action_row).await;
+            self.maintaining.lock().unwrap().remove(&bot);
+            drop(guards);
+            match outcome {
+                Ok(state) => {
+                    rows[index]["state"] = json!(state.0);
+                    if let Some(d) = state.1 {
+                        rows[index]["detail_json"] = json!(d);
+                    }
+                    errors.remove(&link);
+                    self.inner.lock().unwrap().retry.remove(&link);
+                }
+                Err(WtErr::Deferred(_)) => continue,
+                Err(e) => {
+                    failed.insert(link.clone());
+                    if let Some(files) = action_row.get("skipped_files") {
+                        let _ = self.client.patch(&format!("tasks/{task}/links/{link}"), &json!({"skipped_files": files})).await;
+                    }
+                    let text = match e {
+                        WtErr::Os(_) => "Worktree action failed; history kept. Check repository access, network, disk space and permissions".to_string(),
+                        other => format!("Worktree action failed; history kept. {}", other.text()),
+                    };
+                    errors.insert(link, text.chars().take(300).collect());
+                }
+            }
+        }
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for key in failed {
+                let failures = inner.retry.get(&key).map(|r| r.1).unwrap_or(0) + 1;
+                let wait = (300.0 * 2f64.powi((failures - 1).min(7) as i32)).min(21600.0);
+                inner.retry.insert(key, (Instant::now() + Duration::from_secs_f64(wait), failures));
+            }
+            inner.stats.retain(|k, _| ids.contains(k));
+            inner.retry.retain(|k, _| ids.contains(k));
+        }
+        let mut stats = std::mem::take(&mut self.inner.lock().unwrap().stats);
+        let env = crate::env::process_environment();
+        let mut reports = vec![];
+        for r in &rows {
+            let mut report = inspect(&self.workspace, r, &env, Some(&mut stats)).await;
+            if let Some(e) = errors.get(&text_of(&report["link_id"])) {
+                report["error"] = json!(e);
+            }
+            reports.push(report);
+        }
+        let mut inner = self.inner.lock().unwrap();
+        inner.stats = stats;
+        inner.errors = errors;
+        inner.reports = reports;
+    }
+
+    /// One action on one row: (the link's new state, its new detail_json when a restore changed it).
+    async fn act_on(&self, host: &Arc<dyn Host>, row: &Value, action: &Value, kind: &str, released: bool, action_row: &mut Map<String, Value>) -> R<(String, Option<String>)> {
+        let owner = text_of(&row["owner"]);
+        let bot = owner.trim_start_matches("bot:").to_string();
+        let (link, task, name) = (text_of(&row["id"]), text_of(&row["task_id"]), text_of(&row["repo"]));
+        let process = crate::env::process_environment();
+        let mut env = crate::safegit::environment(&process);
+        let mut repo = Map::new();
+        let mut token = String::new();
+        if !name.is_empty() {
+            let granted = self.client.post(&format!("runners/me/worktrees/{link}/token"), &json!({}), None).await.map_err(|e| WtErr::msg(e.detail))?;
+            if granted["configured"] == false {
+                env = crate::safegit::machine_environment(&process);
+                repo.insert("machine_git".into(), json!(true));
+            } else if text_of(&granted["token"]).is_empty() {
+                return Err(WtErr::msg("No repository credential for this worktree"));
+            } else {
+                token = text_of(&granted["token"]);
+                env.extend(repositories::token_env(&token));
+                let listed = self.client.get("runners/me/repositories").await.map_err(|e| WtErr::msg(e.detail))?;
+                if let Some(found) = listed["repositories"].as_array().and_then(|a| a.iter().find(|r| text_of(&r["full_name"]).to_lowercase() == name.to_lowercase())) {
+                    repo = found.as_object().cloned().unwrap_or_default();
+                }
+            }
+        }
+        for source in [row.as_object(), Some(&repo), action.as_object()].into_iter().flatten() {
+            for (k, v) in source {
+                action_row.insert(k.clone(), v.clone());
+            }
+        }
+        action_row.insert("full_name".into(), json!(name));
+        if kind == "restore" && !name.is_empty() && !crate::util::truthy(repo.get("machine_git")) {
+            if let Some(repos) = host.repositories() {
+                // Unavailable: worktree_base reports the cached mirror's age instead.
+                if let Ok(refreshed) = repos.refresh_mirror(&name, &token).await {
+                    action_row.insert("_mirror_refresh".into(), refreshed);
+                }
+            }
+        }
+        let vault = host.vault(&bot);
+        let client = self.client.clone();
+        let (h, l, b, t) = (host.clone(), link.clone(), bot.clone(), task.clone());
+        let still_closed = move || {
+            let (client, h, l, b, t) = (client.clone(), h.clone(), l.clone(), b.clone(), t.clone());
+            async move {
+                let Ok(reply) = client.get("runners/me/worktrees").await else { return false };
+                let Some(fresh) = reply["worktrees"].as_array().and_then(|a| a.iter().find(|r| text_of(&r["id"]) == l).cloned()) else { return false };
+                let fd = detail(&fresh);
+                h.idle(&b, &t) && (closed(&fresh) || (released && crate::util::truthy(fd.get("release_requested"))))
+            }
+        };
+        let state = act(&self.workspace, action_row, kind, &env, &vault, still_closed).await?;
+        let mut restore_pending = kind == "restore";
+        let mut recorded = None;
+        if restore_pending {
+            let mut base_repo = repo.clone();
+            base_repo.insert("full_name".into(), json!(name));
+            recorded = Some(record_restored(&self.workspace, row, &mut base_repo, &env).await?);
+        }
+        let mut body = Map::new();
+        body.insert("state".into(), json!(if restore_pending { "pending" } else { state }));
+        body.insert("cleanup".into(), json!(kind == "remove"));
+        body.insert("setup_pending".into(), json!(restore_pending));
+        if let Some((head, target, base)) = &recorded {
+            body.insert("checkout_state".into(), json!("checkout_ready"));
+            body.insert("expected_head".into(), json!(head));
+            body.insert("checkout_target".into(), json!(target));
+            body.insert("expected_base".into(), json!(base));
+        }
+        let mut kept = Map::new();
+        for k in ["snapshot_skipped", "restore_source"] {
+            if let Some(v) = action_row.get(k) {
+                kept.insert(k.into(), v.clone());
+            }
+        }
+        body.extend(kept.clone());
+        let path = format!("tasks/{task}/links/{link}");
+        if let Err(e) = self.client.patch(&path, &Value::Object(body)).await {
+            if !(restore_pending && server_lacks_checkout_fields(&e)) {
+                return Err(WtErr::msg(e.detail));
+            }
+            // A server from before checkout records: report the restore as it knew it, setup pending.
+            let mut old = json!({"state": state, "cleanup": false, "setup_pending": true});
+            old.as_object_mut().unwrap().extend(kept);
+            self.client.patch(&path, &old).await.map_err(|e| WtErr::msg(e.detail))?;
+            restore_pending = false;
+        }
+        if restore_pending {
+            let (head, target, base) = recorded.unwrap();
+            let mut d = detail(row);
+            d.insert("checkout_state".into(), json!("checkout_ready"));
+            d.insert("setup_pending".into(), json!(true));
+            d.insert("expected_head".into(), json!(head));
+            d.insert("checkout_target".into(), json!(target));
+            d.insert("expected_base".into(), json!(base));
+            return Ok(("pending".into(), Some(Value::Object(d).to_string())));
+        }
+        Ok((state.into(), None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worktree_paths_stay_inside_the_workspace_and_outside_repos() {
+        let root = std::env::temp_dir().join(format!("tico-wt-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("repos/x")).unwrap();
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        assert!(safe_path(&root, "work/product").is_ok());
+        assert_eq!(safe_path(&root, "../out").unwrap_err(), "Use a worktree inside the team workspace");
+        assert_eq!(safe_path(&root, "/abs").unwrap_err(), "Use a worktree inside the team workspace");
+        assert_eq!(safe_path(&root, "repos/x/y").unwrap_err(), "Worktree must stay outside repos");
+        assert_eq!(safe_path(&root, "link").unwrap_err(), "Use a worktree inside the team workspace");
+        assert_eq!(safe_path(&root, "link/inner").unwrap_err(), "Worktree path must not contain symlinks");
+        assert!(build_file("web/node_modules/x.js") && build_file("a/.terraform/providers/p") && !build_file("src/main.rs"));
+        assert!(secret_name(".env.local") && secret_name("server.pem") && !secret_name("main.rs"));
+        assert_eq!(wip_branch(&json!({"task_id": "0123456789", "id": "abcdefgh"})), "wip/01234567-abcdef");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

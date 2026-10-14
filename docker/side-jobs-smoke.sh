@@ -66,6 +66,6 @@ step "switching it off stops the job, and the runner stays up"
 api -X POST -H "Idempotency-Key: side-$RANDOM$RANDOM$SECONDS" \
   -d '{"enabled": false, "runner_id": ""}' "$url/meeting-importers/zoom" >/dev/null
 retry 60 importer_stopped || fail "the importers job kept running after it was unassigned"
-docker exec "$runner" pgrep -f 'python -m runner .* run$' >/dev/null || fail "the runner itself stopped"
+docker exec "$runner" pgrep -f '(python -m runner|tico-runner) .* run$' >/dev/null || fail "the runner itself stopped"
 docker logs "$runner" 2>&1 | grep -q 'no longer assigned here' || fail "the runner did not log stopping the job"
 echo "side-jobs-smoke: ok"

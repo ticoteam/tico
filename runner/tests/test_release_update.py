@@ -115,14 +115,14 @@ def test_rollback_when_the_new_release_does_not_come_back(repos):
 # -- the runner's side -----------------------------------------------------------------------------
 
 class Server:
-    def __init__(self, version="0.2.0"):
-        self.version, self.error = version, None
+    def __init__(self, version="0.2.0", features=None):
+        self.version, self.error, self.features = version, None, features or {}
 
     def get(self, path):
         assert path == "runners/desired"
         if self.error:
             raise self.error
-        return {"version": self.version, "min_runner": "0.1.0"}
+        return {"version": self.version, "min_runner": "0.1.0", "features": self.features}
 
 
 class Clock:
@@ -149,6 +149,15 @@ def test_a_behind_runner_waits_for_quiet_then_starts_one_update(repos):
     assert launched[0][1] == "0.2.0" and f.state == "updating"
     assert f.blocks_claims(active=False) is True and len(launched) == 1
     assert f.fields() == {"release": "0.1.0", "kind": f.kind, "update": {"state": "updating", "target": "0.2.0", "error": ""}}
+
+
+def test_the_commit_goes_to_a_server_that_accepts_it_and_an_image_names_its_own(repos):
+    public, checkout, state = repos
+    head = sh(checkout, "git", "rev-parse", "HEAD")
+    assert "commit" not in follower(checkout, state)[0].fields()          # an older server would refuse the field
+    assert follower(checkout, state, Server(features={"runner_commit": True}))[0].fields()["commit"] == head
+    (checkout / "release-manifest.json").write_text('{"commit": "%s"}' % ("b" * 40))
+    assert follower(checkout, state, Server(features={"runner_commit": True}))[0].fields()["commit"] == "b" * 40
 
 
 @pytest.mark.slow
@@ -428,3 +437,26 @@ def test_a_disk_failure_retries_as_soon_as_space_frees(repos, monkeypatch, docke
     free[0] = 200
     f.poll()
     assert f.pending == "0.2.0"
+
+
+def test_a_rolled_back_server_refusing_the_commit_still_gets_the_rest():
+    from clients.tico import APIError
+    from runner.service import Runner
+
+    class Client:
+        def __init__(self):
+            self.bodies = []
+
+        def post(self, path, body):
+            self.bodies.append(dict(body, readiness=dict(body["readiness"])))
+            if "commit" in body:
+                raise APIError("validation", "body.commit: Extra inputs are not permitted", status=422)
+            return {}
+
+    runner = Runner.__new__(Runner)
+    runner.client = Client()
+    body = {"version": "t", "platform": "t", "capabilities": [], "commit": "a" * 40,
+            "readiness": {"bots": {}, "runtimes": {}, "worktrees": [], "disk": {}, "harnesses": {}}}
+    runner._report_heartbeat(body)
+    assert len(runner.client.bodies) == 2 and "commit" not in runner.client.bodies[-1]
+    assert set(runner.client.bodies[-1]["readiness"]) == {"bots", "runtimes", "worktrees", "disk", "harnesses"}

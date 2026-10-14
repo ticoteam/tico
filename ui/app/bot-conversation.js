@@ -212,6 +212,7 @@ function botResumeCommand(runtime, sid, slug) {
   else if (r === 'grok') cmd = `grok --resume ${sid}`;
   else if (r === 'pi') cmd = `pi --resume ${sid}`;
   else if (r === 'cursor') cmd = `cursor-agent --resume ${sid}`;
+  else if (r === 'musecode') cmd = `muse resume ${sid}`;
   else if (r === 'antigravity') cmd = `antigravity --resume ${sid}`;
   else cmd = `${r} --resume ${sid}`;
   return `cd ~/tico-work/emp-${slug} && ${cmd}`;

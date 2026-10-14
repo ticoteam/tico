@@ -9117,6 +9117,66 @@
         ]
       }
     },
+    "/api/v2/needs-you/recommended": {
+      "post": {
+        "summary": "Do what the bot recommends: answer its ask with what it said it would do, and close the card",
+        "operationId": "takeRecommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeRecommendation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/openapi.json": {
       "get": {
         "summary": "This document",
@@ -19780,6 +19840,11 @@
                   "additionalProperties": true
                 },
                 "description": "Tasks there only for a question older than three days, out of the queue and its count"
+              },
+              "went_away": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Items that left the caller's queue this week on their own: expired, withdrawn, answered by their Assistant, and the total"
               }
             },
             "required": [
@@ -21832,6 +21897,34 @@
           "version"
         ],
         "title": "TagUpdate"
+      },
+      "TakeRecommendation": {
+        "properties": {
+          "ask": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Ask"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ask"
+        ],
+        "title": "TakeRecommendation"
       },
       "Task": {
         "type": "object",

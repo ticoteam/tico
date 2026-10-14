@@ -1,0 +1,6 @@
+{"event": "init", "conversation_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
+{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Acme "}}
+{"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "run_command", "state": "running"}}
+{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": ""}}
+{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "reply.", "conversation_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff"}}
+{"event": "result", "result": {"status": "SUCCESS", "response": " Acme reply.\n", "conversation_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "usage": {"input_tokens": 120, "output_tokens": 8, "cache_read_tokens": 64}}}

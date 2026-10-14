@@ -246,9 +246,13 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.locator('#task-modal[open]').count(), 0, 'a card opens beside the board, not over it');
     await page.locator('#task-peek [data-modal-close]').click();
-    // Needs you: the tasks that wait on me, grouped by who asks, with a way into that bot's chat.
+    // Needs you: the tasks that wait on me, grouped by what they take; grouped by who asks, a way into that bot's chat.
     await page.locator('#task-view [data-view="foryou"]').click();
     await page.locator('#task-body .tl-row').first().waitFor();
+    assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
+    await page.locator('#task-group').click();
+    await page.locator('[data-pick-group="requester"]').click();
+    await page.locator('#task-body .tl-ghead a.tl-gchat').waitFor();
     assert.equal(await page.locator('#task-body .tl-row').count(), 1);
     assert.match(await page.locator('#task-body .tl-gname').innerText(), /Assistant/i);
     assert.match(await page.locator('#task-body .tl-row').innerText(), /Approve the budget/);

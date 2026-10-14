@@ -76,5 +76,5 @@ docker exec "$runner" test -x /home/runner/tools/mail-venv/bin/python || fail "t
 step "removing the key stops the job, and the runner stays up"
 docker exec "$runner" rm /home/runner/workspace/secrets/google-sa.json
 retry 60 job_stopped || fail "the connectors job kept running after the key was removed"
-docker exec "$runner" pgrep -f 'python -m runner .* run$' >/dev/null || fail "the runner itself stopped"
+docker exec "$runner" pgrep -f '(python -m runner|tico-runner) .* run$' >/dev/null || fail "the runner itself stopped"
 echo "connectors-smoke: ok"
