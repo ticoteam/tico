@@ -107,20 +107,22 @@ def machine(api, r):
 def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api):
     from backend.store import encode
     company(api, enabled=["openai", "google", "xai"], runtime="codex", model="gpt-6-sol")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode(
-            {"name": "cpo", "fallback": {"harness": "antigravity", "model": "gemini-3-pro"}}),))
     r = runner(api)
     assign(api, r, "cpo")
-    beat(api, r, codex=HARNESS, antigravity={**HARNESS, "name": "Antigravity", "runtime": "gemini"},
+    # A branch bot: its fallback is its original's (shared_bots.follow), as the runner reads it.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'", (encode(
+            {"name": "finance", "fallback": {"harness": "gemini", "model": "gemini-3-pro"}}),))
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "shared_from": "finance"}),))
+    beat(api, r, codex=HARNESS, **{"gemini-cli": {**HARNESS, "name": "Gemini CLI", "runtime": "gemini"}},
          grok={**HARNESS, "name": "Grok Build", "runtime": "grok"})
     choose = lambda harness, enabled, **kw: post(api, f"runners/{r['runner_id']}/harness-choices",
                                                  {"harness": harness, "enabled": enabled}, **kw)
     choose("codex", False, expected=409)                          # the bot's own
-    choose("antigravity", False, expected=409)                    # its fallback
-    assert choose("antigravity", True)["enabled"] is True
+    choose("gemini-cli", False, expected=409)                     # its fallback
+    assert choose("gemini-cli", True)["enabled"] is True
     choose("grok", False)
-    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"antigravity": True, "grok": False}
+    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"gemini-cli": True, "grok": False}
     # The page locks both; the fallback alone is not needed for the computer to be ready.
     assert (machine(api, r)["bot_runtimes"], machine(api, r)["needed_runtimes"]) == (["codex", "gemini"], ["codex"])
     assert machine(api, runner(api))["bot_runtimes"] == []
