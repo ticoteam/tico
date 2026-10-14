@@ -41,14 +41,16 @@ DMs are gated the same way, plus one more rule: a bot may only DM a company huma
 
 Files people share (a screenshot in a DM or a channel) show as `[file F...] name` in `history`, `inbox` and
 a routed Slack message. `file --id F...` downloads one with the bot token (the app needs `files:read`), only
-from a channel the bot may read or a DM when its DMs are not off, and only from Slack's own file host.
+from a channel the bot may read or a DM when its DMs are not off, and only from Slack's own file host. By
+default it lands in this user's own slack-files-<uid> folder under the temp folder (made 0700; one owned by
+someone else is refused), named <id>-<name> with the name cut to 200 bytes and control characters dropped.
 
 Nothing in Slack wakes a bot. People DM the bot; `inbox` is how a run reads those DMs.
 
 Exit codes: 0 ok, 1 failure (auth, network, Slack error), 2 policy refusal.
 """
 
-import argparse, json, os, re, sys, tempfile, time
+import argparse, json, os, re, stat, sys, tempfile, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -76,7 +78,10 @@ INBOX_FILE = PROJECTS / "runtime" / "slack-inbox.json"
 USER_CACHE_TTL = 24 * 3600
 MAX_POST_CHARS = 4000
 MAX_FILE_BYTES = 50 * 1024 * 1024
-FILES_DIR = Path(tempfile.gettempdir()) / "slack-files"   # outside every repository
+# Outside every repository, and one folder per local user: a shared /tmp must not hand it to someone else.
+FILES_DIR = Path(tempfile.gettempdir()) / (f"slack-files-{os.getuid()}" if hasattr(os, "getuid")
+                                           else "slack-files")
+MAX_NAME_BYTES = 200                                    # file systems refuse a name over 255 bytes
 DEFAULT_TZ = "America/Los_Angeles"
 API = "https://slack.com/api/"
 SECRETS_HINT = "<projects>/secrets/_shared.env"
@@ -555,14 +560,47 @@ def check_file_url(url):
 
 
 def one_line(text):
-    return " ".join(str(text or "").split())
+    """One printable line: whitespace runs become one space; control and format characters (NUL, bidi
+    overrides) are dropped."""
+    text = "".join(c for c in str(text or "") if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf"))
+    return " ".join(text.split())
+
+
+def trim_bytes(text, limit):
+    return text.encode()[:max(limit, 0)].decode(errors="ignore")
 
 
 def file_name(info):
-    """`<file id>-<name>`: the sharer picks the name, so it never names an existing file on its own."""
+    """`<file id>-<name>`: the sharer picks the name, so it never names an existing file on its own.
+    At most MAX_NAME_BYTES, keeping a short extension."""
     name = one_line(Path(str(info.get("name") or "").replace("\\", "/")).name)
-    fid = re.sub(r"[^A-Za-z0-9]", "", str(info.get("id") or "")) or "F"
-    return f"{fid}-{name}" if name not in ("", ".", "..") else fid
+    fid = re.sub(r"[^A-Za-z0-9]", "", str(info.get("id") or ""))[:32] or "F"
+    if name in ("", ".", ".."):
+        return fid
+    full = f"{fid}-{name}"
+    if len(full.encode()) <= MAX_NAME_BYTES:
+        return full
+    stem, suffix = os.path.splitext(full)
+    if len(suffix.encode()) > 16:
+        stem, suffix = full, ""
+    return trim_bytes(stem, MAX_NAME_BYTES - len(suffix.encode())).rstrip(" .") + suffix
+
+
+def files_dir(path):
+    """The default download folder, made 0700 if missing; refused unless it is this user's own real folder."""
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as e:
+        raise Failure(f"Could not create {path}: {e.strerror or e}", "Pass --out a folder you own.")
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+        raise Refused(f"{path} is not a folder this user owns; nothing was saved.",
+                      "Remove it, or pass --out a folder you own.")
+    if hasattr(os, "getuid") and stat.S_IMODE(st.st_mode) & 0o077:
+        os.chmod(path, 0o700)
+    return path
 
 
 def save_new(path, raw, folder):
@@ -575,6 +613,10 @@ def save_new(path, raw, folder):
             fd = os.open(target, flags, 0o600)
         except FileExistsError:
             continue
+        except (OSError, ValueError) as e:
+            why = getattr(e, "strerror", None) or e
+            raise Failure(f"Could not save {one_line(target)}: {why}; nothing was saved.",
+                          "Pass --out a shorter or plainer file name.")
         with os.fdopen(fd, "wb") as f:
             f.write(raw)
         return target
@@ -1226,14 +1268,21 @@ def cmd_file(args):
         raise Failure(f"Slack file download failed: HTTP {status}")
     if len(raw) > MAX_FILE_BYTES:
         raise Refused(f"File {args.id} is over the {MAX_FILE_BYTES} byte limit.")
-    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.out:
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError) as e:
+            raise Failure(f"Could not create {one_line(out.parent)}: {getattr(e, 'strerror', None) or e}")
+    else:
+        files_dir(FILES_DIR)
     out = save_new(out, raw, folder)
     row = {"ok": True, "id": info.get("id"), "name": info.get("name"), "mimetype": info.get("mimetype"),
            "bytes": len(raw), "path": str(out)}
     if args.json:
         print(json.dumps(row, indent=2))
     else:
-        print(f"saved {info.get('name') or args.id} ({row['mimetype'] or 'unknown type'}, {len(raw)} bytes) to {out}")
+        print(f"saved {one_line(info.get('name') or args.id)} ({one_line(row['mimetype']) or 'unknown type'}, "
+              f"{len(raw)} bytes) to {one_line(out)}")
     return 0
 
 

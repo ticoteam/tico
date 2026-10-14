@@ -685,6 +685,31 @@ def command(client, operation, value, task=None):
         raise
 
 
+def prepare(workspace, row, repo, env, client):
+    """Check out and set up a worktree the server reserved for a waiting task (backend/worktree_waits.py), as
+    `hub task worktree add` does inside a turn, with the same records and proof: the bot is idle, and the server wakes
+    its task once this reports the worktree present."""
+    task = row['task_id']
+    link = {**row, **_detail(row), 'link_id': row['id']}
+    with locked(workspace, row['path']):
+        checked_branch(row['branch'])
+        path = safe_path(workspace, row['path'])
+        state = link.get('checkout_state') or 'queued'
+        if state in ('queued', 'initializing'):
+            if path.exists() and state == 'queued':
+                raise ValueError('Worktree path already exists without an initialization record; kept unchanged')
+            disk_floor(workspace)
+            base, default = repositories.worktree_base(workspace, repo, env)
+            expected, target = _create_or_resume_checkout(path, workspace, base, default,
+                                                          {**link, 'checkout_state': state}, repo, task, env, client)
+            link.update(checkout_state='checkout_ready', expected_head=expected, checkout_target=target,
+                        expected_base=_base_identity(_common_dir(base, env)))
+        elif state not in ('checkout_ready', 'setup_running'):
+            raise ValueError('Worktree is not waiting to be prepared; kept unchanged')
+        _run_registered_setup(path, workspace, repo, row['branch'], link, task, env, client)
+    return 'present'
+
+
 def _server_lacks_checkout_fields(exc):
     """Only a server from before checkout records, refusing their fields as unknown (422)."""
     detail = str(getattr(exc, 'detail', exc)).lower()
@@ -1115,7 +1140,7 @@ class Worktrees:
             detail = json.loads(row.get('detail_json') or '{}')
             closed = row['task_status'] in ('done', 'closed', 'declined') or row['bot_state'] == 'archived' or detail.get('delete_requested')
             released = bool(action.get('release') and detail.get('release_requested'))
-            if action['action'] == 'remove' and not (closed or released) or action['action'] == 'restore' and closed:
+            if action['action'] == 'remove' and not (closed or released) or action['action'] in ('restore', 'prepare') and closed:
                 continue
             # A turn in the bot's main checkout or in this task's lane may be using the worktree; turns on the
             # bot's other tasks run in their own session worktrees and do not hold maintenance back.
@@ -1147,7 +1172,7 @@ class Worktrees:
                 else:
                     repo = {}
                 action_row = {**row, **repo, **action, 'full_name': row['repo']}
-                if action['action'] == 'restore' and row.get('repo') and not repo.get('machine_git') and self.refresh:
+                if action['action'] in ('restore', 'prepare') and row.get('repo') and not repo.get('machine_git') and self.refresh:
                     try:
                         action_row['_mirror_refresh'] = self.refresh(row['repo'], granted['token'])
                     except (ValueError, OSError, subprocess.SubprocessError):
@@ -1157,6 +1182,11 @@ class Worktrees:
                     fresh_detail = json.loads(fresh.get('detail_json') or '{}') if fresh else {}
                     return fresh is not None and self.bot_idle(row['owner'], row['task_id']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or fresh_detail.get('delete_requested')
                                                                                or released and fresh_detail.get('release_requested'))
+                if action['action'] == 'prepare':
+                    prepare(self.workspace, row, {**repo, 'full_name': row['repo']}, env, self.client)
+                    errors.pop(row['id'], None)
+                    self.retry.pop(row['id'], None)
+                    continue
                 state = act(self.workspace, action_row, action['action'], env, self.vault_values(row['owner']), still_closed)
                 restore_pending = action['action'] == 'restore'
                 if restore_pending:

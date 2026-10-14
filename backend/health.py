@@ -10,6 +10,7 @@ counts plus which computers are up and the day's failed runs, so it can check th
 import json
 import os
 import shlex
+from datetime import datetime, timezone
 
 from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, usage_limits, watchers
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
@@ -993,6 +994,17 @@ def view(c, who, settings, auth, github, config):
                 checks.append(_check('worktrees', 'Task worktrees', 'warn' if errors else 'ok',
                                      '; '.join(errors[:3]) if errors else '; '.join(f'{bot}: {size:g} MB' for bot, size in sorted(usage.items())),
                                      [_fix('Open tasks', '#/tasks')]))
+            # A task waiting for room for a worktree is waiting, not failing (backend/worktree_waits.py). Named by bot
+            # and repository only: a private task's title is not everyone's.
+            from .worktree_waits import waiting as worktree_waiting
+            if waits := worktree_waiting(c):
+                def age(since):
+                    minutes = int(max(0, (datetime.now(timezone.utc) - H.parse_ts(since)).total_seconds()) // 60)
+                    return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
+                checks.append(_check('worktree_waits', 'Waiting for a worktree', 'info', '; '.join(
+                    f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
+                    f"for {age(w['created'])} ({w['reason']})" for w in waits[:3])
+                    + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
     if full:
         from . import task_loops
         if loops := task_loops.looping(c):

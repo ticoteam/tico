@@ -91,14 +91,19 @@ function taskCodeLineHTML(l, mover, siblings = []) {
   return `<li class="code-line pr" data-code-link="${esc(l.id || '')}"><a class="code-main" href="${esc(l.url || '#')}" target="_blank" rel="noopener" title="${esc([taskLinkRepo(l), l.title || l.url].filter(Boolean).join(' · '))}">${num ? `<span class="code-num tnum">#${esc(num)}</span>` : ''}<span class="code-title">${esc(title || repoShort(taskLinkRepo(l)) || l.url || 'Pull request')}</span></a><span class="code-chips">${taskPRChips(l)}</span>${x}</li>`;
 }
 const taskCodeLinks = t => (t.links || []).filter(l => l.kind === 'pr' || l.kind === 'worktree');
+// A task waiting for room for a worktree (backend/worktree_waits.py): waiting, not failed.
+function taskWorktreeWaitHTML(w) {
+  const what = w.state === 'reserved' ? 'setting up' : 'no room yet';
+  return `<li class="code-line wt wait" data-worktree-wait="${esc(w.id || '')}"><span class="code-main" title="${esc(w.reason || '')}"><span class="code-repo">${esc(repoShort(w.repo))}</span><span class="code-dot">·</span><span>Waiting for a worktree · ${esc(what)} · ${esc(ageShort(w.since))}</span></span></li>`;
+}
 function taskCodeHTML(t) {
-  const links = taskCodeLinks(t);
-  if (!links.length) return '';
+  const links = taskCodeLinks(t), waits = Array.isArray(t.worktree_waits) ? t.worktree_waits : [];
+  if (!links.length && !waits.length) return '';
   const mover = canMove();
   // Worktrees first, then pull requests; each in the order they were added.
   const sorted = [...links.filter(l => l.kind === 'worktree'), ...links.filter(l => l.kind === 'pr')];
   return `<section class="rail-sec task-code" aria-labelledby="task-code-h"><h3 class="rail-h" id="task-code-h">Code</h3>
-    <ul class="code-list">${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}</ul></section>`;
+    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}</ul></section>`;
 }
 
 // ---- Subtasks: the children (one level shown, each expandable), with the roll-up line

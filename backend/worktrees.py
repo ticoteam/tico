@@ -11,7 +11,7 @@ from fastapi import Request
 from pydantic import Field
 from clients import git_repository
 
-from . import hubdb as H, repositories as R
+from . import hubdb as H, repositories as R, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem, readiness_document
@@ -172,6 +172,14 @@ def holdings(c, owner):
     return sorted(out, key=lambda w: order[w['clear']])
 
 
+def preparable(c, row, detail):
+    """A worktree reserved for a waiting task (backend/worktree_waits.py): its computer checks it out and runs setup
+    while the bot is idle, then reports it present. A failed attempt is not repeated; the task is told instead."""
+    return (row['state'] == 'pending' and bool(detail.get('wait_id')) and not detail.get('error')
+            and detail.get('checkout_state') in ('queued', 'initializing', 'checkout_ready', 'setup_running')
+            and bool(waits.preparing(c, row['id'])))
+
+
 def heartbeat(c, who, reports, capable, default_org=""):
     if not supported(c):
         return []
@@ -289,6 +297,9 @@ def heartbeat(c, who, reports, capable, default_org=""):
         row['detail_json'] = json.dumps(detail)
         if branch:
             row['branch'] = branch
+    # What this computer reported may have freed a place, or finished preparing a reserved worktree.
+    hosted = [r[0] for r in c.execute("SELECT 'bot:' || bot FROM assignments WHERE runner_id=?", (who.runner_id,))]
+    waits.serve(c, hosted, default_org)
     if not capable:
         c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
         return []
@@ -313,7 +324,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
         if closed and row['state'] == 'present' and not detail.get('delete_requested'):
             detail['restore_on_reopen'] = True
         action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
-                  else 'restore' if not closed and restore_requested(row, detail) else None)
+                  else 'restore' if not closed and restore_requested(row, detail)
+                  else 'prepare' if not closed and preparable(c, row, detail) else None)
         if detail.get('delete_requested') and row['state'] == 'removed':
             c.execute('DELETE FROM task_links WHERE id=?', (row['id'],))
             continue
@@ -341,6 +353,110 @@ def heartbeat(c, who, reports, capable, default_org=""):
     return actions
 
 
+def provision(c, who, task, repo, path=None, branch=None, default_org=''):
+    """The one path a task worktree is made or reused by: the owner bot's request, a person's, and a worktree wait
+    being served (backend/worktree_waits.py) all go through it, so each checks permission, ownership and computer."""
+    if not supported(c):
+        raise Problem('worktrees_unavailable', 'The server is too old for task worktrees', 409)
+    bot = H.actor_id(task['owner'])
+    connection = c.execute("SELECT * FROM github_app WHERE id='app'").fetchone()
+    org = connection['org'] if connection else default_org
+    grants = R.access(c, bot, org)['effective']
+    grant = next((r for r in grants if repo and r['full_name'].lower() == repo.lower() and r['access'] == 'write'), None)
+    if repo and connection and not grant:
+        raise Problem('forbidden', 'This bot needs write access to this repository', 403)
+    if repo and not connection:
+        try:
+            git_repository.address(repo)
+        except ValueError as exc:
+            raise Problem('worktree_repo', str(exc), 422) from None
+    assigned = c.execute('SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    if not assigned or not readiness_document(assigned['readiness_json']).get('worktrees'):
+        raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
+    if who.role == 'bot' and who.runner_id != assigned['id']:
+        raise Problem('forbidden', 'Worktree belongs on the bot\'s computer', 403)
+    attaching = path is not None
+    short = task['id'][:8]
+    repo = grant['full_name'] if connection and grant else repo
+    path = relative(path or f'tasks/{short}/{git_repository.folder(repo)}')
+    parts = PurePosixPath(path).parts
+    if attaching and parts[0].casefold() == 'tasks' and (len(parts) < 3 or parts[1] != short):
+        raise Problem('worktree_path', 'This worktree belongs to another task', 409)
+    candidates = list(c.execute("SELECT * FROM task_links WHERE kind='worktree' AND (computer_id=? OR task_id=?)", (assigned['id'], task['id'])))
+    canonical = unicodedata.normalize('NFC', path).casefold()
+    existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
+    suffix = ''
+    if existing and not attaching and existing['task_id'] == task['id']:
+        owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
+        if owner != task['owner'] and existing['state'] != 'removed':
+            suffix = '-' + bot
+            path = relative(path + suffix)
+            canonical = unicodedata.normalize('NFC', path).casefold()
+            existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
+    if existing:
+        owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
+        if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner'] and existing['state'] != 'removed':
+            raise Problem('worktree_path', 'This worktree belongs to another task', 409)
+        if existing['state'] != 'removed':
+            detail = json.loads(existing['detail_json'] or '{}')
+            return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
+                    'state': existing['state'],
+                    'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
+                    'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
+                    'expected_base': detail.get('expected_base')}
+    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
+    if count >= LIMIT:
+        held = holdings(c, task['owner'])
+        # Worded so a bot never removes a worktree by hand: finished ones free themselves.
+        detail = f'This bot already has {LIMIT} worktrees.'
+        merge = [w['path'] for w in held if w['clear'] == 'merge_ready']
+        freeing = [w['path'] for w in held if w['clear'] in ('merged', 'closed', 'task_finished') and not w.get('kept')]
+        kept = [f"{w['path']} ({w['kept']})" for w in held if w.get('kept')]
+        if merge:
+            detail += ' Merge these approved pull requests: ' + '; '.join(merge) + '.'
+        if freeing:
+            detail += (' These are finished and free themselves once you are idle; do not remove them: '
+                       + '; '.join(freeing) + '.')
+        if kept:
+            detail += ' Kept for the reason given; save or discard that work: ' + '; '.join(kept) + '.'
+        if not (merge or freeing or kept):
+            # Nothing frees itself, and nothing is removed to make room: name the oldest idle ones to clean up.
+            idle = [f"{w['path']} ({w['task']})" for w in sorted(held, key=lambda w: w['updated'] or '')[:3]]
+            detail += ' Clean one up before making another. Oldest idle: ' + '; '.join(idle) + '.'
+        raise Problem('worktree_limit', detail, 409, extra={'worktrees': held, 'limit': LIMIT})
+    if existing:
+        detail = json.loads(existing['detail_json'] or '{}')
+        detail.pop('removed_by', None)
+        detail.pop('cleanup_requested', None)
+        detail['owner'] = task['owner']
+        detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
+        detail.pop('expected_head', None)
+        detail.pop('checkout_target', None)
+        detail.pop('expected_base', None)
+        now = detail['record_changed'] = H.now()
+        c.execute("UPDATE task_links SET state='pending',computer_id=?,detail_json=?,updated=? WHERE id=?",
+                  (assigned['id'], json.dumps(detail), now, existing['id']))
+        return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
+                'state': 'pending',
+                'checkout_state': 'attached_pending' if attaching else 'queued',
+                'setup_pending': not attaching, 'expected_head': None, 'checkout_target': None,
+                'expected_base': None}
+    slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
+    branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
+    if branch is not None and (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith('-') or '..' in branch or '@{' in branch or branch.endswith(('/', '.', '.lock')) or '//' in branch):
+        raise Problem('worktree_branch', 'Invalid worktree branch', 422)
+    link = uuid.uuid4().hex
+    now = H.now()
+    c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,path,updated) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
+              (link, task['id'], 'worktree:' + link, repo or 'Worktree', who.actor, now, repo, branch, assigned['id'], path, now))
+    c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+              (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
+                           'setup_pending': not attaching, 'record_changed': now}), link))
+    return {'link_id': link, 'branch': branch, 'path': path, 'state': 'pending',
+            'checkout_state': 'attached_pending' if attaching else 'queued', 'setup_pending': not attaching,
+            'expected_head': None, 'checkout_target': None, 'expected_base': None}
+
+
 def install(app, store, auth, mutate):
     def check(c, who, tid):
         validate_identity(c, who)
@@ -351,111 +467,26 @@ def install(app, store, auth, mutate):
             raise Problem('forbidden', "Only the task's owner bot or a human mover manages its worktrees", 403)
         return row
 
-    def provision(c, who, task, repo, path=None, branch=None):
-        if not supported(c):
-            raise Problem('worktrees_unavailable', 'The server is too old for task worktrees', 409)
-        bot = H.actor_id(task['owner'])
-        connection = app.state.github_app.row(c)
-        org = connection['org'] if connection else store.settings.github_owner
-        grants = R.access(c, bot, org)['effective']
-        grant = next((r for r in grants if repo and r['full_name'].lower() == repo.lower() and r['access'] == 'write'), None)
-        if repo and connection and not grant:
-            raise Problem('forbidden', 'This bot needs write access to this repository', 403)
-        if repo and not connection:
-            try:
-                git_repository.address(repo)
-            except ValueError as exc:
-                raise Problem('worktree_repo', str(exc), 422) from None
-        assigned = c.execute('SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
-        if not assigned or not readiness_document(assigned['readiness_json']).get('worktrees'):
-            raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
-        if who.role == 'bot' and who.runner_id != assigned['id']:
-            raise Problem('forbidden', 'Worktree belongs on the bot\'s computer', 403)
-        attaching = path is not None
-        short = task['id'][:8]
-        repo = grant['full_name'] if connection and grant else repo
-        path = relative(path or f'tasks/{short}/{git_repository.folder(repo)}')
-        parts = PurePosixPath(path).parts
-        if attaching and parts[0].casefold() == 'tasks' and (len(parts) < 3 or parts[1] != short):
-            raise Problem('worktree_path', 'This worktree belongs to another task', 409)
-        candidates = list(c.execute("SELECT * FROM task_links WHERE kind='worktree' AND (computer_id=? OR task_id=?)", (assigned['id'], task['id'])))
-        canonical = unicodedata.normalize('NFC', path).casefold()
-        existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
-        suffix = ''
-        if existing and not attaching and existing['task_id'] == task['id']:
-            owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
-            if owner != task['owner'] and existing['state'] != 'removed':
-                suffix = '-' + bot
-                path = relative(path + suffix)
-                canonical = unicodedata.normalize('NFC', path).casefold()
-                existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
-        if existing:
-            owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
-            if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner'] and existing['state'] != 'removed':
-                raise Problem('worktree_path', 'This worktree belongs to another task', 409)
-            if existing['state'] != 'removed':
-                detail = json.loads(existing['detail_json'] or '{}')
-                return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
-                        'state': existing['state'],
-                        'checkout_state': detail.get('checkout_state'), 'setup_pending': detail.get('setup_pending', False),
-                        'expected_head': detail.get('expected_head'), 'checkout_target': detail.get('checkout_target'),
-                        'expected_base': detail.get('expected_base')}
-        count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
-        if count >= LIMIT:
-            held = holdings(c, task['owner'])
-            # Worded so a bot never removes a worktree by hand: finished ones free themselves.
-            detail = f'This bot already has {LIMIT} worktrees.'
-            merge = [w['path'] for w in held if w['clear'] == 'merge_ready']
-            freeing = [w['path'] for w in held if w['clear'] in ('merged', 'closed', 'task_finished') and not w.get('kept')]
-            kept = [f"{w['path']} ({w['kept']})" for w in held if w.get('kept')]
-            if merge:
-                detail += ' Merge these approved pull requests: ' + '; '.join(merge) + '.'
-            if freeing:
-                detail += (' These are finished and free themselves once you are idle; do not remove them: '
-                           + '; '.join(freeing) + '.')
-            if kept:
-                detail += ' Kept for the reason given; save or discard that work: ' + '; '.join(kept) + '.'
-            if not (merge or freeing or kept):
-                # Nothing frees itself, and nothing is removed to make room: name the oldest idle ones to clean up.
-                idle = [f"{w['path']} ({w['task']})" for w in sorted(held, key=lambda w: w['updated'] or '')[:3]]
-                detail += ' Clean one up before making another. Oldest idle: ' + '; '.join(idle) + '.'
-            raise Problem('worktree_limit', detail, 409, extra={'worktrees': held})
-        if existing:
-            detail = json.loads(existing['detail_json'] or '{}')
-            detail.pop('removed_by', None)
-            detail.pop('cleanup_requested', None)
-            detail['owner'] = task['owner']
-            detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
-            detail.pop('expected_head', None)
-            detail.pop('checkout_target', None)
-            detail.pop('expected_base', None)
-            now = detail['record_changed'] = H.now()
-            c.execute("UPDATE task_links SET state='pending',computer_id=?,detail_json=?,updated=? WHERE id=?",
-                      (assigned['id'], json.dumps(detail), now, existing['id']))
-            return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
-                    'state': 'pending',
-                    'checkout_state': 'attached_pending' if attaching else 'queued',
-                    'setup_pending': not attaching, 'expected_head': None, 'checkout_target': None,
-                    'expected_base': None}
-        slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
-        branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
-        if branch is not None and (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith('-') or '..' in branch or '@{' in branch or branch.endswith(('/', '.', '.lock')) or '//' in branch):
-            raise Problem('worktree_branch', 'Invalid worktree branch', 422)
-        link = uuid.uuid4().hex
-        now = H.now()
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,path,updated) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
-                  (link, task['id'], 'worktree:' + link, repo or 'Worktree', who.actor, now, repo, branch, assigned['id'], path, now))
-        c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
-                  (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
-                               'setup_pending': not attaching, 'record_changed': now}), link))
-        return {'link_id': link, 'branch': branch, 'path': path, 'state': 'pending',
-                'checkout_state': 'attached_pending' if attaching else 'queued', 'setup_pending': not attaching,
-                'expected_head': None, 'checkout_target': None, 'expected_base': None}
-
     @app.post('/api/v2/tasks/{tid}/worktrees')
     def create(request: Request, tid: str, body: Create):
         who = request.state.identity
-        return mutate(request, body, lambda c: provision(c, who, check(c, who, tid), body.repo))
+        def work(c):
+            task = check(c, who, tid)
+            try:
+                return provision(c, who, task, body.repo, default_org=store.settings.github_owner)
+            except Problem as problem:
+                # The bot's own turn at its limit: the wait is kept (backend/worktree_waits.py) with the refusal, so
+                # it is returned rather than raised, which would roll it back; a retry with the same key replays it.
+                wait = waits.record(c, who, task, body.repo, problem)
+                if not wait:
+                    raise
+                return {'_worktree_wait': waits.refusal(problem, wait)}
+        result = mutate(request, body, work)
+        if isinstance(result, dict) and '_worktree_wait' in result:
+            refused = result['_worktree_wait']
+            raise Problem('worktree_limit', refused['detail'], 409,
+                          extra={'worktrees': refused['worktrees'], 'limit': LIMIT, 'wait': refused['wait']})
+        return result
 
     @app.post('/api/v2/tasks/{tid}/worktrees/attach')
     def attach(request: Request, tid: str, body: Attach):
@@ -464,7 +495,7 @@ def install(app, store, auth, mutate):
             task = check(c, who, tid)
             path = relative(body.path)
             repo = body.repo
-            return provision(c, who, task, repo, path, body.branch)
+            return provision(c, who, task, repo, path, body.branch, default_org=store.settings.github_owner)
         return mutate(request, body, work)
 
     @app.patch('/api/v2/tasks/{tid}/links/{link_id}')
@@ -556,6 +587,9 @@ def install(app, store, auth, mutate):
                 raise Problem('worktree_branch', 'Attach a new worktree to change its branch', 409)
             fields['updated'] = now
             c.execute('UPDATE task_links SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?', (*fields.values(), link_id))
+            # A worktree set up, failed or removed may be what a waiting task needs, or the place it waits for.
+            owner = detail.get('owner') or H.task(c, task_id)['owner']
+            waits.serve(c, [owner], store.settings.github_owner)
             return dict(c.execute('SELECT * FROM task_links WHERE id=?', (link_id,)).fetchone())
         return mutate(request, body, work)
 

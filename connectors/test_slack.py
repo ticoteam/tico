@@ -4,9 +4,10 @@
     python3 -m unittest discover -s connectors
 """
 
-import contextlib, io, json, os, sys, tempfile, unittest
+import contextlib, io, json, os, stat, sys, tempfile, unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import slack                                            # noqa: E402
@@ -344,6 +345,60 @@ class FileDownload(FakeSlack):
         self.assertEqual(rc, 0, out)
         self.assertEqual(Path(json.loads(out)["path"]).parent, self.out)
         self.assertNotIn(str(slack.HUB), str(real))
+        self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o700)
+        if hasattr(os, "getuid"):
+            self.assertTrue(real.name.endswith(f"-{os.getuid()}"), real)    # one folder per local user
+
+    def test_the_default_folder_is_refused_unless_it_is_this_users_own_folder(self):
+        real = slack.FILES_DIR
+        try:
+            elsewhere = Path(self.tmp.name) / "elsewhere"
+            elsewhere.mkdir()
+            slack.FILES_DIR = self.out
+            self.out.symlink_to(elsewhere)                                  # planted link: refused
+            rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--json"],
+                                      [(200, {}, {"ok": True, "file": SHOT})])
+            self.assertEqual(rc, 2, out)
+            self.assertEqual(list(elsewhere.iterdir()), [])
+            self.out.unlink()
+            self.out.mkdir(mode=0o777)
+            os.chmod(self.out, 0o777)
+            with mock.patch.object(slack.os, "getuid", return_value=os.getuid() + 1):   # someone else's
+                rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--json"],
+                                          [(200, {}, {"ok": True, "file": SHOT})])
+            self.assertEqual(rc, 2, out)
+            self.assertEqual(list(self.out.iterdir()), [])
+            rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--json"],
+                                      [(200, {}, {"ok": True, "file": SHOT})])
+            self.assertEqual(rc, 0, out)                                    # its own: made private, used
+            self.assertEqual(stat.S_IMODE(self.out.stat().st_mode), 0o700)
+        finally:
+            slack.FILES_DIR = real
+
+    def test_a_long_or_odd_name_is_trimmed_and_saved(self):
+        for name, want in (("é" * 300 + ".png", ".png"), ("bad\x00na\x1bme‮.txt", "F0SHOT1-badname.txt"),
+                           ("x" * 400, "F0SHOT1-x")):
+            rc, out, _ = self.fetch({**SHOT, "name": name})
+            self.assertEqual(rc, 0, out)
+            saved = Path(json.loads(out)["path"])
+            self.assertLessEqual(len(saved.name.encode()), slack.MAX_NAME_BYTES)
+            self.assertTrue(saved.name.startswith("F0SHOT1-") and want in saved.name, saved.name)
+            self.assertEqual(saved.read_bytes(), PNG)
+        self.assertEqual(slack.file_name({"id": "F1", "name": "é" * 300}), "F1-" + "é" * 98)
+
+    def test_a_name_the_file_system_refuses_is_a_clean_failure(self):
+        for bad in ("x" * 300, "a\x00b"):
+            rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out / bad),
+                                       "--json"], [(200, {}, {"ok": True, "file": SHOT})])
+            self.assertEqual(rc, 1, out)
+            self.assertIn("nothing was saved", json.loads(out)["error"])
+
+    def test_the_text_line_shows_the_name_on_one_line(self):
+        rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out) + "/"],
+                                  [(200, {}, {"ok": True, "file": {**SHOT, "name": "a.png\nsaved payroll.pdf\x07"}})])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.count("\n"), 1, out)
+        self.assertTrue(out.startswith("saved a.png saved payroll.pdf (image/png"), out)
 
     def test_without_files_read_the_bot_is_told_to_add_the_scope_and_nothing_is_saved(self):
         rc, out, _ = self.run_cli(["file", "--as", "reader", "--id", "F0SHOT1", "--out", str(self.out), "--json"],

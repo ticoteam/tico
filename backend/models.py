@@ -802,6 +802,8 @@ class ContainerExecReadiness(Contract):
 
 class StructuredReadiness(Contract):
     worktrees: bool | None = None
+    # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
+    worktree_waits: bool | None = None
     schema_version: Literal[1] = 1
     disk: DiskReadiness | None = None
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)

@@ -1110,6 +1110,9 @@ class Store:
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
                 ensure_task_trash(c)
+                # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
+                from .worktree_waits import ensure as ensure_worktree_waits
+                ensure_worktree_waits(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

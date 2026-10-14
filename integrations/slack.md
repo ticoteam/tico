@@ -65,7 +65,8 @@ Inside a hosted turn `HUB_BOT` stands in for `--as`. Exit codes: `0` ok, `1` fai
 - A file someone shared shows as a `[file F...] name` line in `history`, `inbox` and a message routed from
   Slack. `file --id` downloads it under the same read rules: a channel the bot may read, or a DM unless
   `dms: false`. It needs the app's `files:read` scope; without it Slack sends its sign-in page, and `file` says
-  so instead of saving it.
+  so instead of saving it. By default the file goes to a private folder of the bot's own user under the temp
+  folder, never into the repository, and a long or odd name is shortened and cleaned.
 - Posting needs `post` in `can`, and the channel must be on the Slack channel list
   (Tools > Slack channels) with posting on, as it is unless an owner or admin turned it off. Externally shared (Slack Connect) channels are refused: posting there is an
   outbound send. Text over 4,000 characters is refused.

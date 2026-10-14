@@ -1341,3 +1341,48 @@ def test_interrupted_add_refuses_a_worktree_on_a_different_branch(trees):
         W.command(client, 'add', 'org/product')
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == 'unrelated'
     assert (path / 'file').read_text() == before
+
+
+@pytest.mark.slow
+def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_reported(trees):
+    workspace, base, remote, row, client = trees
+    saved = {**row, 'state': 'pending', 'task_status': 'open', 'bot_state': 'active',
+             'detail_json': json.dumps({'checkout_state': 'queued', 'setup_pending': True, 'wait_id': 'w1'})}
+    repo = {**row, 'access': 'write'}
+    client.get.side_effect = lambda route: {'worktrees': [saved]} if route.endswith('/worktrees') else {'repositories': [repo]}
+    client.post.return_value = {'token': 'synthetic-worktree-token'}
+    patches = []
+
+    def patch(route, body):
+        patches.append(body)
+        detail = json.loads(saved['detail_json'])
+        detail.update({k: v for k, v in body.items() if k != 'state'})
+        saved.update(state=body.get('state', saved['state']), detail_json=json.dumps(detail))
+        return saved
+    client.patch.side_effect = patch
+    idle = [False]
+    manager = W.Worktrees(workspace, client, idle=lambda: idle[0])
+    action = {'link_id': 'link1', 'action': 'prepare', 'branch': row['branch'], 'path': row['path'],
+              'task_id': row['task_id'], 'repo': row['repo'], 'owner': 'engineer'}
+    path = workspace / row['path']
+    try:
+        manager.sync([action])
+        assert not path.exists() and not patches          # a turn may be in this task: nothing is touched
+        idle[0] = True
+        manager.sync([action])
+        assert (path / 'setup-ran').exists()
+        assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
+        assert patches[-1]['state'] == 'present' and patches[-1]['checkout_state'] == 'ready'
+        assert patches[-1]['setup_pending'] is False and patches[-1]['expected_head'] == git(remote, 'rev-parse', 'main')
+        assert 'error' not in manager.reports[0]
+        # A setup that fails is recorded on the worktree and reported, for the server to tell the task once.
+        other = {**saved, 'id': 'link2', 'path': 'tasks/12345678/org__product-2', 'branch': 'tico/12345678-other',
+                 'state': 'pending', 'detail_json': json.dumps({'checkout_state': 'queued', 'setup_pending': True})}
+        saved.clear()
+        saved.update(other)
+        repo['setup_command'] = 'exit 7'
+        manager.sync([{**action, 'link_id': 'link2', 'path': other['path'], 'branch': other['branch']}])
+        assert patches[-1]['checkout_state'] == 'setup_failed'
+        assert 'setup failed (exit 7)' in manager.reports[0]['error']
+    finally:
+        manager.close()

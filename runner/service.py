@@ -2018,7 +2018,9 @@ class Runner:
             kept = self.__dict__.get("catch_up_notes", {}).get(row["bot"])
             if kept:
                 bots[row["bot"]]["warnings"].append("Not brought up to GitHub's history: " + kept)
-        document = {"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": True}
+        document = {"schema_version": 1, "runtimes": runtimes, "bots": bots, "worktrees": True,
+                    # Prepares a worktree reserved for a waiting task while its bot is idle (runner/worktrees.py prepare).
+                    "worktree_waits": True}
         try:
             usage = shutil.disk_usage("/" if self.follower.kind == "docker" else self.state.directory)
             document["disk"] = {"total_bytes": usage.total, "free_bytes": usage.free}
@@ -3319,7 +3321,7 @@ class Runner:
 
     def _report_heartbeat(self, body):
         readiness = body["readiness"]
-        optional = ("worktrees", "disk", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch")
+        optional = ("worktree_waits", "worktrees", "disk", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch")
         unsupported = self.__dict__.setdefault("_readiness_unsupported", {})
         for field, until in list(unsupported.items()):
             if time.monotonic() < until:
@@ -3440,7 +3442,7 @@ class Runner:
                               re.search(r"readiness\.(?:StructuredReadiness\.)?" + name + r"(?:[.: ;]|$)", detail)), None) if extra else None
                 generic = extra and "readiness." not in detail
                 if not field and generic:
-                    field = next((name for name in ("worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk")
+                    field = next((name for name in ("worktree_waits", "worktrees", "harnesses", "mail_key", "shared_env", "recent_errors", "container_exec", "github_auth", "browser_launch", "disk")
                                   if name in readiness), None)
                 if field:
                     readiness.pop(field, None)
