@@ -100,6 +100,16 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     if readiness.get("schema_version") != 1 or harness == "antigravity":
         return verdict(None, label + " does not report its AI tools; update it to check")
     if not state.get("installed"):
+        # A computer installs a bot's harness when the bot is put there (runner/harness_tools.py), so a harness it
+        # can install is no reason to refuse the move or the model: it says so while it installs.
+        tool = next((t for t in (readiness.get("harnesses") or {}).values()
+                     if isinstance(t, dict) and t.get("runtime") == runtime), None)
+        if tool and tool.get("state") == "failed":
+            return verdict(False, (tool.get("name") or str(runtime)) + " could not be installed on " + label
+                           + (": " + str(tool["detail"])[:200] if tool.get("detail") else ""),
+                           "Check " + label + " in Settings > Computers, or choose a model it already runs")
+        if tool:
+            return verdict(None, (tool.get("name") or str(runtime)) + " is installing on " + label)
         return verdict(False, str(runtime) + " is not installed on " + label,
                        "Install " + str(runtime) + " on " + label + ", or choose a model it already runs")
     if _uses_key(runtime, harness or config.get("harness") or "", config):

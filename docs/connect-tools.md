@@ -53,9 +53,12 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 | Codex | http only | `mcp_servers` config for the thread; `Authorization: Bearer ${VAR}` becomes `bearer_token_env_var`, `${VAR}` alone becomes `env_http_headers`, other shapes are filled in for the thread |
 | Gemini CLI | http and sse | `mcpServers` in the bot's own settings file, with `${VAR}` left for the CLI to expand |
 | Grok Build | http and sse | ACP `session/new`, headers filled in for that session |
+| Muse Code | http only | `-c mcp_servers.<name>=...` for that run; a `${VAR}` header is read by the CLI from the run's environment, other shapes are filled into a variable only that run has |
 | Cursor, Antigravity, pi | no | they read MCP servers only from a config file in the operator's home, or have none, so the operator's own servers would reach every bot; the bot's readiness shows a warning naming the tool |
 
-The operator's own MCP servers never reach a bot through Tico. The bot's own `.mcp.json` (Claude Code) still applies.
+A bot's turn gets the `hub` server, the servers its `bot.yaml` declares and its repository's own `.mcp.json` (Claude Code),
+not the computer operator's own (`~/.claude.json`, plugins, claude.ai connectors, `~/.codex/config.toml`). Grok still loads
+servers in the operator's `~/.grok/config.toml` and plugins; Cursor reads `~/.cursor/mcp.json`; Antigravity its user config.
 
 ### When the vendor's server needs OAuth
 

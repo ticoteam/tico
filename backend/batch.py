@@ -20,7 +20,7 @@ import re
 from . import hubdb as H
 from .store import Problem
 from . import task_privacy as privacy
-from .views import needs_order, pressing
+from .views import deadline, needs_order, pressing
 
 KINDS = ("decide", "needs_info", "instruct", "rule", "skip", "later")
 DECISIONS = ("approve", "decline", "done", "close", "answer")
@@ -86,6 +86,15 @@ def _row(it, actor):
         row["from_person"] = it["from_person"]
     if it.get("pressing"):
         row["pressing"] = True
+    if deadline(it):
+        row["due"] = deadline(it)
+    if it.get("recommend"):
+        row["recommend"] = it["recommend"]["do"]       # what the bot would do: "do what you recommend" takes it
+    if it.get("folded"):
+        # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
+        row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner")),
+                                            ("ask", _clip(f.get("person_ask") or f.get("note"), 300))) if v}
+                         for f in it["folded"]]
     return row
 
 
@@ -164,7 +173,7 @@ def _name(c, actor):
 
 def _rank(row):
     return needs_order(row["kind"], row.get("created"), row.get("rank") if row["kind"] == "task" else None,
-                       row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")))
+                       row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due"))
 
 
 def lineup(c, person, rows):

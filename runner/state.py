@@ -139,8 +139,19 @@ class State:
         """Saves an interrupted completion for an attempt that has none yet; a result already saved stands."""
         with self.connect() as c:
             seq = c.execute("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", (aid,)).fetchone()[0]
-            c.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL",
+            c.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL "
+                      "AND phase NOT IN ('synced','historical')",
                       (json.dumps({"outcome": "interrupted", "text": text, "last_seq": seq}), aid))
+
+    def settled(self, aid, text):
+        """The completion to send for an attempt being recovered, read fresh: a result saved since the snapshot
+        stands, an attempt with none is settled as interrupted, and None when it was synced or set aside meanwhile."""
+        self.interrupted(aid, text)
+        with self.connect() as c:
+            row = c.execute("SELECT phase, completion FROM attempts WHERE id=?", (aid,)).fetchone()
+        if not row or row["phase"] in ("synced", "historical") or not row["completion"]:
+            return None
+        return json.loads(row["completion"])
 
     def unfinished(self):
         with self.connect() as c:

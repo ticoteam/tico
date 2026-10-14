@@ -1,0 +1,15 @@
+{"method": "thread/started", "params": {"thread": {"id": "thr_1"}}}
+{"method": "turn/started", "params": {"threadId": "thr_1", "turn": {"id": "turn_1"}}}
+{"method": "item/agentMessage/delta", "params": {"threadId": "thr_1", "turnId": "turn_1", "itemId": "m1", "delta": "Hello"}}
+{"method": "item/agentMessage/delta", "params": {"threadId": "thr_1", "turnId": "turn_1", "itemId": "m1", "delta": " from Acme"}}
+{"method": "item/completed", "params": {"threadId": "thr_1", "turnId": "turn_1", "item": {"type": "agentMessage", "id": "m1", "text": "Hello from Acme", "phase": "final_answer"}}}
+{"method": "thread/tokenUsage/updated", "params": {"threadId": "thr_1", "turnId": "turn_1", "tokenUsage": {"total": {"inputTokens": 1200, "cachedInputTokens": 800, "outputTokens": 40, "totalTokens": 1240}, "last": {"inputTokens": 1200, "cachedInputTokens": 800, "outputTokens": 40, "totalTokens": 1240}}}}
+{"method": "thread/tokenUsage/updated", "params": {"threadId": "thr_1", "turnId": "turn_1", "tokenUsage": {"total": {"inputTokens": 1500, "cachedInputTokens": 900, "outputTokens": 60, "totalTokens": 1560}, "last": {"inputTokens": 300, "cachedInputTokens": 100, "outputTokens": 20, "totalTokens": 320}}}}
+{"method": "account/rateLimits/updated", "params": {"rateLimits": {"primary": {"usedPercent": 12.5, "windowDurationMins": 300, "resetsAt": 1760000000}, "secondary": null, "planType": "plus"}}}
+{"method": "error", "params": {"threadId": "thr_1", "turnId": "turn_1", "willRetry": true, "error": {"message": "stream disconnected before completion; retrying 1/5"}}}
+{"method": "thread/status/changed", "params": {"threadId": "thr_1", "status": {"type": "idle"}}}
+{"method": "turn/completed", "params": {"threadId": "thr_1", "turn": {"id": "turn_1", "status": "completed"}}}
+{"method": "turn/completed", "params": {"threadId": "thr_1", "turn": {"id": "turn_1", "status": "completed"}}}
+{"method": "turn/started", "params": {"threadId": "thr_1", "turn": {"id": "turn_2"}}}
+{"method": "turn/completed", "params": {"threadId": "thr_1", "turn": {"id": "turn_2", "status": "failed", "error": {"message": "You've hit your usage limit. Upgrade to Pro"}}}}
+{"method": "error", "params": {"threadId": "thr_1", "turnId": "turn_3", "willRetry": false, "error": {"code": 500}}}

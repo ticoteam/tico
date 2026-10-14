@@ -138,11 +138,15 @@ const comments = {
     assert.ok(Math.abs(person.height - bot.height) < 0.5, `the header keeps its height: ${person.height} vs ${bot.height}`);
     assert.deepEqual(errors, []);
 
-    // Tapping the name goes to the chat and does nothing to the card
+    // Tapping the name goes to the chat and does nothing to the card. Opening a bot page saves the recently viewed
+    // list (preference org.history) after a short debounce: that write is not a card action, and waiting for it
+    // gives any card action the click might have sent time to show up.
     const writes = [];
-    page.on('request', r => { if (r.method() !== 'GET') writes.push(r.url()); });
+    page.on('request', r => { if (r.method() !== 'GET' && !new URL(r.url()).pathname.startsWith('/api/v2/preferences/')) writes.push(r.url()); });
+    const visited = page.waitForRequest(r => r.method() !== 'GET' && new URL(r.url()).pathname === '/api/v2/preferences/org.history');
     await page.locator('.decide .dc-who-link').click();
     await page.waitForFunction(() => location.hash === '#/bot/writer');
+    await visited;
     assert.deepEqual(writes, [], 'no card action was sent');
     console.log('Decide: a task card leads with the plain ask, title second, details folded; a yes/no ask answers the bot; '
       + 'a card with no ask waits last for its bot to explain');

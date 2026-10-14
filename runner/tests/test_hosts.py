@@ -112,6 +112,17 @@ class FakeProcess:
         return self._rc
 
 
+class EventWakeup(unittest.TestCase):
+    def test_an_emit_wakes_the_turn_loop_before_its_timeout(self):
+        import threading, time
+        host = FakeHost()
+        threading.Timer(0.02, host.emit, ("delta",), {"text": "hi"}).start()
+        started = time.monotonic()
+        host.wait_events(2)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual([e["kind"] for e in host.drain()], ["delta"])
+
+
 class AuthRetryClassification(unittest.TestCase):
     """One rule for "the runtime could not sign itself in", kept beside the usage-limit rule."""
 
@@ -333,8 +344,23 @@ class ClaudeStreamJson(unittest.TestCase):
         self.assertEqual(list(config["mcpServers"]), ["hub"])
         self.assertTrue(config["mcpServers"]["hub"]["args"][0].endswith("clients/hubmcp.py"))
         self.assertEqual(config["mcpServers"]["hub"]["env"]["HUB_TOKEN"], "t0k")
-        self.assertNotIn("--strict-mcp-config", proc.argv)     # the bot repo's own .mcp.json stays
+        self.assertIn("--strict-mcp-config", proc.argv)        # none of the operator's own servers
+        self.assertEqual(proc.kwargs["env"]["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
         self.finish(host, proc)
+
+    def test_mcp_is_hub_declared_and_project_only(self):
+        with tempfile.TemporaryDirectory() as repo:
+            Path(repo, ".mcp.json").write_text(json.dumps({"mcpServers": {"docs": {"command": "docs-server"}}}))
+            env = {"HUB_EMPLOYEE": "cpo", "HUB_TOKEN": "t0k", "HUB_API_URL": "https://acme.example", "PATH": "/bin"}
+            host = make_claude()
+            host.start_turn(host.start_thread("cpo", base.settings(repo, env=env)), "hi")
+            proc = ClaudeProcess.instances[-1]
+            host.stop()
+            self.assertIn("--strict-mcp-config", proc.argv)
+            self.assertNotIn("--setting-sources", proc.argv)          # other user settings stay
+            self.assertEqual(sorted(json.loads(proc.argv[proc.argv.index("--mcp-config") + 1])["mcpServers"]),
+                             ["docs", "hub"])
+            self.assertEqual(proc.kwargs["env"]["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
 
     def test_a_missing_saved_session_restarts_once_fresh_under_the_same_id(self):
         host = make_claude()

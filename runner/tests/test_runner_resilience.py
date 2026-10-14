@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from clients.tico import APIError
-from runner import goals, service
+from runner import goals, safe_git, service
 from runner.hosts.fake import FakeHost
 from runner.service import Runner
 
@@ -153,6 +153,16 @@ class Execution(unittest.TestCase):
         self.assertEqual(client.completion()["outcome"], "interrupted")
         self.assertIn("RuntimeError", client.completion()["text"], "the error, not a runner restart, is the reason given")
         self.assertEqual(runner.state.unfinished(), [])
+
+    def test_recovery_keeps_a_result_saved_after_its_snapshot(self):
+        client = FakeClient()
+        runner = self.runner(client)
+        runner.state.record(attempt())
+        stale = runner.state.unfinished()
+        runner.state.finish("att-1", {"outcome": "completed", "text": "the real reply"})
+        with mock.patch.object(runner.state, "unfinished", return_value=stale):
+            runner.recover_output()
+        self.assertEqual(client.completion()["text"], "the real reply")
 
     def test_a_turn_outlives_a_cloud_outage_longer_than_its_lease(self):
         client = FakeClient(renew_error=CLOUDFLARE)
@@ -474,6 +484,21 @@ class Pushing(unittest.TestCase):
         self.assertEqual(self.head(self.origin, "main"), self.head(self.repo))
         self.assertTrue((self.repo / "elsewhere").exists() and (self.repo / "memory").exists())
 
+    def test_a_catch_up_without_any_git_identity_still_rebases(self):
+        # emp-botops on the Tico Team box: the startup push ran with no identity, so the rebase died on
+        # "unable to auto-detect email address" and the bot's memory commits stayed unpushed.
+        other = Path(self.tmp.name) / "other"
+        git(self.tmp.name, "clone", "-q", "-b", "main", str(self.origin), str(other), env=self.env)
+        self.commit("elsewhere", other)
+        git(other, "push", "-q", "origin", "main", env=self.env)
+        bare = {k: v for k, v in self.env.items() if not k.startswith(("GIT_AUTHOR", "GIT_COMMITTER", "EMAIL"))}
+        bare["HOME"] = self.tmp.name
+        git(self.repo, "config", "user.useConfigOnly", "true", env=self.env)   # no hostname guess, as in Docker
+        with mock.patch.dict(os.environ, bare, clear=True):
+            self.assertEqual(service.catch_up(self.repo, safe_git.process_environment()), "")
+        self.assertEqual(self.head(self.repo, "HEAD~1"), self.head(other))
+        self.assertEqual(git(self.repo, "log", "-1", "--format=%an", env=self.env).stdout.strip(), "t")
+
     def test_two_tasks_of_one_bot_run_at_once_in_their_own_worktrees_and_both_land(self):
         both = threading.Barrier(2, timeout=30)
 
@@ -504,6 +529,68 @@ class Pushing(unittest.TestCase):
         messages = git(self.origin, "log", "--format=%B", "main", env=self.env).stdout
         self.assertIn("Tico-Run: att-1", messages)
         self.assertIn("Tico-Run: att-2", messages)
+
+    def routine(self, aid, task):
+        return {**attempt(aid), "config": {"runtime": "codex", "max_run_minutes": 1, "session": "task"},
+                "task": {"id": task}, "lane": "task:" + task,
+                "message": {"id": "msg-" + aid, "body": "weekly check", "from_actor": "keeper"}}
+
+    def test_a_persons_chat_starts_while_a_routine_waits_for_its_worktree(self):
+        # A routine whose worktree could not be added ran its whole turn in the bot's checkout, and the person's
+        # chat with the bot waited behind it.
+        from runner import task_sessions
+        chat_done, worktree_back, asked = threading.Event(), threading.Event(), threading.Event()
+        real, ran = task_sessions.ensure, []
+
+        def ensure(main, path, task, env=None):
+            asked.set()
+            return real(main, path, task, env) if worktree_back.is_set() else ("", "could not add the task's worktree: busy")
+
+        class Turns(FakeHost):
+            def start_turn(host, thread_id, text, effort=None):
+                ran.append(Path(host.threads[thread_id]["settings"]["cwd"]).name)
+                if "weekly check" in text:
+                    chat_done.wait(5)       # a routine in the checkout holds the chat until this times out
+                return FakeHost.start_turn(host, thread_id, text, effort)
+        self.runner.host_factory = lambda attempt, env: Turns(replies=["done"])
+        self.runner.task_closed = lambda attempt: False
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(task_sessions, "ensure", side_effect=ensure), \
+                mock.patch.object(service, "WORKTREE_RETRY_S", 0.05), ThreadPoolExecutor(max_workers=1) as pool:
+            routine = pool.submit(self.runner.execute, self.routine("att-r", "t1"))
+            self.assertTrue(asked.wait(10))
+            self.runner.execute(attempt("att-c"))
+            chat_done.set()
+            self.assertFalse(routine.done())    # the chat finished while the routine waited, not after it
+            worktree_back.set()
+            routine.result(timeout=30)
+        self.assertEqual(ran, ["emp-coo", "t1"])
+        self.assertEqual([body["outcome"] for path, body in self.client.posts if path.endswith("/complete")],
+                         ["completed", "completed"])
+
+    def test_a_persons_chat_goes_before_background_turns_waiting_for_the_checkout(self):
+        # A routine with no worktree to wait for runs in the checkout, but not ahead of a person already waiting.
+        from runner import task_sessions
+        order, lock = [], self.runner.worktrees.bot_lock("coo")
+
+        class Turns(FakeHost):
+            def start_turn(host, thread_id, text, effort=None):
+                order.append("routine" if "weekly check" in text else "chat")
+                return FakeHost.start_turn(host, thread_id, text, effort)
+        self.runner.host_factory = lambda attempt, env: Turns(replies=["done"])
+        self.runner.task_closed = lambda attempt: False
+        lock.acquire()
+        with mock.patch.dict(os.environ, self.env), ThreadPoolExecutor(max_workers=2) as pool, \
+                mock.patch.object(task_sessions, "ensure", return_value=("", task_sessions.NO_UPSTREAM)):
+            routine = pool.submit(self.runner.execute, self.routine("att-r", "t1"))
+            time.sleep(1.5)                 # the routine is waiting for the checkout first
+            chat = pool.submit(self.runner.execute, attempt("att-c"))
+            deadline = time.monotonic() + 10
+            while not self.runner.person_waiting("coo") and time.monotonic() < deadline:
+                time.sleep(0.01)
+            lock.release()
+            chat.result(timeout=30)
+            routine.result(timeout=30)
+        self.assertEqual(order, ["chat", "routine"])
 
     def test_the_task_folder_is_the_bot_users_before_git_adds_the_worktree(self):
         # Under isolation git runs as the bot user; a sessions/bot-<slug> folder the supervisor made (mode 755)

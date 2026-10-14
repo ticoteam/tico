@@ -248,21 +248,22 @@ class ClaudeHost(Host):
 
     def _argv(self, thread_id, t, effort):
         argv = self.cmd + ["-p"] + STREAM_ARGS
-        # The hub's MCP server for this turn, and the bot's declared remote ones (their `${VAR}` headers are
-        # expanded by Claude Code from this turn's own environment, so the command line holds no value).
-        # Not `--strict-mcp-config`: a bot repo's own `.mcp.json` (an integration's read-only server, say)
-        # stays in force.
+        # The hub's MCP server for this turn, the bot's declared remote ones (their `${VAR}` headers are
+        # expanded by Claude Code from this turn's own environment, so the command line holds no value) and the
+        # bot repo's own `.mcp.json`, and nothing else: `--strict-mcp-config` keeps out the operator's own
+        # servers (~/.claude.json, user settings, plugins, claude.ai connectors), for every bot.
         servers = mcp_servers.claude_config(t["settings"].get("mcp_servers") or [])
         hub = hub_mcp_server(t["settings"].get("env"))
         if hub:
             servers["hub"] = hub
         if t["settings"].get("shared"):
-            argv += ["--setting-sources", "project,local", "--strict-mcp-config"]
-            try:
-                project = json.loads((Path(t["settings"]["cwd"]) / ".mcp.json").read_text()).get("mcpServers", {})
-            except (OSError, ValueError, AttributeError):
-                project = {}
-            servers = {**project, **servers}
+            argv += ["--setting-sources", "project,local"]
+        argv += ["--strict-mcp-config"]
+        try:
+            project = json.loads((Path(t["settings"]["cwd"]) / ".mcp.json").read_text()).get("mcpServers", {})
+        except (OSError, ValueError, AttributeError):
+            project = {}
+        servers = {**(project if isinstance(project, dict) else {}), **servers}
         if servers:
             argv += ["--mcp-config", json.dumps({"mcpServers": servers})]
         # The task's worktrees in other repos (runner/repo_rules.py), each one readable and writable by the session.
@@ -286,12 +287,11 @@ class ClaudeHost(Host):
 
     @staticmethod
     def _env(settings):
-        env = settings.get("env")
-        if not env and not settings.get("shared"):
-            return None
-        env = dict(env or os.environ)
+        env = dict(settings.get("env") or os.environ)
         if settings.get("shared"):
             env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        # Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors in 2.1.299.
+        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
         # The login and the session files live under HOME; a trimmed environment must keep it.
         if not env.get("HOME") and os.environ.get("HOME"):
             env["HOME"] = os.environ["HOME"]

@@ -86,8 +86,10 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
 async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = []} = {}) {
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false} = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
+  // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
+  if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
   const posts = [];
   const conflictNextUpdate = new Set();
   let pref = prefs;
@@ -845,9 +847,13 @@ async function snoozing(browser) {
   await page.close();
 }
 async function views(browser) {
-  // Needs you: what waits on you, grouped by who asks. A bot's heading has a visible Chat link; a person's has none.
-  const {page, errors} = await open(browser, {hash: '#/tasks'});
+  // Needs you: what waits on you, grouped by what it takes, or by who asks. A bot's heading has a visible Chat link; a
+  // person's has none.
+  const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true});
   assert.equal(await page.locator('[role=tab][aria-selected=true]').getAttribute('data-view'), 'foryou');
+  assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
+  await page.locator('#task-group').click();
+  await page.locator('[data-pick-group="requester"]').click();
   assert.deepEqual(await groupNames(page), ['WRITER', 'ENGINEER', 'SUPPORT', 'SAM', 'BOTOPS'], 'whoever asked most recently first');
   assert.equal(await page.locator('#task-body .tl-row').count(), NEEDS_YOU);
   const chat = page.locator('.tl-group[data-group="a:bot:writer"] a.tl-gchat');

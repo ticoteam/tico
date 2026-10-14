@@ -30,6 +30,11 @@ REQUEST_TIMEOUT_S = 120
 EFFORTS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"}
 DEFAULT_EFFORT = "high"
 DEFAULT_MODEL = "grok-4.6"
+# The operator's own MCP servers that Grok would pick up from other tools' files (~/.claude.json,
+# ~/.cursor/mcp.json) and from the xAI account: off, so a bot gets the hub and its declared servers. Grok
+# has no switch for servers in its own ~/.grok/config.toml or in plugins; those still load.
+NO_OPERATOR_MCP = {"GROK_CLAUDE_MCPS_ENABLED": "false", "GROK_CURSOR_MCPS_ENABLED": "false",
+                   "GROK_MANAGED_MCPS_ENABLED": "false"}
 
 
 def effort_for(effort):
@@ -69,7 +74,7 @@ class GrokHost(Host):
             stderr = subprocess.DEVNULL
             if self.stderr_path:
                 stderr = open(self.stderr_path, "ab", buffering=0)
-            env = self.env if self.env is not None else dict(os.environ)
+            env = {**(self.env if self.env is not None else os.environ), **NO_OPERATOR_MCP}
             self.proc = self._spawn(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=stderr, env=env, text=True, bufsize=1)
             self._pending = {}

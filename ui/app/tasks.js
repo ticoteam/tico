@@ -210,7 +210,11 @@ function taskDueInfo(t) {
   const day = new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
   if (actorSlug(t.owner)) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
-  return {at, day, kind: 'deadline', late, words: `${late ? 'Overdue' : 'Due'} ${day}`};
+  // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
+  const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(at) - start(Date.now())) / 864e5);
+  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
+    ? new Date(at).toLocaleDateString(undefined, {weekday: 'short'}) : day;
+  return {at, day, kind: 'deadline', late, words: late ? `Overdue ${day}` : `Due ${when}`};
 }
 // Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
 function taskSnoozed(t) {

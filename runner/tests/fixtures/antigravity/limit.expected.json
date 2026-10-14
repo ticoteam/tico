@@ -1,0 +1,27 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "tokens",
+  "input": 40,
+  "output": 0,
+  "cached": 0,
+  "total": 40,
+  "usage": {
+   "input": 40,
+   "cached": 0,
+   "output": 0
+  }
+ },
+ {
+  "kind": "turn_failed",
+  "error": "RESOURCE_EXHAUSTED: Gemini quota for this account is used up",
+  "limit": true
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

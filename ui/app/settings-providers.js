@@ -13,7 +13,7 @@ function providersModels(view, models, enabled) {
 }
 // One line per provider: box, name, a few muted words. The vendors that run through OpenRouter share one line.
 const PROVIDER_LINE = {openai: 'Codex, ChatGPT or API key', anthropic: 'Claude Code, Claude or API key', google: 'Gemini CLI, API key',
-  xai: 'Grok Build, Grok or API key', cursor: 'Cursor agent, Cursor or API key'};
+  xai: 'Grok Build, Grok or API key', cursor: 'Cursor agent, Cursor or API key', meta: 'Muse Code, Meta account or API key'};
 function providersFormHTML(view, models, id, editable = true) {
   const enabled = view.enabled || [], dis = editable ? '' : ' disabled';
   const box = row => `<input type="checkbox" data-provider value="${esc(row.id)}" ${enabled.includes(row.id) ? 'checked' : ''}${dis}>`;

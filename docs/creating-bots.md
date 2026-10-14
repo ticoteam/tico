@@ -477,6 +477,8 @@ Tico holds. A bot that needs a service it has not declared stops and says so on 
 borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in chat, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
+A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
+
 ### What humans see about a bot's tools
 
 Beside a bot's name at the top of its page, after the mark for the harness it runs on, is one small

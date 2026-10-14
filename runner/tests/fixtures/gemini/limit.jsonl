@@ -1,0 +1,2 @@
+{"type": "init", "timestamp": "2026-10-14T12:00:00.000Z", "session_id": "3b1f0c56-7f0e-4d2a-9b7e-2f5f3c1d9a01", "model": "gemini-3.8-flash"}
+{"type": "result", "timestamp": "2026-10-14T12:00:03.000Z", "status": "error", "error": {"type": "API_ERROR", "message": "[API Error: UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash]"}, "stats": {"total_tokens": 0, "input_tokens": 0, "output_tokens": 0, "models": {}}}

@@ -21,6 +21,11 @@ from . import isolation, safe_git
 SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 BRANCH = "tico-session/"
 CLOSED = ("done", "closed", "declined")
+# Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
+# then runs in the main checkout; any other problem is worth waiting out first (runner/service.py WORKTREE_WAIT_S).
+MISSING = "the bot's checkout is missing"
+NO_UPSTREAM = "the bot's checkout has no upstream to share between tasks"
+LASTING = (MISSING, NO_UPSTREAM)
 
 
 def task_of(lane):
@@ -38,16 +43,6 @@ def _git(path, *args, env, timeout=15):
                          stdin=subprocess.DEVNULL, env=env, timeout=timeout)
 
 
-def _committer(env, turn_env):
-    """Rebasing and the memory commit need an identity; the turn's is the bot's (runner/service.py environment)."""
-    for role in ("AUTHOR", "COMMITTER"):
-        for part in ("NAME", "EMAIL"):
-            key = f"GIT_{role}_{part}"
-            if (turn_env or {}).get(key):
-                env[key] = turn_env[key]
-    return env
-
-
 def upstream(main, env):
     """The main checkout's upstream as a remote-tracking ref (`origin/main`), or "" when it has none."""
     done = _git(main, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", env=env)
@@ -61,11 +56,11 @@ def ensure(main, path, task, turn_env=None):
     main, path = Path(main), Path(path)
     env = safe_git.environment(turn_env)
     if not (main / ".git").exists():
-        return "", "the bot's checkout is missing"
+        return "", MISSING
     try:
         tracked = upstream(main, env)
         if not tracked:
-            return "", "the bot's checkout has no upstream to share between tasks"
+            return "", NO_UPSTREAM
         common = _git(main, "rev-parse", "--path-format=absolute", "--git-common-dir", env=env).stdout.strip()
         if (path / ".git").exists():
             mine = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir", env=env).stdout.strip()
@@ -102,7 +97,7 @@ def finish(path, aid, turn_env=None, skip=(), timeout=45):
     Returns a problem or ""; on a problem the commits stay here for the next turn or a person."""
     from .memory_history import FOLDERS
     path = Path(path)
-    env = _committer(safe_git.environment(turn_env), turn_env)
+    env = safe_git.committing_environment(turn_env)
     try:
         folders = [name for name in FOLDERS if (path / name).is_dir()]
         if folders:

@@ -1,0 +1,102 @@
+[
+ {
+  "kind": "status",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "text": "Hello"
+ },
+ {
+  "kind": "delta",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "text": " from Acme"
+ },
+ {
+  "kind": "message",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "text": "Hello from Acme",
+  "final": true,
+  "item_id": "m1"
+ },
+ {
+  "kind": "tokens",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "input": 1200,
+  "output": 40,
+  "total": 1240,
+  "usage": {
+   "input": 1200,
+   "cached": 800,
+   "output": 40
+  }
+ },
+ {
+  "kind": "tokens",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "input": 1500,
+  "output": 60,
+  "total": 1560,
+  "usage": {
+   "input": 300,
+   "cached": 100,
+   "output": 20
+  }
+ },
+ {
+  "kind": "rate_limits",
+  "thread_id": null,
+  "turn_id": null,
+  "used_percent": 12.5,
+  "window_minutes": 300,
+  "resets_at": "2025-10-09T08:53:20+00:00",
+  "plan_type": "plus"
+ },
+ {
+  "kind": "error",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "error": "stream disconnected before completion; retrying 1/5",
+  "limit": false
+ },
+ {
+  "kind": "status",
+  "thread_id": "thr_1",
+  "turn_id": null,
+  "state": "idle"
+ },
+ {
+  "kind": "turn_completed",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "thread_id": "thr_1",
+  "turn_id": "turn_2",
+  "state": "active"
+ },
+ {
+  "kind": "turn_failed",
+  "thread_id": "thr_1",
+  "turn_id": "turn_2",
+  "error": "You've hit your usage limit. Upgrade to Pro",
+  "limit": true
+ },
+ {
+  "kind": "turn_failed",
+  "thread_id": "thr_1",
+  "turn_id": "turn_3",
+  "error": "{\"code\": 500}",
+  "limit": false
+ }
+]

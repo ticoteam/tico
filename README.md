@@ -213,6 +213,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_OIDC_CLIENT_SECRET` or `TICO_OIDC_CLIENT_SECRET_FILE` | For `oidc`: the client secret, or a file holding it | `/etc/tico/oidc-secret` |
 | `TICO_OIDC_ALLOWED_DOMAINS` | For `oidc`, optional: comma-separated email domains that may sign in (Google also checks the `hd` claim) | `acme.com` |
 | `TICO_SESSION_IDLE_SECONDS` and `TICO_SESSION_ABSOLUTE_SECONDS` | For `oidc`, optional: how long a sign-in lasts without use (default 30 days) and in all (default 90 days). Lower them to sign humans out sooner | `28800` |
+| `TICO_STREAM_KEEPALIVE_SECONDS` | Optional: how often a quiet event stream (pages, runners) sends a keepalive, 5 to 50 seconds (default 15). Keep it under the idle timeout of any proxy in front | `20` |
 | `TICO_SESSION_SECRET` | For `oidc`, optional: at least 32 characters, signs the sign-in round trip. Generated and kept in `tico-session-secret` beside the database (mode 0600) when unset | |
 | `TICO_ALB_ARN` and `TICO_ALB_REGION` | For `aws-alb`: the load balancer's ARN (must equal the token's `signer`) and its region | `arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/tico/50dc6c495c0c9188` |
 | `TICO_ALB_KEYS_URL` | For `aws-alb`: base URL for the public keys, replacing `https://public-keys.auth.elb.<region>.amazonaws.com`. Meant for tests | `http://127.0.0.1:9000/keys` |

@@ -117,6 +117,9 @@ CREATE TABLE IF NOT EXISTS runner_harness_actions(
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
  created TEXT NOT NULL, updated TEXT NOT NULL, requested_by TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS runner_harness_actions_by_runner ON runner_harness_actions(runner_id,state);
+CREATE TABLE IF NOT EXISTS runner_harness_choices(
+ runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL, enabled INTEGER NOT NULL,
+ updated TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(runner_id,harness));
 CREATE TABLE IF NOT EXISTS enrollments(
  code_hash TEXT PRIMARY KEY, operator TEXT NOT NULL REFERENCES humans(id),
  expires TEXT NOT NULL, consumed_at TEXT, runner_id TEXT);
@@ -619,6 +622,7 @@ class Store:
             _updates.ensure_schema(c)
             from . import runner_versions as _runner_versions
             c.executescript(_runner_versions.SCHEMA)
+            _runner_versions.ensure_schema(c)
             from . import files as _files
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history

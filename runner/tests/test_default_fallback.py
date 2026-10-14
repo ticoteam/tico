@@ -13,7 +13,7 @@ CHOICES = [{"runtime": "codex", "harness": "codex", "model": "gpt-test"},
 class ConfigClient(FakeClient):
     def get(self, path, **query):
         if path == "config":
-            return {"enabled_providers": ["openai", "anthropic"], "fallback_models": CHOICES}
+            return {"enabled_providers": ["openai", "anthropic"], "default_runtime": "claude", "fallback_models": CHOICES}
         return {}
 
 
@@ -31,7 +31,7 @@ def execution(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "refresh_workspace", lambda *args: None)
     monkeypatch.setattr(runner, "refresh_product_files", lambda *args: None)
     monkeypatch.setattr(runner, "mcp_for_run", lambda *args: [])
-    runner.enabled_providers()
+    runner.default_runtime()
     runner.runtime_rows = {"claude": dict(READY), "codex": dict(READY)}
     yield runner, client
     runner.pool.shutdown(wait=True)

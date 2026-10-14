@@ -1,8 +1,8 @@
 """The model CLIs a runner uses, installed and kept current by the runner itself.
 
 Each harness is described by a manifest (runner/harnesses/*.toml; docs/harnesses.md). The runner
-installs only the harnesses the company's enabled providers (and its assigned bots) need, into a
-tools directory of its own, never system-wide:
+installs only the harnesses its assigned bots run on (primary and fallback), plus any the owner turned
+on for this computer in Settings, into a tools directory of its own, never system-wide:
 
     <tools>/<id>/<uid>/     one complete install (an npm prefix, a venv, or a binary)
     <tools>/<id>/current    symlink to the install in use
@@ -13,7 +13,9 @@ Rules that keep it safe to run beside people's own tools and beside running turn
   * nothing is replaced while a turn on that harness runs: the new version is staged beside the
     old one (slow, in a worker thread) and only switched in by `step`, on the runner's main loop,
     at a moment no turn uses it;
-  * a harness pinned to a version is installed at that version and never moved by the daily check.
+  * a harness pinned to a version is installed at that version and never moved by the daily check;
+  * an install no bot here needs stays and is kept current until the owner turns it off; only then is
+    it removed, and never while a turn uses it.
 """
 
 import dataclasses
@@ -77,6 +79,9 @@ class Manifest:
     api_key_env: tuple
     login: dict | None
     source: str = ""
+    # Variables every command the runner runs with this harness sets (version probes, logins), e.g. an
+    # auto-updater's off switch.
+    env: tuple = ()
 
     @property
     def method(self):
@@ -112,7 +117,7 @@ def parse(data, source="", hosts_dir=HOSTS_DIR):
     if not isinstance(data, dict):
         raise ManifestError(f"{where}: not a table")
     known = {"id", "name", "host", "executable", "providers", "catch_all", "install", "version",
-             "update", "auth", "login"}
+             "update", "auth", "login", "env"}
     if set(data) - known:
         raise ManifestError(f"{where}: unknown field(s) {', '.join(sorted(set(data) - known))}")
     ident = data.get("id")
@@ -207,8 +212,11 @@ def parse(data, source="", hosts_dir=HOSTS_DIR):
             raise ManifestError(f"{where}: login is for device-code or subscription sign-in")
     elif "device-code" in methods:
         raise ManifestError(f"{where}: device-code sign-in needs a [login] command for the browser relay")
+    env = _table(data, "env", where)
+    if not all(isinstance(k, str) and ENV_NAME.fullmatch(k) and isinstance(v, str) for k, v in env.items()):
+        raise ManifestError(f"{where}: [env] maps variable names to strings")
     return Manifest(ident, name.strip(), host, executable, providers, bool(data.get("catch_all", False)),
-                    install, args, pattern, policy, pin, methods, keys, login, source)
+                    install, args, pattern, policy, pin, methods, keys, login, source, tuple(sorted(env.items())))
 
 
 def load_all(directory=MANIFEST_DIR, hosts_dir=HOSTS_DIR):
@@ -285,6 +293,10 @@ class Harnesses:
         self.lock = threading.RLock()
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="harness-install")
         self.wanted = set()
+        self.needed = set()           # what this computer's bots run on: always installed
+        self.default = set()          # a computer with no bots: the company default, unless the owner turned it off
+        self.loaded = False           # the bots' runtimes have been read once; until then nothing is removed
+        self.choices = {}             # the owner's on/off per harness for this computer; {} from an older server
         self.requests = []            # owner updates waiting for their turn: [Job]
         self.job = None               # the one job the worker is running
         self.staged = {}              # harness id -> Job whose new version waits for an idle moment
@@ -355,7 +367,8 @@ class Harnesses:
         version = ""
         try:
             done = self.run([path, *manifest.version_args], capture_output=True, text=True, timeout=timeout,
-                            stdin=subprocess.DEVNULL)
+                            stdin=subprocess.DEVNULL, **({"env": {**os.environ, **dict(manifest.env)}}
+                                                         if manifest.env else {}))
             found = re.search(manifest.version_pattern, (done.stdout or "") + "\n" + (done.stderr or ""))
             version = found.group(1) if found and done.returncode == 0 else ""
         except (OSError, subprocess.SubprocessError):
@@ -365,26 +378,36 @@ class Harnesses:
         return version
 
     # ------------------------------------------------------------------ what is wanted
-    def harness_for_provider(self, provider):
-        return next((m for m in self.manifests.values() if provider in m.providers), None)
-
     def harness_for_runtime(self, runtime):
         return next((m for m in self.manifests.values() if m.host == runtime), None)
 
-    def want(self, providers=(), runtimes=()):
-        """Harnesses the company's enabled providers, and the runtimes its assigned bots run on, need."""
-        found = set()
-        for provider in providers or ():
-            manifest = self.harness_for_provider(provider)
-            if manifest:
-                found.add(manifest.id)
-        for runtime in runtimes or ():
-            manifest = self.harness_for_runtime(runtime)
-            if manifest:
-                found.add(manifest.id)
+    def _ids(self, runtimes):
+        return {manifest.id for manifest in map(self.harness_for_runtime, runtimes or ()) if manifest}
+
+    def want(self, runtimes=(), default=()):
+        """Install the harnesses these runtimes (this computer's bots, primary and fallback) run on, plus
+        the ones the owner turned on here. The company's other providers are not installed. `default` (the
+        company default, for a computer with no bots yet) is installed unless the owner turned it off.
+        Called once the bots have been read from the server; only after that is anything removed."""
         with self.lock:
-            self.wanted = found
-        return found
+            self.needed, self.default, self.loaded = self._ids(runtimes), self._ids(default), True
+            return self._rewant()
+
+    def choose(self, choices):
+        """The owner's on/off per harness for this computer (`{id: bool}`), as the server keeps it."""
+        with self.lock:
+            self.choices = {str(k): bool(v) for k, v in (choices or {}).items() if str(k) in self.manifests}
+            return self._rewant()
+
+    def _rewant(self):
+        self.wanted = (self.needed | {ident for ident in self.default if self.choices.get(ident) is not False}
+                       | {ident for ident, on in self.choices.items() if on})
+        return set(self.wanted)
+
+    def turned_off(self, ident):
+        """Off on this computer: the owner said so and none of its bots runs on it. Never before the bots
+        have been read: a saved "off" must not remove what a bot needs while the server is still being asked."""
+        return self.loaded and self.choices.get(ident) is False and ident not in self.needed
 
     def install_plan(self, wanted=None):
         """What would be installed right now: wanted harnesses that are nowhere on this computer."""
@@ -435,7 +458,17 @@ class Harnesses:
                 if manifest.host in busy:
                     continue
                 del self.staged[ident]
+                if self.turned_off(ident):
+                    shutil.rmtree(job.staged["dir"], ignore_errors=True)
+                    if job.request:
+                        self.results.append((job.request, "failed", f"{manifest.name} is turned off on this computer"))
+                    continue
                 self._commit(manifest, job)
+            for ident, manifest in self.manifests.items():
+                # Turned off: removed at a moment no turn uses it and nothing is being installed for it.
+                if (self.turned_off(ident) and manifest.host not in busy and ident not in self.staged
+                        and not (self.job and self.job.harness == ident)):
+                    self._remove(manifest)
             if self.job is None:
                 job = self._next()
                 if job:
@@ -474,7 +507,7 @@ class Harnesses:
         if job.request:
             self.results.append((job.request, "failed", message))
 
-    def _backing_off(self, manifest):
+    def backing_off(self, manifest):
         failure = self.state["failed"].get(manifest.id)
         return bool(failure) and self.clock() - float(failure.get("at") or 0) < RETRY_AFTER_S
 
@@ -483,7 +516,7 @@ class Harnesses:
             return self.requests.pop(0)
         for ident in sorted(self.manifests):
             manifest = self.manifests[ident]
-            if self._backing_off(manifest) or ident in self.staged:
+            if self.backing_off(manifest) or ident in self.staged:
                 continue
             path, source = self.locate(manifest)
             policy, pin = self.policy(manifest)
@@ -491,8 +524,8 @@ class Harnesses:
                 if ident in self.wanted:
                     return Job("install", ident, pin if policy == "pinned" else "")
                 continue
-            if source != "tools":
-                continue                     # the person's own install: theirs to update
+            if source != "tools" or self.turned_off(ident):
+                continue                     # the person's own install, or one on its way out
             installed = self.detect(manifest, path)
             if policy == "pinned" and installed != pin:
                 return Job("update", ident, pin)
@@ -657,6 +690,21 @@ class Harnesses:
         if job.request:
             self.results.append((job.request, "done", f"{manifest.name} is at {job.staged['version']}"))
 
+    def _remove(self, manifest):
+        """Uninstall what this runner installed for `manifest`. A person's own install is theirs."""
+        root, entry = self.tools / manifest.id, self.bin_dir / manifest.executable
+        if not root.exists() and not entry.is_symlink():
+            return
+        self.on_switch(manifest)                      # a warm process would keep the files open
+        if entry.is_symlink():
+            entry.unlink(missing_ok=True)
+        shutil.rmtree(root, ignore_errors=True)
+        self.versions.clear()
+        for key in ("checked", "latest", "failed"):
+            self.state[key].pop(manifest.id, None)
+        self._save()
+        log(f"Tico runner: removed {manifest.name}; it is turned off on this computer")
+
     # ------------------------------------------------------------------ what the heartbeat says
     def report(self, runtimes=None, wanted=None):
         """{harness id: {installed, version, pinned, authenticated, update_available, ...}}."""
@@ -680,7 +728,7 @@ class Harnesses:
                     state, detail = "updating", "Waiting for a running turn to finish"
                 elif ident in queued:
                     state, detail = "queued", "Waiting for its turn"
-                elif failure and self._backing_off(manifest):
+                elif failure and self.backing_off(manifest):
                     state, detail = "failed", str(failure.get("error") or "")[:300]
                 else:
                     state, detail = "idle", ""
@@ -747,6 +795,10 @@ class Relay:
         if ask:
             self.polled = time.monotonic()
             reply = self.client.get("runner-harness-actions")
+            # The owner's on/off per harness here. A server from before the setting sends none: the
+            # computer then installs what its bots run on and keeps what it already has.
+            if isinstance((reply or {}).get("choices"), dict):
+                self.tools.choose(reply["choices"])
             for row in (reply or {}).get("actions", []):
                 if not isinstance(row, dict) or not row.get("id") or row["id"] in self.known:
                     continue

@@ -46,10 +46,17 @@ function decideCards(items) {
   }
   const old = (a, b) => String(a.at || '').localeCompare(String(b.at || ''));
   const all = [...asks.sort(old), ...approvals.sort(old), ...waiting.sort(old), ...mine.sort(old)];
-  // What a person asked for leads (the server's needs_order), and so does a bot's item that presses: due, or old.
+  // One group at a time, by what it takes (all the decisions in one sitting, then paying, signing in, reviewing,
+  // doing); within each, what is due first, soonest first, then what a person asked for (the server's needs_order)
+  // and a bot's item that presses: due, or old.
   const first = c => !!(c.it.from_person || c.it.pressing);
-  return [...all.filter(first), ...all.filter(c => !first(c)), ...unexplained.sort(old)];
+  const ordered = [...all.filter(first), ...all.filter(c => !first(c))];
+  const due = c => decideDue(c.it)?.at ?? Infinity;
+  ordered.sort((a, b) => (NEED_RANK[a.it.need] ?? 4) - (NEED_RANK[b.it.need] ?? 4) || due(a) - due(b));
+  return [...ordered, ...unexplained.sort(old)];
 }
+// A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
+const decideDue = it => { const d = it.kind === 'approval' ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
 // "From Ana" beside the name when the card's work traces back to another person than the one shown;
 // "You asked" when it is the viewer's own request a bot is bringing back.
 function decideFromPerson(it, shown) {
@@ -81,7 +88,7 @@ function pageDecide() {
     </header>
     <div class="dc-stage"></div>
     <div class="dc-actions"></div>
-    <p class="dc-keys" aria-hidden="true">1–6 pick · Y / N approve · D done · S skip · C comment</p>
+    <p class="dc-keys" aria-hidden="true">1–6 pick · Y / N approve · R do what it recommends · D done · S skip · C comment</p>
     <div class="dc-toast" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
   </section>`;
   const st = DEC = {queue: [], cards: new Map(), handled: new Set(), pending: null, data: new Map(), off: []};
@@ -158,7 +165,10 @@ function decidePaintHead(st) {
   const root = $('.decide');
   if (!root) return;
   const n = st.queue.length, d = st.queue.filter(k => decideDecision(st.cards.get(k))).length, c = decideCurrent(st);
-  $('.dc-count', root).innerHTML = n ? `<span class="tnum">${n} left</span>${d ? `<small class="tnum">${d} decision${d === 1 ? '' : 's'}</small>` : ''}` : '';
+  // How many cards the current group has left, so a sitting of decisions can be seen to end.
+  const need = c?.it.need || 'do', inGroup = st.queue.filter(k => (st.cards.get(k)?.it.need || 'do') === need).length;
+  $('.dc-count', root).innerHTML = n ? `<span class="tnum">${n} left</span>${c ? `<small class="tnum">${esc(needLabel(need))} · ${inGroup}</small>`
+    : d ? `<small class="tnum">${d} decision${d === 1 ? '' : 's'}</small>` : ''}` : '';
   $('.dc-right', root).innerHTML = !c ? '' : decideDecision(c)
     ? '<button type="button" class="dc-text" data-dc="skip">Skip</button>'
     : `<a class="dc-text" href="#/task/${encodeURIComponent(c.it.id)}">Open task</a>`;
@@ -187,7 +197,8 @@ function decideRender(st, enter = false) {
     <div class="dc-who">${face}
       <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
         <div class="dc-who-sub">${esc(c.type !== 'task' ? plainActors(c.it.title || '') : decideMeta(c.it))}</div></div>
-      <span class="pill ${decide ? 'needs' : ''}">${decide ? 'Decide' : 'Task'}</span></div>
+      ${decideDue(c.it) ? `<span class="tl-due${decideDue(c.it).late ? ' late' : ''}">${esc(decideDue(c.it).words)}</span>` : ''}
+      <span class="pill ${decide ? 'needs' : ''}">${esc(needLabel(c.it.need || (decide ? 'decide' : 'do')))}</span></div>
     <div class="dc-body"></div>
     <div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${decide ? 'Note' : 'Comment'}" placeholder="${decide ? 'Add a note' : 'Add a comment'}"></textarea>
       ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="Send comment" disabled>${ICON_SEND}</button>`}</div>
@@ -204,7 +215,9 @@ function decideRender(st, enter = false) {
 function decidePaintBody(st) {
   const c = decideCurrent(st), body = $('.decide .dc-body');
   if (!c || !body) return;
-  const html = c.type === 'pick' ? decidePickHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(c) : decideTaskHTML(st, c);
+  // Other bots' tasks waiting on the person for the same thing are named on the card, as in Needs you.
+  const html = (c.type === 'pick' ? decidePickHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(c) : decideTaskHTML(st, c))
+    + (c.type === 'approve' ? '' : foldedHTML(c.it));
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
 }
 const decideTwo = c => c.type === 'pick' && c.q.options.length === 2;
@@ -215,6 +228,14 @@ function decideOrder(c) {
 }
 function decideActionsHTML(c) {
   const k = key => `<kbd>${key}</kbd>`;
+  // The bot said what it would do: taking that is the main button, across the row, and the card's own answers stay
+  // below it.
+  const rec = c.type !== 'approve' && c.it.recommend?.ask
+    ? `<button type="button" class="primary dc-rec" data-dc="recommend" title="${esc(c.it.recommend.do)}">Do what you recommend${k('R')}</button>` : '';
+  if (rec) return rec + decideActionsPlain(c, k).replace(/ class="primary"/g, '');
+  return decideActionsPlain(c, k);
+}
+function decideActionsPlain(c, k) {
   if (decideTwo(c)) return decideOrder(c).map((i, n) => {
     const o = c.q.options[i];
     const yn = decideYesNo(c) ? String(o.label)[0].toUpperCase() : i + 1;
@@ -352,6 +373,13 @@ function decideWriteBody(c, what, i, note) {
     const writes = [{path: `/v2/tasks/${id}/answers`, body: {target, answers: {[q.id]: [o.label]}, ...(other ? {other: note} : {})}}];
     if (note && !other) writes.push({path: `/v2/tasks/${id}/comments`, body: {text: note}});
     return {writes, label: `Picked ${o.label} · sent to ${to}`};
+  }
+  if (what === 'recommend') {
+    const rec = c.it.recommend;
+    const version = c.it.kind === 'ask' ? null : shown || c.it.version;
+    return {writes: [{path: '/v2/needs-you/recommended', body: {ask: rec.ask, ...(version ? {version} : {})}},
+      ...(note ? [{path: c.it.kind === 'ask' ? `/v2/conversations/${encodeURIComponent(c.it.conversation_id)}/messages` : `/v2/tasks/${id}/comments`, body: {text: note}}] : [])],
+      label: `Done what ${to} recommends · ${rec.do}`};
   }
   if ((what === 'yes' || what === 'no') && c.type === 'task') {
     // A yes/no ask on a task: on the person's own task it finishes (yes) or declines (no) it with the answer as
@@ -534,6 +562,7 @@ function decideKey(st, ev) {
   if (!c) return;
   let what = null, i;
   if (k === 's') what = 'skip';
+  else if (k === 'r' && c.type !== 'approve' && c.it.recommend?.ask) what = 'recommend';
   else if (k === 'c') { ev.preventDefault(); $('.decide .dc-note textarea')?.focus(); return; }
   else if ((c.type === 'approve' || c.yn) && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
   else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }

@@ -25,7 +25,8 @@ function fixtures() {
   const machine = (id, label, operator, bots = []) => ({id, label, operator, last_seen: now, version: '0.3.2', platform: 'linux', bots,
     accepts_member_bots: true, readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}, claude: {installed: true, authenticated: 'ready'}}}});
   return {
-    machines: [machine('r1', 'Acme box', 'ana'), machine('r2', "Sam's Mac", 'sam', ['builder']), machine('r3', 'Old laptop', 'ana', ['scout'])],
+    machines: [machine('r1', 'Acme box', 'ana'), machine('r2', "Sam's Mac", 'sam', ['builder']), {...machine('r3', 'Old laptop', 'ana', ['scout']),
+      update: {state: 'needs_update', label: 'Needs update', release: '0.2.0', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.3.0', error: ''}}],
     subs: {
       profiles_by_computer: [
         {runner_id: 'r1', label: 'Acme box', profiles: [
@@ -135,6 +136,9 @@ const last = (writes, p) => writes.filter(w => w.p === p).at(-1)?.body;
 
 async function navigation(browser) {
   const {page, errors} = await open(browser);
+  // A computer behind the server's release carries an Outdated badge and the page says whose it is to update.
+  assert.equal(await page.locator('#set-machines [data-runner-outdated]').count(), 1);
+  assert.match(await page.locator('#set-machines [data-runner-outdated-banner]').textContent(), /Tico 0\.3\.0.*Old laptop \(0\.2\.0\).*Yours/);
   for (const alias of ['tags', 'types']) {
     await page.evaluate(alias => settingsShow(alias), alias);
     assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);

@@ -1,8 +1,8 @@
 # Harnesses: the model CLIs a runner uses
 
-A **harness** is the program a runner starts for a bot's run: Codex, Claude Code, Gemini CLI, Grok Build, Cursor Agent, or pi.
+A **harness** is the program a runner starts for a bot's run: Codex, Claude Code, Gemini CLI, Grok Build, Cursor Agent, Muse Code, or pi.
 Tico does not ship them. Model CLIs release every few days and Tico has to work with many providers, so each runner
-installs the harnesses its team needs, keeps them current, and lets the owner pin one when a release misbehaves.
+installs the harnesses its own bots need, keeps them current, and lets the owner pin one when a release misbehaves.
 
 Where bots run: on a Mac (native runner) or on a Linux computer (the `tico-runner` Docker image). The server runs no bots
 and holds no harness.
@@ -16,7 +16,8 @@ and holds no harness.
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Grok Build | `grok.toml` | xAI | npm `@xai-official/grok` (xAI's own package) | Grok subscription (`grok login` in a terminal) or `XAI_API_KEY` |
 | Cursor Agent | `cursor-agent.toml` | Cursor | Cursor's install script, run with `HOME` inside the tools directory | Cursor subscription (`cursor-agent login` in a terminal) or `CURSOR_API_KEY` |
-| pi (catch-all) | `pi.toml` | DeepSeek, Kimi (Moonshot), Meta Llama, Mistral, OpenRouter | npm `@earendil-works/pi-coding-agent` | `OPENROUTER_API_KEY` |
+| Muse Code | `muse-code.toml` | Meta | Meta's install script (`dev.meta.ai/install.sh`), run with `HOME` inside the tools directory | Meta account (device code, from Settings) or `META_API_KEY` |
+| pi (catch-all) | `pi.toml` | DeepSeek, Kimi (Moonshot), Mistral, OpenRouter | npm `@earendil-works/pi-coding-agent` | `OPENROUTER_API_KEY` |
 
 xAI has an official CLI (Grok Build, `docs.x.ai/build`; also an install script at `x.ai/cli/install.sh`), so xAI does
 not go through the catch-all. Tico uses the npm package because it installs into a directory of our choosing and npm
@@ -28,6 +29,23 @@ run, with the prompt on stdin and the chat made by `cursor-agent create-chat`, s
 the model itself on `auto` (`cursor-auto` in the model list); a bot's config may name any other model Cursor offers.
 Cursor's installer only ever installs the newest release, so this harness follows `latest` and cannot be pinned to an
 older version (Pin to this version pins the one installed).
+
+Muse Code is Meta's coding CLI (`muse`). Its runtime is `musecode`, because `muse` already names the Muse app synced
+in as an external agent. `runner/hosts/musecode.py` runs `muse exec --json --yolo` once per run with the prompt in a
+file (the CLI takes no prompt on stdin) and `--session-id <uuid>`: Tico makes the id, the first run creates the
+session and every later run with the same id continues it, so a restart resumes it. The hub and a bot's remote MCP
+servers are set for that run only (`-c mcp_servers.<name>=...`), with secrets left as `${VAR}` in the run's
+environment. Every run sets `MUSE_NO_AUTO_UPDATE=1` so the launcher does not update itself; the runner updates it.
+Muse also loads every MCP server in its own `settings.json` and refuses to switch those off per run, so bot runs
+never use the operator's `~/.config/muse`: they run with `XDG_CONFIG_HOME` set to a Muse folder of Tico's own (a
+subscription profile's `musecode/`, else the runner's host state), and any servers in it are removed before each
+run. A bot run gets only the hub, its bot.yaml servers and the repository's own MCP config.
+The download is about 340 MB. The sign-in is `muse/auth.json` in that folder (sign in from Settings; a
+profile signs in to its own); `META_API_KEY` wins over it, and a computer-wide key reaches the run. The CLI has no
+sign-in status command, so readiness reports the file being there. Version checks and sign-ins also set
+`MUSE_NO_AUTO_UPDATE=1` (the manifest's `[env]`).
+Meta's install script only installs the newest release, so this harness follows `latest` like Cursor's.
+Meta's Llama models stay on pi through OpenRouter (`llama-4-maverick`, no longer recommended).
 
 ### Why pi is the catch-all
 
@@ -49,10 +67,15 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 ## How providers map to harnesses
 
 The owner enables providers in **Settings > AI providers** (`backend/providers.py`). Each provider names its runtime
-(the host adapter) and its harness (the manifest). The runner reads the enabled providers from the server
-(`GET /api/v2/config`, `enabled_providers`) and installs the harnesses they need, plus the harness of any bot
-assigned to it that names a runtime. A runner whose team has no provider yet installs nothing and still joins and
-goes online.
+(the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
+anything. Each computer installs only:
+
+- the harness of every bot assigned to it, and of each bot's fallback (`fallback.harness`);
+- with no bot yet, the harness of the company's default model (`default_runtime` in `GET /api/v2/config`), so the
+  first computer can be signed in before its first bot arrives;
+- any harness the owner turned on for that computer (see [Choosing what a computer installs](#choosing-what-a-computer-installs)).
+
+A runner whose team has no provider yet installs nothing and still joins and goes online.
 
 A model with no CLI of its own has a row in `MODEL_CATALOG` with `runtime: "pi"` and an entry in
 `runner/hosts/pi.py` `MODELS` that gives its OpenRouter id (for example `kimi-k3` is `moonshotai/kimi-k3`). Enabling
@@ -89,6 +112,8 @@ Cursor Agent and Grok Build already have runner adapters and appear when their p
 Cursor currently offers Auto; its effort field says **Managed by harness** because the CLI has no
 separate effort switch. Before adding named Cursor models, confirm their exact identifiers with
 [`cursor-agent --list-models`](https://cursor.com/docs/cli/reference/parameters) on the relevant account.
+Muse Code offers Muse Spark 1.3 (`muse-spark-1.3`, effort low to max, medium by default), the only public model
+the Muse Code 1.4.7 CLI names (checked 2026-10-14); `muse-spark-1.2` exists but is older.
 Grok Build retains its catalog model and supported efforts through the
 [existing CLI integration](https://docs.x.ai/build/overview). Selecting a harness does not enable
 its provider, grant credentials or guarantee model access on a computer.
@@ -126,9 +151,28 @@ volume, so harnesses survive a restart or a new image. The directory is put last
   replace a CLI or reach that user's runner state. See the isolation notes in
   [Install](install.md#add-computers-to-run-your-bots) and [Security](../SECURITY.md).
 
+## Choosing what a computer installs
+
+**Settings > Computers > Model CLIs** lists every harness on each computer with an **On** switch for the owner.
+A harness a bot on that computer runs on is always on (the switch is locked). Any other one can be turned on, for
+example to sign it in before moving bots there, or off. Turning one off removes the runner's own install (its
+`<tools>/<id>` directory and its `bin` link) at a moment no turn uses it; a copy the person installed outside Tico is
+never touched. The choice is kept per computer on the server (`runner_harness_choices`,
+`POST /api/v2/computers/{id}/harness-choices` with `{harness, enabled}`, audited as `runner.harness.on|off`) and
+reaches the runner with its pending actions (`GET /api/v2/runner-harness-actions`, `choices`).
+
+A harness never switched either way is left as it is: an install no bot needs any more stays and is kept current
+until the owner turns it off. So a computer that installed every enabled provider's harness before this change keeps
+them all working. A runner talking to a server that does not know the setting installs what its bots run on and
+keeps what it has.
+
+Moving a bot to a computer, or choosing a model whose harness that computer lacks, is not refused: the computer
+installs the harness when the bot is there, and the readiness check says "<harness> is installing on <computer>".
+Only an install that failed (no `npm` on a Mac, say) blocks the move, with the reason.
+
 ## Updating and pinning
 
-Every day the runner asks each harness it installed for the newest release. With the default policy (`latest`) it
+Every day the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
 installs the new version **between runs**: the copy is downloaded and checked beside the old one while runs are in progress,
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
 back). A failed install keeps the working version and is retried after 30 minutes.
@@ -137,7 +181,7 @@ A harness can be **pinned** to a version: the runner keeps that version and only
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.
 
-**Settings > Computers** shows a chip per harness on each computer: name, version, `pinned`, `<version> available`,
+**Settings > Computers > Model CLIs** shows a chip per harness on each computer: name, version, `pinned`, `<version> available`,
 `installing`, `updating`. The owner (and only the owner) sees the actions, for installs the runner manages:
 
 - **Update**: install the newest release now (waits for an idle moment; moves the pin if the harness is pinned).
@@ -148,7 +192,8 @@ same way as the browser sign-in: the server keeps the request, the runner polls 
 and reports back. Nothing listens on the runner. A request the computer does not answer within six hours expires.
 
 The readiness heartbeat carries, per harness: `installed`, `version`, `pinned` (and `pin`), `authenticated`,
-`update_available` (and `latest`), `managed` (installed by the runner, not by a human), `wanted`, `state`. A runner
+`update_available` (and `latest`), `managed` (installed by the runner, not by a human), `wanted` (a bot here runs on it,
+or the owner turned it on), `state`. A runner
 talking to a server from before this change drops the field instead of going offline.
 
 ## Writing a harness

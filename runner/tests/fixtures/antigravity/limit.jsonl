@@ -1,0 +1,2 @@
+{"event": "init", "init": {"conversation_id": "0b2e6f1c-3a1d-4f43-9a51-6c2f2f7e9d10"}}
+{"event": "result", "result": {"status": "ERROR", "error": "RESOURCE_EXHAUSTED: Gemini quota for this account is used up", "usage": {"input_tokens": "40", "output_tokens": 0}}}

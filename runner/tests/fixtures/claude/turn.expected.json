@@ -1,0 +1,55 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "Hello",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": " from Acme",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "Hello from Acme",
+  "final": false,
+  "item_id": "msg_1"
+ },
+ {
+  "kind": "rate_limits",
+  "used_percent": null,
+  "window_minutes": 300,
+  "resets_at": "2025-10-09T08:53:20+00:00",
+  "status": "allowed"
+ },
+ {
+  "kind": "tokens",
+  "input": 26083,
+  "output": 4,
+  "total": 26087,
+  "cost_usd": 0.1131,
+  "usage": {
+   "input": 26083,
+   "cached": 15560,
+   "output": 4
+  }
+ },
+ {
+  "kind": "message",
+  "text": "Hello from Acme",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed",
+  "stop_reason": "end_turn"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

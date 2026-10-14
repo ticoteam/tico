@@ -82,7 +82,8 @@ async function v2Refresh() {
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
-  if (needs) S.v2.needs = needs.items || [];
+  if (needs) { S.v2.needs = needs.items || []; S.v2.wentAway = needs.went_away || null; }
+  if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or
 // its Mac has been offline for ten minutes. Messages still save and run when it is back; this

@@ -37,6 +37,7 @@ SUPPORT = {
     "cursor": {"name": "Cursor", "why": "cursor-agent reads MCP servers only from ~/.cursor/mcp.json or the bot's "
                                         ".cursor/mcp.json, with no per-run setting, so a bot would also get the operator's own servers"},
     "pi": {"name": "pi", "why": "pi has no MCP support"},
+    "musecode": {"name": "Muse Code", "transports": ("http",)},
 }
 REACH_TIMEOUT_S = 4
 
@@ -174,6 +175,26 @@ def codex_config(servers, env, process_env=None):
             table["http_headers"] = static
         out[s["name"]] = table
     return out
+
+
+def muse_config(servers, env):
+    """(`mcp_servers.<name>` values, extra environment) for Muse Code's per-run `-c` settings. Muse takes a
+    secret only as a header that is exactly one `${VAR}` it reads from its own environment, so a header
+    of any other shape (`Bearer ${VAR}`) is resolved into a variable of its own, `TICO_MCP_<n>`, that only
+    this run's environment carries. Nothing is written to a file or put on the command line."""
+    out, extra = {}, {}
+    for s in servers:
+        headers = {}
+        for name, value in s["headers"].items():
+            found = placeholders(value)
+            if len(found) == 1 and value.strip() == "${" + found[0] + "}":
+                headers[name] = value.strip()
+                continue
+            var = f"TICO_MCP_{len(extra) + 1}"
+            extra[var] = expand(value, env)
+            headers[name] = "${" + var + "}"
+        out[s["name"]] = {"transport": "streamable_http", "url": s["url"], **({"headers": headers} if headers else {})}
+    return out, extra
 
 
 # --------------------------------------------------------------------------- reachability

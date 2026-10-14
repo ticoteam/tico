@@ -39,8 +39,8 @@ PROVIDERS = (
      "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
     {"id": "moonshot", "label": "Kimi (Moonshot)", "runtime": "pi", "harness": "pi", "login": "",
      "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
-    {"id": "meta", "label": "Meta Llama", "runtime": "pi", "harness": "pi", "login": "",
-     "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
+    {"id": "meta", "label": "Meta", "runtime": "musecode", "harness": "muse-code", "login": "muse login",
+     "detail": "Muse Code, Meta's CLI, signed in with a Meta account or a META_API_KEY"},
     {"id": "mistral", "label": "Mistral", "runtime": "pi", "harness": "pi", "login": "",
      "detail": "The pi agent, with an OpenRouter API key in the shared secrets"},
     {"id": "openrouter", "label": "OpenRouter", "runtime": "pi", "harness": "pi", "login": "",
@@ -48,11 +48,12 @@ PROVIDERS = (
 )
 PROVIDER_BY_ID = {row["id"]: row for row in PROVIDERS}
 # What a computer's model CLI is called, for the words on Health and in Settings.
-RUNTIME_LABELS = {"codex": "Codex", "claude": "Claude Code", "grok": "Grok", "cursor": "Cursor", "gemini": "Gemini", "pi": "pi"}
+RUNTIME_LABELS = {"codex": "Codex", "claude": "Claude Code", "grok": "Grok", "cursor": "Cursor", "gemini": "Gemini", "pi": "pi",
+                  "musecode": "Muse Code"}
 # The variables that sign a runtime's CLI in with no browser. A credential stored under one of these names can be
 # given to every computer (backend/credentials.py `COMPUTERS`); a runner takes only the names it can sign in with.
 MODEL_KEYS = {"codex": ("OPENAI_API_KEY",), "claude": ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
-              "cursor": ("CURSOR_API_KEY",)}
+              "cursor": ("CURSOR_API_KEY",), "musecode": ("META_API_KEY",)}
 MODEL_KEY_NAMES = frozenset(name for names in MODEL_KEYS.values() for name in names)
 # One provider speaks for a runtime when a bot names only the runtime: the catch-all row for a
 # shared runtime, else the only one.
@@ -107,6 +108,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     # Cursor picks the model itself on `auto`; any other model it offers is named in the bot's config.
     {"id": "cursor-auto", "label": "cursor auto", "runtime": "cursor", "provider": "cursor",
      "recommended": True, "efforts": ("as-configured",), "default_effort": "as-configured"},
+    # Muse Code's own catalog (strings in the 1.4.7 binary; `muse model-profile show <id>` resolves it).
+    {"id": "muse-spark-1.3", "label": "muse spark 1.3", "runtime": "musecode", "provider": "meta",
+     "recommended": True, "efforts": ("low", "medium", "high", "xhigh", "max"), "default_effort": "medium"},
     # Models with no CLI of their own run on pi through OpenRouter (runner/hosts/pi.py maps each
     # id here to its OpenRouter id). The `openrouter` provider serves all of them.
     {"id": "deepseek-v4.1-flash", "label": "deepseek v4.1 flash", "runtime": "pi",
@@ -119,8 +123,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high", "max"), "default_effort": "low"},
     {"id": "kimi-k2.7-code", "label": "kimi k2.7 code", "runtime": "pi", "provider": "moonshot",
      "efforts": ("low", "high", "max"), "default_effort": "low"},
+    # Llama stays on pi (OpenRouter) for the bots already on it; Muse Code is Meta's own CLI now.
     {"id": "llama-4-maverick", "label": "llama 4 maverick", "runtime": "pi", "provider": "meta",
-     "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
+     "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "mistral-medium-3.5", "label": "mistral medium 3.5", "runtime": "pi", "provider": "mistral",
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",

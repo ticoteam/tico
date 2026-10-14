@@ -3,6 +3,45 @@
 'use strict';
 
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
+// What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
+// NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
+const NEED_GROUPS = [['decide', 'Decide'], ['pay', 'Pay'], ['connect', 'Sign in or connect'], ['review', 'Review and send'], ['do', 'Do']];
+const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
+const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS[4])[1];
+let NEEDS_MEMO = null;
+function needsIndex() {
+  const list = S.v2?.needs || [];
+  if (NEEDS_MEMO?.list !== list) {
+    const byId = new Map(list.map((it, i) => [String(it.id), {it, i}]));
+    // A bot's task folded into the card that asks the person the same thing is not listed again.
+    const folded = new Set(list.flatMap(it => (it.folded || []).map(f => String(f.id))));
+    NEEDS_MEMO = {list, byId, folded};
+  }
+  return NEEDS_MEMO;
+}
+const needsItem = id => needsIndex().byId.get(String(id))?.it || null;
+const needsFolded = id => needsIndex().folded.has(String(id));
+// "Do what you recommend": one tap answers the bot's ask with what it said it would do, and the card goes. It sends
+// the version of the task the card showed, so a task that changed meanwhile is refused, not answered unseen.
+const recommendButton = (rec, cls = 'primary', version = null) => rec?.ask
+  ? `<button type="button" class="${cls}" data-recommend="${esc(rec.ask)}"${version ? ` data-version="${esc(String(version))}"` : ''} title="${esc(rec.do)}">Do what you recommend</button>` : '';
+const recommendLine = (rec, from) => rec?.do
+  ? `<div class="req-context need-rec"><span>${esc(actorLabel(from) || 'The bot')} recommends</span> ${esc(plainActors(rec.do))}</div>` : '';
+// The cards folded into this one: each bot's task and what it asks, so nothing it asks is hidden.
+const foldedHTML = it => (it.folded || []).length ? `<div class="req-next need-folded"><span>Also waiting on this</span><ul>${it.folded.map(f =>
+  `<li><a href="#/task/${encodeURIComponent(f.id)}">${esc(plainActors(f.title || ''))}</a>${f.person_ask || f.note ? ` <span class="muted">${esc(plainActors(f.person_ask || f.note))}</span>` : ''}</li>`).join('')}</ul></div>` : '';
+async function needsRecommend(button, ask, version) {
+  const label = button.textContent;
+  button.disabled = true; button.textContent = '…';
+  try {
+    const done = await post('/v2/needs-you/recommended', {ask, ...(version ? {version} : {})});
+    toast(`Done: ${done.did}`);
+    button.closest('.req, .tl-row')?.remove();
+    await v2Refresh();
+    if (TASKS_ST && isTasksRoute(S.route)) { await tasksLoad(TASKS_ST); }
+    personTasksReload();
+  } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
+}
 function needsV2Item(it, folded, showName = true) {
   const kind = String(it.kind || 'task');
   const from = taskRequester(it) || it.requested_by || '';
@@ -10,11 +49,13 @@ function needsV2Item(it, folded, showName = true) {
   const line = it.first_line || v2Firstline(it.body);
   const title = it.title || line || V2_KIND[kind] || 'Item';
   const acts = [];
+  const rec = kind === 'approval' ? null : it.recommend;
+  if (rec) acts.push(recommendButton(rec, 'primary', it.version));
   if (kind === 'approval') {
     acts.push(`<button class="primary" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="approved">Approve</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-approval="${esc(it.id)}" data-v2-decision="declined">Decline</button>`);
   } else {
-    if (it.status !== 'done') acts.push(`<button class="primary" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
+    if (it.status !== 'done') acts.push(`<button class="${rec ? 'ghost' : 'primary'}" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
     if (['done', 'declined'].includes(String(it.status))) acts.push(`<button class="ghost" type="button" data-v2-task="${esc(it.id)}" data-v2-status="open">Reopen</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-task="${esc(it.id)}" data-v2-close="1">Close</button>`);
   }
@@ -25,7 +66,7 @@ function needsV2Item(it, folded, showName = true) {
     <summary>
       ${slug && S.emps.some(e => e.name === slug) ? avatar(slug, 24) : personCircle(actorLabel(from) || 'Tico', 24)}
       <span class="req-text">${showName ? `<span class="req-from">${esc(actorLabel(from) || 'Tico')}:</span> ` : ''}${esc(plainActors(title))}</span>
-      <span class="req-meta"><span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
+      <span class="req-meta">${dueChip({due: it.due, owner: it.owner, status: it.status})}<span class="pill ${kind === 'approval' || kind === 'question' ? 'needs' : kind === 'declined' ? 'blocked' : ''}">${esc(V2_KIND[kind] || kind)}</span>${esc(ago(it.created))}</span>
       <span class="req-arrow" aria-hidden="true">›</span>
     </summary>
     <div class="req-body">
@@ -34,8 +75,10 @@ function needsV2Item(it, folded, showName = true) {
         : it.person_ask ? `<div class="req-context"><b>${esc(plainActors(it.person_ask))}</b></div>` : ''}
       ${it.body ? `<div class="req-context"><div class="md">${safeMd(taskBody(it))}</div></div>`
                 : line ? `<div class="req-context">${esc(line)}</div>` : ''}
+      ${recommendLine(rec, it.ask?.from_actor || from)}
       ${payload}
       ${it.note ? `<div class="req-next"><span>Note</span><div class="md">${safeMd(it.note)}</div></div>` : ''}
+      ${foldedHTML(it)}
       <div class="issue-actions">${kind === "approval" ? "" : taskConversationButton(it.id)}${acts.join('')}</div>
       <div class="issue-compose" hidden></div>
     </div>
@@ -190,9 +233,10 @@ function looseAskRow(it) {
     </summary>
     <div class="req-body">
       <div class="req-context"><div class="md">${safeMd(plainActors(it.body || ''))}</div></div>
+      ${recommendLine(it.recommend, from)}
       <form class="issue-compose" data-ask-answer="${esc(it.id)}">
         <textarea aria-label="Your answer" placeholder="Your answer…" required></textarea>
-        <div class="row"><button class="primary" type="submit">Answer</button><span class="muted" data-ask-msg></span></div>
+        <div class="row">${recommendButton(it.recommend)}<button class="${it.recommend ? 'ghost' : 'primary'}" type="submit">Answer</button><span class="muted" data-ask-msg></span></div>
       </form>
     </div>
   </details>`;
@@ -311,6 +355,13 @@ function v2ReplyBox(button, conversation) {
   };
   box.focus();
 }
+// Capturing, so a recommendation button inside a task row answers instead of opening the task.
+document.addEventListener('click', ev => {
+  const rec = ev.target.closest?.('[data-recommend]');
+  if (!rec) return;
+  ev.preventDefault(); ev.stopPropagation();
+  void needsRecommend(rec, rec.dataset.recommend, Number(rec.dataset.version) || null);
+}, true);
 document.addEventListener('click', ev => {
   const ap = ev.target.closest('[data-v2-approval]');
   if (ap) { ev.preventDefault(); void v2Decide(ap, ap.dataset.v2Approval, ap.dataset.v2Decision); return; }

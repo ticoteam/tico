@@ -152,7 +152,7 @@ class HostConfigs(unittest.TestCase):
                                           "headers": {"Authorization": "Bearer ${JIRA_API_TOKEN}"}})
         self.assertEqual(config["linear"]["type"], "sse")
         self.assertNotIn("tok-jira-123", " ".join(argv))
-        self.assertNotIn("--strict-mcp-config", argv)                               # the bot repo's own .mcp.json stays
+        self.assertIn("--strict-mcp-config", argv)                                  # not the operator's own servers
 
     def test_gemini_and_grok_take_both_transports(self):
         settings = self.settings([JIRA, LINEAR_SSE], "gemini")

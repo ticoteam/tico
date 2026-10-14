@@ -22,17 +22,18 @@ import re
 import stat
 from pathlib import Path
 
-RUNTIMES = ("codex", "claude", "gemini", "grok")
+RUNTIMES = ("codex", "claude", "gemini", "grok", "musecode")
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # The only relocation knob each CLI offers today. Codex reads CODEX_HOME; Claude Code and Grok
 # Build key their login to HOME (grok 1.0.30 also honours GROK_HOME, but one
 # rule for both keeps a profile a single directory). Gemini is not here: its host takes a home
-# argument instead, so nothing in the turn's environment has to move.
-HOME_VAR = {"codex": "CODEX_HOME", "claude": "HOME", "grok": "HOME"}
+# argument instead, so nothing in the turn's environment has to move. Muse Code keeps its login and
+# settings in $XDG_CONFIG_HOME/muse.
+HOME_VAR = {"codex": "CODEX_HOME", "claude": "HOME", "grok": "HOME", "musecode": "XDG_CONFIG_HOME"}
 # Worst first: a runner row reports the profile that needs attention, not the healthy one.
 SIGN_IN_ORDER = ("failed", "missing", "unknown", "ready")
 LOGIN_COMMAND = {"codex": ["codex", "login"], "claude": ["claude", "auth", "login"],
-                 "grok": ["grok", "login"]}
+                 "grok": ["grok", "login"], "musecode": ["muse", "login"]}
 
 
 class SubscriptionUnavailable(RuntimeError):

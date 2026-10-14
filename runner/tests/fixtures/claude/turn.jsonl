@@ -1,0 +1,9 @@
+{"type": "system", "subtype": "init", "session_id": "5b0c1c43-6a35-4d3e-9a54-2f4a1d0c0e11", "model": "claude-sonnet-5", "tools": []}
+{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "msg_1"}}, "parent_tool_use_id": null}
+{"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}, "parent_tool_use_id": null}
+{"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " from Acme"}}, "parent_tool_use_id": null}
+{"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "a subagent's words"}}, "parent_tool_use_id": "toolu_01"}
+{"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "Hello from Acme"}]}, "parent_tool_use_id": null}
+{"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "Hello from Acme"}]}, "parent_tool_use_id": null}
+{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "five_hour", "resetsAt": 1760000000}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "Hello from Acme", "stop_reason": "end_turn", "session_id": "5b0c1c43-6a35-4d3e-9a54-2f4a1d0c0e11", "total_cost_usd": 0.1131, "usage": {"input_tokens": 2, "cache_creation_input_tokens": 10521, "cache_read_input_tokens": 15560, "output_tokens": 4}}
