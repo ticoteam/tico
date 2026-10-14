@@ -297,6 +297,8 @@ def config_view(c, settings, who=None):
     if who is not None:
         # A runner installs only the harnesses these providers need (runner/harness_tools.py).
         value["enabled_providers"] = list(chosen["enabled"])
+        # Where a runner sends a turn whose subscription hit its limit, when the bot names no fallback.
+        value["fallback_models"] = providers.default_fallbacks(chosen)
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one

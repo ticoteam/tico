@@ -1611,7 +1611,7 @@ class Execution:
             # named in Runs, so a primary that keeps failing is noticed.
             H.event(c, H.KEEPER, "attempt.fallback", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "fallback": body.fallback,
-                     "outcome": body.outcome})
+                     "outcome": body.outcome, **({"primary_limited": True} if body.primary_limited else {})})
         if stopped:
             person = row["stop_requested"]
             name = (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)

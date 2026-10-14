@@ -8,3 +8,4 @@ body:has(#main.overview-layout) #topbar{display:none}
 @media(max-width:760px){
   #main.overview-layout{height:calc(100dvh - var(--demo-h,0px) - var(--mobile-nav-height) - env(safe-area-inset-bottom));padding:0}
 }
+.overview-stuck .overview-fallback{margin:0;padding:2px 0}

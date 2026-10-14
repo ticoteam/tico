@@ -844,6 +844,26 @@ def _failed(c):
     return total, [{"bot": r["bot"], "state": r["state"], "at": r["finished"]} for r in rows]
 
 
+def _fallbacks(c):
+    """(on fallback, limited): bots whose latest run in the last day ran on a fallback harness, with that
+    harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
+    from .execution import cooling_off
+    since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
+    for r in c.execute("SELECT bot,coalesce(started,created) AS began,json_extract(result_json,'$.fallback') AS harness "
+                       "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished>? "
+                       "ORDER BY bot,finished DESC", (since,)):
+        row = latest.setdefault(r["bot"], {"bot": r["bot"], "harness": r["harness"], "since": r["began"], "open": bool(r["harness"])})
+        if row["open"] and r["harness"]:
+            row["since"] = r["began"]
+        else:
+            row["open"] = False
+    on = sorted(({"bot": row["bot"], "harness": row["harness"], "since": row["since"]}
+                 for row in latest.values() if row["harness"]), key=lambda row: (row["since"] or "", row["bot"]))
+    limited = [{"bot": r["bot"], "since": r["since"]} for r in
+               c.execute("SELECT bot,since FROM bot_status WHERE state='limited' ORDER BY since,bot") if cooling_off(c, r["bot"])]
+    return on, limited
+
+
 def _bot_computers(computers):
     """A bot checking the team's health sees which computers are up, their release and disk, never who operates
     them or their sign-in, container and browser errors."""
@@ -886,6 +906,11 @@ def view(c, who, settings, auth, github, config):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full)
+    on_fallback, limited = _fallbacks(c) if kind != "bot" else ([], [])
+    if not full and (on_fallback or limited):     # the same rule as `stuck`: only bots the caller may read
+        readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
+        on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
+        limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
     if full and (listening := _listening(c, settings)):
@@ -1230,6 +1255,7 @@ def view(c, who, settings, auth, github, config):
     return {**({"storage": storage_view(c, settings)} if kind == "owner" else {}), "audience": kind, "checks": checks, "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
+            "on_fallback": on_fallback, "limited": limited,
             "failures": failures if full or kind == "bot" else [], "checked": H.now(),
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}

@@ -128,6 +128,13 @@ class AuthRetryClassification(unittest.TestCase):
         self.assertTrue(base.is_limit("Selected model is at capacity. Please try a different model."))
         self.assertFalse(base.is_limit("The capacity planning doc is at docs/capacity.md"))
 
+    def test_a_spend_limit_is_a_limit_not_a_failure(self):
+        # 2026-10-13 10:00-13:32Z: 23 Claude bots failed 87 turns on "monthly spend limit" instead of going limited.
+        self.assertTrue(base.is_limit("Claude AI monthly spend limit reached. Raise it in your account settings."))
+        self.assertTrue(base.is_limit("You have reached your spend limit"))
+        self.assertTrue(base.is_limit("Monthly usage limit reached"))
+        self.assertFalse(base.is_limit("Draft the monthly spend report"))
+
 # ----------------------------------------------------------------------------- Grok (ACP)
 def grok_responder(proc, msg):
     method, rid = msg.get("method"), msg.get("id")

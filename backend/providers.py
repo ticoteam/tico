@@ -311,7 +311,9 @@ def _record(value):
     return {"enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
             "runtime": str(stored.get("runtime") or ""), "model": str(stored.get("model") or ""),
             "revision": int(stored.get("revision") or 0), "updated": str(stored.get("updated") or ""),
-            "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or "")}
+            "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
+            # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
+            "auto_fallback": stored.get("auto_fallback") is not False}
 
 
 def env_seed(settings):
@@ -363,8 +365,10 @@ def save(c, actor, body, now):
         raise ProviderError("conflict", "The provider choice changed since you opened it; reload and try again", 409)
     enabled = normalize_enabled(body.get("enabled"))
     runtime, model = complete_choice(enabled, body.get("runtime"), body.get("model"))
+    auto = body.get("auto_fallback")
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
-             "updated": now, "updated_by": actor, "source": "owner"}
+             "updated": now, "updated_by": actor, "source": "owner",
+             "auto_fallback": before["auto_fallback"] if auto is None else bool(auto)}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (KEY, json.dumps(after, sort_keys=True)))
     return before, after
@@ -376,9 +380,29 @@ def view(record):
             "default": {"runtime": record["runtime"], "model": record["model"]},
             "revision": record["revision"], "source": record["source"],
             "updated": record["updated"], "updated_by": record["updated_by"],
+            "auto_fallback": record["auto_fallback"],
             "providers": [{**row, "enabled": row["id"] in record["enabled"],
                            "recommended": (recommended(row["id"]) or {}).get("id", "")}
                           for row in PROVIDERS]}
+
+
+def default_fallbacks(record):
+    """What a runner may run a turn on when the bot's own subscription hits its limit and the bot names no
+    fallback: one model per enabled provider's runtime, in the owner's order (the company default on its own
+    runtime, else the provider's recommended model). The runner takes the first other runtime signed in on
+    its computer (runner/service.py `default_fallback`). Empty when the owner turned it off."""
+    if not record["auto_fallback"]:
+        return []
+    rows, seen = [], set()
+    for name in record["enabled"]:
+        runtime = PROVIDER_BY_ID[name]["runtime"]
+        model = (record["model"] if record["runtime"] == runtime and record["model"]
+                 else (recommended(name) or {}).get("id"))
+        if runtime in seen or not model:
+            continue
+        seen.add(runtime)
+        rows.append({"runtime": runtime, "harness": runtime, "model": model})
+    return rows
 
 
 # ----------------------------------------------------------------------------- resolution

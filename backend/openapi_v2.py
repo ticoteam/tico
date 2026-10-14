@@ -719,7 +719,12 @@ SCHEMAS = {
                   stuck={"type": "array", "items": {"type": "object"}, "description":
                          "Bots with queued work that is not starting (the caller may read them): bot, name, queued, oldest, "
                          "computer, reason (not_ready, computer_offline, no_computer, slow), why, and fix (label plus "
-                         "href/tab, login or move; null unless the caller administers bots)"}),
+                         "href/tab, login or move; null unless the caller administers bots)"},
+                  on_fallback={"type": "array", "items": {"type": "object"}, "description":
+                               "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
+                               "them): bot, harness, since (when the unbroken run of fallback turns began)"},
+                  limited={"type": "array", "items": {"type": "object"}, "description":
+                           "Bots a usage limit holds now (the caller may read them): bot, since"}),
     "BotFile": obj({"id": "s", "bot": "s", "title": "s", "kind": "s", "mime": "s", "locator": "s", "scope": "s",
                     "version": "i", "state": "s", "synced": "b", "size": {"type": ["integer", "null"]},
                     "name": "n", "open": {"type": ["object", "null"], "description": "{type: tico|external, url}: "

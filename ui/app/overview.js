@@ -123,10 +123,20 @@ function overviewStop() {
 }
 // Bots with queued work that is not starting, from the Health answer the app already polls (ui/health.js).
 const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
+// "3 bots running on fallback since 10:04, 2 limited": bots whose plan ran out, from the same answer.
+function overviewFallbackLine() {
+  const on = (typeof HL !== 'undefined' && HL?.on_fallback) || [], limited = (typeof HL !== 'undefined' && HL?.limited) || [];
+  if (!on.length && !limited.length) return '';
+  const first = on.map(row => row.since).filter(Boolean).sort()[0];
+  const clock = first ? new Date(first).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+  const parts = [on.length ? `${on.length} ${on.length === 1 ? 'bot' : 'bots'} running on fallback${clock ? ' since ' + clock : ''}` : '',
+    limited.length ? `${limited.length} limited` : ''].filter(Boolean);
+  return `<p class="overview-fallback"><a href="#/runs">${esc(parts.join(', '))}</a></p>`;
+}
 function overviewStuckDraw() {
   const el = OVERVIEW_PAGE && $('#overview-stuck'); if (!el) return;
-  const rows = overviewStuck();
-  el.hidden = !rows.length;
-  el.innerHTML = rows.length ? `<strong>Stuck · ${rows.length}</strong><ul class="hl-bots">${hlStuckHtml(rows.slice(0, 5))}</ul>${rows.length > 5 ? `<a href="#/health">${rows.length - 5} more</a>` : ''}` : '';
+  const rows = overviewStuck(), fallback = overviewFallbackLine();
+  el.hidden = !rows.length && !fallback;
+  el.innerHTML = (rows.length ? `<strong>Stuck · ${rows.length}</strong><ul class="hl-bots">${hlStuckHtml(rows.slice(0, 5))}</ul>${rows.length > 5 ? `<a href="#/health">${rows.length - 5} more</a>` : ''}` : '') + fallback;
   overviewRefresh();
 }
