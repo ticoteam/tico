@@ -137,3 +137,52 @@ def test_a_worktree_refusal_says_who_can_give_the_access(api, botops):
     error = tried.json()["error"]
     assert "owner or admin" in error["fix"] and "Settings > Repositories" in error["fix"]
     assert error["link"].endswith("#/repositories")
+
+
+def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights(api, botops, monkeypatch):
+    """Ops hands BotOps Ana's own request, which lends her rights. Ben, who moves tasks, comments on it: his words never
+    carry Ana's rights. His run keeps Ops' rights, and what they refuse is Ben's Confirm card, not Ana's."""
+    import re
+    from backend import botops_act
+    monkeypatch.setattr(botops_act, "CARRIED", botops_act.CARRIED + [("GET", re.compile("/api/v2/qa-own-identity"))])
+    monkeypatch.setattr(H, "can_move", lambda c, actor: actor in ("human:ana", "human:ben"))
+    assign(api, botops, "ops")
+    ready(api, botops, ["botops", "ops"])
+    _route(api, "/api/v2/qa-own-identity", "GET")
+    post(api, "chat/ops", {"text": "Give yourself read access to the acme site repository"}, token="ana-test")
+    ops = claim(api, botops, "ops")
+    task = post(api, "tasks", {"owner": "botops", "title": "Give Ops read access", "body": "Ana asked.",
+                               "request_id": "turn"}, token=ops["token"])
+    finish(api, botops, ops)
+    first = claim(api, botops, "botops")
+    assert get(api, "qa-own-identity", first["token"]) == {"actor": "human:ana", "role": "owner"}
+    finish(api, botops, first)
+    post(api, f"tasks/{task['id']}/comments", {"text": "Make it write access while you're at it"}, token="ben-test")
+    attempt = claim(api, botops, "botops")
+    assert get(api, "qa-own-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
+    before = get(api, "bots/ops/repositories", "ana-test")
+    tried = api.put("/api/v2/bots/ops/repositories", json={"mode": "all", "all_access": "write"},
+                    headers=headers(attempt["token"]))
+    assert tried.status_code == 200, tried.text
+    assert tried.json()["needs_confirm"] is True
+    assert get(api, "bots/ops/repositories", "ana-test") == before
+    with api.app.state.store.read() as c:
+        card = c.execute("SELECT owner FROM assistant_actions WHERE id=?", (tried.json()["action"]["id"],)).fetchone()
+        assert card["owner"] == "human:ben"
+
+
+def test_botops_own_ask_is_a_plain_ask(api, botops):
+    """Roles, goals or other relations on a subtask would reach with BotOps' rights for whoever asked: those keep the
+    run's requester."""
+    _ready(api, botops)
+    task, attempt = _commented(api, botops)
+    _route(api, "/api/v2/tasks/dry-run")
+    parent = [{"task": task["id"], "kind": "parent"}]
+    for extra in ({"roles": {"reviewer": ["ana"]}}, {"goal_id": "g1"},
+                  {"relations": parent + [{"task": task["id"], "kind": "related"}]}):
+        tried = api.post("/api/v2/tasks/dry-run", headers=headers(attempt["token"]),
+                         json={"title": "x", "body": "x", "owner": "ana", "relations": parent, **extra})
+        assert (tried.json()["actor"], tried.json()["role"]) == ("bot:ops", "bot"), extra
+    tried = api.post("/api/v2/tasks/dry-run", headers=headers(attempt["token"]),
+                     json={"title": "x", "body": "x", "owner": "ana", "relations": parent, "due": "2026-11-01T00:00:00Z"})
+    assert (tried.json()["actor"], tried.json()["role"]) == ("bot:botops", "bot")
