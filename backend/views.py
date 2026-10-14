@@ -379,15 +379,31 @@ def operation_issues(c, who, auth):
             problems = location.get("readiness", {}).get("problems") or ["Local setup is incomplete."]
             add("readiness", bot["display_name"] + " is not ready", problems[0], bot=slug,
                 machine=location["machine"]["runner_id"], needs_person=False)
+    from .health import NEEDS_YOU_MINUTES, quiet_minutes, silent_computers
+    # Whether a computer has stopped is the shared rule over all its queued work, not only what this viewer may read.
+    silent = {x["id"] for x in silent_computers(c)} if offline else set()
     for runner_id, entry in offline.items():
         names = entry["bots"]
         listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         cannot = "cannot run until it reconnects"
         waiting = f" {entry['queued']} saved request{'s are' if entry['queued'] != 1 else ' is'} waiting." if entry["queued"] else ""
-        # An offline Mac is a warning that clears itself when it reconnects. Do not put it
-        # in "needs you": nobody here can wake Ben's laptop.
-        add("machine", entry["label"] + " is offline", f"{listed} {cannot}.{waiting}",
-            machine=runner_id, since=entry["since"], severity="warning", needs_person=False)
+        quiet = quiet_minutes(entry["since"])
+        if runner_id in silent:
+            # Work piling up behind a computer that stopped checking in is an outage, not a blip. Its owner is the one
+            # who can bring it back (the company owner when no current person enrolled it), so after a while it is
+            # theirs to handle; the title stays the same as the minutes pass, so it opens for them once.
+            operator = entry["operator"] or ""
+            person = P.person(operator, roster(c)) if operator else None
+            mine = who.actor == "human:" + operator or (who.role == "owner" and (not person or bool(person.get("hidden"))))
+            add("machine", entry["label"] + " stopped checking in",
+                f"No word from it for {quiet} minutes. {listed} {cannot}.{waiting}",
+                machine=runner_id, since=entry["since"], needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
+                action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
+                       "`tico status` says what stopped, `tico restart` starts it again.")
+        else:
+            # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
+            add("machine", entry["label"] + " is offline", f"{listed} {cannot}.{waiting}",
+                machine=runner_id, since=entry["since"], severity="warning", needs_person=False)
         issues[-1]["bots"] = entry["slugs"]     # the bot pages find their machine's issue by this
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.

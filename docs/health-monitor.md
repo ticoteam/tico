@@ -11,6 +11,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | Check | Kind | What it means |
 |---|---|---|
 | `runner_outdated` | setup | An online computer is on an older release, cannot work with this one, or failed to update |
+| `computer_silent` | setup | A computer has not checked in for 10 minutes or more while work is queued for its bots |
 | `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day and it has no fallback model |
 | `stuck_setup` | setup | A bot has been in setup over an hour while work waits for it |
 | `paused_routines` | setup | A paused bot still has routines on (they do not run) |

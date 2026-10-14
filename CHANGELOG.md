@@ -29,6 +29,8 @@ All notable changes to Tico are recorded here. The format follows
   [Health Monitor](docs/health-monitor.md).
 
 ### Changed
+- **The Health Monitor watches for a silent computer.** A computer that has not checked in for ten minutes while work is queued for its bots is a setup finding (`computer_silent`), handed to BotOps like the other setup checks and never reported as a Tico bug.
+- **A computer that stops checking in is no longer quiet.** Ten minutes without a word while work is queued for its bots, Health's Bots waiting check turns red and Overview's Stuck line says how long it has been silent; after thirty minutes the person who enrolled it (the company owner when nobody current did) gets it in Needs you, with how to bring it back. A computer offline for a moment is still a warning that clears itself.
 - **A bot left in setup for a day shows on Overview.** A bot still `needs_setup` a day after it was added holds its
   routines' jobs and its tasks, and nobody saw it. It is now listed with the stuck bots on Overview and Health
   ("Stuck in setup for 14 days", reason `setup` in `GET /api/v2/health` `stuck`), and a person who may manage it gets

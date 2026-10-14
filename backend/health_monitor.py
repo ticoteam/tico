@@ -71,6 +71,7 @@ MEANING = {
     "limited_no_fallback": "A bot's turns stopped on a usage limit and it has no fallback model.",
     "stuck_setup": "A bot has been in setup for over an hour while work waits for it.",
     "paused_routines": "A paused bot still has routines on.",
+    "computer_silent": "A computer has not checked in for 10 minutes or more while work is queued for its bots.",
     "queue_idle": "Work stayed queued 15 minutes or more on an online computer with room and no limit.",
     "worktree_error": "A task worktree failed on its computer.",
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
@@ -153,6 +154,13 @@ def _runner_checks(c, settings):
                                 f"{update['state']}" + (f"; last update error: {update['error']}" if update["error"] else "") + ".",
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
                                 "`scripts/tico install` once on that computer so it updates itself)."))
+    for x in health.silent_computers(c):
+        out.append(_finding("computer_silent:" + x["id"], "computer_silent", SETUP,
+                            f"{x['label']} has not checked in for {x['minutes']} minutes",
+                            f"Computer {x['label']} was last heard from at {(x['last_seen'] or '')[:16]}; "
+                            f"{x['queued']} job(s) wait for {', '.join(x['bots'])}.",
+                            f"Ask the person who runs {x['label']} to wake it and check Tico there "
+                            "(`tico status`; `tico restart` starts it again), or move its bots to an online computer."))
     for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL"):
         lines = [str(x) for x in (readiness_document(r["readiness_json"]).get("recent_errors") or [])]
         for check_id, kind, pattern, least, title, fix in LOG_PATTERNS:

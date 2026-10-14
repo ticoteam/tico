@@ -142,12 +142,21 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
     with api.app.state.store.transaction() as c:
         H.event(c, H.KEEPER, "attempt.limited", SECRET_BOT, {"bot": SECRET_BOT})
     runner_errors(api, runner, ["2026-10-14T10:00Z Tico runner: research has unpushed commits and push failed"])
+    # A computer silent 15 minutes with a request queued for its bot.
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {SECRET_BOT: {"name": SECRET_BOT, "status": "active"}}, None)
+        c.execute("INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
+                  (SECRET_BOT, runner["runner_id"], H.now()))
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m-silent','human:ana',?,'chat','hi',?)",
+                  ("bot:" + SECRET_BOT, H.now()))
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
-    assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found
+    silent = "computer_silent:" + runner["runner_id"]
+    assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found and silent in found
     bot = as_monitor(api)
     for rule in (True, False):                                   # neither filed nor put to a person to send
         api.put("/api/v2/access/rules", json={"health_monitor_reports": rule}, headers=signed_in())
-        for key in ("limited_no_fallback:" + SECRET_BOT, "push_stuck:" + runner["runner_id"]):
+        for key in ("limited_no_fallback:" + SECRET_BOT, "push_stuck:" + runner["runner_id"], silent):
             r = api.post(f"/api/v2/health-monitor/findings/{key}/report", json={}, headers=bot)
             assert r.status_code == 409 and r.json()["error"]["code"] == "not_a_tico_bug", r.text
     assert hq.seen == []

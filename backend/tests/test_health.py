@@ -68,6 +68,57 @@ def test_an_offline_computer_holds_its_bots(environment):
     assert checks["computers"]["status"] == "warn" and "Old laptop" in checks["computers"]["summary"]
 
 
+def silent_computer(api, seconds_ago):
+    """A computer enrolled for riley, holding one queued request for its bot, last heard from `seconds_ago`."""
+    runner = enrolled(api)
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET operator='riley' WHERE id=?", (runner,))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+                  (runner, H.now()))
+        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m1','human:ana','bot:helper','chat','hi',?)",
+                  (H.now(),))       # queues its job
+    heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
+    return runner
+
+
+def machine_issue(api, headers):
+    return next(i for i in api.get("/api/status", headers=headers).json()["health_issues"] if i["kind"] == "machine")
+
+
+def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
+    from backend.tests.test_people_access import person_headers
+    api = environment()
+    runner = silent_computer(api, 300)
+    riley, quinn, owner = person_headers(api, "riley"), as_person(api, "quinn"), signed_in()
+    # A few minutes offline is a blip that clears itself.
+    assert machine_issue(api, riley)["title"] == "Owner Mac is offline" and not machine_issue(api, riley)["needs_person"]
+    # Past ten minutes with work queued it is an outage: said on Health and Overview, nobody interrupted yet.
+    heartbeat(api, runner, seconds_ago=700, runtimes=SIGNED_IN)
+    issue = machine_issue(api, riley)
+    assert issue["title"] == "Owner Mac stopped checking in" and issue["severity"] == "error" and not issue["needs_person"]
+    body, checks = health_of(api)
+    assert checks["waiting"]["status"] == "bad" and "Owner Mac has not checked in for 11 minutes" in checks["waiting"]["summary"]
+    assert body["stuck"][0]["why"].startswith("Owner Mac has not checked in for 11 minutes")
+    # Past thirty, the person who enrolled it has it in Needs you; nobody else does while they are here.
+    heartbeat(api, runner, seconds_ago=1900, runtimes=SIGNED_IN)
+    assert machine_issue(api, riley)["needs_person"] and machine_issue(api, riley)["action"]
+    assert not machine_issue(api, quinn)["needs_person"] and not machine_issue(api, owner)["needs_person"]
+    # Once they have left, the company owner is the one asked.
+    assert api.post("/api/v2/people/riley", json={"left": True}, headers=owner).status_code == 200
+    assert machine_issue(api, owner)["needs_person"]
+
+
+def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(environment, monkeypatch):
+    from backend import views
+    from backend.tests.test_people_access import person_headers
+    api = environment()
+    silent_computer(api, 1900)
+    monkeypatch.setattr(views.privacy, "job_count", lambda *a, **k: 0)      # someone else's private request
+    issue = machine_issue(api, person_headers(api, "riley"))
+    assert issue["title"] == "Owner Mac stopped checking in" and issue["needs_person"]
+
+
 def test_backups_local_only_and_stale(environment, monkeypatch):
     api = environment()
     old = H.shift(H.now(), hours=-30)

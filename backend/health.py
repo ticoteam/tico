@@ -24,6 +24,8 @@ from .store import H, Problem, readiness_document
 from .views import roster
 
 QUEUE_MINUTES = 15          # work that has waited this long on a computer that is up is stuck
+SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
+NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
@@ -350,6 +352,26 @@ def _rejected_summary(rows):
             + fix + " It takes no work that needs it until then.")
 
 
+def silent_computers(c, minutes=SILENT_MINUTES):
+    """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
+    first: [{id, label, operator, last_seen, minutes, queued, bots}]. A computer that never checked in is setup, not this."""
+    rows = c.execute(
+        "SELECT r.id, r.label, r.operator, r.last_seen, count(j.id) queued, group_concat(DISTINCT a.bot) bots "
+        "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
+        "JOIN jobs j ON j.bot=a.bot AND j.state='queued' "
+        "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
+        (H.shift(H.now(), minutes=-minutes),)).fetchall()
+    return [{"id": r["id"], "label": r["label"], "operator": r["operator"], "last_seen": r["last_seen"],
+             "minutes": quiet_minutes(r["last_seen"]), "queued": r["queued"], "bots": sorted(r["bots"].split(","))}
+            for r in rows]
+
+
+def quiet_minutes(last_seen):
+    """Whole minutes since `last_seen`; 0 when it cannot be read."""
+    seen = H.parse_ts(last_seen)
+    return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
+
+
 def _waiting(c, online_ids):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
@@ -489,7 +511,9 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "No computer"
             fix = _fix("Choose a computer", "#/settings", "bots")
         elif reason == "computer_offline":
-            text = f"{label} is offline"
+            seen = c.execute("SELECT last_seen FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
+            quiet = quiet_minutes(seen["last_seen"] if seen else None)
+            text = f"{label} has not checked in for {quiet} minutes" if quiet >= SILENT_MINUTES else f"{label} is offline"
             fix = _fix("Open Computers", "#/settings", "devices")
             if full and runtime:
                 move = next(({"id": rid, "label": name} for rid, name in computers if rid != row["runner_id"] and
@@ -1166,11 +1190,15 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Computers", "#/settings", "devices"), _fix("Open Credentials", "#/credentials")]))
     if full and (versions := runner_versions.health_check(computers)):
         checks.append(versions)
+    silent = silent_computers(c) if waiting else []
     if waiting:
         names = ", ".join(w["name"] for w in waiting[:5])
-        checks.append(_check("waiting", "Bots waiting", "warn" if online else "bad",
+        # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
+        stopped = "".join(f" {x['label'] if full else 'A computer'} has not checked in for {x['minutes']} minutes "
+                          f"with {_plural(x['queued'], 'job')} queued." for x in silent[:3])
+        checks.append(_check("waiting", "Bots waiting", "bad" if silent or not online else "warn",
                              f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
-                             + (f": {names}." if full else "."),
+                             + (f": {names}." if full else ".") + stopped,
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
     else:
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
