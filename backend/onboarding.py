@@ -548,7 +548,10 @@ class Onboarding:
         c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (ONBOARDED, slug))
         H.event(c, who.actor, "bot.onboarded", slug, {})
         H.setup_finished(c, slug)
-        return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True}
+        # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
+        # would have given it; once only, so one already armed or turned off by a person is left alone.
+        routine = self.arm_first_routine(c, who, slug)
+        return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True, "routine": routine}
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""

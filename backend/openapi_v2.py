@@ -573,7 +573,9 @@ SCHEMAS = {
     "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "org_groups": "a", "teams": "o"}),
     "BotList": items(ref("Bot")),
     "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
-    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "changed": "b"}, required=["bot", "onboarding_state", "changed"]),
+    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "changed": "b", "routine": {
+                            "type": ["string", "null"], "description": "The template's first routine when this call "
+                            "armed it (on, unless a person turned it off); null when setup had armed it already"}}, required=["bot", "onboarding_state", "changed"]),
     "BotTool": obj({"id": "s", "service": "s", "name": "s", "logo_key": "n", "identity": "s", "can": items({"type": "string"}),
                     "scope": {"type": "object", "description": "Service-specific fields, a string or a list of strings each: "
                               "database, channels, project, mailbox, sites, repo, effort ..."},

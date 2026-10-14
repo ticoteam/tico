@@ -361,12 +361,12 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
 
 
-def _parked(api, slug, days_ago, created_by=""):
+def _parked(api, slug, days_ago, created_by="", operator="morgan"):
     add_bot(api, slug)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state,created_by) VALUES(?,'{}','morgan','needs_setup',?) "
-                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',created_by=excluded.created_by",
-                  (slug, created_by))
+        c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state,created_by) VALUES(?,'{}',?,'needs_setup',?) "
+                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',operator=excluded.operator,"
+                  "created_by=excluded.created_by", (slug, operator, created_by))
         c.execute("UPDATE bots SET created=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
 
 
@@ -386,17 +386,21 @@ def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(en
     assert health_of(api)[0]["stuck"] == []
 
 
-def test_a_bot_left_in_setup_is_nudged_to_whoever_added_it_once(environment):
+def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_to(environment):
+    """The same person as the "Finish setting up" reminder, and nobody while that reminder is open: one ask per bot."""
     from backend import setup_stuck
     api = environment()
+    as_person(api, "quinn")
     _parked(api, "support", 3, created_by="human:quinn")
-    _parked(api, "sales", 3)                        # nobody known added it: the owner and the bot administrators
+    _parked(api, "sales", 3, operator="quinn")      # nobody known added it: its operator, as the reminder picks
+    _parked(api, "ops", 3, created_by="human:quinn")
     with api.app.state.store.transaction() as c:
-        told = setup_stuck.nudge(c, "morgan", {"riley@acme.example"})
-        assert told == {"support": ["human:quinn"], "sales": ["human:morgan", "human:riley"]}
-        assert setup_stuck.nudge(c, "morgan", {"riley@acme.example"}) == {}
-        notes = c.execute("SELECT to_actor FROM messages WHERE from_actor='keeper' AND body LIKE '%waiting in setup%'")
-        assert sorted(r["to_actor"] for r in notes) == ["human:morgan", "human:quinn", "human:riley"]
+        assert H._setup_reminder(c, "ops")["owner"] == "human:quinn"     # it already has its ask
+        told = setup_stuck.nudge(c)
+        assert told == {"support": ["human:quinn"], "sales": ["human:quinn"]}
+        assert setup_stuck.nudge(c) == {}
+        notes = c.execute("SELECT to_actor,body FROM messages WHERE from_actor='keeper' AND body LIKE '%waiting in setup%'")
+        assert sorted(r["to_actor"] for r in notes) == ["human:quinn", "human:quinn"]
 
 
 def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(request):

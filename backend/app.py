@@ -170,7 +170,7 @@ def create_app(settings=None):
                     await asyncio.to_thread(worktree_waits.tick, store, settings.github_owner)
                     # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
                     from . import setup_stuck
-                    await asyncio.to_thread(setup_stuck.tick, store, auth)
+                    await asyncio.to_thread(setup_stuck.tick, store)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging

@@ -3,10 +3,12 @@
 A starter bot is parked (`needs_setup`) until someone finishes its setup, and a parked bot claims no work, so
 its routines' jobs and its tasks pile up where nobody looks. After a day it is listed with the stuck bots
 (backend/health.py `stuck`, which Overview and Health show) with how long, and a person who may manage it gets
-"Finish with defaults": the same setup-done call the bot itself makes (`POST /api/v2/bots/{bot}/onboarded`).
-Nothing finishes setup on its own; setup answers are a person's to give or to skip.
+"Finish with defaults": the same setup-done call the bot itself makes (`POST /api/v2/bots/{bot}/onboarded`),
+which also turns its template's first routine on, as starting setup would have. Nothing finishes setup on its own;
+setup answers are a person's to give or to skip.
 
-The person who added the bot (else the owner and the bot administrators) gets one message saying so, once per bot.
+The person the "Finish setting up" reminder goes to (who added the bot, else its operator, else the default person)
+gets one message saying so, once per bot, unless that reminder is still open.
 """
 
 import time
@@ -47,27 +49,18 @@ def held_for(since, at=None):
     return f"{hours // 24} days" if hours >= 48 else f"{hours} hours"
 
 
-def recipients(c, bot, owner_id, admin_emails):
-    """The person who added the bot, when that is a person still on the roster; else the owner and the bot
-    administrators."""
-    from .auth import standing
-    row = c.execute("SELECT created_by FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    added = row["created_by"] if row else ""
-    if H.is_human(added) and H.human(c, H.actor_id(added)) and not standing(c, H.actor_id(added)):
-        return [added]
-    admins = {r["id"] for r in c.execute("SELECT id,email FROM humans") if (r["email"] or "").lower() in admin_emails}
-    return ["human:" + pid for pid in sorted(({owner_id} if owner_id else set()) | admins)
-            if not standing(c, pid)]
-
-
-def nudge(c, owner_id, admin_emails, at=None):
-    """Tell each stuck bot's person once (a keeper event marks it). Returns {bot: [actors told]}."""
+def nudge(c, at=None):
+    """Tell each stuck bot's person once (a keeper event marks it): the same person the "Finish setting up"
+    reminder goes to (hubdb `_setup_person`), and nobody while that reminder is still open, so one bot never makes
+    two asks. Returns {bot: [actors told]}."""
     told = {}
     for row in stuck(c, at):
-        if c.execute("SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1",
-                     (H.KEEPER, NUDGED, row["bot"])).fetchone():
+        if H._open_setup_reminder(c, row["bot"]) or c.execute(
+                "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1",
+                (H.KEEPER, NUDGED, row["bot"])).fetchone():
             continue
-        people = recipients(c, row["bot"], owner_id, admin_emails)
+        person = H._setup_person(c, row["bot"])
+        people = [person] if person else []
         waiting = f", with {row['queued']} job{'s' if row['queued'] != 1 else ''} waiting" if row["queued"] else ""
         text = (f"{row['name']} has been waiting in setup for {held_for(row['since'], at)}{waiting}, so it runs nothing. "
                 "Finish its setup on its page, or choose Finish with defaults on Overview.")
@@ -79,7 +72,7 @@ def nudge(c, owner_id, admin_emails, at=None):
     return told
 
 
-def tick(store, auth, force=False):
+def tick(store, force=False):
     """The server loop's hourly sweep: nothing to write unless a bot has been parked for a day."""
     if not force and time.time() - _last["at"] < SWEEP_EVERY:
         return {}
@@ -88,4 +81,4 @@ def tick(store, auth, force=False):
         if not stuck(c):
             return {}
     with store.transaction() as c:
-        return nudge(c, auth.owner_id(c), {e.lower() for e in auth.bot_admins})
+        return nudge(c)

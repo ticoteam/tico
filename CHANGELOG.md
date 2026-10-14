@@ -11,8 +11,9 @@ All notable changes to Tico are recorded here. The format follows
 - **A bot left in setup for a day shows on Overview.** A bot still `needs_setup` a day after it was added holds its
   routines' jobs and its tasks, and nobody saw it. It is now listed with the stuck bots on Overview and Health
   ("Stuck in setup for 14 days", reason `setup` in `GET /api/v2/health` `stuck`), and a person who may manage it gets
-  **Finish with defaults**, the same setup-done call as `hub bot setup-done`. The person who added the bot, else the
-  owner and the bot administrators, gets one message about it, once per bot. Nothing finishes setup on its own.
+  **Finish with defaults**, the same setup-done call as `hub bot setup-done`, which now also turns the template's first
+  routine on as Start setup would have (`routine` in its answer). The person the "Finish setting up" reminder goes to
+  gets one message about it, once per bot, unless that reminder is still open. Nothing finishes setup on its own.
 - **Approvals nobody will act on leave Needs you.** An undecided approval is withdrawn (a new decision, `withdrawn`)
   when its task is closed, declined or marked done, when its bot asks again for the same thing (`hub approval request
   --supersedes <id>`, `supersedes_approval` on the API and `hub_approval_request`, or the same task and the same url,

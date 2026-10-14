@@ -14240,6 +14240,13 @@
           },
           "changed": {
             "type": "boolean"
+          },
+          "routine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template's first routine when this call armed it (on, unless a person turned it off); null when setup had armed it already"
           }
         },
         "required": [
