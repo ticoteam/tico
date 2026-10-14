@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A bot whose plan runs out keeps working on another provider.** When a turn hits a usage or spend limit and the bot
+  names no fallback of its own, the runner runs that turn once on another of the company's providers that is signed in on the
+  same computer (Codex when Claude is limited, and the reverse), with that provider's default model. A bot with its own fallback
+  keeps it; with no ready provider the turn is limited as before. The owner can turn it off in **Settings > AI providers**
+  (`auto_fallback` on `PUT /api/v2/providers`). Overview says "N bots running on fallback since HH:MM, X limited"
+  (`GET /api/v2/health` `on_fallback`, `limited`). "Monthly spend limit" now counts as a usage limit: on Oct 13 those turns failed
+  outright instead of waiting.
 - **Bots can check a workflow run's result.** A bot's GitHub token now reads Actions (workflow runs and their logs) in every repository it can read, so a bot that watches a deploy reads `gh run list` / `gh run view` itself instead of asking a person. It can't start, rerun or cancel a run. New GitHub Apps ask for Actions read; **an existing App needs Actions: Read-only added on its GitHub settings page and accepted on the installation**, and until then tokens are issued without it as before. See [GitHub App](docs/github-app.md#permissions-and-why).
 - **Attachments can be allowed for one mailbox.** `mailboxes.<address>.allow_attachments: true` in `registry/mail-policy.yaml` lets bots attach files to drafts from that mailbox only (Legal's, say) while `defaults.allow_attachments` stays off for the rest; `false` turns one off when the default is on. `mail draft discard <draft-id>` removes an unsent draft the bot made (the older `mail discard` still works). See [Mail](docs/mail.md).
 

@@ -254,6 +254,16 @@ Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limi
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None (fail)** means no hop:
 the cloud cooldown applies.
 
+A bot with no fallback of its own still gets one on a usage limit (a spend cap such as "monthly spend
+limit" counts): the runner runs that turn once on the first of the company's other providers that is
+signed in on the same computer, with that provider's default model (`fallback_models` in
+`GET /api/v2/config`), and reports `fallback` with `primary_limited`. A provider signed in only by a key in
+the environment is skipped (a turn carries only its own runtime's keys; Codex turns its key into a login).
+With no ready provider the run is limited as above. Every turn tries the bot's own provider first, so the
+bot moves back on its own once the limit resets. The owner turns this off in **Settings → AI providers**
+(*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
+since when, and how many are limited.
+
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's
 chat and other turns share one more. BotOps (and any bot set to `session: task`) also gives each
 chat conversation its own thread, so unrelated requesters stay separate; `session: bot` keeps

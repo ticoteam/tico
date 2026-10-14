@@ -555,7 +555,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
   the runtime refused). **None (fail)** is the default. The hop starts a fresh session. OpenRouter
-  is not a bot harness.
+  is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
+  the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
