@@ -177,12 +177,34 @@ def test_pausing_a_bot_holds_its_routines_and_resuming_brings_back_the_enabled_o
     assert [get(api, "tasks/" + tid)["task"]["routine_id"] for tid in fired] == ["ops:audit"]
 
 
-def test_a_bot_still_in_setup_gets_no_routine_runs(api):
+def test_a_bot_still_in_setup_gets_no_timed_runs_and_keeps_its_event_runs(api):
     setup(api)
     create(api, "ops", DEBRIEF)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='ops'")
         from backend import routines
-        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
+        # A meeting's notes are announced once, so its run waits for the bot instead of being dropped.
+        assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
     assert tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"] == []
     assert {row["held_by_bot"] for row in rows(api)} == {"needs_setup"}
+    post(api, "routines/ops:audit/run", {}, expected=409)     # as the page, which offers no Run now
+
+
+def test_pausing_keeps_event_runs_run_now_and_runs_handed_to_another_bot(api):
+    setup(api)
+    create(api, "ops", DEBRIEF)
+    queued = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"][0]
+    from backend import routines
+    with api.app.state.store.transaction() as c:
+        event_run = routines.emit(c, "meeting.ready", "rec-1", title="Planning", content="Ship Friday")[0]
+        moved = routines.open_task(c, None, routines.row(c, "ops:weekly"), "Weekly backlog", "Review", H.now())
+        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", ("ops:weekly", "2026-09-11T16:30", moved["id"], "created"))
+        c.execute("UPDATE tasks SET owner='bot:other' WHERE id=?", (moved["id"],))
+        asked = routines.open_task(c, None, routines.row(c, "ops:weekly"), "Weekly backlog", "Review", H.now())
+        c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,?)", ("ops:weekly", "manual:x", asked["id"], "created"))
+    control(api, "ops", "pause")
+    with api.app.state.store.read() as c:
+        assert H.task(c, queued)["status"] == "closed"
+        assert H.task(c, event_run)["status"] == "open"      # one-off content, never announced again
+        assert H.task(c, moved["id"])["status"] == "open"    # the other bot's now
+        assert H.task(c, asked["id"])["status"] == "open"    # a person's Run now

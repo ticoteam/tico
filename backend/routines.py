@@ -14,7 +14,7 @@ from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P, task_privacy as privacy
 from .harnesses import SYNCED_SQL
-from .statuses import PARKED_SQL, is_parked
+from .statuses import is_parked
 from .scheduler import next_due, stamp
 from .store import H, Problem, encode
 
@@ -139,11 +139,14 @@ PAUSED_NOTE = "Bot paused before this routine ran; its routines fire again on sc
 
 def hold_for_paused_bot(c, bot):
     """A paused bot's routine runs nobody has started are closed, so a long pause does not leave a
-    backlog that all runs at once on resume. Only routine-opened tasks: a person's direct work stays
-    queued for the bot. Each routine keeps its own enabled flag, so resuming restores exactly the ones
-    that were on. Returns the closed task ids."""
+    backlog that all runs at once on resume. Only timed runs the bot still holds: a person's direct work
+    and a person's Run now stay queued for the bot, an event run carries one-off content (a meeting's notes)
+    that is never announced again, and a run handed to another bot is that bot's. Each routine keeps its own
+    enabled flag, so resuming restores exactly the ones that were on. Returns the closed task ids."""
     found = c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
-                      "JOIN schedules s ON s.id=o.schedule_id WHERE s.bot=? AND t.status='open'", (bot,)).fetchall()
+                      "JOIN schedules s ON s.id=o.schedule_id WHERE s.bot=? AND t.owner=? AND t.status='open' "
+                      "AND s.event_name IS NULL AND o.occurrence NOT LIKE 'manual:%'",
+                      (bot, H.bot_actor(bot))).fetchall()
     return _close_unclaimed(c, found, PAUSED_NOTE)
 
 
@@ -225,9 +228,6 @@ def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, aut
                      # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
                      "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
                      "AND json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ")) "
-                     # a starter bot runs nothing on its own until it says its setup is done, as in Scheduler.tick
-                     "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot "
-                     "AND pc.onboarding_state IN " + PARKED_SQL + ") "
                      "ORDER BY s.id", (kind,)).fetchall()
     for schedule in rows:
         occurrence = f"{kind}:{subject}"

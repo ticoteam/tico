@@ -754,6 +754,9 @@ def create_app(settings=None):
                 raise Problem("routine", "Only an existing timed routine can run now", 422)
             if schedule["enabled"] != 1 or (H.bot(c, bot) or {}).get("state") != "active":
                 raise Problem("routine", "Resume the routine and bot before running it", 409)
+            setup = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            if setup and is_parked(setup["onboarding_state"]):
+                raise Problem("routine", "Finish the bot's setup before running its routines", 409)
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
