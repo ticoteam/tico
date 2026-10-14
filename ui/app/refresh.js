@@ -99,14 +99,14 @@ function liveWire() {
     }, 200);
   });
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.cursor = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
 // cursor (tasksLoad), which costs only what changed while it was away.
 let tasksHiddenAt = 0;
 function tasksCatchUp() {
-  if (TASKS_ST?.cursor && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
+  if (TASKS_ST?.since && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
 }
 window.addEventListener('online', tasksCatchUp);
 document.addEventListener('visibilitychange', () => {

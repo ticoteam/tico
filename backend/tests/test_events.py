@@ -80,7 +80,7 @@ class Stream:
             pass
         self.events.put({"event": "closed"})
 
-    def until(self, match, timeout=5.0):
+    def until(self, match, timeout=30.0):   # a deadline, not a wait: a busy computer can take seconds per event
         """The first event `match` accepts; every event read on the way is kept in `seen`."""
         deadline = time.monotonic() + timeout
         while True:

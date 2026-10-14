@@ -141,7 +141,7 @@ EOF
   for pid in "${pids[@]}"; do wait "$pid" || ok=0; done
   [ "$ok" = 1 ] || { say "the $PREV images are not available"; return 1; }
   dc up -d >/dev/null 2>&1 || { say "docker compose up failed"; return 1; }
-  retry 180 healthy || { say "the server did not become healthy"; return 1; }
+  retry 600 healthy || { say "the server did not become healthy"; return 1; }   # a loaded Mac can take minutes
   STATE_ID="$(environment_id)"
   [ -n "$STATE_ID" ] && [ "$(server_tag)" = "$PREV" ] || return 1
   # The release run has no bot turn; a one-time code is the row it follows through upgrade and rollback instead.

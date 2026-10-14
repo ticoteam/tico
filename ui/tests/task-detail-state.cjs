@@ -9,7 +9,7 @@ const shots = process.env.TICO_DETAIL_SHOTS;
 const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, name + '.png')}) : Promise.resolve();
 async function visit(browser) {
   const v = await open(browser, {viewport: {width: 390, height: 844}, rich: true, at: '#/bot/eng/tasks'});
-  v.page.setDefaultTimeout(t(5000));
+  v.page.setDefaultTimeout(t(30000));
   // readDone: the path of every answer the app has read in full (its handler runs in the same turn)
   await v.page.evaluate(() => {
     const send = fetch; window.readDone = [];

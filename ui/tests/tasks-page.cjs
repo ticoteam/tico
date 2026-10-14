@@ -634,6 +634,9 @@ async function properties(browser) {
   assert.ok(top.y < main.y, 'properties first in the peek');
   assert.equal(await peek.locator('.tmodal-main select, [data-task-props] select, [data-modal-task], .tcontrols').count(), 0, 'no boxed form, no Done/Close links');
   assert.equal(await peek.locator('.task-ask').count(), 0, 'the blocker is in Related, not a second box');
+  // A list reload landing after the click keeps the keyboard on that row (its catch-up cursor is a different field).
+  await page.evaluate(() => tasksLoad(TASKS_ST, {poll: true}));
+  assert.equal(await page.evaluate(() => TASKS_ST.cursor), 'tt-checkout', 'a reload keeps the row');
   // Status: a small menu; ↑/↓ and Enter pick, the list's j/k wait while it is open, and the row keeps the focus after saving.
   await props.locator('[data-prop="status"]').focus();
   await page.keyboard.press('Enter');

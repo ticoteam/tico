@@ -334,9 +334,9 @@ async function tasksLoad(state, opts = {}) {
   // Done (or a type's board, which shows finished steps) is on screen, and never more than that one page.
   const doneShown = state.view === 'done' || state.view === 'board';
   const reloadDone = opts.poll ? doneShown && state.doneLoaded : (state.doneLoaded || doneShown);
-  // A list read in full keeps the cursor it was read at; from then on a load asks only for what changed since
-  // (backend/task_reads.py), unless the server says to read in full again (`reset`).
-  const cursor = state.cursor;
+  // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
+  // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
+  const cursor = state.since;
   state.loading = !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/routines'), v2Get('/v2/tasks/labels'),
@@ -345,7 +345,7 @@ async function tasksLoad(state, opts = {}) {
   if (cursor) {
     [changed, rec, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.cursor = null; }
+    if (!changed || changed.reset) { changed = null; state.since = null; }
   }
   if (!changed) {
     if (cursor) tasksRender(state);
@@ -355,7 +355,7 @@ async function tasksLoad(state, opts = {}) {
   if (changed) {
     const gone = new Set((changed.gone || []).map(String));
     state.tasks = mergeTaskRows((state.tasks || []).filter(t => !gone.has(String(t.id))), changed.tasks || []);
-    state.cursor = changed.cursor;
+    state.since = changed.cursor;
   } else {
     const activeIds = new Set((active?.tasks || []).map(t => String(t.id)));
     const finished = (state.tasks || []).filter(t => ['done', 'closed'].includes(String(t.status)) && !activeIds.has(String(t.id)));   // reopened ones are active again
@@ -392,7 +392,7 @@ async function tasksLoad(state, opts = {}) {
   if (active) {
     await drain(active.next_offset);
     // Only a list read to its end can be caught up from its cursor.
-    if (TASKS_ST === state && state.loadSeq === seq) state.cursor = active.cursor || null;
+    if (TASKS_ST === state && state.loadSeq === seq) state.since = active.cursor || null;
   }
   if (reloadDone && TASKS_ST === state && state.loadSeq === seq) await (state.doneLoaded ? tasksDoneMerge(state) : tasksLoadDone(state, true));
 }

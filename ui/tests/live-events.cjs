@@ -116,7 +116,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   await page.waitForFunction(() => !document.querySelector('#task-body')?.innerText.includes('Check the release links'));
   assert.deepEqual(reads.changed, ['12.a']);
   assert.equal(reads.active, active, 'no full read of the open tasks');
-  assert.equal(await page.evaluate(() => TASKS_ST.cursor), '21.a');
+  assert.equal(await page.evaluate(() => TASKS_ST.since), '21.a');
   assert.deepEqual(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id).sort()), ['t1', 't3'], 'an unchanged task stays');
   assert.deepEqual(reads.labels.slice(-1), ['W/"l1"']);
   assert.deepEqual(await page.evaluate(() => TASKS_ST.labels), ['launch']);

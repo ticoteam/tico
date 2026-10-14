@@ -42,6 +42,7 @@ HOSTS_DIR = HERE / "hosts"
 
 METHODS = ("npm", "pip", "script", "binary")
 POLICIES = ("latest", "pinned")
+VERSION_TIMEOUT_S = 60       # seconds for `<cli> --version`: a fresh Node CLI on a busy computer can take more than 15
 AUTH_METHODS = ("device-code", "subscription", "api-key")
 CHECK_EVERY_S = 24 * 3600      # how often a managed harness is compared with the newest release
 RETRY_AFTER_S = 30 * 60        # a failed install or update waits this long before trying again
@@ -353,7 +354,7 @@ class Harnesses:
             return self.versions[key]
         version = ""
         try:
-            done = self.run([path, *manifest.version_args], capture_output=True, text=True, timeout=15,
+            done = self.run([path, *manifest.version_args], capture_output=True, text=True, timeout=VERSION_TIMEOUT_S,
                             stdin=subprocess.DEVNULL)
             found = re.search(manifest.version_pattern, (done.stdout or "") + "\n" + (done.stderr or ""))
             version = found.group(1) if found and done.returncode == 0 else ""

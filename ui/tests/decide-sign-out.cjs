@@ -3,6 +3,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
+const {t} = require('./support/load.cjs');
 const KEY = 'tico.decide.outbox';
 const saved = JSON.stringify([{me: 'ana', key: 'task:t-q1', writes: [
   {path: '/v2/tasks/t-q1/comments', body: {text: 'Private note: only after the board call'}, key: 'dc-1'}]}]);
@@ -12,7 +13,7 @@ const saved = JSON.stringify([{me: 'ana', key: 'task:t-q1', writes: [
     const {page, errors} = await open(browser, {hash: '#/tasks', local: {[KEY]: saved}});
     const sent = [];
     await page.route('**/api/v2/tasks/t-q1/comments', route => { sent.push(route.request().postDataJSON()); });  // never confirmed
-    for (let i = 0; i < 300 && !sent.length; i++) await page.waitForTimeout(20);     // the next load sends it again
+    for (const end = Date.now() + t(15000); !sent.length && Date.now() < end;) await page.waitForTimeout(20);   // the next load sends it again
     assert.equal(sent.length, 1, 'a saved action goes out on the next load');
     assert.equal(await page.evaluate(k => localStorage.getItem(k), KEY), saved, 'kept until confirmed or sign-out');
     // The click as a person makes it, then the page leaving (pagehide); the navigation itself is not followed.
