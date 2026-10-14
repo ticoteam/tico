@@ -74,6 +74,7 @@ def test_product_operation_survives_app_restart_cache_cleanup_and_disconnect(api
 
 @pytest.mark.slow
 def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(api, gh, monkeypatch):
+    import time
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -82,12 +83,15 @@ def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(a
     body = {'org': 'Acme', 'name': 'tico-recorder', 'visibility': 'private',
             'auto_init': False, 'confirmed': True}
     started, release = Event(), Event()
+    # These waits only bound a hang. Under a loaded full-suite run the first request can take well over
+    # ten seconds to reach GitHub, so none of them is a timing expectation.
+    hang = 120
 
     def hold_external_create(request):
         response = gh(request)
         if request.method == 'POST' and request.url.path == '/orgs/Acme/repos':
             started.set()
-            assert release.wait(10), 'Synthetic create was not released'
+            assert release.wait(hang), 'Synthetic create was not released'
         return response
 
     monkeypatch.setattr(G, 'TRANSPORT', httpx.MockTransport(hold_external_create))
@@ -96,7 +100,11 @@ def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(a
     with TestClient(separate, follow_redirects=False) as other, ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(product_repo_request, api, body, key='separate-service')
         try:
-            assert started.wait(10), 'Synthetic create did not start'
+            # Wait for the create to start, but stop as soon as the request ends without reaching it.
+            deadline = time.monotonic() + hang
+            while not started.wait(0.05):
+                assert not pending.done(), f'The request ended before the create: {pending.result().status_code} {pending.result().text}'
+                assert time.monotonic() < deadline, 'Synthetic create did not start'
             same = product_repo_request(other, body, key='separate-service')
             assert same.status_code == 409
             assert same.json()['error']['code'] == 'github_create_outcome_unknown'
@@ -105,6 +113,6 @@ def test_separate_api_service_cannot_create_while_first_operation_is_in_flight(a
             assert changed.json()['error']['code'] == 'idempotency_conflict'
         finally:
             release.set()
-        assert pending.result(timeout=10).status_code == 200
+        assert pending.result(timeout=hang).status_code == 200
     assert len([call for call in gh.calls if call[:2] == ('POST', '/orgs/Acme/repos')]) == 1
     assert gh.created_repositories == {'Acme/tico-recorder'}
