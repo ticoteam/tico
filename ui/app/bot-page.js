@@ -136,6 +136,7 @@ function botRecurringHTML(e, slug) {
   const words = r => { const w = cadenceZoned(r) || ''; return w.charAt(0).toUpperCase() + w.slice(1); };
   const paused = r => r.enabled === false || r.enabled === 0;
   const next = r => paused(r) ? '<span class="muted" title="kept, not running">paused</span>'
+    : r.held_by_bot ? '<span class="muted" title="fires again when the bot resumes">paused with the bot</span>'
     : !r.active ? '<span class="muted">not armed</span>'
     : r.on ? '<span class="muted">on event</span>'
     : r.next ? `<span class="tnum" title="${esc(fmt(r.next))}">${esc(until(r.next))}</span>` : '';

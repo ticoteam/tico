@@ -551,7 +551,11 @@ SCHEMAS = {
                      required=["slug", "display_name", "state", "owners", "access"]),
     "Routine": obj({"id": "s", "bot": "s", "key": "n", "title": "s", "cron": "s", "on": "s", "kind": "s",
                     "timezone": "s", "enabled": "b", "text": "s", "last_fired": "n", "next_due": "n",
-                    "deleted_at": "n", "updated_at": "n", "active": "b"},
+                    "deleted_at": "n", "updated_at": "n", "active": "b",
+                    "held_by_bot": {"type": ["string", "null"], "description":
+                                    "Set while an enabled routine waits on its bot rather than its own switch: the "
+                                    "bot's state (paused, planned, quarantined, archived) or needs_setup. The routine "
+                                    "stays enabled and fires again once the bot is active and set up."}},
                    required=["id", "bot", "title", "cron", "on", "kind", "timezone", "enabled", "active"]),
     "RoutineList": obj({"routines": items(ref("Routine"))}, required=["routines"]),
     "Audience": obj({"everyone": "b", "people": items({"type": "string"}), "teams": items({"type": "string"}),

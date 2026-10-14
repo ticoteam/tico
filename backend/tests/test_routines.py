@@ -147,3 +147,42 @@ def test_run_now_during_another_task_stays_queued_for_its_own_run(api):
     assert next_attempt["task"]["id"] == tid
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (next_attempt["job_id"],)).fetchone()[0] == "leased"
+
+
+def control(api, bot, action):
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+    post(api, f"bots/{bot}/control", {"action": action, "expected_revision": revision})
+
+
+def test_pausing_a_bot_holds_its_routines_and_resuming_brings_back_the_enabled_ones(api):
+    r = setup(api)
+    queued = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"][0]
+    direct = post(api, "tasks", {"title": "Write a report", "body": "Write the report", "owner": "ops"})
+    post(api, "routines/ops:weekly", {"enabled": False})
+    control(api, "ops", "pause")
+    with api.app.state.store.read() as c:
+        # The routine run nobody started is closed with a reason; a person's own work stays for the bot.
+        assert H.task(c, queued)["status"] == "closed" and "paused" in H.task(c, queued)["note"]
+        assert H.task(c, direct["id"])["status"] == "open"
+    listed = {row["key"]: row for row in rows(api)}
+    assert listed["audit"]["enabled"] is True and listed["audit"]["held_by_bot"] == "paused"
+    assert listed["weekly"]["held_by_bot"] is None and not listed["audit"]["active"]
+    assert scheduler(api).tick(datetime(2026, 9, 15, 14, tzinfo=timezone.utc))["fired"] == []
+    control(api, "ops", "resume")
+    listed = {row["key"]: row for row in rows(api)}
+    assert listed["audit"]["active"] and listed["audit"]["held_by_bot"] is None
+    assert listed["weekly"]["enabled"] is False     # a routine a person turned off stays off
+    fired = scheduler(api).tick(datetime(2026, 9, 16, 14, tzinfo=timezone.utc))["fired"]
+    assert [get(api, "tasks/" + tid)["task"]["routine_id"] for tid in fired] == ["ops:audit"]
+
+
+def test_a_bot_still_in_setup_gets_no_routine_runs(api):
+    setup(api)
+    create(api, "ops", DEBRIEF)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='ops'")
+        from backend import routines
+        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
+    assert tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"] == []
+    assert {row["held_by_bot"] for row in rows(api)} == {"needs_setup"}

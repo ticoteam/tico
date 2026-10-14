@@ -20930,6 +20930,13 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "held_by_bot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set while an enabled routine waits on its bot rather than its own switch: the bot's state (paused, planned, quarantined, archived) or needs_setup. The routine stays enabled and fires again once the bot is active and set up."
           }
         },
         "required": [

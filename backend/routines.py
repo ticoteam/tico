@@ -14,6 +14,7 @@ from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P, task_privacy as privacy
 from .harnesses import SYNCED_SQL
+from .statuses import PARKED_SQL, is_parked
 from .scheduler import next_due, stamp
 from .store import H, Problem, encode
 
@@ -128,8 +129,27 @@ def remove(c, actor, sid, *, at=None):
 
 
 def cancel_unclaimed(c, sid):
-    for task in c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
-                          "WHERE o.schedule_id=? AND t.status='open'", (sid,)).fetchall():
+    _close_unclaimed(c, c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
+                                  "WHERE o.schedule_id=? AND t.status='open'", (sid,)).fetchall(),
+                     "Routine removed before execution.")
+
+
+PAUSED_NOTE = "Bot paused before this routine ran; its routines fire again on schedule once it resumes."
+
+
+def hold_for_paused_bot(c, bot):
+    """A paused bot's routine runs nobody has started are closed, so a long pause does not leave a
+    backlog that all runs at once on resume. Only routine-opened tasks: a person's direct work stays
+    queued for the bot. Each routine keeps its own enabled flag, so resuming restores exactly the ones
+    that were on. Returns the closed task ids."""
+    found = c.execute("SELECT DISTINCT t.* FROM tasks t JOIN schedule_occurrences o ON o.task_id=t.id "
+                      "JOIN schedules s ON s.id=o.schedule_id WHERE s.bot=? AND t.status='open'", (bot,)).fetchall()
+    return _close_unclaimed(c, found, PAUSED_NOTE)
+
+
+def _close_unclaimed(c, tasks, note):
+    closed = []
+    for task in tasks:
         # Primary jobs, additional turn inputs and carried work all count as claimed.
         claimed = c.execute(
             "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
@@ -141,7 +161,8 @@ def cancel_unclaimed(c, sid):
             "WHERE e.action='task.next-run.carried' AND v.value=? LIMIT 1", (task['id'],)).fetchone()
         if claimed or carried:
             continue
-        H.task_close(c, H.KEEPER, task['id'], 'Routine removed before execution.')
+        H.task_close(c, H.KEEPER, task['id'], note)
+        closed.append(task['id'])
         c.execute('UPDATE tasks SET version=version+1 WHERE id=?', (task['id'],))
         task_messages = ("SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                          f"WHERE {H.MESSAGE_TASK_SQL}=?")
@@ -150,6 +171,7 @@ def cancel_unclaimed(c, sid):
         # Includes the close notice, so the outbox does not wake this removed work.
         c.execute("UPDATE messages SET delivered_at=? WHERE id IN (" + task_messages + ") AND to_actor LIKE 'bot:%' "
                   "AND delivered_at IS NULL", (H.now(), task["id"]))
+    return closed
 
 
 def latest_task(c, sid):
@@ -203,6 +225,9 @@ def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, aut
                      # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
                      "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
                      "AND json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ")) "
+                     # a starter bot runs nothing on its own until it says its setup is done, as in Scheduler.tick
+                     "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot "
+                     "AND pc.onboarding_state IN " + PARKED_SQL + ") "
                      "ORDER BY s.id", (kind,)).fetchall()
     for schedule in rows:
         occurrence = f"{kind}:{subject}"
@@ -413,13 +438,20 @@ def occurrences(c, schedule_id, limit=OCCURRENCE_LIMIT, *, who, auth):
 def listing(c, bot=None, include_deleted=False, summary=False):
     """`summary` drops the text: the overview and employee views only need the schedule, not
     hundreds of KB of prose."""
-    rows = c.execute('SELECT s.*,b.state,coalesce(sc.timezone,?) AS timezone,coalesce(sc.enabled,1) AS enabled '
-                     'FROM schedules s JOIN bots b ON b.slug=s.bot LEFT JOIN schedule_config sc ON sc.schedule_id=s.id '
+    rows = c.execute('SELECT s.*,b.state,coalesce(sc.timezone,?) AS timezone,coalesce(sc.enabled,1) AS enabled,'
+                     'bc.onboarding_state FROM schedules s JOIN bots b ON b.slug=s.bot '
+                     'LEFT JOIN schedule_config sc ON sc.schedule_id=s.id LEFT JOIN bot_config bc ON bc.bot=s.bot '
                      'WHERE (? IS NULL OR s.bot=?) AND (? OR s.deleted_at IS NULL) ORDER BY s.title,s.id',
                      (DEFAULT_ZONE, bot, bot, include_deleted)).fetchall()
     inboxes = _inboxes(c, {found["bot"] for found in rows})
     result = []
     for found in rows:
+        # Why an enabled routine is not firing because of its bot, not its own switch: the routine
+        # stays enabled and fires again once the bot is active and set up.
+        held = None
+        if found['enabled'] and not found['deleted_at']:
+            held = (found['state'] if found['state'] != 'active'
+                    else 'needs_setup' if is_parked(found['onboarding_state']) else None)
         value = {'id': found['id'], 'bot': found['bot'], 'employee': found['bot'], 'key': found['routine_key'],
                  'title': found['title'], 'cron': found['cron'] or '', 'on': found['event_name'] or '',
                  'kind': 'event' if found['event_name'] else 'cron', 'timezone': found['timezone'],
@@ -427,7 +459,8 @@ def listing(c, bot=None, include_deleted=False, summary=False):
                  'last_fired': found['last_fired'], 'next_due': found['next_due'], 'next': found['next_due'],
                  'deleted_at': found['deleted_at'], 'updated_at': found['updated_at'],
                  'inbox': inboxes.get(found['bot']) or {'mailboxes': [], 'org_read': False},
-                 'active': found['state'] == 'active' and bool(found['enabled']) and not found['deleted_at']}
+                 'held_by_bot': held,
+                 'active': bool(found['enabled']) and not found['deleted_at'] and not held}
         if summary:
             value.pop('text', None)
         result.append(value)
