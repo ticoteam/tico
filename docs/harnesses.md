@@ -1,6 +1,6 @@
 # Harnesses: the model CLIs a runner uses
 
-A **harness** is the program a runner starts for a bot's run: Codex, Claude Code, Gemini CLI, Grok Build, Cursor Agent, or pi.
+A **harness** is the program a runner starts for a bot's run: Codex, Claude Code, Gemini CLI, Grok Build, Cursor Agent, Muse Code, or pi.
 Tico does not ship them. Model CLIs release every few days and Tico has to work with many providers, so each runner
 installs the harnesses its own bots need, keeps them current, and lets the owner pin one when a release misbehaves.
 
@@ -16,7 +16,8 @@ and holds no harness.
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
 | Grok Build | `grok.toml` | xAI | npm `@xai-official/grok` (xAI's own package) | Grok subscription (`grok login` in a terminal) or `XAI_API_KEY` |
 | Cursor Agent | `cursor-agent.toml` | Cursor | Cursor's install script, run with `HOME` inside the tools directory | Cursor subscription (`cursor-agent login` in a terminal) or `CURSOR_API_KEY` |
-| pi (catch-all) | `pi.toml` | DeepSeek, Kimi (Moonshot), Meta Llama, Mistral, OpenRouter | npm `@earendil-works/pi-coding-agent` | `OPENROUTER_API_KEY` |
+| Muse Code | `muse-code.toml` | Meta | Meta's install script (`dev.meta.ai/install.sh`), run with `HOME` inside the tools directory | Meta account (device code, from Settings) or `META_API_KEY` |
+| pi (catch-all) | `pi.toml` | DeepSeek, Kimi (Moonshot), Mistral, OpenRouter | npm `@earendil-works/pi-coding-agent` | `OPENROUTER_API_KEY` |
 
 xAI has an official CLI (Grok Build, `docs.x.ai/build`; also an install script at `x.ai/cli/install.sh`), so xAI does
 not go through the catch-all. Tico uses the npm package because it installs into a directory of our choosing and npm
@@ -28,6 +29,17 @@ run, with the prompt on stdin and the chat made by `cursor-agent create-chat`, s
 the model itself on `auto` (`cursor-auto` in the model list); a bot's config may name any other model Cursor offers.
 Cursor's installer only ever installs the newest release, so this harness follows `latest` and cannot be pinned to an
 older version (Pin to this version pins the one installed).
+
+Muse Code is Meta's coding CLI (`muse`). Its runtime is `musecode`, because `muse` already names the Muse app synced
+in as an external agent. `runner/hosts/musecode.py` runs `muse exec --json --yolo` once per run with the prompt in a
+file (the CLI takes no prompt on stdin) and `--session-id <uuid>`: Tico makes the id, the first run creates the
+session and every later run with the same id continues it, so a restart resumes it. The hub and a bot's remote MCP
+servers are set for that run only (`-c mcp_servers.<name>=...`), with secrets left as `${VAR}` in the run's
+environment. Every run sets `MUSE_NO_AUTO_UPDATE=1` so the launcher does not update itself; the runner updates it.
+The download is about 340 MB. The sign-in is `~/.config/muse/auth.json` in the bot user's home (from `muse login`);
+`META_API_KEY` wins over it. The CLI has no sign-in status command, so readiness reports the file being there.
+Meta's install script only installs the newest release, so this harness follows `latest` like Cursor's.
+Meta's Llama models stay on pi through OpenRouter (`llama-4-maverick`, no longer recommended).
 
 ### Why pi is the catch-all
 
@@ -94,6 +106,8 @@ Cursor Agent and Grok Build already have runner adapters and appear when their p
 Cursor currently offers Auto; its effort field says **Managed by harness** because the CLI has no
 separate effort switch. Before adding named Cursor models, confirm their exact identifiers with
 [`cursor-agent --list-models`](https://cursor.com/docs/cli/reference/parameters) on the relevant account.
+Muse Code offers Muse Spark 1.3 (`muse-spark-1.3`, effort low to max, medium by default), the only public model
+the Muse Code 1.4.7 CLI names (checked 2026-10-14); `muse-spark-1.2` exists but is older.
 Grok Build retains its catalog model and supported efforts through the
 [existing CLI integration](https://docs.x.ai/build/overview). Selecting a harness does not enable
 its provider, grant credentials or guarantee model access on a computer.

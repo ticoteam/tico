@@ -1,0 +1,35 @@
+# Meta's Muse Code CLI (dev.meta.ai). Its only install is a script that puts a launcher in
+# $MUSE_INSTALL_DIR (default ~/.local/bin), which downloads the ~340 MB binary beside itself. The
+# runner runs it with HOME set to a fresh directory inside its tools directory, so the script's PATH
+# edits land there and not in anyone's shell profile. The script always installs the newest release,
+# so this harness cannot be pinned to an older version. The channel file names the newest release.
+id = "muse-code"
+name = "Muse Code"
+host = "musecode"
+executable = "muse"
+providers = ["meta"]
+
+[install]
+method = "script"
+url = "https://dev.meta.ai/install.sh"
+shell = "bash"
+requires = ["curl", "mktemp"]
+prefix_env = "HOME"
+bin = ".local/bin/muse"
+latest_url = "https://api.meta.ai/muse-code/channels/muse-stable"
+latest_pattern = '"version"\s*:\s*"(\d+\.\d+\.\d+)'
+
+[version]
+args = ["--version"]
+pattern = '(\d+\.\d+\.\d+)'
+
+[update]
+policy = "latest"
+
+[auth]
+methods = ["device-code", "subscription", "api-key"]
+api_key_env = ["META_API_KEY"]
+
+[login]
+command = ["login"]
+terminal = true

@@ -82,10 +82,10 @@ class Base(unittest.TestCase):
 class Manifests(unittest.TestCase):
     def test_the_shipped_manifests_are_valid_and_complete(self):
         found = H.load_all()
-        self.assertEqual(set(found), {"codex", "claude-code", "gemini-cli", "grok", "pi", "cursor-agent"})
+        self.assertEqual(set(found), {"codex", "claude-code", "gemini-cli", "grok", "pi", "cursor-agent", "muse-code"})
         self.assertEqual([m.id for m in found.values() if m.catch_all], ["pi"])
         for manifest in found.values():
-            self.assertEqual(manifest.method, "script" if manifest.id == "cursor-agent" else "npm")
+            self.assertEqual(manifest.method, "script" if manifest.id in ("cursor-agent", "muse-code") else "npm")
             self.assertTrue((H.HOSTS_DIR / f"{manifest.host}.py").is_file())
             self.assertEqual(manifest.policy, "latest")
 

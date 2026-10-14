@@ -27,6 +27,7 @@ from .release_update import Follower
 from .login import POLL_S as LOGIN_POLL_S, Logins
 from .hosts.base import HostError, SteerRefused, is_auth_rejected, rejection_reason, settings as host_settings
 from .hosts.cursor import MODELS as CURSOR_HOST_MODELS
+from .hosts.musecode import MODELS as MUSE_HOST_MODELS, QUIET as MUSE_QUIET
 from .hosts.pi import MODELS as PI_HOST_MODELS
 from .outage import RECENT, Outage, describe, log
 from .state import BOT_THREAD, State, lane as turn_lane, session_key, session_task
@@ -38,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 _UNSELECTED = object()
 
 RUNNER_VERSION = "0.5.4"
-RUNTIMES = ("codex", "grok", "claude", "gemini", "pi", "cursor")
+RUNTIMES = ("codex", "grok", "claude", "gemini", "pi", "cursor", "musecode")
 # Claude Code has no local model catalog command, so readiness reports these ids.
 # Verified against Claude Code 2.1.212 with a one-word prompt each; claude-fable-5-1
 # was refused by that CLI and accepted from 2.1.230, and the cloud catalog lists it.
@@ -55,7 +56,7 @@ CLAUDE_AUTH_TIMEOUT_SECONDS = 30
 # Environment variables that sign a CLI in without a browser, checked in this order.
 REJECT_RECHECK_S = 300      # how long a refused key or sign-in is trusted before one turn tries again
 HEADLESS_LOGIN = {"claude": ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"), "cursor": ("CURSOR_API_KEY",),
-                  "codex": ("OPENAI_API_KEY",)}
+                  "codex": ("OPENAI_API_KEY",), "musecode": ("META_API_KEY",)}
 # Codex reads its key from a login, not the environment, so the runner makes the login. A key it could not log in with
 # is not tried again for this long (a heartbeat asks every few seconds), unless the key or the home changes.
 CODEX_LOGIN_RETRY_S = 600
@@ -87,13 +88,22 @@ DEFAULT_NAMES = {"company_name": "the company", "app_name": "Tico", "assistant_n
 BOOTSTRAP_TEMPLATES = {"coo": "assistant", "botops": "botops", "librarian": "librarian", "goal-manager": "goal-manager"}
 OWN_INTERRUPT = ("Lease expired", "Execution interrupted after stop")
 FALLBACK_RUNTIME = {"antigravity": "gemini", "gemini": "gemini", "codex": "codex",
-                    "claude": "claude", "grok": "grok", "pi": "pi", "cursor": "cursor"}
+                    "claude": "claude", "grok": "grok", "pi": "pi", "cursor": "cursor", "musecode": "musecode"}
 PI_MODELS = sorted(PI_HOST_MODELS)
 CURSOR_MODELS = sorted(CURSOR_HOST_MODELS)
+MUSE_MODELS = sorted(MUSE_HOST_MODELS)
 # The server resolves a bot's runtime from its own config, then the company default; this is what
 # a runner sees when neither exists.
 # Prefix of the readiness warning that says a bot's history did not reach GitHub; backend/health.py reads it.
 PUBLISH_WARNING = "GitHub history not published: "
+
+
+def muse_auth_file(env):
+    """Where Muse Code keeps its Meta-account login for this environment (MUSE_AUTH_PATH, else the XDG config)."""
+    if env.get("MUSE_AUTH_PATH"):
+        return Path(env["MUSE_AUTH_PATH"])
+    config = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or str(Path.home()), ".config")
+    return Path(config) / "muse" / "auth.json"
 
 
 def reserved_credential(key):
@@ -1319,7 +1329,7 @@ class Runner:
                     values[key] = value
             runtime_keys = {"claude": ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
                             "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"), "cursor": ("CURSOR_API_KEY",),
-                            "pi": ("OPENROUTER_API_KEY",)}
+                            "pi": ("OPENROUTER_API_KEY",), "musecode": ("META_API_KEY",)}
             runtimes = {config.get("runtime"), (configured_fallback(config) or {}).get("runtime")}
             for runtime in runtimes:
                 for key in runtime_keys.get(runtime, ()):
@@ -1972,6 +1982,18 @@ class Runner:
                     authenticated, detail = "failed", "Cursor sign-in check timed out"
                 except OSError:
                     authenticated, detail = "failed", "Cursor sign-in could not be checked"
+        elif runtime == "musecode":
+            # Muse Code keeps a Meta-account login in auth.json (`muse login`) and has no status command, so
+            # the file's presence is the sign-in. Its contents are never read. META_API_KEY wins over it.
+            env = {**(env or os.environ), **MUSE_QUIET}
+            if profile is None:
+                self.team_model_keys("musecode")
+            if self.headless_login("musecode"):
+                authenticated, detail = "ready", "Signed in with META_API_KEY"
+            elif muse_auth_file(env).is_file():
+                authenticated, detail = "ready", "Signed in with a Meta account"
+            else:
+                authenticated, detail = "missing", "Muse login required (muse login) or META_API_KEY"
         elif runtime == "pi":
             relevant = [row for row in assignments if row.get("config", {}).get("runtime") == "pi"]
             missing = sorted(row["bot"] for row in relevant
@@ -1988,7 +2010,8 @@ class Runner:
                   list(CLAUDE_MODELS) if runtime == "claude" else
                   list(GEMINI_MODELS) if runtime == "gemini" else
                   list(PI_MODELS) if runtime == "pi" else
-                  list(CURSOR_MODELS) if runtime == "cursor" else [])
+                  list(CURSOR_MODELS) if runtime == "cursor" else
+                  list(MUSE_MODELS) if runtime == "musecode" else [])
         return {"installed": bool(executable), "authenticated": authenticated, "version": version,
                 "models": models, "controls": ["interrupt", "new-session"] if executable else [],
                 "detail": detail, **goals.capabilities(runtime, executable, version)}
@@ -2132,6 +2155,9 @@ class Runner:
         if runtime == "cursor":
             from .hosts.cursor import CursorHost
             return CursorHost(bot=attempt["bot"])
+        if runtime == "musecode":
+            from .hosts.musecode import MuseCodeHost
+            return MuseCodeHost(bot=attempt["bot"], state_dir=self.host_state / "musecode")
         raise RuntimeError(NO_RUNTIME if not runtime else f"Unsupported local runtime: {runtime}")
 
     def prompt(self, attempt, after=None, *, resumed=False):

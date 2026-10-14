@@ -179,7 +179,7 @@ def is_limit(text):
 # It wins over AUTH_RETRY_RE, whose 401 pattern is a lost token renewal, not a wrong key.
 AUTH_REJECTED_RE = re.compile(r"incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)"
                               r"|not logged in|please run /login|invalid authentication credentials|authentication_error"
-                              r"|oauth session expired and could not be refreshed", re.I)
+                              r"|oauth session expired and could not be refreshed|missing meta credentials", re.I)
 _SECRETISH = re.compile(r"\b(?:sk|pk|xai|gsk|key|ghp|github_pat)[-_][A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,}")
 
 

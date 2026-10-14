@@ -214,10 +214,10 @@ async function enrollmentDownload(operator, label) {
 }
 // One chip per AI tool on a computer: its version and whether it is signed in, from the computer's readiness
 // (`harnesses` per tool, `runtimes` per runtime; an older runner sends only `runtimes`). Only what its bots use (with no bot
-// yet, the team's default), plus anything installed anyway. Codex and Claude Code sign in from here: the computer runs
+// yet, the team's default), plus anything installed anyway. Codex, Claude Code and Muse Code sign in from here: the computer runs
 // the login as the bot user and relays only the link and one-time code (backend/model_login.py, runner/login.py).
 // The others have no login the computer can relay, so the chip says what to run there.
-const MACHINE_SIGNIN = ['codex', 'claude'];
+const MACHINE_SIGNIN = ['codex', 'claude', 'musecode'];
 const MACHINE_LOGIN_COMMANDS = {grok: 'grok login', cursor: 'cursor-agent login'};   // backend/providers.py `login`
 const MACHINE_KEY_ONLY = ['gemini', 'pi'];
 // The server's rule (model_login._operator): the owner, an admin, or the person whose computer it is.
