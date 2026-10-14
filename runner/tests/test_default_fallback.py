@@ -126,3 +126,26 @@ def test_readiness_is_per_subscription_and_never_a_key_from_the_environment(exec
     assert runner.fallback_ready("codex")
     runner.reject("codex", "Incorrect API key provided")
     assert not runner.fallback_ready("codex")
+
+
+def test_a_provider_the_owner_turned_off_on_this_computer_is_never_the_default_fallback(execution, monkeypatch):
+    runner, client = execution
+    runner.tools.choose({"codex": False})       # still answering from PATH, but the owner said off here
+    assert not runner.fallback_ready("codex")
+    calls = run(runner, monkeypatch, claude_bot())
+    assert [runtime for runtime, *_ in calls] == ["claude"]
+    assert client.completion()["limited"] is True
+
+
+def test_a_provider_not_installed_here_is_never_the_default_fallback(execution, monkeypatch):
+    runner, client = execution
+    runner.runtime_rows["codex"] = {"installed": False, "authenticated": "missing"}
+    calls = run(runner, monkeypatch, claude_bot())
+    assert [runtime for runtime, *_ in calls] == ["claude"]
+    assert client.completion()["limited"] is True
+
+
+def test_a_computer_with_bots_still_reads_the_default_fallbacks(execution):
+    runner, client = execution
+    runner._fallback_models, runner._default_runtime_at = [], -60
+    assert runner.default_fallbacks() == CHOICES

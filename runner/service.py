@@ -3906,7 +3906,12 @@ class Runner:
 
     def fallback_ready(self, runtime, profile=""):
         """Whether `runtime` can take a turn here now: installed, signed in (on `profile` when the bot is
-        pinned to one) and not refused. Read from the last readiness report, never probed mid-turn."""
+        pinned to one), not refused and not turned off here by the owner. Read from the last readiness report,
+        never probed mid-turn."""
+        tools = getattr(self, "tools", None)
+        manifest = tools.harness_for_runtime(runtime) if tools is not None else None
+        if manifest is not None and (getattr(tools, "choices", None) or {}).get(manifest.id) is False:
+            return False      # the owner's "off" here holds even while a copy on PATH still answers
         row = (getattr(self, "runtime_rows", None) or {}).get(runtime) or {}
         if profile:
             row = (row.get("profiles") or {}).get(profile)
