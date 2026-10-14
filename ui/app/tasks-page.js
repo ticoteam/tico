@@ -11,7 +11,7 @@ function pageTasks(forced, openId = '') {
   const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '',
     loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
     filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
-    selected: new Set(), anchor: '', cursor: '', tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map()};
+    selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map()};
   const query = tasksFiltersFromURL(state);
   const hadQuery = [...query.keys()].length > 0;
   if (state.urlView && TASK_VIEWS.some(([k]) => k === state.urlView)) forced = state.urlView;

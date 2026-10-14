@@ -42,7 +42,7 @@ HOSTS_DIR = HERE / "hosts"
 
 METHODS = ("npm", "pip", "script", "binary")
 POLICIES = ("latest", "pinned")
-VERSION_TIMEOUT_S = 60       # seconds for `<cli> --version`: a fresh Node CLI on a busy computer can take more than 15
+VERSION_TIMEOUT_S = 60       # seconds for `<cli> --version` right after an install: a fresh Node CLI on a busy computer can take more than 15
 AUTH_METHODS = ("device-code", "subscription", "api-key")
 CHECK_EVERY_S = 24 * 3600      # how often a managed harness is compared with the newest release
 RETRY_AFTER_S = 30 * 60        # a failed install or update waits this long before trying again
@@ -344,7 +344,7 @@ class Harnesses:
             return str(ours), "tools"
         return None, ""
 
-    def detect(self, manifest, path):
+    def detect(self, manifest, path, timeout=15):
         """The installed version, or "" when the executable does not answer."""
         try:
             key = (path, os.stat(path).st_mtime_ns, os.stat(os.path.realpath(path)).st_mtime_ns)
@@ -354,7 +354,7 @@ class Harnesses:
             return self.versions[key]
         version = ""
         try:
-            done = self.run([path, *manifest.version_args], capture_output=True, text=True, timeout=VERSION_TIMEOUT_S,
+            done = self.run([path, *manifest.version_args], capture_output=True, text=True, timeout=timeout,
                             stdin=subprocess.DEVNULL)
             found = re.search(manifest.version_pattern, (done.stdout or "") + "\n" + (done.stderr or ""))
             version = found.group(1) if found and done.returncode == 0 else ""
@@ -562,7 +562,7 @@ class Harnesses:
             path = dest / manifest.bin_relative
             if not path.exists():
                 raise RuntimeError(f"the install did not produce {manifest.bin_relative}")
-            found = self.detect(manifest, str(path))
+            found = self.detect(manifest, str(path), timeout=VERSION_TIMEOUT_S)
             if not found:
                 raise RuntimeError(f"{manifest.executable} does not answer {' '.join(manifest.version_args)}")
             return {"dir": dest, "version": found}
