@@ -43,6 +43,7 @@ let HL_CHECK_MSG = null;   // {text, error}: what the last "Check for updates" s
 function hlFixHtml(fix) {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
+  if (fix.finish) return `<button class="ghost" type="button" data-stuck-finish="${esc(fix.finish.bot)}">${esc(fix.label)}</button>`;
   if (fix.click) return `<button class="ghost" type="button" data-hl-click="${esc(fix.click)}">${esc(fix.label)}</button>`;
   return `<a class="ghost gs-link" href="${esc(fix.href)}"${fix.tab ? ` data-gs-tab="${esc(fix.tab)}"` : ''}>${esc(fix.label)}</a>`;
 }
@@ -98,7 +99,8 @@ function hlStorageHtml(st) {
     ${s3 ? '' : `<a class="hl-s3" href="${GH}/blob/main/docs/files.md#storage" target="_blank" rel="noopener noreferrer">Set up S3</a>`}</div></div>`;
 }
 
-// Bots with queued work that is not starting (backend/health.py `_stuck`): who, why, and one fix. Overview shows the same rows.
+// Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
+// one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
   return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
     <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${row.queued ? ` · ${row.queued} queued` : ''}</span>
@@ -112,6 +114,22 @@ async function hlStuckMove(button) {
   await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.runner,
     expected_generation: e.machine?.generation || 0, expected_revision: e.revision});
   void hlRefresh();
+}
+
+// A bot stuck in setup: the same setup-done call as its page's "Mark setup done" (POST /v2/bots/{bot}/onboarded).
+async function hlStuckFinish(button) {
+  const slug = button.dataset.stuckFinish;
+  button.disabled = true; button.textContent = 'Finishing…';
+  try {
+    const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
+    const bot = (S.emps || []).find(e => e.name === slug);
+    if (bot) bot.onboarding_state = result.onboarding_state;
+    toast(`${botDisplayName(slug)} finished setup`);
+    void hlRefresh();
+  } catch (error) {
+    toast(error.message, true);
+    button.disabled = false; button.textContent = 'Finish with defaults';
+  }
 }
 
 function hlPageDraw() {
@@ -211,6 +229,8 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
   const move = event.target.closest('[data-stuck-move]');
   if (move) { void hlStuckMove(move); return; }
+  const finish = event.target.closest('[data-stuck-finish]');
+  if (finish) { void hlStuckFinish(finish); return; }
   const open = event.target.closest('[data-hl-click]');
   // After this click finishes: the page's outside-click handler would otherwise close the popup it opens.
   if (open) setTimeout(() => document.querySelector(open.dataset.hlClick)?.click(), 0);

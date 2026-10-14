@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, usage_limits, watchers
+from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, usage_limits, watchers
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -464,9 +464,10 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
     return view
 
 
-def _stuck(c, rows, online_ids, who, full):
+def _stuck(c, rows, online_ids, who, full, auth=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
-    or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers."""
+    or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
+    A bot stuck in setup is the exception: whoever may manage it gets "Finish with defaults"."""
     from .readiness import own_harness
     if not rows:
         return []
@@ -475,6 +476,12 @@ def _stuck(c, rows, online_ids, who, full):
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]
+        if reason == "setup":
+            manages = auth is not None and auth.bot_manager(c, who, row["bot"])
+            out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason", "since")}
+                       | {"why": f"Stuck in setup for {setup_stuck.held_for(row['since'])}",
+                          "fix": {**_fix("Finish with defaults"), "finish": {"bot": row["bot"]}} if manages else None})
+            continue
         runtime = row["runtime"] or configured.get(row["bot"], "")
         harness = own_harness(c, row["bot"], runtime)     # an Antigravity bot is not judged as Gemini CLI
         fix, move = None, None
@@ -882,10 +889,13 @@ def view(c, who, settings, auth, github, config):
     online_ids = {r["id"] for r in online}
     computers = _computers(c, online, settings)
     waiting, slow, stuck_rows = _waiting(c, online_ids)
+    # A bot parked in setup for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
+    listed = {row["bot"] for row in stuck_rows}
+    stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
     if not full and stuck_rows:      # someone who is not an administrator hears only about the bots they may read
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
-    blocked = _stuck(c, stuck_rows, online_ids, who, full)
+    blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
     failed, failures = _failed(c)
     checks = []
     if full and (listening := _listening(c, settings)):
@@ -1141,7 +1151,8 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
-    blocking = [s for s in blocked if s["bot"] not in held]
+    # A bot stuck in setup has its own check below ("Setup not finished").
+    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     if blocking:
         # A count: each bot, its reason and its fix are listed once, under `stuck` (Health's Stuck list, Overview).
         checks.append(_check("queue", "Stuck bots", "bad" if any(s["reason"] != "slow" for s in blocking) else "warn",

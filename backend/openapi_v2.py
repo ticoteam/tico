@@ -717,9 +717,11 @@ SCHEMAS = {
                   required=["audience", "checks", "attention", "checked"],
                   storage={**ref("Storage"), "description": "Read-only file storage usage and copy progress; Team owners only"},
                   stuck={"type": "array", "items": {"type": "object"}, "description":
-                         "Bots with queued work that is not starting (the caller may read them): bot, name, queued, oldest, "
-                         "computer, reason (not_ready, computer_offline, no_computer, slow), why, and fix (label plus "
-                         "href/tab, login or move; null unless the caller administers bots)"}),
+                         "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
+                         "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
+                         "slow, limit, setup), why, since (setup only: when the bot was added), and fix (label plus "
+                         "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
+                         "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"}),
     "BotFile": obj({"id": "s", "bot": "s", "title": "s", "kind": "s", "mime": "s", "locator": "s", "scope": "s",
                     "version": "i", "state": "s", "synced": "b", "size": {"type": ["integer", "null"]},
                     "name": "n", "open": {"type": ["object", "null"], "description": "{type: tico|external, url}: "

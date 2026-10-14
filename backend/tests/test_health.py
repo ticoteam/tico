@@ -361,6 +361,44 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
 
 
+def _parked(api, slug, days_ago, created_by=""):
+    add_bot(api, slug)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state,created_by) VALUES(?,'{}','morgan','needs_setup',?) "
+                  "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup',created_by=excluded.created_by",
+                  (slug, created_by))
+        c.execute("UPDATE bots SET created=? WHERE slug=?", (H.shift(H.now(), days=-days_ago), slug))
+
+
+def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(environment):
+    """Overview's stuck list names a bot parked over a day, and only someone who may manage it gets the finish."""
+    api = environment()
+    _parked(api, "support", 14)
+    _parked(api, "sales", 0)                        # added today: setup may be under way
+    stuck = {row["bot"]: row for row in health_of(api)[0]["stuck"]}
+    assert set(stuck) == {"support"} and stuck["support"]["reason"] == "setup"
+    assert stuck["support"]["why"] == "Stuck in setup for 14 days"
+    assert stuck["support"]["fix"]["finish"] == {"bot": "support"}
+    quinn = as_person(api, "quinn")                 # neither an owner of it nor an administrator
+    assert all(row["fix"] is None for row in health_of(api, quinn)[0]["stuck"])
+    assert api.post("/api/v2/bots/support/onboarded", json={}, headers=quinn).status_code == 403
+    assert api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()["onboarding_state"] == "onboarded"
+    assert health_of(api)[0]["stuck"] == []
+
+
+def test_a_bot_left_in_setup_is_nudged_to_whoever_added_it_once(environment):
+    from backend import setup_stuck
+    api = environment()
+    _parked(api, "support", 3, created_by="human:quinn")
+    _parked(api, "sales", 3)                        # nobody known added it: the owner and the bot administrators
+    with api.app.state.store.transaction() as c:
+        told = setup_stuck.nudge(c, "morgan", {"riley@acme.example"})
+        assert told == {"support": ["human:quinn"], "sales": ["human:morgan", "human:riley"]}
+        assert setup_stuck.nudge(c, "morgan", {"riley@acme.example"}) == {}
+        notes = c.execute("SELECT to_actor FROM messages WHERE from_actor='keeper' AND body LIKE '%waiting in setup%'")
+        assert sorted(r["to_actor"] for r in notes) == ["human:morgan", "human:quinn", "human:riley"]
+
+
 def test_a_repository_a_computer_could_not_copy_is_named_with_gits_reason(request):
     from backend.repositories import save_metadata
     api = request.getfixturevalue("environment")()

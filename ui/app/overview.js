@@ -121,7 +121,8 @@ function overviewStop() {
   state.frame.contentWindow?.postMessage({type: 'tico-overview-dispose'}, location.origin);
   state.abort.abort(); state.frame.remove(); OVERVIEW_PAGE = null;
 }
-// Bots with queued work that is not starting, from the Health answer the app already polls (ui/health.js).
+// Bots with queued work that is not starting, or left in setup for a day, from the Health answer the app already
+// polls (ui/health.js).
 const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
 function overviewStuckDraw() {
   const el = OVERVIEW_PAGE && $('#overview-stuck'); if (!el) return;
