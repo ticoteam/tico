@@ -7,6 +7,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.44] - 2026-10-14
+
+**Upgrade:** an existing GitHub App needs **Actions: Read-only** added on its GitHub settings page and accepted on the installation before bots can read workflow results. Until then, tokens are issued as before. See [GitHub App](docs/github-app.md).
+
 ### Added
 - **Bots can check a workflow run's result.** A bot's GitHub token now reads Actions (workflow runs and their logs) in every repository it can read, so a bot that watches a deploy reads `gh run list` / `gh run view` itself instead of asking a person. It can't start, rerun or cancel a run. New GitHub Apps ask for Actions read; **an existing App needs Actions: Read-only added on its GitHub settings page and accepted on the installation**, and until then tokens are issued without it as before. See [GitHub App](docs/github-app.md#permissions-and-why).
 - **Attachments can be allowed for one mailbox.** `mailboxes.<address>.allow_attachments: true` in `registry/mail-policy.yaml` lets bots attach files to drafts from that mailbox only (Legal's, say) while `defaults.allow_attachments` stays off for the rest; `false` turns one off when the default is on. `mail draft discard <draft-id>` removes an unsent draft the bot made (the older `mail discard` still works). See [Mail](docs/mail.md).
