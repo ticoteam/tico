@@ -1501,7 +1501,7 @@ class Completion(Contract):
     limited: bool = False   # the local runtime refused the turn on a subscription usage limit
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
-    primary_limited: bool = False  # the bot's own runtime hit its usage limit and `fallback` ran the turn
+    primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     auth_rejected: AuthRejected | None = None  # the provider refused this computer's key or sign-in
     usage: RunUsage | None = None  # the run's token counts and the model that ran it
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between

@@ -2973,7 +2973,9 @@ class Runner:
                 # runs the turn once (Settings > AI providers can turn this off for the company).
                 hop = default_fallback(config, self.default_fallbacks(), self.fallback_ready,
                                        attempt.get("profile") or "")
-            primary_limited = bool(hop and limited)
+            # Only a server that sent `fallback_models` knows the field (an older one refuses unknown fields).
+            hit_limit = limited
+            primary_limited = bool(hop and limited and hop.get("default"))
             if hop and drive and base_env is not None:
                 if aid in self.attempt_runtimes:
                     self.attempt_runtimes[aid].add(hop["runtime"])
@@ -3001,7 +3003,7 @@ class Runner:
                     hop_env = profile.environment(hop["runtime"], base_env) if profile else base_env
                     env = hop_env
                     self.state.append(aid, "diagnostic",
-                                      {"text": f"{primary} " + ("hit its usage limit" if primary_limited else "unavailable")
+                                      {"text": f"{primary} " + ("hit its usage limit" if hit_limit else "unavailable")
                                        + f"; running this turn on {fallback}"
                                        + (" (no fallback set; another provider signed in here)" if hop.get("default") else "")})
                     host = self.host_factory(hop_attempt, hop_env)

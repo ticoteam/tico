@@ -65,6 +65,9 @@ def test_a_limit_with_no_fallback_set_runs_the_turn_once_on_another_ready_provid
     assert result["fallback"] == "codex"
     assert result["primary_limited"] is True
     assert not result.get("limited")
+    with runner.state.connect() as connection:
+        notes = [row[0] for row in connection.execute("SELECT payload FROM events WHERE kind='diagnostic'")]
+    assert any("claude hit its usage limit; running this turn on codex (no fallback set" in note for note in notes), notes
 
 
 def test_no_ready_provider_leaves_the_turn_limited_as_before(execution, monkeypatch):
@@ -100,6 +103,16 @@ def test_choice_keeps_an_explicit_fallback_honours_off_and_skips_the_primary():
     assert default_fallback({**config, "fallback": {"off": True}}, CHOICES, ready) is None
     assert default_fallback({**config, "fallback": {"harness": "gemini", "model": "g"}}, CHOICES, ready) is None
     assert default_fallback(config, CHOICES, lambda runtime, profile="": runtime == "codex") is None
+
+
+def test_a_bots_own_fallback_on_a_limit_sends_no_new_field_to_an_older_server(execution, monkeypatch):
+    runner, client = execution
+    work = claude_bot()
+    work["config"]["fallback"] = {"harness": "codex", "model": "gpt-own"}
+    calls = run(runner, monkeypatch, work)
+    result = client.completion()
+    assert calls[1] == ("codex", "gpt-own", "codex")
+    assert result["fallback"] == "codex" and "primary_limited" not in result
 
 
 def test_readiness_is_per_subscription_and_never_a_key_from_the_environment(execution, monkeypatch):
