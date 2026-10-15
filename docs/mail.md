@@ -254,8 +254,8 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
-change that calendar access. On a Docker runner with the two-user layout the bot gets calendar tokens only for its
-own mailboxes, so `org_read` does limit it there (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
+change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the
+mailboxes on its mail token list (a message bot's own, and its reports' only with `org_read: true`) (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 
