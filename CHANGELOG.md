@@ -17,10 +17,10 @@ All notable changes to Tico are recorded here. The format follows
 - A Docker runner whose updater sidecar is stopped no longer holds new work for an update it cannot start. It
   used to stop claiming while any turn ran, so a person's message waited until every running turn on that
   computer finished. It now reports the update as failed ("the updater did not answer") and keeps claiming.
-- On an isolated Docker runner, checkout proofs an older runner left in `tasks/.checkout-state` as the supervisor
-  are handed to the bot user on every heartbeat, so `hub task worktree setup` no longer fails with "Worktree
-  initialization marker cannot be read". Modes and contents stay; a symlink or hard link in the folder changes
-  nothing outside it.
+- On an isolated Docker runner, checkout proofs and per-task locks an older runner left in `tasks/.checkout-state`
+  and `tasks/.locks` as the supervisor are handed to the bot user on every heartbeat, so `hub task worktree add`
+  and `setup` no longer fail on them (for example "Worktree initialization marker cannot be read"). Files, modes
+  and contents stay, a held lock stays held, and a symlink or hard link in either folder changes nothing outside it.
 
 ### Changed
 - Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,

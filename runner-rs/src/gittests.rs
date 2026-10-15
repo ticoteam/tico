@@ -226,7 +226,7 @@ async fn isolated_existing_checkout_proofs_go_to_the_bot_and_links_in_their_fold
     assert!(!crate::gitrun::run_as_bot(&cat(&marker), &env, None, 10).await.unwrap().ok(), "the 0.3.46 layout the bot could not read");
 
     // A heartbeat's worktree pass, before any link is read.
-    worktrees::adopt_checkout_state(&tmp.0);
+    worktrees::adopt_task_states(&tmp.0);
     assert_eq!(owner_mode(&folder), (10003, 0o700));
     assert_eq!(owner_mode(&marker), (10003, 0o600));
     assert_eq!(std::fs::read(&marker).unwrap(), bytes, "ownership changes, the proof does not");
@@ -252,6 +252,66 @@ async fn isolated_existing_checkout_proofs_go_to_the_bot_and_links_in_their_fold
     worktrees::write_marker(&tmp.0, &proof).unwrap();
     assert_eq!(owner_mode(&folder), (10003, 0o700));
     assert_eq!(owner_mode(&other), (10003, 0o600));
+    assert_eq!(owner_mode(&private), (0, 0o600));
+}
+
+// Tico Team 0.3.46 leftovers: per-task locks (tasks/.locks/<sha[:2]>) made as ticorun, 644 in a 755 folder,
+// which the bot's `hub worktree` could not open. The same inodes go to the bot, a held lock stays held.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a disposable Linux two-user environment"]
+async fn isolated_existing_task_locks_go_to_the_bot_without_replacing_inodes_or_following_links() {
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let folder = tmp.0.join("tasks/.locks");
+    std::fs::create_dir_all(&folder).unwrap();
+    seed_owner(&tmp.0.join("tasks"), 10002, 0o755);
+    let lock_for = |task: &str| folder.join(&crate::gitrun::sha256_hex(task.as_bytes())[..2]);
+    let (held, idle) = (lock_for("held-task"), lock_for("idle-task"));
+    assert_ne!(held, idle);
+    for lock in [&held, &idle] {
+        std::fs::write(lock, "").unwrap();
+        seed_owner(lock, 10002, 0o644);
+    }
+    seed_owner(&folder, 10002, 0o755);
+    let private = tmp.0.join("runner.json");
+    std::fs::write(&private, "private fixture").unwrap();
+    seed_owner(&private, 0, 0o600);
+    std::fs::hard_link(&private, folder.join("zz-alias")).unwrap();
+    let linked = tmp.0.join("supervisor-dir");
+    std::fs::create_dir(&linked).unwrap();
+    seed_owner(&linked, 0, 0o700);
+    std::os::unix::fs::symlink(&linked, folder.join("zz-escape")).unwrap();
+    let open = |lock: &Path| vec!["/bin/sh".to_string(), "-c".into(), format!("exec 9>>{} && flock -n 9", lock.display())];
+    assert!(!crate::gitrun::run_as_bot(&open(&idle), &env, None, 10).await.unwrap().ok(), "the 0.3.46 layout the bot could not open");
+    let inodes = (held.metadata().unwrap().ino(), idle.metadata().unwrap().ino());
+
+    // The supervisor holds one task's lock while a heartbeat adopts the folder.
+    let guard = worktrees::locked(&tmp.0, "held-task").await.unwrap();
+    worktrees::adopt_task_states(&tmp.0);
+    assert_eq!((held.metadata().unwrap().ino(), idle.metadata().unwrap().ino()), inodes, "no lock inode is replaced");
+    for lock in [&held, &idle] {
+        assert_eq!(owner_mode(lock), (10003, 0o644), "{lock:?}");
+    }
+    assert_eq!(owner_mode(&folder), (10003, 0o755));
+    assert!(!crate::gitrun::run_as_bot(&open(&held), &env, None, 10).await.unwrap().ok(), "a held lock stays held for the bot");
+    assert!(crate::gitrun::run_as_bot(&open(&idle), &env, None, 10).await.unwrap().ok(), "the bot opens and takes an idle lock");
+    drop(guard);
+    assert!(crate::gitrun::run_as_bot(&open(&held), &env, None, 10).await.unwrap().ok());
+    assert_eq!(owner_mode(&private), (0, 0o600), "a foreign hard link in the folder grants nothing");
+    assert_eq!(owner_mode(&linked), (0, 0o700), "a symlink in the folder is never followed");
+
+    // Taking a lock adopts the folder too, not only the lock it opens.
+    let other = lock_for("other-task");
+    std::fs::write(&other, "").unwrap();
+    seed_owner(&other, 10002, 0o644);
+    seed_owner(&folder, 10002, 0o755);
+    drop(worktrees::locked(&tmp.0, "held-task").await.unwrap());
+    assert_eq!(owner_mode(&folder), (10003, 0o755));
+    assert_eq!(owner_mode(&other), (10003, 0o644));
     assert_eq!(owner_mode(&private), (0, 0o600));
 }
 
