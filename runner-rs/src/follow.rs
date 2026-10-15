@@ -24,9 +24,6 @@ const STATUS_FILE: &str = "update-status.json";
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
 const DRAIN_S: u64 = 20 * 60;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
-/// A Docker updater that says pulling or restarting this long has stopped without an outcome: its status has no time
-/// of its own, so the runner counts from when it first saw it. Longer than STALE_UPDATING_S: an image pull is slow.
-const DOCKER_STALE_UPDATING: Duration = Duration::from_secs(30 * 60);
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
 const PREPARE_RETRY: Duration = Duration::from_secs(3600);
@@ -294,8 +291,6 @@ struct Inner {
     prepare_after: Option<Instant>,
     /// The checkout moved to newer runner code: exit once no turn runs, never draining for it (service.py restart_due).
     restart_due: bool,
-    /// Since when the Docker updater has said pulling or restarting for this release (DOCKER_STALE_UPDATING).
-    updater_busy: Option<(String, Instant)>,
 }
 
 pub struct Follower {
@@ -400,28 +395,13 @@ impl Follower {
                 Err(code) => return Some(("failed".into(), format!("the updater answered {code}"))),
             };
             let to = text_of(&status["to"]);
-            let state = status["state"].as_str().unwrap_or_default();
-            let busy = to.trim_start_matches('v') == want && matches!(state, "pulling" | "restarting");
-            let busy_since = {
-                let mut s = self.inner.lock().unwrap();
-                if !busy {
-                    s.updater_busy = None;
-                } else if s.updater_busy.as_ref().is_none_or(|(w, _)| w != want) {
-                    s.updater_busy = Some((want.to_string(), Instant::now()));
-                }
-                s.updater_busy.as_ref().map(|(_, at)| *at)
-            };
             if to.trim_start_matches('v') != want {
                 return None;
             }
-            return match state {
+            return match status["state"].as_str().unwrap_or_default() {
                 s @ ("rolled_back" | "failed") => {
                     let error = text_of(&status["message"]);
                     (!self.space_freed(&status, &error)).then(|| (s.into(), disk_error_message(&error)))
-                }
-                // Stuck there, it would hold new work forever: report it, so Health shows the error, and claim again.
-                "pulling" | "restarting" if busy_since.is_some_and(|at| at.elapsed() >= DOCKER_STALE_UPDATING) => {
-                    Some(("failed".into(), format!("the update stopped without an outcome (the updater has said {state} for over 30 minutes)")))
                 }
                 "pulling" | "restarting" => Some(("updating".into(), String::new())),
                 // The image came up but does not say it is `want`: never loop on pulling it again.
@@ -780,62 +760,6 @@ mod tests {
         assert_eq!(body["update"], json!({"state": "failed", "target": "0.3.47", "error": "the updater did not answer"}));
         assert!(!f.blocks_claims(true).await); // past the drain time, a turn running: still claims
         assert!(!f.blocks_claims(false).await); // idle: claims rather than launching an update nobody can run
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[tokio::test]
-    async fn a_docker_updater_stuck_pulling_stops_holding_work() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        // An updater that always answers it is pulling 0.3.47.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut sock, _)) = listener.accept().await else { return };
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                let body = r#"{"state":"pulling","from":"0.3.46","to":"0.3.47","message":""}"#;
-                let reply = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
-                let _ = sock.write_all(reply.as_bytes()).await;
-            }
-        });
-        let f = Follower {
-            directory: dir.clone(),
-            root: dir.clone(),
-            kind: "docker",
-            release: "0.3.46".into(),
-            started: String::new(),
-            commit: String::new(),
-            pinned: false,
-            self_update: true,
-            prepare: vec!["true".into()],
-            sidecar: Sidecar { url, token_file: dir.join("t") },
-            inner: Mutex::new(Inner { state: "waiting".into(), desired: Some("0.3.47".into()), ..Default::default() }),
-        };
-        f.decide().await;
-        assert_eq!(f.inner.lock().unwrap().state, "updating");
-        assert!(f.blocks_claims(false).await); // a fresh pull holds new work
-        f.decide().await;
-        assert_eq!(f.inner.lock().unwrap().state, "updating", "still within the limit");
-
-        // Seen pulling for longer than the limit: failed with a reason, and new work is claimed again.
-        let long_ago = Instant::now().checked_sub(DOCKER_STALE_UPDATING + Duration::from_secs(1)).unwrap();
-        f.inner.lock().unwrap().updater_busy.as_mut().unwrap().1 = long_ago;
-        f.decide().await;
-        let mut body = json!({});
-        f.fields(&mut body);
-        assert_eq!(body["update"]["state"], "failed");
-        assert!(body["update"]["error"].as_str().unwrap().starts_with("the update stopped without an outcome"));
-        assert!(!f.blocks_claims(true).await);
-        assert!(!f.blocks_claims(false).await);
-
-        // A pull for another release starts its own clock.
-        f.inner.lock().unwrap().desired = Some("0.3.48".into());
-        f.inner.lock().unwrap().updater_busy = Some(("0.3.47".into(), long_ago));
-        f.decide().await;
-        assert!(f.inner.lock().unwrap().updater_busy.is_none(), "the updater is not pulling 0.3.48");
         let _ = std::fs::remove_dir_all(dir);
     }
 

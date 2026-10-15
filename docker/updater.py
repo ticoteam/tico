@@ -71,6 +71,8 @@ STATUS_FILE = ".updater-status.json"   # the outcome survives the updater being 
 PREVIOUS = ".bundle-previous"
 NEVER_TOUCH = {".env"}
 MAX_BUNDLE = 20 * 1024 * 1024
+# A docker inspect, ps or tag answers in seconds; one a stalled daemon holds must not keep an update running.
+INSPECT_SECONDS = 60
 VERSION = re.compile(r"latest|v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?")
 
 lock = threading.Lock()
@@ -129,8 +131,11 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
     override = os.path.join(PROJECT, OVERRIDE_FILE)
     if COMPOSE_FILE and os.path.exists(override):   # the installer's own additions (--server-network); an update keeps them
         files += ["-f", override]
-    result = subprocess.run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
-                            capture_output=True, text=True, timeout=timeout)
+    try:
+        result = subprocess.run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
+                                capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:   # run() has killed and reaped it: it cannot switch anything later
+        raise RuntimeError("docker compose %s did not finish within %d seconds" % (args[0], timeout))
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
         raise RuntimeError(lines[-1] if lines else "docker compose failed")
@@ -139,9 +144,9 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
 
 def running_image():
     """(image id, tag) of the running service, so a failed update can put exactly that back."""
-    container = compose("ps", "-q", SERVICE).split()[0]
+    container = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()[0]
     out = subprocess.run(["docker", "inspect", "--format", "{{.Image}} {{.Config.Image}}", container],
-                         capture_output=True, text=True, check=True).stdout.split()
+                         capture_output=True, text=True, check=True, timeout=INSPECT_SECONDS).stdout.split()
     return out[0], image_tag(out[1])
 
 
@@ -209,9 +214,9 @@ def container_healthy(seconds):
     deadline = time.time() + seconds
     while time.time() < deadline:
         try:
-            container = compose("ps", "-q", SERVICE).split()
+            container = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
             state = subprocess.run(["docker", "inspect", "--format", "{{.State.Health.Status}}", container[0]],
-                                   capture_output=True, text=True).stdout.strip() if container else ""
+                                   capture_output=True, text=True, timeout=INSPECT_SECONDS).stdout.strip() if container else ""
             if state == "healthy":
                 return True
             if state == "unhealthy":   # past its start period and failing: waiting out the window changes nothing
@@ -612,7 +617,10 @@ def replace_self():
         print("tico-updater: the new updater did not stay up", flush=True)
     except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         print("tico-updater: replacing the updater failed: %s" % exc, flush=True)
-    subprocess.run(["docker", "tag", old_id, old_ref], check=False)
+    try:
+        subprocess.run(["docker", "tag", old_id, old_ref], check=False, timeout=INSPECT_SECONDS)
+    except subprocess.SubprocessError as exc:
+        print("tico-updater: could not tag the old updater back: %s" % exc, flush=True)
     try:
         compose(*up, extra_env={"TICO_UPDATER_TAG": image_tag(old_ref)})
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
@@ -659,12 +667,20 @@ def prune_images(keep, keep_ids=()):
 
 def update(version, running=""):
     """`running` is the release the server reported it was running when the update was asked for: what "from" says.
-    The image tag only says what to put back if this fails, and can be `latest`."""
+    The image tag only says what to put back if this fails, and can be `latest`.
+
+    A runner holds new work while this says pulling or restarting, so it must always end, and say how only once it
+    can change nothing more: every docker call has a time limit (run() kills and reaps one that runs over), an
+    overrun goes through the same rollback as a failure, and the outcome is set after the last call."""
     staging = None
     bundled = False
     snapshot, switched = "", False
     try:
-        image_id, previous = running_image()
+        try:
+            image_id, previous = running_image()
+        except (RuntimeError, OSError, IndexError, subprocess.SubprocessError) as exc:
+            set_status(state="failed", to=version, message="Not updated: could not read the running %s (%s)." % (SERVICE, exc))
+            return
         if not release_name(previous) and release_name(running):
             previous = release_name(running)   # an untagged or `latest` image: the server knows which release it is
         set_status(state="pulling", **{"from": release_name(running) or previous, "to": version}, message="", snapshot="", restored=False)
@@ -708,11 +724,11 @@ def update(version, running=""):
             if not healthy(HEALTH_SECONDS):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
             check_switched(version, target)
-        except RuntimeError as exc:
+        except (RuntimeError, subprocess.SubprocessError) as exc:
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
-            subprocess.run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False)
             restored = ""
             try:
+                subprocess.run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False, timeout=INSPECT_SECONDS)
                 if bundled:
                     restore_bundle()
                 if switched and snapshot:
@@ -726,7 +742,7 @@ def update(version, running=""):
                     print("tico-updater: rollback:" + restored, flush=True)
                 compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
                 back = healthy(HEALTH_SECONDS)
-            except (RuntimeError, OSError):
+            except (RuntimeError, OSError, subprocess.SubprocessError):
                 back = False
             set_status(state="rolled_back" if back else "failed",
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)

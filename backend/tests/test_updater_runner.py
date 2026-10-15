@@ -101,3 +101,69 @@ def test_a_downgrade_is_refused_and_an_upgrade_accepted(monkeypatch, tmp_path):
     assert updater.older_than_running("v0.0.9") and updater.older_than_running("v0.0.99")
     assert not any(updater.older_than_running(v) for v in ("v0.1.0", "v0.1.1", "v1.0.0", "latest"))
 
+
+
+class Daemon:
+    """`docker` for the whole update, the runner's own checks included: every call must carry a time limit, and
+    `hang` names the call that runs over it. Records the status each call was made under."""
+
+    def __init__(self, module, monkeypatch, hang):
+        import subprocess
+        self.module, self.hang, self.calls, self.expired = module, hang, [], subprocess.TimeoutExpired
+        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "pinned_services", lambda version: [])
+        monkeypatch.setattr(module, "POLL_SECONDS", 0)
+
+    def run(self, argv, env=None, timeout=None, **kw):
+        assert timeout, argv                                        # nothing the worker runs may hang it
+        tag = (env or {}).get("TICO_TAG")
+        self.calls.append((argv, tag, self.module.status["state"]))
+        if self.hang(argv, tag):
+            raise self.expired(argv, timeout)
+        out = ""
+        if "ps" in argv:
+            out = "c1\n"
+        elif argv[:2] == ["docker", "inspect"] and "{{.State.Health.Status}}" in argv:
+            out = "healthy\n"
+        elif argv[:2] == ["docker", "inspect"]:
+            out = "sha256:old ghcr.io/ticoteam/tico-runner:v0.1.0\n"
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+
+def test_a_switch_that_runs_over_is_rolled_back_before_the_update_says_how_it_ended(monkeypatch, tmp_path):
+    """The runner holds new work while the update says pulling or restarting: the outcome must come after the last
+    call that could restart the runner, the rollback's included."""
+    updater = load(monkeypatch, "runner", tmp_path)
+    docker = Daemon(updater, monkeypatch, lambda argv, tag: "up" in argv and tag == "v0.2.0")
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back", updater.status
+    assert "did not finish within" in updater.status["message"] and "Went back to v0.1.0" in updater.status["message"]
+    ups = [i for i, (argv, _, _) in enumerate(docker.calls) if "up" in argv]
+    assert [docker.calls[i][1] for i in ups] == ["v0.2.0", "v0.1.0"]
+    assert ups[-1] < max(i for i, (argv, _, _) in enumerate(docker.calls) if "{{.State.Health.Status}}" in argv)
+    assert {state for _, _, state in docker.calls} <= {"idle", "pulling", "restarting"}   # nothing said until then
+
+
+def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "runner", tmp_path)
+    docker = Daemon(updater, monkeypatch, lambda argv, tag: argv[:2] == ["docker", "inspect"])
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "failed" and updater.status["to"] == "v0.2.0"
+    assert updater.status["message"].startswith("Not updated: could not read the running runner")
+    assert not [argv for argv, _, _ in docker.calls if "pull" in argv or "up" in argv]
+
+
+def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeypatch, tmp_path):
+    import time
+    import pytest
+    updater = load(monkeypatch, "runner", tmp_path)
+    marker = tmp_path / "switched"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "docker").write_text(f"#!/bin/sh\nsleep 0.5\ntouch {marker}\n")
+    (bin_dir / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    with pytest.raises(RuntimeError, match="did not finish within"):
+        updater.compose("up", "-d", "runner", timeout=0.1)
+    time.sleep(0.8)
+    assert not marker.exists()

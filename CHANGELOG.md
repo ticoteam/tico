@@ -8,9 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
-- A Docker runner whose updater keeps saying it is pulling or restarting no longer holds new work for ever: after
-  30 minutes the runner reports the update failed ("the update stopped without an outcome"), shows it under Settings >
-  Health, and takes work again.
+- A Docker runner's updater can no longer leave the runner holding new work for ever. Each Docker command it
+  runs has a time limit and is stopped when it runs over; a switch that runs over is rolled back like any failed
+  update, and the updater reports the outcome only after its last command, so the runner takes work again only once
+  nothing can restart it. A runner whose image cannot be read is reported "Not updated" instead.
 - A message bot reads only its person's mailbox unless its `gmail` entry sets `org_read: true`, as the mail manual
   says. Being a person's `inbox_bot` used to add the mailboxes of everyone below that person too: in the mailboxes
   its runs could ask the runner for a token for, in the routine's and bot page's mail sources, and in the mail
