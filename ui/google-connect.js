@@ -32,6 +32,7 @@ window.mountGoogleConnect = async function (host) {
   } else {
     const failed = state.status === 'failed' ? `<p role="alert"><strong>${text(state.message)}</strong></p><p class="muted">${text(state.hint)}</p>` : '';
     body = `${failed}<p>Connect ${box} so your message bot can read your inbox and calendar. You sign in to Google and approve; no administrator or setup is needed.</p>
+      <p class="muted">If Google says it hasn't verified this app, this Tico server uses its own private Google app. Continue with Advanced only if you trust whoever runs this server.</p>
       <div class="row"><button type="button" class="primary" data-google-connect>Connect Google</button></div>`;
   }
   host.innerHTML = body + (state.configured ? reads : '') + '<p role="status" data-google-status></p>';

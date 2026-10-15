@@ -484,13 +484,27 @@ same way the key does. No token reaches a bot's environment, a log or a report: 
 hour-long token for one mailbox the server named for it, and nothing else. A computer can hold both a key and grants:
 mailboxes without a connected account still use the service account, if there is one.
 
-Tico's Google app, testing and verification. While Tico's app is in Google's **Testing** state, only accounts on its
-test-user list (100 at most) can connect, and Google ends each grant after 7 days: the sync then stops and Settings >
-Health says to reconnect. That is enough to try Connect Google, not for lasting background sync. Lasting grants need
-the app **In production** and verified by Google; `gmail.readonly` is a restricted scope, so that verification includes
-Google's yearly security assessment. Tico, not the team, does this. Until it is done, an account that is not a test
-user sees Google's "This app is blocked" or "hasn't been verified" page. An **Internal** app would avoid verification
-only for accounts in the Workspace that owns it, so it is not a way to connect other companies' mailboxes.
+Tico's Google app, testing and verification. Each Tico server names its own OAuth client, so there are two honest
+ways to supply it:
+- **A private app for one server** (for example one person's own mailbox). A Google Cloud project used by that server
+  alone, by fewer than 100 people its operator knows, is a personal-use app, which Google lists as exempt from
+  verification (support.google.com/cloud/answer/13464323). Publish it **In production** without submitting it for
+  verification. Each person then sees Google's "Google hasn't verified this app" screen before consent and continues
+  with **Advanced**. The project can never have more than 100 users in total, and Google's API Services User Data
+  Policy still applies. Name it honestly as private to that server, never as Tico's public app, and don't share one
+  such client across servers to stay under the cap. Google's 7-day limit applies to apps in **Testing**, so an app in
+  production should keep its grants; check that on the real project by seeing a sync still work after the eighth day.
+- **Tico's public app** for every team. Lasting grants for anyone need it **In production** and verified by Google.
+  `gmail.readonly` is a restricted scope, so verification includes Google's yearly security assessment. Until then an
+  app in **Testing** takes at most 100 listed test users, and Google ends each grant after 7 days. That is enough to
+  try Connect Google, not for lasting sync.
+
+Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
+Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
+app avoids verification only for accounts in the Workspace that owns the project.
+
+Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
+use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
 
 For the Tico server's operator: Connect Google needs Tico's OAuth client on the server (`TICO_GOOGLE_OAUTH_CLIENT_ID`,
 `TICO_GOOGLE_OAUTH_CLIENT_SECRET`, a Web application client whose redirect URI is
