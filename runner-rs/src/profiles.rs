@@ -178,17 +178,20 @@ pub fn create(root: &Path, name: &str, share_operator: bool) -> Result<Value, St
     std::fs::create_dir_all(parent).map_err(err)?;
     let root = std::fs::canonicalize(parent).map_err(err)?.join(root.file_name().ok_or("no profiles folder name")?);
     let directory = |path: &Path, mode: u32| -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
         match std::fs::DirBuilder::new().mode(mode).create(path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e.to_string()),
         }
-        let meta = std::fs::symlink_metadata(path).map_err(err)?;
-        if !meta.is_dir() {
-            return Err("Subscription profile paths must not be symbolic links".into());
-        }
-        if meta.permissions().mode() & 0o7777 != mode {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(err)?;
+        // The opened directory, never a link put in its place, and only the supervisor's own: a home already
+        // handed to the bot user keeps the mode its CLI gave it.
+        let folder = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY).open(path)
+            .map_err(|_| "Subscription profile paths must not be symbolic links".to_string())?;
+        let meta = folder.metadata().map_err(err)?;
+        // SAFETY: geteuid has no preconditions.
+        if meta.uid() == unsafe { libc::geteuid() } && meta.permissions().mode() & 0o7777 != mode {
+            folder.set_permissions(std::fs::Permissions::from_mode(mode)).map_err(err)?;
         }
         Ok(())
     };
@@ -208,7 +211,8 @@ pub fn create(root: &Path, name: &str, share_operator: bool) -> Result<Value, St
     };
     directory(&root, 0o711)?;
     let folder = root.join(name);
-    directory(&folder, 0o700)?;
+    let isolated = !share_operator && crate::isolation::enabled();
+    directory(&folder, if isolated { 0o711 } else { 0o700 })?;
     let meta = serde_json::to_string_pretty(&json!({"name": name, "share_operator": share_operator})).unwrap();
     write_new(&folder.join("profile.json"), meta.as_bytes())?;
     if !share_operator {
@@ -226,7 +230,54 @@ pub fn create(root: &Path, name: &str, share_operator: bool) -> Result<Value, St
             }
         }
     }
+    if isolated {
+        hand_over(&folder)?;
+    }
     Ok(json!({"dir": folder.display().to_string(), "share_operator": share_operator}))
+}
+
+/// Under runner isolation a profile's sign-in, its verdict and every turn on it run as the bot user, so each
+/// runtime home is the bot user's. The profile folder stays the supervisor's and only traversable (0711): the
+/// bot can neither read profile.json nor put a link in place of a home. Repairs a profile made before this
+/// (folder 0700, homes the supervisor's). A no-op without isolation or for a profile on the operator's logins.
+pub fn hand_to_bot(profile: &Profile) -> Result<(), String> {
+    if profile.share_operator || !crate::isolation::enabled() {
+        return Ok(());
+    }
+    hand_over(&profile.directory)
+}
+
+fn hand_over(folder: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let Some((uid, _)) = crate::isolation::identity() else { return Ok(()) };
+    crate::isolation::keep_supervisor_directory(folder, 0o711).map_err(|e| format!("Subscription profile folder: {e}"))?;
+    let homes: Vec<PathBuf> = crate::harness_tools::profile_runtimes().iter().map(|r| folder.join(r)).collect();
+    for home in &homes {
+        // A runtime added after the profile was made: the bot user cannot make its home in the folder itself.
+        match std::fs::DirBuilder::new().mode(0o700).create(home) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e.to_string()),
+            _ => {}
+        }
+    }
+    // Pinned, link-free and leaving foreign hardlinks alone (isolation::adopt).
+    crate::isolation::adopt(&homes);
+    for home in &homes {
+        match std::fs::symlink_metadata(home) {
+            Ok(meta) if meta.is_dir() && meta.uid() == uid => {}
+            _ => return Err(format!("{} is not a folder the bot user owns; subscription profile homes must not be symbolic links", home.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Every profile runner.json names.
+pub fn configured(config: &Map<String, Value>) -> Vec<Profile> {
+    let Some(entries) = config.get("profiles").and_then(|p| p.as_object()) else { return vec![] };
+    entries
+        .iter()
+        .filter(|(name, entry)| valid_name(name) && entry.is_object() && truthy(entry.get("dir")))
+        .map(|(name, entry)| Profile::new(name, &text_of(&entry["dir"]), truthy(entry.get("share_operator"))))
+        .collect()
 }
 
 /// Persist a UI-made profile (service.py add_profile): created under `<config dir>/profiles`, added to
@@ -396,7 +447,8 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                         "command" | "json" => {
                             if let (Some(exe), false) = (exe, budget.is_zero()) {
                                 let env = profile.environment(runtime, &clean);
-                                let mut cmd = tokio::process::Command::new(exe);
+                                // As the bot user, like readiness and turns: the CLI may write in the profile's home.
+                                let mut cmd = crate::isolation::command(exe);
                                 cmd.args(&status.args).env_clear().envs(&env).stdin(std::process::Stdio::null()).kill_on_drop(true);
                                 if let Ok(Ok(out)) = tokio::time::timeout(budget.min(Duration::from_secs(3)), cmd.output()).await {
                                     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).to_lowercase();
@@ -534,6 +586,165 @@ mod tests {
         assert_eq!(stored.data["bot_profiles"]["sales"], "acme");
         assert_eq!(stored.data["keep"], 1);
         assert!(create(&dir.join("profiles"), "Bad Name", false).is_err());
+        let names: Vec<String> = configured(&stored.data).into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["acme"]);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_supervisor_folder_is_pinned_and_never_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tico-profile-folder-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("acme")).unwrap();
+        std::fs::set_permissions(dir.join("acme"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::isolation::keep_supervisor_directory(&dir.join("acme"), 0o711).unwrap();
+        assert_eq!(std::fs::metadata(dir.join("acme")).unwrap().permissions().mode() & 0o7777, 0o711);
+        std::fs::create_dir(dir.join("elsewhere")).unwrap();
+        std::fs::set_permissions(dir.join("elsewhere"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(dir.join("elsewhere"), dir.join("link")).unwrap();
+        assert!(crate::isolation::keep_supervisor_directory(&dir.join("link"), 0o711).is_err());
+        std::os::unix::fs::symlink(&dir, dir.join("acme/up")).unwrap();
+        assert!(crate::isolation::keep_supervisor_directory(&dir.join("acme/up/elsewhere"), 0o711).is_err(), "no link on the way");
+        assert_eq!(std::fs::metadata(dir.join("elsewhere")).unwrap().permissions().mode() & 0o7777, 0o700);
+        // Without isolation a profile stays the operator's alone and handing it over changes nothing.
+        let created = create(&dir.join("profiles"), "solo", false).unwrap();
+        let folder = PathBuf::from(text_of(&created["dir"]));
+        assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o7777, 0o700);
+        hand_to_bot(&Profile::new("solo", &folder.display().to_string(), false)).unwrap();
+        assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o7777, 0o700);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Root plays the supervisor, `TICO_RUNNER_BOT_UID=10003 TICO_RUNNER_BOT_GID=10002` the bot user.
+    #[cfg(target_os = "linux")]
+    struct Disposable(PathBuf);
+    #[cfg(target_os = "linux")]
+    impl Disposable {
+        fn new() -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(unsafe { libc::geteuid() }, 0, "disposable supervisor fixture");
+            assert!(std::env::var_os("TICO_TEST_DISPOSABLE").is_some());
+            assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+            let path = std::env::temp_dir().join(format!("tico-profile-contract-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self(path)
+        }
+    }
+    #[cfg(target_os = "linux")]
+    impl Drop for Disposable {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    /// (uid, mode) of `path`, not following a link.
+    #[cfg(target_os = "linux")]
+    fn owner(path: &Path) -> (u32, u32) {
+        use std::os::unix::fs::MetadataExt;
+        let m = std::fs::symlink_metadata(path).unwrap();
+        (m.uid(), m.mode() & 0o7777)
+    }
+
+    /// What a sign-in and its verdict do in `runtime`'s profile home, as the bot user and with the profile's
+    /// environment (login::model_command): write there, and fail to read `private`.
+    #[cfg(target_os = "linux")]
+    fn bot_uses_home(profile: &Profile, runtime: &str, private: &Path) -> bool {
+        let var = home_var(runtime).unwrap();
+        let out = crate::isolation::std_command("/bin/sh")
+            .args(["-c", &format!("id -u >\"${var}/probe\" && test \"$(cat \"${var}/probe\")\" = 10003 && ! cat \"$1\" 2>/dev/null"), "sh"])
+            .arg(private)
+            .env_clear()
+            .envs(profile.environment(runtime, &[("PATH".to_string(), "/usr/bin:/bin".to_string())].into_iter().collect()))
+            .output()
+            .unwrap();
+        out.status.success()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    fn isolated_a_new_profile_signs_in_as_the_bot_user() {
+        let f = Disposable::new();
+        let entry = create(&f.0.join("profiles"), "chris-chatgpt", false).unwrap();
+        let folder = PathBuf::from(text_of(&entry["dir"]));
+        assert_eq!(owner(&folder), (0, 0o711), "the folder stays the supervisor's, traversable only");
+        assert_eq!(owner(&folder.join("profile.json")), (0, 0o600));
+        for runtime in crate::harness_tools::profile_runtimes() {
+            assert_eq!(owner(&folder.join(&runtime)), (10003, 0o700), "{runtime} home");
+        }
+        assert_eq!(owner(&folder.join("claude/.claude")), (10003, 0o700));
+        let profile = Profile::new("chris-chatgpt", &folder.display().to_string(), false);
+        for runtime in ["codex", "claude"] {
+            assert!(bot_uses_home(&profile, runtime, &folder.join("profile.json")), "{runtime}");
+        }
+        // Making it again (a retried sign-in) keeps what the bot user owns and its modes.
+        create(&f.0.join("profiles"), "chris-chatgpt", false).unwrap();
+        assert_eq!(owner(&folder.join("codex/probe")).0, 10003);
+        assert_eq!(owner(&folder), (0, 0o711));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    fn isolated_a_profile_made_before_is_repaired_with_its_bytes_and_modes() {
+        use std::os::unix::fs::{chown, PermissionsExt};
+        let f = Disposable::new();
+        let set = |p: &Path, mode: u32| std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+        for (name, folder_uid) in [("before", 0), ("hand-repaired", 10003)] {
+            let folder = f.0.join("profiles").join(name);
+            std::fs::create_dir_all(folder.join("codex")).unwrap();
+            std::fs::create_dir_all(folder.join("claude/.claude")).unwrap();
+            std::fs::write(folder.join("profile.json"), "{}").unwrap();
+            std::fs::write(folder.join("codex/config.toml"), "model = 'x'\n").unwrap();
+            for p in ["", "codex", "claude", "claude/.claude"] { set(&folder.join(p), 0o700); }
+            set(&folder.join("profile.json"), 0o600);
+            set(&folder.join("codex/config.toml"), 0o640);
+            chown(&folder, Some(folder_uid), Some(10002)).unwrap();
+            let profile = Profile::new(name, &folder.display().to_string(), false);
+            assert!(!bot_uses_home(&profile, "codex", &folder.join("profile.json")), "{name}: the reported Permission denied");
+            hand_to_bot(&profile).unwrap();
+            assert_eq!(owner(&folder), (0, 0o711), "{name}");
+            assert_eq!(owner(&folder.join("codex")), (10003, 0o700));
+            assert_eq!(owner(&folder.join("codex/config.toml")), (10003, 0o640));
+            assert_eq!(std::fs::read(folder.join("codex/config.toml")).unwrap(), b"model = 'x'\n");
+            assert_eq!(owner(&folder.join("claude/.claude")), (10003, 0o700));
+            assert!(bot_uses_home(&profile, "codex", &folder.join("profile.json")), "{name}");
+            assert!(bot_uses_home(&profile, "claude", &folder.join("profile.json")), "{name}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    fn isolated_hand_over_follows_no_link_and_no_foreign_alias() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = Disposable::new();
+        let private = f.0.join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(private.join("runner.json"), "supervisor fixture").unwrap();
+        std::fs::set_permissions(private.join("runner.json"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let entry = create(&f.0.join("profiles"), "acme", false).unwrap();
+        let folder = PathBuf::from(text_of(&entry["dir"]));
+        let profile = Profile::new("acme", &folder.display().to_string(), false);
+        // A home replaced by a link to the supervisor's files.
+        std::fs::remove_dir_all(folder.join("codex")).unwrap();
+        std::os::unix::fs::symlink(&private, folder.join("codex")).unwrap();
+        assert!(hand_to_bot(&profile).is_err());
+        assert!(create(&f.0.join("profiles"), "acme", false).is_err());
+        assert_eq!(owner(&private), (0, 0o700));
+        assert_eq!(owner(&private.join("runner.json")), (0, 0o600));
+        // A hardlink to a supervisor file inside a home stays the supervisor's.
+        std::fs::remove_file(folder.join("codex")).unwrap();
+        std::fs::create_dir(folder.join("codex")).unwrap();
+        std::fs::hard_link(private.join("runner.json"), folder.join("claude/alias")).unwrap();
+        hand_to_bot(&profile).unwrap();
+        assert_eq!(owner(&private.join("runner.json")), (0, 0o600));
+        assert_eq!(owner(&folder.join("codex")).0, 10003);
+        // The profile folder itself replaced by a link.
+        let moved = f.0.join("moved");
+        std::fs::rename(&folder, &moved).unwrap();
+        std::os::unix::fs::symlink(&private, &folder).unwrap();
+        assert!(hand_to_bot(&profile).is_err());
+        assert_eq!(owner(&private), (0, 0o700));
     }
 }

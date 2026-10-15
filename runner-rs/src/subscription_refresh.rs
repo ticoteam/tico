@@ -97,7 +97,8 @@ pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBo
     if cancelled.load(Ordering::SeqCst) {
         return json!({"state": "failed"});
     }
-    let mut cmd = tokio::process::Command::new(exe);
+    // The bot user's, like the profile's sign-in and turns: app-server writes in CODEX_HOME.
+    let mut cmd = crate::isolation::command(exe);
     cmd.arg("app-server").env_clear().envs(&env).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     let Ok(mut child) = cmd.spawn() else { return json!({"state": "failed"}) };
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else { return json!({"state": "failed"}) };

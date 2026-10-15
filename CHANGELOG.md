@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Signing a new named subscription in on a Docker Computer works. The profile's folders were the supervisor's
+  (0700), but the sign-in runs as the separate bot user, so Codex stopped at once with "failed to read CODEX_HOME:
+  Permission denied" before showing a link, on the first try and every retry. Each runtime's home in a profile now
+  belongs to the bot user; the profile folder stays the supervisor's, traversable only (0711), so `profile.json`
+  stays private. A profile made before is repaired when its sign-in starts and when the runner starts, without
+  following a link or taking over a hardlinked file, and keeping each file's bytes and mode.
 - Health no longer reports work held by a computer that is waiting to update as a Tico bug (`queue_idle`). A
   computer due an update stops taking new work after 20 minutes until its running turns finish; Health's Stuck list
   now says so ("Team box is holding new work to update to Tico 0.3.48: it starts once its running turn finishes"),

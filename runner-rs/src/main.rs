@@ -381,6 +381,12 @@ async fn start(command: Command, config: config::Config) -> i32 {
         // Sign-ins a person ran as root (`docker exec`) go to the bot user, who runs the harnesses.
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
         isolation::adopt(&[".codex", ".claude", ".claude.json", ".gemini", ".config"].map(|p| home.join(p)));
+        // Subscription profiles made before their homes were the bot user's, or by `profile add` without isolation.
+        for profile in profiles::configured(&config.data) {
+            if let Err(e) = profiles::hand_to_bot(&profile) {
+                util::log(&format!("Tico runner: subscription profile {}: {e}", profile.name));
+            }
+        }
     }
     mail_key::init(&config); // an inbox bot's turn asks the credential socket for its mailbox's token
     let mut service = runner::Runner::new(config, client.clone(), state);
