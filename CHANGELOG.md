@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- The worktrees manual says a refused cleanup stops: the server asks the computer again at most six times over about
+  two hours, then the link shows `cleanup_gave_up`. It says what a person does next: fix the cause the refusal names
+  (the bot's write access, or the kept files), then remove the link again. It used to read as retrying forever.
 - Health no longer reports work held by a computer that is waiting to update as a Tico bug (`queue_idle`). A
   computer due an update stops taking new work after 20 minutes until its running turns finish; Health's Stuck list
   now says so ("Team box is holding new work to update to Tico 0.3.48: it starts once its running turn finishes"),
