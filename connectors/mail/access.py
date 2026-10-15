@@ -133,34 +133,40 @@ def roster_mailboxes(roster=None):
     return out
 
 
+def _declared_gmail(manifest):
+    """The gmail identities the manifest declares, in order."""
+    out = []
+    for e in entries(manifest):
+        addr = str(e.get("identity") or "").strip().lower()
+        if str(e.get("service", "")).lower() == "gmail" and "@" in addr and addr not in out:
+            out.append(addr)
+    return out
+
+
 def org_mailboxes(slug, manifest=None, roster=None):
     """Mailboxes this employee may read because of the human org tree.
 
-    A person named as `inbox_bot` on the roster, or a gmail entry with `org_read: true`,
-    can read their own mailbox plus everyone who reports to them. Draft and send stay
-    on the declared identity only.
+    Only a gmail entry with `org_read: true` reads its mailbox's person plus everyone who
+    reports to them; being a person's `inbox_bot` alone reads that person's mailbox only
+    (see holdings). Draft and send stay on the declared identity only.
     """
     from backend import people as P
     roster = roster if roster is not None else _roster()
     seen, out = set(), []
-
-    def add(pid):
-        for addr in P.mailboxes_below(pid, roster):
-            if addr not in seen:
-                seen.add(addr)
-                out.append(addr)
-
     who = P.inbox_person(slug, roster)
-    if who:
-        add(who["id"])
     m = manifest if manifest is not None else load(slug)
+    declared = _declared_gmail(m)
     for e in entries(m):
         if str(e.get("service", "")).lower() != "gmail" or e.get("org_read") is not True:
             continue
         addr = str(e.get("identity") or "").strip().lower()
-        person = P.person_by_email(addr, roster)
-        if person:
-            add(person["id"])
+        person = P.person_by_email(addr, roster) or (who if who and declared and addr == declared[0] else None)
+        if not person:
+            continue
+        for box in P.mailboxes_below(person["id"], roster):
+            if box not in seen:
+                seen.add(box)
+                out.append(box)
     return out
 
 
@@ -181,7 +187,12 @@ def holdings(slug, manifest=None, roster=None):
         for v in verbs:
             if v not in out[addr][service]:
                 out[addr][service].append(v)
-    for addr in org_mailboxes(slug, m, roster):
+    from backend import people as P
+    roster = roster if roster is not None else _roster()
+    # An inbox bot that declares no gmail identity reads its person's own mailbox, never the reports'.
+    who = P.inbox_person(slug, roster)
+    own = [str(who.get("email") or "").strip().lower()] if who and not _declared_gmail(m) else []
+    for addr in [a for a in own if "@" in a] + org_mailboxes(slug, m, roster):
         out.setdefault(addr, {}).setdefault("gmail", [])
         if "read" not in out[addr]["gmail"]:
             out[addr]["gmail"].append("read")

@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- A message bot reads only its person's mailbox unless its `gmail` entry sets `org_read: true`, as the mail manual
+  says. Being a person's `inbox_bot` used to add the mailboxes of everyone below that person too: in the mailboxes
+  its runs could ask the runner for a token for, in the routine's and bot page's mail sources, and in the mail
+  command. `org_read: false` or no `org_read` now keeps all three to the one mailbox.
 - Signing a new named subscription in on a Docker Computer works. The profile's folders were the supervisor's
   (0700), but the sign-in runs as the separate bot user, so Codex stopped at once with "failed to read CODEX_HOME:
   Permission denied" before showing a link, on the first try and every retry. Each runtime's home in a profile now

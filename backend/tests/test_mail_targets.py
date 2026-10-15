@@ -15,9 +15,9 @@ from runner.connectors import ConnectorPublisher
 DECLARED = "ana@acme.team"
 
 
-def declare(api, identity):
+def declare(api, identity, **extra):
     """Give the `inbox` bot (Ana's message bot) a gmail tool with this identity, in bot.yaml's shape."""
-    tools = [{"service": "gmail", "identity": identity, "can": ["read", "draft"]}]
+    tools = [{"service": "gmail", "identity": identity, "can": ["read", "draft"], **extra}]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config_json=? WHERE bot='inbox'",
                   (encode({"name": "inbox", "runtime": "fake", "status": "active", "tools": tools}),))
@@ -33,10 +33,33 @@ def test_targets_are_the_message_bots_declared_mailboxes_not_every_person(api):
     boxes = mail_targets(api)
     assert [b["address"] for b in boxes] == [DECLARED]          # Ben, Lena, Mira, Carla and Cara have no message bot
     assert boxes[0]["person_id"] == "ana"
-    # The message bot's token covers the declared mailbox and the people below; nobody else's bot gets any.
+    # The message bot's token covers its declared mailbox only; nobody else's bot gets any.
     with api.app.state.store.read() as c:
-        assert routines.token_mailboxes(c, "inbox") == [
-            DECLARED, "ben@acme.example", "lena@acme.example", "mira@acme.example", "carla@acme.example"]
+        assert routines.token_mailboxes(c, "inbox") == [DECLARED]
+        assert routines.token_mailboxes(c, "coo") == []
+
+
+def test_reports_mail_only_with_org_read_true(api):
+    """Ana has reports on the roster, but her message bot reads only her mailbox until its gmail entry says
+    `org_read: true`: for the runner's mail token and for what the routine and bot pages show."""
+    seed_org(api)
+    reports = ["ben@acme.example", "lena@acme.example", "mira@acme.example", "carla@acme.example"]
+    for setting in ({}, {"org_read": False}, {"org_read": "true"}):
+        declare(api, DECLARED, **setting)
+        with api.app.state.store.read() as c:
+            roster = routines._roster(c)
+            config = {"tools": [{"service": "gmail", "identity": DECLARED, "can": ["read"], **setting}]}
+            assert routines.token_mailboxes(c, "inbox") == [DECLARED], setting
+            assert routines.inbox_of("inbox", config, roster) == {"mailboxes": [DECLARED], "org_read": False}
+    declare(api, DECLARED, org_read=True)
+    with api.app.state.store.read() as c:
+        roster = routines._roster(c)
+        config = {"tools": [{"service": "gmail", "identity": DECLARED, "can": ["read"], "org_read": True}]}
+        assert routines.token_mailboxes(c, "inbox") == [DECLARED] + reports
+        inbox = routines.inbox_of("inbox", config, roster)
+        assert inbox["org_read"] is True and inbox["mailboxes"][0] == DECLARED
+        assert set(reports) <= set(inbox["mailboxes"])
+        # Any other bot still gets none.
         assert routines.token_mailboxes(c, "coo") == []
 
 

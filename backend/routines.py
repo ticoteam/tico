@@ -335,16 +335,33 @@ def person_for_mailbox(address, boxes, roster):
     return (P.person(found["person_id"], roster) if found else None) or P.person_by_email(wanted, roster)
 
 
+def reads_reports(config, address):
+    """Whether the bot's `gmail` entry for `address` sets `org_read: true`, the owner's deliberate choice to read the
+    mail of the people below that mailbox's person. Off unless that entry says so; being an `inbox_bot` is not enough."""
+    address = str(address or "").strip().lower()
+    return bool(address) and any(
+        isinstance(entry, dict) and str(entry.get("service", "")).lower() == "gmail"
+        and str(entry.get("identity") or "").strip().lower() == address and entry.get("org_read") is True
+        for entry in tools_of(config) or [])
+
+
 def token_mailboxes(c, bot, roster=None):
     """The mailboxes a message bot's turn may ask its runner for a token for: its person's (the mailbox the
-    bot declares, else their email), then the people below them in the org chart. Any other bot gets none."""
+    bot declares, else their email), and the people below them in the org chart only when that mailbox's
+    `gmail` entry sets `org_read: true`. Any other bot gets none."""
     roster = roster if roster is not None else _roster(c)
     who = P.inbox_person(bot, roster)
     if not who:
         return []
     boxes = message_bot_mailboxes(c, roster)
+    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    try:
+        config = json.loads(found["config_json"] or "{}") if found else {}
+    except ValueError:
+        config = {}
+    people = P.below(who["id"], roster) if reads_reports(config, mailbox_of(who, boxes)) else [who]
     out = []
-    for person in P.below(who["id"], roster):
+    for person in people:
         addr = mailbox_of(person, boxes)
         if addr and "@" in addr and addr not in out:
             out.append(addr)
@@ -352,7 +369,8 @@ def token_mailboxes(c, bot, roster=None):
 
 
 def inbox_of(bot, config, roster):
-    """Mailboxes this bot may read: declared gmail access plus a roster `inbox_bot`."""
+    """Mailboxes this bot may read: declared gmail access plus a roster `inbox_bot`'s own mailbox. The people
+    below a mailbox's person are added only for a gmail entry with `org_read: true`."""
     mailboxes, seen = [], set()
     org_read = False
 
@@ -363,17 +381,17 @@ def inbox_of(bot, config, roster):
             mailboxes.append(addr)
 
     who = P.inbox_person(bot, roster)
+    own = declared_mailbox(config) or str((who or {}).get("email") or "").strip().lower()
     if who:
-        org_read = True
-        for addr in P.mailboxes_below(who["id"], roster):
-            add(addr)
+        add(own)
     for entry in tools_of(config) or []:
         if not isinstance(entry, dict) or str(entry.get("service", "")).lower() != "gmail":
             continue
         add(entry.get("identity"))
         if entry.get("org_read") is True:
             org_read = True
-            person = P.person_by_email(str(entry.get("identity") or "").strip().lower(), roster)
+            identity = str(entry.get("identity") or "").strip().lower()
+            person = P.person_by_email(identity, roster) or (who if who and identity == own else None)
             if person:
                 for addr in P.mailboxes_below(person["id"], roster):
                     add(addr)
