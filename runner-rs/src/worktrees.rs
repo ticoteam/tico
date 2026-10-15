@@ -228,9 +228,10 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
     }
     if create {
         crate::isolation::mkdir(&folder, 0o700)?;
-        crate::isolation::chown(&folder);
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700));
+        // The bot's `hub worktree` replaces proofs here too, including ones an older runner left as the supervisor.
+        adopt_checkout_state(workspace);
     }
     if !folder.exists() {
         return Ok(None);
@@ -240,6 +241,15 @@ fn marker_path(workspace: &Path, link_id: &str, create: bool) -> R<Option<PathBu
         return Err(WtErr::msg("Worktree initialization marker is a symlink; left as it is"));
     }
     Ok(Some(marker))
+}
+
+/// Hand the bot user every checkout proof the supervisor left in `tasks/.checkout-state`: the folder is adopted by
+/// descriptor, so modes and bytes stay, and a symlink, special file or foreign hard link in it changes nothing.
+pub fn adopt_checkout_state(workspace: &Path) {
+    let folder = resolve(workspace).join("tasks").join(".checkout-state");
+    if folder.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+        crate::isolation::adopt(&[folder]);
+    }
 }
 
 pub fn read_marker(workspace: &Path, link_id: &str) -> R<Option<Map<String, Value>>> {
@@ -1263,6 +1273,8 @@ impl Worktrees {
     }
 
     pub async fn sync(self: Arc<Self>, host: Arc<dyn Host>, actions: Vec<Value>) {
+        // A bot's own `hub worktree setup` reads these proofs between heartbeats, whatever the server lists.
+        adopt_checkout_state(&self.workspace);
         let Ok(reply) = self.client.get("runners/me/worktrees").await else { return };
         let mut rows: Vec<Value> = reply["worktrees"].as_array().cloned().unwrap_or_default();
         let owners: HashSet<String> = rows.iter().map(|r| text_of(&r["owner"]).trim_start_matches("bot:").to_string()).collect();

@@ -182,6 +182,188 @@ async fn isolated_workspace_locks_and_checkout_proofs_are_bot_owned_without_repl
     assert_eq!(private.metadata().unwrap().uid(), 0, "a lock symlink never changes private ownership");
 }
 
+/// Leave `path` as an older runner did (owner and mode), and return what it holds for the unchanged-bytes check.
+#[cfg(target_os = "linux")]
+fn seed_owner(path: &Path, uid: u32, mode: u32) -> Vec<u8> {
+    use std::os::unix::fs::PermissionsExt;
+    std::os::unix::fs::lchown(path, Some(uid), Some(uid)).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    if path.is_file() { std::fs::read(path).unwrap() } else { vec![] }
+}
+
+#[cfg(target_os = "linux")]
+fn owner_mode(path: &Path) -> (u32, u32) {
+    use std::os::unix::fs::MetadataExt;
+    let m = path.symlink_metadata().unwrap();
+    (m.uid(), m.mode() & 0o7777)
+}
+
+// HotMic 0.3.46 leftovers: checkout proofs the supervisor wrote as ticorun (10002), 0600 in a 0700 folder.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a disposable Linux two-user environment"]
+async fn isolated_existing_checkout_proofs_go_to_the_bot_and_links_in_their_folder_change_nothing_outside() {
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let folder = tmp.0.join("tasks/.checkout-state");
+    std::fs::create_dir_all(&folder).unwrap();
+    seed_owner(&tmp.0.join("tasks"), 10002, 0o755);
+    let marker = folder.join(format!("{}.json", crate::gitrun::sha256_hex(b"old-link")));
+    std::fs::write(&marker, r#"{"link_id":"old-link","phase":"checkout_complete","schema":1}"#).unwrap();
+    let bytes = seed_owner(&marker, 10002, 0o600);
+    seed_owner(&folder, 10002, 0o700);
+    let private = tmp.0.join("runner.json");
+    std::fs::write(&private, "private fixture").unwrap();
+    seed_owner(&private, 0, 0o600);
+    std::fs::hard_link(&private, folder.join("alias.json")).unwrap();
+    let linked = tmp.0.join("supervisor-dir");
+    std::fs::create_dir(&linked).unwrap();
+    seed_owner(&linked, 0, 0o700);
+    std::os::unix::fs::symlink(&linked, folder.join("escape.json")).unwrap();
+    let cat = |p: &Path| vec!["cat".to_string(), p.display().to_string()];
+    assert!(!crate::gitrun::run_as_bot(&cat(&marker), &env, None, 10).await.unwrap().ok(), "the 0.3.46 layout the bot could not read");
+
+    // A heartbeat's worktree pass, before any link is read.
+    worktrees::adopt_checkout_state(&tmp.0);
+    assert_eq!(owner_mode(&folder), (10003, 0o700));
+    assert_eq!(owner_mode(&marker), (10003, 0o600));
+    assert_eq!(std::fs::read(&marker).unwrap(), bytes, "ownership changes, the proof does not");
+    let read = crate::gitrun::run_as_bot(&cat(&marker), &env, None, 10).await.unwrap();
+    assert!(read.ok() && read.stdout.contains("checkout_complete"), "{}", read.stderr);
+    assert_eq!(worktrees::read_marker(&tmp.0, "old-link").unwrap().unwrap()["phase"], "checkout_complete");
+    assert_eq!(owner_mode(&private), (0, 0o600), "a foreign hard link in the folder grants nothing");
+    assert!(!crate::gitrun::run_as_bot(&cat(&private), &env, None, 10).await.unwrap().ok());
+    assert_eq!(owner_mode(&linked), (0, 0o700), "a symlink in the folder is never followed");
+    assert_eq!(owner_mode(&folder.join("escape.json")).0, 0, "nor handed over itself");
+
+    // The bot's `hub worktree setup` replaces a proof the way runner/worktrees.py does: temp file, then rename.
+    let replace = format!("printf %s '{{\"schema\":1}}' > {0}.tmp && mv {0}.tmp {0}", marker.display());
+    let replaced = crate::gitrun::run_as_bot(&["/bin/sh".into(), "-c".into(), replace], &env, None, 10).await.unwrap();
+    assert!(replaced.ok(), "{}", replaced.stderr);
+
+    // A proof the supervisor writes later, beside one still left as 10002, hands both over.
+    let other = folder.join(format!("{}.json", crate::gitrun::sha256_hex(b"other-link")));
+    std::fs::write(&other, r#"{"schema":1}"#).unwrap();
+    seed_owner(&other, 10002, 0o600);
+    seed_owner(&folder, 10002, 0o700);
+    let proof = json!({"schema":1,"link_id":"new-link","phase":"ready"}).as_object().unwrap().clone();
+    worktrees::write_marker(&tmp.0, &proof).unwrap();
+    assert_eq!(owner_mode(&folder), (10003, 0o700));
+    assert_eq!(owner_mode(&other), (10003, 0o600));
+    assert_eq!(owner_mode(&private), (0, 0o600));
+}
+
+// HotMic 0.3.46 leftovers: a managed base clone (repos/<name>/.git, its config and tico-managed) owned by
+// ticorun, directories 755, files 644. Refreshing it hands it to the bot, whose worktree add and
+// mark_managed (runner/repositories.py) then work.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a disposable Linux two-user environment"]
+async fn isolated_existing_base_clone_left_by_the_supervisor_group_is_refreshed_and_used_by_the_bot() {
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (mirror, seed) = remote(&tmp.0, "app");
+    let base = tmp.0.join("repos").join(crate::repositories::base_folder("acme/app"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(&tmp.0, &["clone", "-q", "--no-hardlinks", mirror.to_str().unwrap(), base.to_str().unwrap()]);
+    sh(&base, &["remote", "rename", "origin", "tico-mirror"]);
+    sh(&base, &["remote", "add", "origin", "https://github.com/acme/app.git"]);
+    sh(&base, &["fetch", "-q", "tico-mirror", "+refs/heads/main:refs/remotes/origin/main"]);
+    std::fs::write(base.join(".git/tico-managed"), r#"{"full_name": "acme/app"}"#).unwrap();
+    commit_and_push(&seed, "later.md", "newer than the base clone\n");
+    let entries = |root: &Path| -> Vec<(PathBuf, bool)> {
+        let output = std::process::Command::new("find").arg(root).args(["-type", "d", "-printf", "d %p\n", "-o", "-type", "f", "-printf", "f %p\n"]).output().unwrap();
+        String::from_utf8(output.stdout).unwrap().lines().map(|l| (PathBuf::from(&l[2..]), l.starts_with('d'))).collect()
+    };
+    let mut before = vec![];
+    for (path, dir) in entries(&base) {
+        let mode = if dir { 0o755 } else { 0o644 };
+        let bytes = seed_owner(&path, 10002, mode);
+        before.push((path.clone(), path.metadata().map(|m| std::os::unix::fs::MetadataExt::ino(&m)).unwrap(), mode, bytes));
+    }
+    let mark = format!("test ! -L .git/tico-managed && printf %s '{{\"full_name\": \"acme/app\"}}' > .git/tico-managed");
+    let mark = vec!["/bin/sh".to_string(), "-c".into(), mark];
+    assert!(!crate::gitrun::run_as_bot(&mark, &env, Some(&base), 10).await.unwrap().ok(), "the 0.3.46 layout mark_managed failed on");
+
+    let mut repo = json!({"full_name": "acme/app", "default_branch": "main"}).as_object().unwrap().clone();
+    let (path, branch) = crate::repositories::worktree_base(&tmp.0, &mut repo, &env).await.unwrap();
+    assert_eq!((path.as_path(), branch.as_str()), (base.as_path(), "main"));
+    for (path, _) in entries(&base) {
+        assert_eq!(owner_mode(&path).0, 10003, "{path:?}");
+    }
+    for (path, inode, mode, bytes) in &before {
+        // Git replaces the refs and config it updates; every inode the refresh only adopted keeps its mode.
+        if path.metadata().is_ok_and(|m| std::os::unix::fs::MetadataExt::ino(&m) == *inode) {
+            assert_eq!(owner_mode(path).1, *mode, "{path:?}");
+            if path.components().any(|c| c.as_os_str() == "objects") {
+                assert_eq!(&std::fs::read(path).unwrap(), bytes, "{path:?}");
+            }
+        }
+    }
+    let (mirror_owner, _) = owner_mode(&mirror);
+    assert_eq!(mirror_owner, 0, "the computer's mirror stays the supervisor's");
+
+    assert!(crate::gitrun::run_as_bot(&mark, &env, Some(&base), 10).await.unwrap().ok());
+    let task = tmp.0.join("tasks/t1/acme__app");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    crate::isolation::chown(&tmp.0.join("tasks"));
+    crate::isolation::chown(task.parent().unwrap());
+    let add = crate::gitrun::git_as_bot(&base, &env, &["worktree", "add", "--quiet", "-b", "tico/t1", &task.display().to_string(), "origin/main"], 30).await.unwrap();
+    assert!(add.ok(), "{}", add.stderr);
+    assert!(task.join("later.md").is_file(), "the refresh fetched the newer commit");
+    std::fs::write(task.join("work.txt"), "bot work\n").unwrap();
+    crate::isolation::chown(&task.join("work.txt"));
+    for args in [&["add", "work.txt"][..], &["commit", "-qm", "bot work"][..]] {
+        let done = crate::gitrun::git_as_bot(&task, &env, args, 30).await.unwrap();
+        assert!(done.ok(), "{args:?}: {}", done.stderr);
+    }
+}
+
+// A session left with mixed owners: the base index root's (644), a worktree's FETCH_HEAD and admin folder
+// ticorun's (644, 755). The next turn's ensure and finish work as the bot and keep every mode.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires a disposable Linux two-user environment"]
+async fn isolated_mixed_owner_session_metadata_is_ensured_and_finished_as_the_bot() {
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+    let tmp = Tmp::new();
+    let (bare, _) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(&projects, &["clone", "--no-hardlinks", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let session = sessions::path_for(&projects, "ops", "mixed");
+    std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+    sh(&main, &["worktree", "add", "-q", "-b", "tico-session/mixed", session.to_str().unwrap(), "origin/main"]);
+    sh(&session, &["branch", "--set-upstream-to=origin/main"]);
+    sh(&session, &["fetch", "-q"]);
+    crate::isolation::adopt(&[bare.clone()]); // stands in for GitHub; local upload-pack runs as its owner
+    let index = main.join(".git/index");
+    let index_bytes = seed_owner(&index, 0, 0o644);
+    let admin = main.join(".git/worktrees/mixed");
+    let fetch_head = admin.join("FETCH_HEAD");
+    seed_owner(&fetch_head, 10002, 0o644);
+    seed_owner(&admin, 10002, 0o755);
+    let env = turn_env(&tmp.0, &[]);
+
+    assert_eq!(sessions::ensure(&main, &session, "mixed", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(owner_mode(&index), (10003, 0o644));
+    assert_eq!(std::fs::read(&index).unwrap(), index_bytes);
+    assert_eq!(owner_mode(&fetch_head), (10003, 0o644));
+    assert_eq!(owner_mode(&admin), (10003, 0o755));
+    let write = crate::gitrun::run_as_bot(&["/bin/sh".into(), "-c".into(), "mkdir memory && printf lesson > memory/lesson.md".into()], &env, Some(&session), 10).await.unwrap();
+    assert!(write.ok(), "{}", write.stderr);
+    assert_eq!(sessions::finish(&session, "run", &env, &[]).await, "");
+    assert_eq!(owner_mode(&admin), (10003, 0o755));
+    assert_eq!(owner_mode(&fetch_head).0, 10003);
+    assert_eq!(owner_mode(&index), (10003, 0o644));
+}
+
 #[tokio::test]
 async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_other_lanes() {
     let tmp = Tmp::new();
