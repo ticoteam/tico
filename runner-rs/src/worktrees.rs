@@ -1368,7 +1368,8 @@ impl Worktrees {
         let mut reports = vec![];
         for r in &rows {
             let mut report = inspect(&self.workspace, r, &env, Some(&mut stats)).await;
-            if let Some(e) = errors.get(&text_of(&report["link_id"])) {
+            // What this pass found in the tree is newer than the last failed action, which comes back once it clears.
+            if let Some(e) = errors.get(&text_of(&report["link_id"])).filter(|_| report["error"].is_null()) {
                 report["error"] = json!(e);
             }
             reports.push(report);
@@ -1502,15 +1503,70 @@ impl Worktrees {
 mod tests {
     use super::*;
 
+    struct Folder(PathBuf);
+    impl Drop for Folder {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    /// A server whose `runners/me/worktrees` answer is the one row given, whatever the request.
+    async fn serve_rows(row: Arc<Mutex<Value>>) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 8192];
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let n = socket.read(&mut buffer).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    request.extend_from_slice(&buffer[..n]);
+                    assert!(request.len() <= 65536);
+                }
+                let body = json!({"worktrees": [row.lock().unwrap().clone()]}).to_string();
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn a_fresh_inspection_error_wins_over_the_remembered_action_error() {
+        struct IdleHost;
+        impl Host for IdleHost {
+            fn idle(&self, _: &str, _: &str) -> bool { true }
+            fn try_locks(&self, _: &str, _: &str) -> Option<Box<dyn Send>> { Some(Box::new(())) }
+            fn vault(&self, _: &str) -> Vec<String> { vec![] }
+            fn retain_vault(&self, _: &HashSet<String>) {}
+            fn repositories(&self) -> Option<Arc<repositories::Repositories>> { None }
+        }
+        let root = std::env::temp_dir().join(format!("tico-inspect-error-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let folder = Folder(root.canonicalize().unwrap());
+        let row = Arc::new(Mutex::new(json!({
+            "id": "link", "task_id": "task", "path": "tasks/task/product", "repo": "", "branch": "task",
+            "owner": "bot:ops", "task_status": "open", "bot_state": "active", "state": "present", "detail_json": "{}"
+        })));
+        let (url, server) = serve_rows(row).await;
+        let manager = Arc::new(Worktrees::new(&folder.0, Client::new(&url, "fixture", 5, 0).unwrap()));
+        let failed = "Worktree action failed; history kept. Restore path already exists and is not a worktree";
+        manager.inner.lock().unwrap().errors.insert("link".into(), failed.into());
+        manager.clone().sync(Arc::new(IdleHost), vec![]).await;
+        assert_eq!(manager.latest()[0]["error"], json!(failed), "a tree that inspects cleanly still reports the failed action");
+
+        std::fs::create_dir_all(folder.0.join("tasks/task/product")).unwrap();
+        manager.clone().sync(Arc::new(IdleHost), vec![]).await;
+        assert_eq!(manager.latest()[0]["error"], json!("Could not find it: Tracked path is not a Git worktree; left as it is"));
+        server.abort();
+    }
+
     #[tokio::test]
     async fn explicit_cleanup_retry_reaches_preservation_once_despite_local_backoff() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        struct Folder(PathBuf);
-        impl Drop for Folder {
-            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
-        }
         struct RetryHost { idle: AtomicBool, locks_available: AtomicBool, attempts: AtomicUsize }
         impl Host for RetryHost {
             fn idle(&self, _: &str, _: &str) -> bool { self.idle.load(Ordering::SeqCst) }
@@ -1535,26 +1591,7 @@ mod tests {
             "owner": "bot:ops", "task_status": "closed", "bot_state": "active", "state": "present",
             "detail_json": json!({"delete_requested": true, "cleanup_retry_generation": generation}).to_string()
         })));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let served = row.clone();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut socket, _)) = listener.accept().await else { return };
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 8192];
-                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
-                    let n = socket.read(&mut buffer).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    request.extend_from_slice(&buffer[..n]);
-                    assert!(request.len() <= 65536);
-                }
-                let body = json!({"worktrees": [served.lock().unwrap().clone()]}).to_string();
-                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.shutdown().await;
-            }
-        });
+        let (url, server) = serve_rows(row.clone()).await;
         let manager = Arc::new(Worktrees::new(&folder.0, Client::new(&url, "fixture", 5, 0).unwrap()));
         let host = Arc::new(RetryHost { idle: AtomicBool::new(true), locks_available: AtomicBool::new(true), attempts: AtomicUsize::new(0) });
         manager.inner.lock().unwrap().retry.insert("link".into(), (Instant::now() + Duration::from_secs(21600), 8));
@@ -1564,7 +1601,7 @@ mod tests {
         let action = json!({"link_id": "link", "action": "remove", "cleanup_retry_generation": generation});
         manager.clone().sync(host.clone(), vec![action.clone()]).await;
         assert_eq!(host.attempts.load(Ordering::SeqCst), 1, "a fresh explicit retry reaches the real preservation checks");
-        assert!(manager.latest()[0]["error"].as_str().unwrap().contains("Repository not identified; kept worktree"));
+        assert!(manager.inner.lock().unwrap().errors["link"].contains("Repository not identified; kept worktree"));
         assert_eq!(std::fs::read_to_string(&wanted).unwrap(), "unfinished work");
         manager.clone().sync(host.clone(), vec![action.clone()]).await;
         assert_eq!(host.attempts.load(Ordering::SeqCst), 1, "the same generation cannot bypass new failure backoff");

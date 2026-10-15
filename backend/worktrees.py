@@ -46,6 +46,13 @@ def current_error(state, detail):
     return error
 
 
+def refused_cleanup(state, detail):
+    """A cleanup the computer refused that is still asked. A computer keeps its action errors in memory, so after a
+    restart its report has none; the stored error stays, or the backoff before the next attempt would be skipped."""
+    return (state != 'removed' and str(detail.get('error') or '').startswith(ACTION_FAILED)
+            and detail.get('cleanup_attempts', 0) > 0 and any(detail.get(key) for key in REMOVAL))
+
+
 def stale_checkout_report(detail, reported_state):
     current = detail.get('checkout_state')
     if current == 'ready' and reported_state == 'unverified':
@@ -285,7 +292,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                                      exclude={'link_id', 'state', 'branch', 'checkout_state', 'record_updated',
                                               *(IDENTITY if stale else ())})
         detail.update(reported)
-        if report.error is None:
+        if report.error is None and not refused_cleanup(report.state, detail):
             detail.pop('error', None)           # every report carries the computer's current error, if any
         legacy_present = (report.state == 'present' and report.checkout_state == 'legacy_present'
                           and not detail.get('setup_pending')
@@ -366,6 +373,10 @@ def heartbeat(c, who, reports, capable, default_org=""):
                 else:
                     detail['cleanup_attempts'] = detail.get('cleanup_attempts', 0) + 1
                     detail['cleanup_retry_at'] = H.shift(now, minutes=2 ** detail['cleanup_attempts'])
+        elif detail.get('cleanup_requested') and row['state'] != 'removed':
+            # Removal is no longer asked (the task reopened): the refused cleanup's record goes with it.
+            for key in ('cleanup_requested', 'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
+                detail.pop(key, None)
         if detail != stored:
             c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), row['id']))
         if action and (action == 'remove' or row['repo'] and row['branch']):

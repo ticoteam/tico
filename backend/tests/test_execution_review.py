@@ -84,6 +84,24 @@ def test_subscription_quota_holds_until_the_provider_reset_and_try_now_can_lift_
         assert not cooling_off(c, "ops")
 
 
+def test_an_api_key_quota_refusal_holds_the_bot_and_says_billing_not_subscription(api):
+    from backend.execution import cooling_off
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "billing"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "error", "payload": {
+        "error": "Quota exceeded. Check your plan and billing details.", "limit": True}}]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {
+        "outcome": "failed", "last_seq": 1, "limited": True, "text": ""}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+        status = H.status(c, 'ops')
+        assert status['state'] == 'limited' and 'billing' in status['focus'] and cooling_off(c, 'ops')
+    assert claim(api, machine) is None
+    issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
+    assert 'billing' in issue['detail'] and 'subscription' not in issue['detail']
+
+
 def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(api):
     from backend.store import H
     machine, message, attempt = setup_attempt(api)

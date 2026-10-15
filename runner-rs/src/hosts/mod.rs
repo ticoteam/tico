@@ -52,7 +52,7 @@ pub fn limit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded\b|resource_exhausted|\b(?:code|status|http) (?:429|503)\b",
+            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded\b|resource_exhausted|\b(?:code|status|http) (?:429|503)\b",
         )
         .unwrap()
     })
@@ -433,6 +433,13 @@ mod tests {
         assert!(is_limit("Claude AI monthly spend limit reached. Raise it in your account settings."));
         assert!(is_limit("API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-19T00:00:00Z. (rate_limit_error)"));
         assert!(!is_limit("Draft the monthly spend report"));
+        // An API key's quota or billing refusal, as Codex and the OpenAI API word it.
+        assert!(is_limit("Quota exceeded. Check your plan and billing details."));
+        assert!(is_limit("You exceeded your current quota, please check your plan and billing details. (insufficient_quota)"));
+        assert!(is_limit(r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#));
+        assert!(!is_limit("Raise the storage quota for the team drive"));
+        assert!(!is_limit("Quota: 40 of 100 seats used"));
+        assert!(!is_limit("write /tmp/out: Disk quota exceeded (os error 122)"));
         assert!(is_auth_retryable("OAuth: failed to refresh OAuth token"));
         assert!(!is_auth_retryable("unexpected status 401 Unauthorized: Invalid API key"));
         assert!(is_auth_rejected("Invalid API key · Please run /login"));

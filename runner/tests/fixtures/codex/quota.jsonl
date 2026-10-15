@@ -1,0 +1,5 @@
+{"method": "turn/started", "params": {"threadId": "thr_q", "turn": {"id": "turn_1"}}}
+{"method": "item/agentMessage/delta", "params": {"threadId": "thr_q", "turnId": "turn_1", "itemId": "m1", "delta": "Checking the storage quota exceeded alert"}}
+{"method": "error", "params": {"threadId": "thr_q", "turnId": "turn_1", "willRetry": false, "error": {"message": "Quota exceeded. Check your plan and billing details."}}}
+{"method": "turn/started", "params": {"threadId": "thr_q", "turn": {"id": "turn_2"}}}
+{"method": "turn/completed", "params": {"threadId": "thr_q", "turn": {"id": "turn_2", "status": "failed", "error": {"message": "You exceeded your current quota, please check your plan and billing details. (insufficient_quota)"}}}}

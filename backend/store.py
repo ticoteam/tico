@@ -1166,6 +1166,8 @@ class Store:
                                    ("task_links_repo_kind", "task_links(repo COLLATE NOCASE, kind)"),
                                    ("task_links_repo_url", "task_links(kind, state, url COLLATE NOCASE)"),
                                    ("attempts_bot_created", "attempts(bot, created)"),
+                                   # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
+                                   ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
