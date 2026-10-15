@@ -47,12 +47,12 @@ All notable changes to Tico are recorded here. The format follows
 - Installing or updating a harness that downloads a single binary (not a `.tar.gz`) no longer fails now and then
   with "Text file busy". The runner wrote the file itself, so another of its threads starting a process at that
   moment kept it open for writing when the install checked `--version`; a child `cp` now writes it, as `tar` does.
-- A deleted task worktree whose cleanup stopped retrying can be cleaned up again. Once the cause is fixed (the
-  bot's write access restored, kept files cleared), delete the worktree link again with
-  `DELETE /api/v2/tasks/{id}/links/{link_id}` (the app and the hub CLI have no button or command for a worktree that
-  is still present): its original computer gets a fresh set of cleanup attempts once the bot is idle, with all of
-  its usual save and safety checks, and a Rust runner on this release skips its earlier wait once. Deleting it again
-  used to change nothing, so the link and its folder stayed.
+- A deleted task worktree whose cleanup stopped retrying can be cleaned up again. Once the cause is fixed (the bot's
+  write access restored, kept files cleared), delete the worktree link again with `DELETE
+  /api/v2/tasks/{id}/links/{link_id}` (the app shows no remove button for a worktree that is still present: ask
+  BotOps, which sends it as you, or call the API yourself): its original computer gets a fresh set of cleanup
+  attempts once the bot is idle, with all of its usual save and safety checks, and a Rust runner on this release
+  skips its earlier wait once. Deleting it again used to change nothing, so the link and its folder stayed.
 - Bots can read a pull request's checks (`gh pr checks`, commit statuses and check runs) on private
   repositories: run tokens carry Checks and Commit statuses read whenever the installation has accepted them. An
   App created by hand without them needs **Checks** and **Commit statuses** set to Read-only and accepted on the
