@@ -7,7 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.47] - 2026-10-15
+
 ### Fixed
+- **Task checkouts stay writable by isolated bots.** The runner uses the bot's OS identity for checkout Git
+  commands and keeps task metadata and locks writable by that user, so pulling, staging and committing do
+  not fail on supervisor-owned files.
 - Reopening the bot editor before its previous close event keeps the new form and its settings refresh intact.
 - Browser model sign-in on an isolated runner uses the bot's OS identity for login and its final check,
   so a successful sign-in does not leave credentials readable only by the supervisor.
@@ -21,6 +26,9 @@ All notable changes to Tico are recorded here. The format follows
 - Task session resume commands load the model CLI catalog on first opening, so copied commands use the correct resume syntax.
 
 ### Added
+- **Routines open in an editor, and webhooks can start them.** A routine on a bot's page opens its instructions
+  and schedule, with Edit, Run now, Pause and Delete when you may change it. Settings > Triggers adds webhooks
+  for routines to listen to, with secret rotation and duplicate-call protection. See [Routines](docs/routines.md).
 - **The flight recorder writes a local file that reads with the server stalled.** Stalls, slow requests and per-minute
   rows go first to `flight/flight.ndjson` beside the database (10 MB x 10, from a bounded queue that never blocks a
   request); `python -m backend.flight summary --since 30m` (or `scripts/tico -e ENV server flight`) reads only the files.
@@ -2591,7 +2599,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.21...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.47...HEAD
+[0.3.47]: https://github.com/ticoteam/tico/compare/v0.3.46...v0.3.47
 [0.3.21]: https://github.com/ticoteam/tico/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/ticoteam/tico/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/ticoteam/tico/compare/v0.3.18...v0.3.19
