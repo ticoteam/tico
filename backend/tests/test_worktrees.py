@@ -220,7 +220,7 @@ def test_owner_unlink_finishes_a_missing_worktree_after_cleanup_gave_up(prepared
     with api.app_state.store.transaction() as c:
         detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
         detail.update(delete_requested=True, cleanup_requested=True, cleanup_attempts=W.CLEANUP_TRIES,
-                      cleanup_gave_up=True, cleanup_retry_at=H.shift(H.now(), minutes=60), error=error)
+                      cleanup_gave_up=True, cleanup_retry_at=H.shift(H.now(), minutes=-60), error=error)
         c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
     report = {'link_id': link['link_id'], 'state': 'missing', 'checkout_state': 'ready',
               'branch': link['branch'], 'error': error}
