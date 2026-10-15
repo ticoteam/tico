@@ -336,6 +336,8 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
   const when = ctx.done ? (it.closed || it.updated) : it.updated;
+  // How long the task has been open (updated age stays in the tooltip).
+  const openFor = !ctx.done && it.created ? ageShort(it.created) : '';
   const need = state.view === 'foryou' ? needsItem(t.id) : null;
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
@@ -350,7 +352,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskStatusText(t)}
     <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
-    <time class="tl-age tnum" datetime="${esc(when || '')}" title="${ctx.done ? 'Done' : 'Updated'} ${esc(fmt(when))}">${esc(ageShort(when))}</time>
+    <time class="tl-age tnum" datetime="${esc(when || '')}" title="${ctx.done ? 'Done' : openFor ? `Open ${esc(fmt(it.created))} · updated` : 'Updated'} ${esc(fmt(when))}">${openFor ? `open ${esc(openFor)}` : esc(ageShort(when))}</time>
     ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
   </div>`);
   return row + (open ? kids.map(k => taskListRowHTML(k, ctx, depth + 1)).join('') : '');

@@ -106,7 +106,8 @@ const taskItem = t => {
   return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner,
           team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner),
           rank: t.rank == null ? null : Number(t.rank), lane: t.lane || 'company', labels: t.labels || [],
-          updated: t.updated || t.created, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
+          updated: t.updated || t.created, closed: t.done_at || t.closed_at || '', created: t.created || '',
+          task: t, col: hubColumn(t)};
 };
 // Rank is the order (no priority): ranked first, low to high, then the newest unranked.
 const byRank = (a, b) => (a.rank == null ? 1 : 0) - (b.rank == null ? 1 : 0)
