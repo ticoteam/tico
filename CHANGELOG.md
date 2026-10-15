@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.47] - 2026-10-15
+
 ### Added
 - **A release that ships a Health Monitor fix closes its HQ tickets.** HQ keeps each ticket's Health Monitor signature,
   the staff list groups by it (`GET /v1/staff/tickets?signature=hm-...`), and one call replies the fixed-in text to every
@@ -16,14 +18,17 @@ All notable changes to Tico are recorded here. The format follows
 ### Changed
 - **The Health Monitor stays quiet when a finding flaps.** A finding that goes away and comes back within a day of its
   last wake only counts; it wakes the Health Monitor again after a day.
-
-## [0.3.46] - 2026-10-15
-
-### Changed
 - **Tasks rows read how long each item has been open and quiet.** Every row in the Tasks section (Tasks page, bot page
   Tasks tab, person page Tasks card, Assistant) now shows its open duration (since created) and, when it has sat
   untouched, how long it has been quiet (since updated): `open 3d · quiet 60m`. A task that just moved reads only its
   open age; finished rows keep their single short age.
+- **A stale bot ask gets one-tap clarify.** A bot question unanswered for three days marks its card stale, with an
+  Ask-to-clarify button. One tap sends the asking bot the clarifying-prompt experiment's winning prompt, once per
+  ask; the ask stays open and the wait stays with the person.
+
+## [0.3.46] - 2026-10-15
+
+### Changed
 - **An inbox bot may share a computer with other bots.** A separate computer for inbox bots is now a choice per computer:
   `POST /api/v2/runners/<id>/inbox-only {"enabled": true}` (an owner, an admin, the computer's operator, or BotOps as one of
   them) keeps it for inbox bots, and the server places no other bot there. Computers that held only inbox bots before this
