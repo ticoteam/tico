@@ -403,6 +403,7 @@ or find it with `docker ps`. Only the optional unnamed manual install uses `tico
 See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
 1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
+   Without delegation, connect each person's own account instead ([Connect one Google account](#connect-one-google-account)) and skip step 2.
 2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
    `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
    A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
@@ -439,6 +440,55 @@ after an hour, and shows one issue in Settings > Health that names the mailbox a
 `Mail can't refresh for ana@acme-signin.example: the Google service account has no domain-wide delegation for the domain acme-signin.example`.
 Fix it by adding the delegation for that domain in the Google Workspace admin console, or by giving the message bot a mailbox on
 a domain the key covers. The issue goes away on its own once the mailbox syncs.
+
+### Connect one Google account
+
+A person can connect their own Google account instead of the team granting domain-wide delegation. Tico then reads only
+that person's mail and calendar, and Google itself enforces that: the grant belongs to the account that signed in and
+cannot act as anyone else in the Workspace. Use this when the Workspace admin will not grant delegation, or when only
+one person's mailbox should be synced.
+
+1. Once, in your Google Cloud project: enable the Gmail API and the Google Calendar API, set up the OAuth consent screen
+   (Internal is enough for your own Workspace), and create an OAuth client id of type **Desktop app**. Download its JSON.
+   If the Workspace restricts third-party apps, the admin allows this client under Admin console > Security > API controls >
+   App access control. That is not domain-wide delegation, and it gives the app no access by itself.
+2. On the computer that runs the `connectors` job, as the runner's user, and as the person whose mailbox it is:
+   `docker exec -it -u ticorun '<container-name>' scripts/mail.sh google connect --mailbox chris@acme.example --client-file client.json`
+   (copy `client.json` into the container first, or pipe it to a file in the state directory; on a Mac, run `scripts/mail.sh google connect ...`).
+   Open the address it prints, sign in as that mailbox and approve. The browser then goes to `http://127.0.0.1:8765/` and
+   says it cannot connect, which is expected. Paste that whole address back. Tico refuses a different account: if Google says
+   someone else signed in, nothing is stored and that grant is revoked.
+3. The grant is saved as `google-oauth.json` beside `google-sa.json` (the runner's state directory, mode 0600, closed to
+   bots). It moves out of `workspace/secrets` and follows a re-enrollment the same way the key does. No token reaches
+   a bot's environment, a log or a report: a message bot's run still gets an hour-long token for one mailbox the server
+   named for it, and nothing else.
+
+What it allows. By default, read only: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy`
+and `calendar.calendarlist.readonly`. A bot's `read` verb in Tico also covers labelling, archiving and triage, but a
+read-only grant cannot do those at Google, so Tico refuses them before calling Google (exit 2, "connected to Tico
+read-only at Google"). It never asks for wider access on its own. To allow more, the person connects again adding
+`--allow` for each capability they want:
+
+| `--allow` | Google scope | What it lets Tico do |
+| --- | --- | --- |
+| `labels` | `gmail.modify` | apply hub labels, archive, mark read (Google also lets this scope send) |
+| `drafts` | `gmail.compose` | write, update and delete drafts (Google also lets this scope send) |
+| `calendar-write` | `calendar.events` | add and remove events and holds |
+
+Sending stays behind Tico's own gates ([Turning sending on](#turning-sending-on)); a scope that lets Google send does not
+turn sending on.
+
+Which account Tico uses. A mailbox with a connected account is always served from it. If that grant stops working
+(the person removed the app at myaccount.google.com/permissions, an admin blocked it, or it expired), mail for that mailbox
+fails and says to reconnect; Tico never falls back to the service account for it. A computer can hold both: mailboxes
+without a connected account still use the service account, if there is one. A calendar shared with the connected person is
+visible to them and so to Tico; nobody else's calendar is.
+
+- `scripts/mail.sh google status` lists the connected accounts and what each may do, never a token.
+- `scripts/mail.sh google connect --mailbox <address>` again replaces that grant (to add or drop a capability, or after a revoke).
+- `scripts/mail.sh google revoke --mailbox <address>` revokes the grant at Google and removes it here. If Google cannot be reached,
+  it is still removed here; remove the app at myaccount.google.com/permissions as well.
+- `scripts/mail.sh doctor` shows each connected mailbox as "connected without delegation", and passes without a service-account key.
 
 ### Who can read the key
 
@@ -479,6 +529,7 @@ the job (and show a sign-in problem in Settings until the key is there).
 | `TICO_MAIL_VENV` | `<projects>/runtime/mail/venv` | `<tools>/mail-venv` for the `connectors` job; a bot's run is given `TICO_PROJECTS_DIR`, so its first `mail.sh` builds `<home>/workspace/runtime/mail/venv` (the bot user can write it) |
 | `TICO_MAIL_RUNTIME_DIR` mail.db, audit log | `<projects>/runtime/mail` | same, under `workspace/runtime/mail` |
 | `GOOGLE_SA_KEY` | `<projects>/secrets/google-sa.json` | the runner's state directory (`~/state-<id>/google-sa.json`) |
+| `GOOGLE_OAUTH_GRANTS` connected accounts | `google-oauth.json` beside the key | beside the key, in the runner's state directory |
 | `TICO_REGISTRY_DIR` | `<checkout>/registry` | unset: the sync needs no registry; per-bot mailbox rules do. There is no `mail-policy.yaml` either, so the mail policy is the built-in one (below) |
 | `TICO_INTERNAL_DOMAINS` | the domains the policy file lists | optional, comma separated: the team's own mail domains when there is no policy file. Without it they come from the bot's mailbox and the team roster |
 

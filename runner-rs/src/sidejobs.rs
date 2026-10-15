@@ -105,7 +105,7 @@ impl SideJobs {
             "close-calls" => Ok(if close_key(&self.config.projects_dir()).is_empty() { vec![] } else { vec!["close".into()] }),
             _ => {
                 crate::mail_key::protect(&self.config);
-                if crate::mail_key::mail_secret_path(&self.config).is_file() {
+                if crate::mail_key::credential_present(&self.config) {
                     return Ok(vec!["mail".into(), "calendar".into()]);
                 }
                 match self.client.get("runners/connectors").await {

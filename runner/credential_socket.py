@@ -12,7 +12,8 @@ One JSON line each way: {"token": "<attempt token>", "repository": "owner/repo",
 
 The same socket serves an inbox bot's mail access (runner/mail_key.py holds the Google key, which
 bots cannot read): {"token": "<attempt token>", "mail": {"service": "gmail", "mailbox": "ana@..."}}
-answers {"token": "<Gmail access token>", "expiry": "..."}. The hub named the mailboxes this attempt's
+answers {"token": "<Gmail access token>", "expiry": "...", "scopes": [...]} (scopes only for a person's own connected
+Google account, connectors/mail/oauth.py, so the turn refuses a write it did not grant). The hub named the mailboxes this attempt's
 bot may open when it handed the attempt out; any other mailbox, and any attempt of any other bot, gets an error
 ("no mailbox" when the hub named none: the bot is nobody's message bot).
 """
@@ -135,7 +136,12 @@ class Server:
             granted = self.mail(service, mailbox)
         except Exception as exc:
             return {"error": type(exc).__name__}
-        return {"token": granted["token"], "expiry": granted.get("expiry", "")} if granted else {"error": "no token"}
+        if not granted:
+            return {"error": "no token"}
+        reply = {"token": granted["token"], "expiry": granted.get("expiry", "")}
+        if isinstance(granted.get("scopes"), list):     # a connected account: the turn refuses what it did not grant
+            reply["scopes"] = granted["scopes"]
+        return reply
 
     def start(self):
         outer = self

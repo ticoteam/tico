@@ -7,6 +7,16 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A person can connect their own Google account for their inbox and calendar, without domain-wide delegation:
+  `scripts/mail.sh google connect --mailbox <address>` (docs/mail.md, Connect one Google account). The grant is read
+  only by default (`gmail.readonly`, calendar events read-only and free/busy); `--allow labels`, `drafts` or
+  `calendar-write` add one scope each. Tico refuses a write the grant does not cover before calling Google, and
+  refuses a sign-in by any account other than the one named. The grant is kept beside the service-account key, out
+  of bots' reach, and a bot's run still gets only an hour-long token for its own mailbox. A revoked or expired grant
+  says to reconnect; it never falls back to the service account. `google status` and `google revoke` list and remove
+  grants.
+
 ### Fixed
 - Health no longer reports work held by a computer that is waiting to update as a Tico bug (`queue_idle`). A
   computer due an update stops taking new work after 20 minutes until its running turns finish; Health's Stuck list

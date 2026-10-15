@@ -40,6 +40,17 @@ def mail_secret_path(config=None):
     return Path((config or {}).get("projects_dir") or "") / "secrets" / "google-sa.json"
 
 
+def mail_grants_path(config=None):
+    """People's own connected Google accounts (connectors/mail/oauth.py): google-oauth.json beside the key."""
+    named = os.environ.get("GOOGLE_OAUTH_GRANTS")
+    return Path(named).expanduser() if named else mail_secret_path(config).with_name("google-oauth.json")
+
+
+def mail_credential_present(config=None):
+    """True when this computer can give mail access: the service-account key, a connected account, or both."""
+    return mail_secret_path(config).is_file() or mail_grants_path(config).is_file()
+
+
 def mail_sync_seconds(config=None):
     raw = (config or {}).get("mail_sync_seconds")
     if raw is None or raw == "":
@@ -132,8 +143,10 @@ class ConnectorPublisher:
         return env
 
     def mail_secret(self):
+        if not mail_credential_present(self.config):
+            return None
         path = mail_secret_path(self.config)
-        return path if path.is_file() else None
+        return path if path.is_file() else mail_grants_path(self.config)
 
     def prepare(self):
         """Build the mail venv now, with room to finish: the first build takes a minute and every

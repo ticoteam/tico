@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
 from . import DEFAULT_TZ, Failure, INTERNAL_DOMAIN, MAX_BODY, TRUNCATED, zone
+from . import oauth
 
 HISTORY_TYPES = ("messageAdded", "labelAdded", "labelRemoved", "messageDeleted")
 
@@ -61,6 +62,7 @@ class Gmail:
 
     def __init__(self, service, mailbox, sleep=time.sleep):
         self.service, self.mailbox, self.sleep = service, mailbox, sleep
+        self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
         self._labels = None
 
     # -- plumbing ---------------------------------------------------
@@ -105,6 +107,7 @@ class Gmail:
         return {name: lid for lid, name in self.labels().items()}
 
     def create_label(self, name):
+        oauth.require(self.granted, "labels", self.mailbox, "create labels")
         body = {"name": name, "labelListVisibility": "labelShow",
                 "messageListVisibility": "show"}
         lab = self._exec(self.service.users().labels().create(userId="me", body=body),
@@ -173,6 +176,7 @@ class Gmail:
 
     # -- state changes ----------------------------------------------
     def modify(self, msg_id, add=(), remove=()):
+        oauth.require(self.granted, "labels", self.mailbox, "label, archive or mark mail read")
         body = {"addLabelIds": list(add), "removeLabelIds": list(remove)}
         return self._exec(
             self.service.users().messages().modify(userId="me", id=msg_id, body=body),
@@ -180,11 +184,13 @@ class Gmail:
 
     # -- drafts and sending (stage 2; every caller is behind policy.py and lint.py) --
     def create_draft(self, raw, thread_id=""):
+        oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
         return self._exec(self.service.users().drafts().create(userId="me", body=body, **media),
                           "drafts.create")
 
     def update_draft(self, draft_id, raw, thread_id=""):
+        oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
         return self._exec(
             self.service.users().drafts().update(userId="me", id=draft_id, body=body, **media),
@@ -195,11 +201,13 @@ class Gmail:
                                                             format="full"), "drafts.get")
 
     def delete_draft(self, draft_id):
+        oauth.require(self.granted, "drafts", self.mailbox, "delete drafts")
         return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),
                           "drafts.delete")
 
     def send_draft(self, draft_id):
         """The only path out of the company. Policy, lint and the reviewer sit in front of it."""
+        oauth.require(self.granted, "drafts", self.mailbox, "send mail")
         return self._exec(
             self.service.users().drafts().send(userId="me", body={"id": draft_id}),
             "drafts.send")
@@ -223,6 +231,10 @@ def _draft_body(raw, thread_id=""):
 
 def gmail_hint(exc, mailbox):
     text = str(exc or "").lower()
+    if "insufficient" in text and _connected(mailbox):
+        return (f"{mailbox} connected its own Google account without this capability (it starts read-only). "
+                "Connect again adding it, e.g. --allow labels or --allow drafts: "
+                + oauth.connect_command(mailbox))
     if "unauthorized_client" in text or "not authorized" in text:
         return ("domain-wide delegation is not granted, or not for these scopes. Google Workspace "
                 "Admin console > Security > Access and data control > API controls > Domain-wide "
@@ -238,6 +250,13 @@ def gmail_hint(exc, mailbox):
     if "notfound" in text or "not found" in text:
         return "No such message, thread, or label in this mailbox."
     return "Run `scripts/mail.sh doctor` for the full picture."
+
+
+def _connected(mailbox):
+    try:
+        return bool(oauth.grant(mailbox))
+    except Failure:
+        return False
 
 
 def _history_gone(exc):

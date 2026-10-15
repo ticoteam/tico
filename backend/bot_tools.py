@@ -144,7 +144,7 @@ def _declared_tool(entry, used, label):
     elif credential == "present":
         status, detail = "ready", f"{env} is set on {label}"
     elif credential == "missing" and env == "GOOGLE_SA_KEY":
-        status, problem = "problem", problem or f"{label} has no Google service-account key (google-sa.json in its state directory)"
+        status, problem = "problem", problem or f"{label} has no Google access: no service-account key (google-sa.json) and no connected Google account (google-oauth.json) in its state directory"
     elif credential == "missing":
         status, problem = "problem", problem or f"Credential missing on {label}"
     elif credential == "hub-vault":

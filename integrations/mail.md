@@ -5,7 +5,7 @@ kind: mail
 summary: Read, file, draft and (with approval) send email as a company mailbox, and read or book calendars, through the one shared mail service.
 access: "`$HUB_DIR/scripts/mail.sh` (connectors/mail) — never the Gmail or Calendar API, an SDK or curl"
 credentials:
-  - GOOGLE_SA_KEY — the Google service account with domain-wide delegation, key file secrets/google-sa.json on the runner computer; the mail service reads it by path and it is never loaded into a bot's environment
+  - GOOGLE_SA_KEY — the Google service account with domain-wide delegation, key file secrets/google-sa.json on the runner computer, or a person's own connected Google account (google-oauth.json beside it, read-only unless they allow more; docs/mail.md, Connect one Google account); the mail service reads it by path and it is never loaded into a bot's environment
 declared_as: |
   - service: gmail
     identity: owner@example.com          # the mailbox it acts as
