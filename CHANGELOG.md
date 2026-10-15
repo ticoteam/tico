@@ -48,10 +48,11 @@ All notable changes to Tico are recorded here. The format follows
   with "Text file busy". The runner wrote the file itself, so another of its threads starting a process at that
   moment kept it open for writing when the install checked `--version`; a child `cp` now writes it, as `tar` does.
 - A deleted task worktree whose cleanup stopped retrying can be cleaned up again. Once the cause is fixed (the
-  bot's write access restored, kept files cleared), delete the worktree link again: its original computer gets a
-  fresh set of cleanup attempts once the bot is idle, with all of its usual save and safety checks, and a Rust
-  runner on this release skips its earlier wait once. Deleting it again used to change nothing, so the link and
-  its folder stayed.
+  bot's write access restored, kept files cleared), delete the worktree link again with
+  `DELETE /api/v2/tasks/{id}/links/{link_id}` (the app and the hub CLI have no button or command for a worktree that
+  is still present): its original computer gets a fresh set of cleanup attempts once the bot is idle, with all of
+  its usual save and safety checks, and a Rust runner on this release skips its earlier wait once. Deleting it again
+  used to change nothing, so the link and its folder stayed.
 - Bots can read a pull request's checks (`gh pr checks`, commit statuses and check runs) on private
   repositories: run tokens carry Checks and Commit statuses read whenever the installation has accepted them. An
   App created by hand without them needs **Checks** and **Commit statuses** set to Read-only and accepted on the
