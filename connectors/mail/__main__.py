@@ -247,7 +247,12 @@ def cmd_e2e(args):
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
     (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
-    token, expiry, granted = auth.mint_token(args.mailbox, args.service)
+    try:
+        token, expiry, granted = auth.mint_token(args.mailbox, args.service)
+    except oauth.SignInFailed as e:
+        # The supervisor passes the reason to the turn, so a bot can say "reconnect" or "admin policy".
+        print(json.dumps({"error_kind": e.kind}))
+        raise
     print(json.dumps({"token": token, "expiry": expiry, **({"scopes": granted} if granted is not None else {})}))
     return 0
 
@@ -260,7 +265,7 @@ def cmd_google_connect(args):
     if not client or not client.get("client_id"):
         raise Failure("no Google OAuth client on this computer yet",
                       "Pass --client-file with the JSON of a Desktop app OAuth client from your Google Cloud project "
-                      "(docs/mail.md, Connect one Google account). It is kept with the grant, not in any bot's reach.")
+                      "(docs/mail.md, Connect your Google account). It is kept with the grant, not in any bot's reach.")
     capabilities = sorted({c.strip() for raw in args.allow or [] for c in raw.split(",") if c.strip()})
     flow = oauth.authorization(client, mailbox, capabilities)
     out = sys.stderr
@@ -283,6 +288,20 @@ def cmd_google_connect(args):
     return 0
 
 
+def cmd_google_finish(args):
+    """Finish a sign-in the server started: the connectors job pipes the request (code, verifier, Tico's client)
+    on stdin, so nothing of it is on a command line or in the environment."""
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        request = {}
+    result = oauth.finish(request if isinstance(request, dict) else {})
+    audit_log.record("owner", "google.connect", result.get("mailbox", ""), "",
+                     {k: result.get(k) for k in ("status", "kind", "can") if result.get(k)})
+    print(json.dumps(result))
+    return 0 if result["status"] == "connected" else 1
+
+
 def cmd_google_status(args):
     rows = oauth.status()
     if args.json:
@@ -297,9 +316,14 @@ def cmd_google_status(args):
 
 def cmd_google_revoke(args):
     mailbox = args.mailbox.strip().lower()
+    if args.json and not oauth.grant(mailbox):
+        print(json.dumps({"status": "revoked", "mailbox": mailbox, "google_confirmed": False, "absent": True}))
+        return 0                                        # already gone here: repeating a revoke is not an error
     confirmed = oauth.revoke(mailbox)
     audit_log.record("owner", "google.revoke", mailbox, "", {"google_confirmed": confirmed})
-    if confirmed:
+    if args.json:
+        print(json.dumps({"status": "revoked", "mailbox": mailbox, "google_confirmed": confirmed}))
+    elif confirmed:
         print(f"revoked {mailbox} at Google and removed it from this computer")
     else:
         print(f"removed {mailbox} from this computer; Google did not confirm the revocation, so also remove "
@@ -2927,6 +2951,8 @@ def build_parser():
                     help="add a write capability to read-only access: " + ", ".join(sorted(oauth.CAPABILITIES)))
     gc.add_argument("--json", action="store_true")
     gc.set_defaults(func=cmd_google_connect)
+    gf = gosub.add_parser("finish", help=argparse.SUPPRESS)
+    gf.set_defaults(func=cmd_google_finish)
     gs = gosub.add_parser("status", help="the connected accounts and what each may do (never a token)")
     gs.add_argument("--json", action="store_true")
     gs.set_defaults(func=cmd_google_status)

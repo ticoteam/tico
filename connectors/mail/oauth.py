@@ -7,8 +7,13 @@ The grant lives next to the service-account key (`google-oauth.json` beside `goo
 bot's turn still gets only a short-lived access token for one of the mailboxes the hub named for it
 (runner/credential_socket.py).
 
-The file holds the OAuth client (a "Desktop app" client from the owner's Google Cloud project) and one
-grant per mailbox, keyed by the address Google confirmed at sign-in. A mailbox with a grant is always
+A person connects from Settings > Inbox > Connect Google (backend/google_connect.py): the sign-in uses Tico's own
+OAuth client, Google returns the browser to the server, and this computer's connectors job finishes it here with
+`finish` (scripts/mail.sh google finish, the request on stdin). Nobody makes a Google Cloud project. A self-hosted
+team may still connect from the runner with its own Desktop client (`google connect --client-file`).
+
+The file holds one grant per mailbox, keyed by the address Google confirmed at sign-in, each with the OAuth client
+that issued it (a refresh token works only with its own client). A mailbox with a grant is always
 served from it: a revoked or expired grant is an error that says how to reconnect, never a quiet switch
 to the service account.
 
@@ -66,8 +71,56 @@ def grants_path(key_path=None):
 
 
 def connect_command(mailbox):
-    return (f"scripts/mail.sh google connect --mailbox {mailbox} (on a Docker runner: docker exec -it -u ticorun "
-            f"'<container-name>' scripts/mail.sh google connect --mailbox {mailbox}); docs/mail.md, Connect one Google account")
+    return f"{mailbox} signs in to Tico and uses Settings > Inbox > Connect Google (docs/mail.md, Connect your Google account)"
+
+
+class SignInFailed(Failure):
+    """A sign-in or refresh Google refused, with the reason a person can act on (`kind`, see REASONS)."""
+
+    def __init__(self, kind, msg, hint=""):
+        super().__init__(msg, hint)
+        self.kind = kind
+
+
+# Google's error codes, as the redirect, the token endpoint and a refresh report them, mapped to what they mean.
+REASONS = {
+    "admin_policy_enforced": "admin_policy", "org_internal": "app_unavailable", "access_denied": "declined",
+    "invalid_grant": "signin", "invalid_client": "app_config", "unauthorized_client": "app_config",
+    "redirect_uri_mismatch": "app_config", "invalid_scope": "app_config",
+}
+
+
+def reason_of(error):
+    return REASONS.get(str(error or "").strip().lower().split(":")[0].strip(), "error")
+
+
+def policy_message(mailbox):
+    domain = str(mailbox).rpartition("@")[2] or "this"
+    return (f"the Google Workspace for {domain} has a policy that blocks Tico from {mailbox}",
+            f"Only a Google Workspace admin for {domain} can allow it (Admin console > Security > API controls > "
+            "App access control > Tico, set to Trusted or Limited). Tico does not work around the policy and does "
+            "not ask for different access.")
+
+
+def refused(kind, mailbox, error=""):
+    """The SignInFailed for a Google error reason: what happened, and who can fix it."""
+    if kind == "admin_policy":
+        return SignInFailed(kind, *policy_message(mailbox))
+    if kind == "declined":
+        return SignInFailed(kind, f"Google did not grant access to {mailbox}: the request was cancelled or not approved",
+                            "Try again and choose Allow. If Google said the app is blocked or unverified, it is a "
+                            "Google policy, not something you missed: tell Tico's support.")
+    if kind == "app_unavailable":
+        return SignInFailed(kind, f"Tico's Google app is not open to {mailbox}'s organization yet",
+                            "This is a setting in Tico's Google app, not yours: tell Tico's support.")
+    if kind == "app_config":
+        return SignInFailed(kind, f"Google refused Tico's sign-in app ({error})",
+                            "This is Tico's Google app configuration, not yours: tell Tico's support.")
+    if kind == "signin":
+        return SignInFailed(kind, f"Google no longer accepts {mailbox}'s connection ({error or 'invalid_grant'})",
+                            refresh_failed_hint(mailbox))
+    return SignInFailed(kind, f"Google refused the sign-in for {mailbox}: {error or 'unknown error'}",
+                        "Start the sign-in again.")
 
 
 def load(path=None):
@@ -164,13 +217,11 @@ def code_from(answer, state):
     if not text:
         raise Failure("nothing was pasted", "Paste the full address from the browser after approving.")
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(text).query)
-    if query.get("error"):
-        raise Failure(f"Google did not grant access: {query['error'][0]}",
-                      "Approve the access on Google's page, or ask the Workspace admin to allow this app "
-                      "(Admin console > Security > API controls > App access control).")
     if query.get("state", [""])[0] != state:
         raise Failure("that address is not the answer to this sign-in (state does not match)",
                       "Start again and paste the address from the browser tab this sign-in opened.")
+    if query.get("error"):
+        raise refused(reason_of(query["error"][0]), "this account", query["error"][0])
     code = query.get("code", [""])[0]
     if not code:
         raise Failure("that address has no authorization code", "Paste the full address, starting with http://127.0.0.1.")
@@ -200,7 +251,7 @@ def _google_error(exc):
     return str(body.get("error") or getattr(exc, "code", "") or type(exc).__name__)
 
 
-def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None):
+def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None, mailbox=""):
     """Trade the code for tokens. Returns Google's answer; the caller keeps only the refresh token."""
     try:
         return _post(client.get("token_uri") or TOKEN_URI,
@@ -208,10 +259,15 @@ def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None):
                       "redirect_uri": redirect_uri, "grant_type": "authorization_code", "code_verifier": verifier},
                      opener)
     except urllib.error.HTTPError as e:
-        raise Failure(f"Google refused the authorization code: {_google_error(e)}",
-                      "Codes work once and expire in minutes: start the sign-in again.")
+        error = _google_error(e)
+        kind = reason_of(error)
+        if kind in ("admin_policy", "app_unavailable", "app_config"):
+            raise refused(kind, mailbox, error)
+        raise SignInFailed("code_rejected", f"Google refused the authorization code: {error}",
+                           "Codes work once and expire in minutes: start the sign-in again.")
     except (OSError, ValueError) as e:
-        raise Failure(f"could not reach Google to finish the sign-in: {type(e).__name__}", "Check this computer's network.")
+        raise SignInFailed("network", f"could not reach Google to finish the sign-in: {type(e).__name__}",
+                           "Check this computer's network, then start the sign-in again.")
 
 
 def confirmed_identity(access_token, opener=None):
@@ -234,22 +290,22 @@ def connect(mailbox, client, code, verifier, capabilities=(), path=None, redirec
     Refuses another account's grant (a person cannot connect someone else's mailbox, and a grant never
     reaches beyond the account that made it). Returns the public description of the stored grant."""
     mailbox = str(mailbox or "").strip().lower()
-    tokens = exchange(client, code, verifier, redirect_uri, opener)
+    tokens = exchange(client, code, verifier, redirect_uri, opener, mailbox)
     refresh, access = tokens.get("refresh_token"), tokens.get("access_token")
     if not access:
         raise Failure("Google returned no access token", "Start the sign-in again.")
     email, granted = confirmed_identity(access, opener)
     if email != mailbox:
         _revoke_token(refresh or access, opener)
-        raise Failure(f"the account that signed in is {email}, not {mailbox}; nothing was stored",
-                      f"Sign in to Google as {mailbox} (use a private window if the browser picks another account).")
+        raise SignInFailed("identity_mismatch", f"the account that signed in is {email}, not {mailbox}; nothing was stored",
+                           f"Sign in to Google as {mailbox} (use a private window if the browser picks another account).")
     if not refresh:
-        raise Failure("Google returned no refresh token, so access would end within the hour",
-                      "Remove this app at myaccount.google.com/permissions, then connect again.")
+        raise SignInFailed("no_refresh_token", "Google returned no refresh token, so access would end within the hour",
+                           "Remove Tico at myaccount.google.com/permissions, then connect again.")
     if not set(granted) & set(SERVICE_SCOPES["gmail"]):
         _revoke_token(refresh, opener)
-        raise Failure("the grant has no Gmail access (the Gmail box was unticked on Google's page); nothing was stored",
-                      "Connect again and leave the read your email box ticked.")
+        raise SignInFailed("no_gmail", "the grant has no Gmail access (the Gmail box was unticked on Google's page); "
+                           "nothing was stored", "Connect again and leave the read your email box ticked.")
     data = load(path)
     data["client"] = public = {"client_id": client["client_id"], "client_secret": client["client_secret"],
                                "token_uri": client.get("token_uri") or TOKEN_URI}
@@ -258,6 +314,35 @@ def connect(mailbox, client, code, verifier, capabilities=(), path=None, redirec
                                                   capabilities=sorted(set(capabilities)), connected_at=stamp)
     save(data, path)
     return describe(mailbox, data["grants"][mailbox])
+
+
+def finish(request, path=None, opener=None):
+    """Finish a sign-in the server started (scripts/mail.sh google finish): `request` carries the mailbox, the
+    code Google sent to the server's callback, the PKCE verifier, the redirect URI and Tico's OAuth client.
+    Returns {"status": "connected", ...describe} or {"status": "failed", "kind", "message", "hint"}; never a token."""
+    mailbox = str(request.get("mailbox") or "").strip().lower()
+    try:
+        client = {k: str(request.get(k) or "") for k in ("client_id", "client_secret", "token_uri")}
+        if not mailbox or not client["client_id"] or not client["client_secret"]:
+            raise SignInFailed("app_config", "this sign-in has no mailbox or no OAuth client",
+                               "This is Tico's Google app configuration, not yours: tell Tico's support.")
+        found = connect(mailbox, client, str(request.get("code") or ""), str(request.get("verifier") or ""), (),
+                        path, str(request.get("redirect_uri") or ""), opener)
+        return dict(found, status="connected")
+    except SignInFailed as e:
+        return {"status": "failed", "kind": e.kind, "message": e.msg, "hint": e.hint, "mailbox": mailbox}
+    except Failure as e:
+        return {"status": "failed", "kind": "error", "message": e.msg, "hint": e.hint, "mailbox": mailbox}
+
+
+def merge_into(protected, incoming):
+    """Grants found in the workspace merged into the protected file: each incoming mailbox replaces its own entry,
+    every other mailbox is kept (a second connect never drops the first person's grant)."""
+    merged = dict(protected or {})
+    merged["grants"] = dict((protected or {}).get("grants") or {}, **((incoming or {}).get("grants") or {}))
+    if (incoming or {}).get("client"):
+        merged["client"] = incoming["client"]
+    return merged
 
 
 def describe(mailbox, found):
@@ -324,10 +409,10 @@ def require(granted, capability, mailbox, what):
         return
     raise Refused(f"{mailbox} is connected to Tico read-only at Google, so Tico will not {what}; nothing was sent "
                   "to Google",
-                  f"Reading still works. Only if {mailbox} wants Tico to {what}, they connect again adding "
-                  f"--allow {capability}: {connect_command(mailbox)}")
+                  "Reading still works. Connect Google grants read-only access; Tico does not ask Google for more "
+                  f"on its own (an operator can add one scope with `google connect --allow {capability}`).")
 
 
 def refresh_failed_hint(mailbox):
-    return ("The grant was revoked at Google (myaccount.google.com/permissions), expired, or the Workspace admin "
-            f"blocked the app. Reconnect: {connect_command(mailbox)}. Tico does not fall back to a service account.")
+    return ("The connection was removed at Google (myaccount.google.com/permissions), expired, or the password "
+            f"changed. Reconnect: {connect_command(mailbox)}. Tico does not fall back to a service account.")

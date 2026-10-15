@@ -138,6 +138,9 @@ class Settings:
     oidc_client_id: str = ""
     oidc_client_secret: str = field(default="", repr=False)
     oidc_client_secret_file: Path | None = None
+    # Tico's own Google OAuth web client for Settings > Inbox > Connect Google (backend/google_connect.py).
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = field(default="", repr=False)
     oidc_allowed_domains: tuple[str, ...] = ()
     session_secret: str = field(default="", repr=False)
     # Off: a bot may invite anyone to a calendar event. On: only people on the roster (403 external_attendee).
@@ -353,6 +356,8 @@ class Settings:
             cognito_logout_url=os.environ.get("TICO_COGNITO_LOGOUT_URL", "").strip(),
             oidc_issuer=os.environ.get("TICO_OIDC_ISSUER", "").strip(),
             oidc_client_id=os.environ.get("TICO_OIDC_CLIENT_ID", "").strip(),
+            google_oauth_client_id=os.environ.get("TICO_GOOGLE_OAUTH_CLIENT_ID", "").strip(),
+            google_oauth_client_secret=os.environ.get("TICO_GOOGLE_OAUTH_CLIENT_SECRET", "").strip(),
             oidc_client_secret=os.environ.get("TICO_OIDC_CLIENT_SECRET", "").strip(),
             oidc_client_secret_file=(Path(os.environ["TICO_OIDC_CLIENT_SECRET_FILE"])
                                      if os.environ.get("TICO_OIDC_CLIENT_SECRET_FILE") else None),

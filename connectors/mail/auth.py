@@ -31,7 +31,7 @@ SETUP_HINT = ("The owner creates it once: Google Cloud console > project acme-ti
               "the Gmail API and the Google Calendar API > IAM & Admin > Service Accounts > "
               "company-hub-mail > Keys > Add key > JSON. Save it as the path above and "
               "`chmod 600` it. Full steps: connectors/mail/README.md. Without domain-wide delegation, "
-              "each person connects their own account instead: docs/mail.md, Connect one Google account.")
+              "each person connects their own account instead: docs/mail.md, Connect your Google account.")
 
 
 def key_path():
@@ -119,6 +119,9 @@ def supervisor_token(mailbox, scopes):
             raise Failure(f"the runner would not let this turn act as {mailbox}; this bot may use {', '.join(e.mailboxes)}",
                           "The server names those for this bot, not its bot.yaml. If the address is wrong, an owner or admin "
                           'sets it: POST /api/v2/access/people/<person> {"mailbox": "<address>"}. docs/mail.md, Who can read the key.')
+        reason = getattr(e, "reason", "") or str(e)
+        if reason in ("signin", "admin_policy", "app_config", "app_unavailable"):
+            raise oauth.refused(reason, mailbox)
         raise Failure(f"the runner would not give this turn access to {mailbox}: {e}",
                       "The run's attempt is not known to the runner, or it has ended. docs/mail.md, Works on Linux runners.")
 
@@ -171,9 +174,10 @@ def person_credentials(mailbox, found, scopes=None):
     try:
         creds.refresh(Request())
     except RefreshError as e:
-        reason = str(e.args[0] if e.args else e).split(":")[0] or "refused"
-        raise Failure(f"Google would not refresh {mailbox}'s connected account ({reason})",
-                      oauth.refresh_failed_hint(mailbox))
+        reason = str(e.args[0] if e.args else e).split(":")[0].strip() or "refused"
+        kind = oauth.reason_of(reason)
+        raise oauth.refused(kind if kind in ("admin_policy", "app_config", "app_unavailable") else "signin",
+                            mailbox, reason)
     except TransportError as e:
         raise Failure(f"could not reach Google to refresh {mailbox}'s access: {type(e).__name__}",
                       "Check this computer's network, then try again.")

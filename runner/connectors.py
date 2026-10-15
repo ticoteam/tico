@@ -91,12 +91,18 @@ def failure_reason(exc):
     text = str(exc).lower()
     if "invalid email or user id" in text:
         return "error"                  # no such mailbox: reconnecting would not help
+    if "admin_policy" in text or "policy that blocks tico" in text:
+        return "admin_policy"           # the Workspace admin's setting: reconnecting would not help either
     if any(word in text for word in ("invalid_grant", "unauthorized_client", "access_denied", "401", "403")):
         return "signin"
     if isinstance(exc, (OSError, TimeoutError, subprocess.TimeoutExpired)) or any(
             word in text for word in ("timed out", "timeout", "unreachable", "connection", "network", "name resolution")):
         return "network"
     return "error"
+
+
+class CalendarRefused(RuntimeError):
+    """The mail CLI refused a calendar write (exit 2) before calling the provider."""
 
 
 def mail_umask():
@@ -108,7 +114,7 @@ def mail_umask():
 
 
 class ConnectorPublisher:
-    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None):
+    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
         # The script this checkout ships, not one named after a company's folder: an environment
@@ -119,6 +125,7 @@ class ConnectorPublisher:
         self.fetch = fetch or self.calendar
         self.run_mail = mail or self.mail_cli
         self.create_event = event or self.calendar_event
+        self.finish_google = google or self.google_finish
         self.stop = threading.Event()
         self.accounts = {}
         self.mailboxes = {}
@@ -184,6 +191,9 @@ class ConnectorPublisher:
             [str(self.script), "connector-event", "--as", self.owner, "--json"],
             cwd=self.script.parents[1], input=json.dumps(action), capture_output=True,
             text=True, timeout=40, env=env, **mail_umask())
+        if result.returncode == 2:
+            # A refusal before any provider call (a read-only Google grant, a policy): nothing was created.
+            raise CalendarRefused("Tico refused the calendar event before calling Google")
         if result.returncode:
             raise RuntimeError("Local calendar event creation failed")
         try:
@@ -193,6 +203,51 @@ class ConnectorPublisher:
         if not isinstance(payload, dict) or not payload.get("event_id"):
             raise RuntimeError("Local calendar event creation returned no event")
         return payload
+
+    def google_finish(self, request):
+        """Run `mail.sh google finish` (or `google revoke`) for one claimed Connect Google. The code, the verifier and
+        the client go on stdin, never a command line; the grant stays in this computer's protected file. Returns
+        the result for the hub: the outcome and why, never a token."""
+        connect = request["action"] == "connect"
+        args = ["google", "finish"] if connect else ["google", "revoke", "--mailbox", request["mailbox"], "--json"]
+        payload = {key: request.get(key) for key in ("mailbox", "code", "verifier", "redirect_uri", "client_id",
+                                                     "client_secret")} if connect else None
+        result = subprocess.run([str(self.script), *args], cwd=self.script.parents[1],
+                                input=json.dumps(payload) if connect else "", capture_output=True, text=True,
+                                timeout=60, env=self.mail_env(), **mail_umask())
+        try:
+            answer = json.loads(result.stdout or "{}")
+        except ValueError:
+            answer = {}
+        if not isinstance(answer, dict):
+            answer = {}
+        if connect and answer.get("status") == "connected" and not result.returncode:
+            return {"status": "connected", "can": [str(c) for c in answer.get("can") or []][:20]}
+        if not connect and answer.get("status") == "revoked" and not result.returncode:
+            return {"status": "disconnected"}
+        return {"status": "failed", "kind": str(answer.get("kind") or "error")[:40],
+                "message": str(answer.get("message") or "")[:500], "hint": str(answer.get("hint") or "")[:500]}
+
+    def google_connect_tick(self, limit=5):
+        """Finish the Connect Google sign-ins and disconnects people started in Settings > Inbox."""
+        done = 0
+        for _ in range(limit):
+            if self.stop.is_set():
+                break
+            claimed = self.client.post("connectors/mail/google/claim", {})
+            request = claimed.get("connect") if isinstance(claimed, dict) else None
+            if not request:
+                break
+            try:
+                body = self.finish_google(request)
+            except subprocess.TimeoutExpired:
+                body = {"status": "failed", "kind": "network", "message": "Finishing the sign-in timed out.",
+                        "hint": "Connect again."}
+            except Exception as exc:
+                body = {"status": "failed", "kind": "error", "message": type(exc).__name__, "hint": "Connect again."}
+            self.client.post(f"connectors/mail/google/{request['id']}/result", body)
+            done += 1
+        return done
 
     def calendar_action_tick(self, limit=10):
         completed = 0
@@ -207,6 +262,8 @@ class ConnectorPublisher:
                 result = self.create_event(action)
                 body = {"status": "succeeded", "event_id": result.get("event_id") or "",
                         "meeting_url": result.get("meeting_url") or "", "error": ""}
+            except CalendarRefused as exc:
+                body = {"status": "failed", "event_id": "", "meeting_url": "", "error": str(exc)}
             except subprocess.TimeoutExpired as exc:
                 body = {"status": "unknown", "event_id": "", "meeting_url": "",
                         "error": type(exc).__name__}
@@ -400,10 +457,18 @@ class ConnectorPublisher:
         # copies, and a mailbox that cannot be read must not stop the calendar.
         mail = Outage("Tico connectors", "mail refresh failed", "mail refresh still failing",
                       "mail refresh working again", progress=600)
+        google = Outage("Tico connectors", "Connect Google failed", "Connect Google still failing",
+                        "Connect Google working again", progress=600)
         from .freshness import CodeWatch
         watch = CodeWatch("Tico connectors")
         self.prepare()
         while not self.stop.is_set():
+            try:
+                self.ready()
+                self.google_connect_tick()      # first: a person waits on it, and it needs no key
+                google.recovered()
+            except Exception as exc:
+                google.failed(exc)
             try:
                 self.tick()
                 cloud.recovered()

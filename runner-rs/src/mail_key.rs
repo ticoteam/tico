@@ -78,7 +78,10 @@ fn protect_one(config: &Config, name: &str) -> bool {
             _ => return Ok(false),
         };
         let _ = meta;
-        let data = std::fs::read(&old)?;
+        let mut data = std::fs::read(&old)?;
+        if name == GRANTS && new.is_file() {
+            data = merged_grants(&std::fs::read(&new)?, &data);
+        }
         if let Some(parent) = new.parent() {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
         }
@@ -101,6 +104,25 @@ fn protect_one(config: &Config, name: &str) -> bool {
             false
         }
     }
+}
+
+/// The protected grants with the workspace's merged in (connectors/mail/oauth.py merge_into): each incoming
+/// mailbox replaces its own entry and every other one is kept, so a move never drops a protected grant.
+fn merged_grants(protected: &[u8], incoming: &[u8]) -> Vec<u8> {
+    let mut kept: Value = serde_json::from_slice(protected).ok().filter(|v: &Value| v.is_object()).unwrap_or_else(|| json!({}));
+    let Ok(new) = serde_json::from_slice::<Value>(incoming) else { return protected.to_vec() };
+    if !kept["grants"].is_object() {
+        kept["grants"] = json!({});
+    }
+    if let Some(grants) = new.get("grants").and_then(|g| g.as_object()) {
+        for (mailbox, grant) in grants {
+            kept["grants"][mailbox] = grant.clone();
+        }
+    }
+    if let Some(client) = new.get("client").filter(|c| c.is_object()) {
+        kept["client"] = client.clone();
+    }
+    serde_json::to_vec_pretty(&kept).unwrap_or_else(|_| protected.to_vec())
 }
 
 /// `protected`, `exposed` (a key bots can read) or None (no key on this computer).
@@ -271,7 +293,9 @@ async fn mint(script: &Path, key: &Path, service: &str, mailbox: &str) -> Result
         .map_err(|_| "TimeoutExpired".to_string())?
         .map_err(|_| "FileNotFoundError".to_string())?;
     if !out.status.success() {
-        return Err("RuntimeError".into());
+        // A connected account's refusal names its reason (signin, admin_policy, ...) so the turn can say what to do.
+        let kind = serde_json::from_slice::<Value>(&out.stdout).ok().and_then(|v| v["error_kind"].as_str().map(String::from));
+        return Err(kind.filter(|k| k.len() <= 40 && k.chars().all(|c| c.is_ascii_lowercase() || c == '_')).unwrap_or_else(|| "RuntimeError".into()));
     }
     serde_json::from_slice(&out.stdout).map_err(|_| "JSONDecodeError".to_string())
 }
@@ -361,6 +385,18 @@ mod tests {
         assert!(!dir.join("state-new").join(FILE).exists());
         assert!(!carry_protected(&config), "once per registration");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_second_grant_moved_from_the_workspace_keeps_the_first() {
+        let merged: Value = serde_json::from_slice(&merged_grants(
+            br#"{"grants": {"ben@x": {"refresh_token": "a"}}, "client": {"client_id": "1"}}"#,
+            br#"{"grants": {"ana@x": {"refresh_token": "b"}}}"#,
+        ))
+        .unwrap();
+        assert_eq!(merged["grants"]["ben@x"]["refresh_token"], "a");
+        assert_eq!(merged["grants"]["ana@x"]["refresh_token"], "b");
+        assert_eq!(merged["client"]["client_id"], "1");
     }
 
     #[test]

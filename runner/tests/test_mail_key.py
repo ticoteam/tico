@@ -244,10 +244,26 @@ def test_a_connected_accounts_scopes_reach_the_turn_with_its_token(tmp_path):
         return {"token": "ya29.t", "expiry": "", "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}
     server = C.Server(str(tmp_path / "cred.sock"), lambda bot: "ghs", mail).start()
     try:
-        server.register("attempt", "inbox", ["chris@hotmic.example"])
-        reply = C.request_mail(server.path, "attempt", "gmail", "chris@hotmic.example")
+        server.register("attempt", "inbox", ["ben@acme.example"])
+        reply = C.request_mail(server.path, "attempt", "gmail", "ben@acme.example")
         assert reply["scopes"] == ["https://www.googleapis.com/auth/gmail.readonly"]
         with pytest.raises(ValueError):            # the grant is bound to its own mailbox only
-            C.request_mail(server.path, "attempt", "gmail", "ana@hotmic.example")
+            C.request_mail(server.path, "attempt", "gmail", "ana@acme.example")
     finally:
         server.stop()
+
+
+def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
+    home = tmp_path / "home"
+    secrets = home / "workspace" / "secrets"
+    secrets.mkdir(parents=True)
+    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
+    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
+    for mailbox in ("ben@x.example", "ana@x.example"):
+        (secrets / mail_key.GRANTS).write_text('{"grants": {"%s": {"refresh_token": "t-%s"}}}' % (mailbox, mailbox))
+        os.chmod(secrets / mail_key.GRANTS, 0o600)
+        assert mail_key.protect(config) is True
+    import json
+    kept = json.loads((home / "state-r1" / mail_key.GRANTS).read_text())["grants"]
+    assert sorted(kept) == ["ana@x.example", "ben@x.example"]

@@ -146,6 +146,8 @@ def protect(config):
             if old.is_symlink() or not old.is_file():
                 continue
             data = old.read_bytes()
+            if name == GRANTS and new.is_file():
+                data = _merged_grants(new, data)
             new.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             temporary = new.with_name(new.name + ".new")
             temporary.unlink(missing_ok=True)
@@ -160,6 +162,17 @@ def protect(config):
         log(f"Tico runner: moved {name} out of workspace/secrets to {new}; bots ask the runner for mail access")
         moved = True
     return moved
+
+
+def _merged_grants(protected, incoming):
+    """The protected grants with the workspace's merged in, so a move never drops a grant already protected."""
+    from connectors.mail.oauth import merge_into
+    try:
+        kept = json.loads(protected.read_text())
+    except ValueError:
+        kept = {}
+    return json.dumps(merge_into(kept if isinstance(kept, dict) else {}, json.loads(incoming)), indent=2,
+                      sort_keys=True).encode()
 
 
 def status(config):

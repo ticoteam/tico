@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import routines
+from . import google_connect, routines
 from .store import H, P, Problem, encode
 
 
@@ -199,7 +199,7 @@ class MailMessage(M.Contract):
 class ConnectorFailure(M.Contract):
     account: str = Field(min_length=3, max_length=320)
     # Only the kind of failure reaches the cloud, never the provider's message or a local path.
-    reason: Literal["signin", "network", "error", "delegation"]
+    reason: Literal["signin", "network", "error", "delegation", "admin_policy"]
 
 
 class ConnectorHealth(M.Contract):
@@ -210,6 +210,9 @@ class ConnectorHealth(M.Contract):
 CONNECTOR_REASON = {"signin": "its Google sign-in was refused, so retrying won't fix it",
                     "network": "Google or the network can't be reached; the Mac keeps retrying",
                     "error": "the connector failed; the Mac keeps retrying",
+                    "admin_policy": "the Google Workspace for {domain} has a policy that blocks Tico; only that "
+                                    "Workspace's administrator can allow it (Admin console > Security > API controls > "
+                                    "App access control), and Tico does not ask for more access to get around it",
                     "delegation": "the Google service account has no domain-wide delegation for the domain {domain}, "
                                   "so it can't act as this mailbox; add that domain's delegation in Google Workspace, "
                                   "or give the message bot a mailbox on a domain the key covers"}
@@ -290,11 +293,19 @@ def install_connectors(app, store, execution, mutate):
     @app.get("/api/v2/runners/connectors")
     def assigned(request: Request):
         """Which connector jobs this computer runs because the owner named its operator in
-        TICO_PROCESSING_OPERATORS. Empty means: run them only where the Google key is."""
-        with store.read() as c:
+        TICO_PROCESSING_OPERATORS. Empty means: run them only where the Google key or a connected account is,
+        or where a person's Connect Google waits to be finished."""
+        with store.transaction() as c:
             runner = execution.runner(c, request.state.identity)
             named = runner["operator"] in store.settings.processing_operators
-        return {"connectors": ["mail", "calendar"] if named else []}
+            if named:
+                return {"connectors": ["mail", "calendar"]}
+            # A person's Connect Google waits for a computer that has no key or grant yet: the one that may publish
+            # mail (the owner's, when no operator is named) runs the job so it can take the grant.
+            eligible = not store.settings.processing_operators and runner["operator"] == execution.auth.owner_id(c)
+            return {"connectors": ["mail"] if eligible and google_connect.pending(c) else []}
+
+    google_connect.install(app, store, publisher, mutate)
 
     @app.get("/api/v2/connectors/calendar/targets")
     def targets(request: Request):

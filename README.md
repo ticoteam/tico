@@ -212,6 +212,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_OIDC_CLIENT_ID` | For `oidc`: the OAuth client id | `1234-abc.apps.googleusercontent.com` |
 | `TICO_OIDC_CLIENT_SECRET` or `TICO_OIDC_CLIENT_SECRET_FILE` | For `oidc`: the client secret, or a file holding it | `/etc/tico/oidc-secret` |
 | `TICO_OIDC_ALLOWED_DOMAINS` | For `oidc`, optional: comma-separated email domains that may sign in (Google also checks the `hd` claim) | `acme.com` |
+| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Settings > Inbox ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
 | `TICO_SESSION_IDLE_SECONDS` and `TICO_SESSION_ABSOLUTE_SECONDS` | For `oidc`, optional: how long a sign-in lasts without use (default 30 days) and in all (default 90 days). Lower them to sign humans out sooner | `28800` |
 | `TICO_STREAM_KEEPALIVE_SECONDS` | Optional: how often a quiet event stream (pages, runners) sends a keepalive, 5 to 50 seconds (default 15). Keep it under the idle timeout of any proxy in front | `20` |
 | `TICO_SESSION_SECRET` | For `oidc`, optional: at least 32 characters, signs the sign-in round trip. Generated and kept in `tico-session-secret` beside the database (mode 0600) when unset | |

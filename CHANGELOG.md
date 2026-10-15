@@ -8,14 +8,17 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- A person can connect their own Google account for their inbox and calendar, without domain-wide delegation:
-  `scripts/mail.sh google connect --mailbox <address>` (docs/mail.md, Connect one Google account). The grant is read
-  only by default (`gmail.readonly`, calendar events read-only and free/busy); `--allow labels`, `drafts` or
-  `calendar-write` add one scope each. Tico refuses a write the grant does not cover before calling Google, and
-  refuses a sign-in by any account other than the one named. The grant is kept beside the service-account key, out
-  of bots' reach, and a bot's run still gets only an hour-long token for its own mailbox. A revoked or expired grant
-  says to reconnect; it never falls back to the service account. `google status` and `google revoke` list and remove
-  grants.
+- A person can connect their own Google account for their inbox and calendar from Settings > Inbox > Connect
+  Google: sign in, approve, done. No service account, no domain-wide delegation, no Workspace admin and no Google Cloud
+  project of their own; Tico supplies the Google app (docs/mail.md, Connect your Google account). The grant is read
+  only at Google (`gmail.readonly`, calendar events read-only and free/busy), and Tico refuses label, archive, draft,
+  send and calendar changes before calling Google. Only the person can connect their own mailbox, and a sign-in by any
+  other account is refused and revoked. The computer that syncs mail keeps the grant, out of bots' reach; a bot's run
+  still gets only an hour-long token for its own mailbox. A Workspace policy that blocks Tico is named as the admin's
+  ("has a policy that blocks Tico"), a revoked or expired grant says to reconnect, and neither falls back to a service
+  account. Disconnect revokes the grant at Google. While Tico's Google app is still in Google's Testing state, only its
+  test users can connect and Google ends each grant after 7 days; lasting sync waits on Google's verification
+  (docs/mail.md).
 
 ### Fixed
 - Health no longer reports work held by a computer that is waiting to update as a Tico bug (`queue_idle`). A
