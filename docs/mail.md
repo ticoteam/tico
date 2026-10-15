@@ -476,7 +476,10 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Settings > Inbox revokes the grant at Google and deletes it from the computer.
+- **Disconnect** in Settings > Inbox revokes the grant at Google and deletes it from the computer that holds it.
+  A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
+  already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
+  holds nothing, and Settings shows that instead of "disconnected".
 
 Where the grant is kept: `google-oauth.json` beside `google-sa.json` (the runner's state directory on Linux, mode 0600,
 closed to bots). It moves out of `workspace/secrets` without dropping other grants, and follows a re-enrollment the
@@ -498,6 +501,12 @@ ways to supply it:
   `gmail.readonly` is a restricted scope, so verification includes Google's yearly security assessment. Until then an
   app in **Testing** takes at most 100 listed test users, and Google ends each grant after 7 days. That is enough to
   try Connect Google, not for lasting sync.
+
+The computer that syncs mail keeps each grant together with the app's client secret, because Google refreshes a
+grant only with the client that issued it. For a private app that is the same organization's secret on its own
+computer. Tico's public app must not hand its secret to every team's computers this way: it is not to be switched on
+until the server refreshes grants on the computers' behalf (the computer sends the refresh token, the server adds the
+secret and returns only an hour-long access token, keeping nothing).
 
 Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
 Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**

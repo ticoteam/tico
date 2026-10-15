@@ -14,7 +14,7 @@ import pytest
 from backend import google_connect
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
 from connectors.mail import oauth
 from runner.connectors import ConnectorPublisher, failure_reason
 
@@ -119,8 +119,8 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     r = app.post("/api/v2/connectors/mail/google/claim", json={}, headers=headers("cara-test"))
     assert r.status_code == 403                                      # a person never sees the code again
     machine = runner(app)
-    with app.app.state.store.read() as c:
-        assert google_connect.pending(c)
+    with app.app.state.store.transaction() as c:
+        assert google_connect.pending(c, machine["runner_id"])
     assert get(app, "runners/connectors", machine["token"])["connectors"] == ["mail"]
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
     assert claimed["action"] == "connect" and claimed["mailbox"] == "cara@acme.example"
@@ -165,6 +165,71 @@ def test_disconnect_is_queued_for_the_computer_without_the_client(app):
     assert r.status_code == 409                                      # a revoke cannot come back as a connect
     post(app, f"connectors/mail/google/{claimed['id']}/result", {"status": "disconnected"}, machine["token"])
     assert get(app, "mail/google", "cara-test")["status"] == "disconnected"
+
+
+def connected(app, machine, token="cara-test"):
+    """A finished connect, taken and answered by `machine`."""
+    _, query = start(app, token)
+    back(app, token, state=query["state"], code="c-1")
+    claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+    assert claimed and claimed["action"] == "connect"
+    post(app, f"connectors/mail/google/{claimed['id']}/result", {"status": "connected", "can": ["read"]},
+         machine["token"])
+
+
+def test_disconnect_and_reconnect_go_only_to_the_computer_holding_the_grant(app):
+    mac, server = runner(app, label="Mac"), runner(app, label="Linux server")
+    connected(app, mac)
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    # The other computer is not told to run the job for it, and can't take it even saying it holds mail.
+    assert get(app, "runners/connectors", server["token"])["connectors"] == []
+    assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, server["token"])["connect"] is None
+    claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, mac["token"])["connect"]
+    assert claimed["action"] == "disconnect"
+    post(app, "connectors/mail/google/cara/result", {"status": "disconnected"}, mac["token"])
+    assert row(app)["holder"] is None
+    # A reconnect also goes to the holder, and a failed one leaves the earlier grant's holder in place.
+    connected(app, mac)
+    _, query = start(app)
+    back(app, state=query["state"], code="c-2")
+    assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, server["token"])["connect"] is None
+    claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, mac["token"])["connect"]
+    post(app, "connectors/mail/google/cara/result", {"status": "failed", "kind": "identity_mismatch"}, mac["token"])
+    assert row(app)["holder"] == mac["runner_id"]
+
+
+def test_a_first_connect_goes_to_the_computer_that_already_holds_mail(app):
+    keyed, bare = runner(app, label="Mac with the key"), runner(app, label="Laptop")
+    assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, keyed["token"])["connect"] is None
+    _, query = start(app)
+    back(app, state=query["state"], code="c-1")
+    assert get(app, "runners/connectors", bare["token"])["connectors"] == []
+    assert post(app, "connectors/mail/google/claim", {}, bare["token"])["connect"] is None
+    assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, keyed["token"])["connect"]
+
+
+def test_a_holder_that_was_removed_no_longer_keeps_the_row(app):
+    mac, server = runner(app, label="Mac"), runner(app, label="Linux server")
+    connected(app, mac)
+    with app.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), mac["runner_id"]))
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    assert post(app, "connectors/mail/google/claim", {}, server["token"])["connect"]["action"] == "disconnect"
+
+
+def test_nobody_acting_for_the_person_connects_or_disconnects(app):
+    settings = app.app.state.store.settings
+    settings.test_identities["cara-assistant"] = Identity("human:cara", "human", "cara@acme.example", via="assistant")
+    machine, _, attempt = setup_attempt(app, "ops")
+    settings.test_identities["cara-botops"] = Identity("human:cara", "human", "cara@acme.example",
+                                                       task_actor="bot:ops", runner_id=machine["runner_id"],
+                                                       attempt_id=attempt["id"])
+    for token in ("cara-assistant", "cara-botops"):
+        for path in ("connect", "disconnect"):
+            r = app.post("/api/v2/mail/google/" + path, json={}, headers=headers(token))
+            assert r.status_code == 403, (token, path, r.text)
+    with app.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM google_connects").fetchone()[0] == 0
 
 
 def test_a_sign_in_nobody_finishes_expires(app):
@@ -257,3 +322,34 @@ def test_a_finish_that_hangs_is_reported_failed(tmp_path):
     publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "test"}, client=hub, google=hang)
     publisher.google_connect_tick()
     assert hub.results[0][1]["status"] == "failed" and hub.results[0][1]["kind"] == "network"
+
+
+def test_a_revoke_with_nothing_here_is_not_called_disconnected(tmp_path):
+    mail_script(tmp_path, 'echo \'{"status": "revoked", "mailbox": "cara@acme.example", "absent": true}\'\n')
+    hub = Hub([{"id": "cara", "action": "disconnect", "mailbox": "cara@acme.example"}])
+    publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "test"}, client=hub)
+    publisher.script = tmp_path / "hub/scripts/mail.sh"
+    publisher.google_connect_tick()
+    assert hub.results[0][1]["status"] == "failed" and hub.results[0][1]["kind"] == "not_here"
+
+
+def test_a_calendar_write_refused_before_google_is_posted_failed_not_unknown(tmp_path):
+    mail_script(tmp_path, 'cat > /dev/null\necho "refused: connected to Tico read-only at Google" >&2\nexit 2\n')
+
+    class Calendar:
+        def __init__(self):
+            self.queue, self.results = [{"id": "act-1", "calendar": "cara@acme.example"}], []
+
+        def post(self, path, body):
+            if path == "connectors/calendar/actions/claim":
+                return {"action": self.queue.pop(0) if self.queue else None}
+            self.results.append((path, body))
+            return {"ok": True}
+    hub = Calendar()
+    publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "test", "owner_handle": "ana"},
+                                   client=hub)
+    publisher.script = tmp_path / "hub/scripts/mail.sh"
+    assert publisher.calendar_action_tick() == 1
+    path, body = hub.results[0]
+    assert path == "connectors/calendar/actions/act-1/result" and body["status"] == "failed"
+    assert "refused" in body["error"]

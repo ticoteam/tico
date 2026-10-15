@@ -303,7 +303,7 @@ def install_connectors(app, store, execution, mutate):
             # A person's Connect Google waits for a computer that has no key or grant yet: the one that may publish
             # mail (the owner's, when no operator is named) runs the job so it can take the grant.
             eligible = not store.settings.processing_operators and runner["operator"] == execution.auth.owner_id(c)
-            return {"connectors": ["mail"] if eligible and google_connect.pending(c) else []}
+            return {"connectors": ["mail"] if eligible and google_connect.pending(c, runner["id"]) else []}
 
     google_connect.install(app, store, publisher, mutate)
 

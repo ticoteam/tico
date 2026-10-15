@@ -35,8 +35,10 @@ from .store import H, P, Problem
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL);
+ kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
+ updated TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
+CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
 """
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -48,13 +50,14 @@ CALLBACK = "/api/v2/mail/google/callback"
 INBOX = "/#/settings/inbox"    # Settings > Inbox (ui/app/router.js), which reads the outcome itself
 SIGN_IN_SECONDS = 600           # Google's codes last about ten minutes; a sign-in left open longer starts again
 CLAIM_SECONDS = 300             # a computer that claimed and never answered
+HOLDER_SECONDS = 600            # a computer that said it holds mail credentials, this recently
 QUEUED = ("ready", "disconnecting")
 # What Google may put in the callback's `error`, as the kind the person is shown.
 CALLBACK_ERRORS = {"admin_policy_enforced": "admin_policy", "org_internal": "app_unavailable",
                    "access_denied": "declined", "invalid_scope": "app_config", "invalid_client": "app_config",
                    "unauthorized_client": "app_config", "redirect_uri_mismatch": "app_config"}
 KINDS = ("admin_policy", "app_unavailable", "declined", "app_config", "expired", "identity_mismatch",
-         "no_refresh_token", "no_gmail", "code_rejected", "network", "signin", "unknown", "error")
+         "no_refresh_token", "no_gmail", "code_rejected", "network", "signin", "unknown", "not_here", "error")
 
 
 def policy_message(mailbox):
@@ -74,6 +77,8 @@ MESSAGES = {
     "app_config": ("Tico's Google app is not set up correctly for this server, so Google refused the sign-in.",
                    "This is Tico's Google app configuration, not yours: tell Tico's support."),
     "expired": ("The sign-in took too long and expired before it finished.", "Connect again."),
+    "not_here": ("The computer that answered doesn't hold your Google access, so nothing was disconnected.",
+                 "Try again in a few minutes. You can also remove Tico at myaccount.google.com/permissions."),
     "unknown": ("The computer that syncs your mail did not say whether the connection finished.",
                 "Connect again. If it keeps happening, check that computer is online."),
 }
@@ -85,6 +90,10 @@ class ConnectorResult(M.Contract):
     message: str = Field(default="", max_length=500)
     hint: str = Field(default="", max_length=500)
     can: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ClaimRequest(M.Contract):
+    holds_mail: bool = False        # this computer has a Google key or connected accounts (runner/connectors.py)
 
 
 def configured(settings):
@@ -137,10 +146,29 @@ def view(row, settings, mailbox, syncing):
     return out
 
 
-def pending(c):
-    """Whether a connect or disconnect waits for a computer: the connectors job runs for it (backend/connectors.py)."""
+def claimable(c, runner_id, holds):
+    """The next connect or disconnect this computer may take, or None.
+
+    A person's row belongs to the computer that holds their grant (`holder`): a reconnect or a disconnect goes only
+    there, so a revoke never runs where there is nothing to revoke while the grant stays live elsewhere. A row with no
+    live holder (a first connect) goes to a computer that already holds mail credentials, so mail stays on one
+    computer; any of the publishing computers takes it only when none has said so recently."""
     expire(c)
-    return bool(c.execute("SELECT 1 FROM google_connects WHERE status IN ('ready','disconnecting') LIMIT 1").fetchone())
+    elsewhere = c.execute(
+        "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
+        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen>? UNION ALL SELECT 1 FROM google_connects g "
+        "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
+        (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone()
+    return c.execute(
+        "SELECT g.* FROM google_connects g LEFT JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL "
+        "WHERE g.status IN ('ready','disconnecting') AND (g.holder=? OR (r.id IS NULL AND ?)) "
+        "ORDER BY g.updated LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
+
+
+def pending(c, runner_id):
+    """Whether a connect or disconnect waits for this computer, which has no mail credentials yet (otherwise its
+    connectors job runs anyway): the job then runs for it (backend/connectors.py)."""
+    return claimable(c, runner_id, False) is not None
 
 
 def install(app, store, publisher, mutate):
@@ -231,14 +259,15 @@ def install(app, store, publisher, mutate):
         return mutate(request, body, work)
 
     @app.post("/api/v2/connectors/mail/google/claim")
-    def google_claim(request: Request):
+    def google_claim(request: Request, body: ClaimRequest | None = None):
         """The next connect or disconnect for the computer that syncs mail. A connect carries the code, the
         verifier and Tico's OAuth client, once: they are cleared when the computer answers."""
         with store.transaction() as c:
             runner = publisher(c, request.state.identity)
-            expire(c)
-            row = c.execute("SELECT * FROM google_connects WHERE status IN ('ready','disconnecting') "
-                            "ORDER BY updated LIMIT 1").fetchone()
+            holds = bool(body and body.holds_mail)
+            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                      "DO UPDATE SET holds=excluded.holds,seen=excluded.seen", (runner["id"], int(holds), time.time()))
+            row = claimable(c, runner["id"], holds)
             if not row:
                 return {"connect": None}
             action = "connect" if row["status"] == "ready" else "disconnect"
@@ -269,11 +298,15 @@ def install(app, store, publisher, mutate):
                 raise Problem("state", "That result does not answer this request", 409)
             kind = body.kind if body.kind in KINDS else ("error" if body.status == "failed" else None)
             failed = body.status == "failed"
-            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,state=NULL,"
+            # The grant is where it was connected, gone once revoked, and unchanged by a failure (a failed reconnect
+            # stores nothing, so an earlier grant stays where it was).
+            holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
+            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,state=NULL,"
                       "verifier=NULL,code=NULL,updated=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
-                       json.dumps(sorted(set(body.can))) if body.status == "connected" else None, H.now(), person_id))
+                       json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, H.now(),
+                       person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
             return {"ok": True}

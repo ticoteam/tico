@@ -267,3 +267,22 @@ def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monke
     import json
     kept = json.loads((home / "state-r1" / mail_key.GRANTS).read_text())["grants"]
     assert sorted(kept) == ["ana@x.example", "ben@x.example"]
+
+
+def test_a_corrupt_workspace_grants_file_leaves_the_protected_one_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
+    home = tmp_path / "home"
+    secrets = home / "workspace" / "secrets"
+    secrets.mkdir(parents=True)
+    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
+    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
+    (secrets / mail_key.GRANTS).write_text('{"grants": {"ben@x.example": {"refresh_token": "t-ben"}}}')
+    os.chmod(secrets / mail_key.GRANTS, 0o600)
+    assert mail_key.protect(config) is True
+    protected = (home / "state-r1" / mail_key.GRANTS).read_text()
+    for broken in ("{not json", "[]"):
+        (secrets / mail_key.GRANTS).write_text(broken)
+        os.chmod(secrets / mail_key.GRANTS, 0o600)
+        mail_key.protect(config)                                    # logs, never raises
+        assert (home / "state-r1" / mail_key.GRANTS).read_text() == protected
+        assert (secrets / mail_key.GRANTS).is_file()                # left for a person to look at

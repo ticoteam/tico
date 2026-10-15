@@ -224,6 +224,10 @@ class ConnectorPublisher:
         if connect and answer.get("status") == "connected" and not result.returncode:
             return {"status": "connected", "can": [str(c) for c in answer.get("can") or []][:20]}
         if not connect and answer.get("status") == "revoked" and not result.returncode:
+            if answer.get("absent"):        # nothing here to revoke: the grant, if any, is on another computer
+                return {"status": "failed", "kind": "not_here",
+                        "message": "This computer doesn't hold the Google access for " + request["mailbox"] + ".",
+                        "hint": "Try again in a few minutes."}
             return {"status": "disconnected"}
         return {"status": "failed", "kind": str(answer.get("kind") or "error")[:40],
                 "message": str(answer.get("message") or "")[:500], "hint": str(answer.get("hint") or "")[:500]}
@@ -234,7 +238,9 @@ class ConnectorPublisher:
         for _ in range(limit):
             if self.stop.is_set():
                 break
-            claimed = self.client.post("connectors/mail/google/claim", {})
+            # Whether this computer already holds mail credentials: a first connect goes to such a computer.
+            claimed = self.client.post("connectors/mail/google/claim",
+                                       {"holds_mail": mail_credential_present(self.config)})
             request = claimed.get("connect") if isinstance(claimed, dict) else None
             if not request:
                 break

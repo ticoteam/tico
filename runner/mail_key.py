@@ -156,7 +156,7 @@ def protect(config):
                 handle.write(data)
             os.replace(temporary, new)
             old.unlink()
-        except OSError as exc:
+        except (OSError, ValueError) as exc:     # ValueError: a workspace grants file that is not JSON; both stay
             log(f"Tico runner: could not move {name} out of the bots' reach ({type(exc).__name__})")
             continue
         log(f"Tico runner: moved {name} out of workspace/secrets to {new}; bots ask the runner for mail access")
@@ -171,8 +171,10 @@ def _merged_grants(protected, incoming):
         kept = json.loads(protected.read_text())
     except ValueError:
         kept = {}
-    return json.dumps(merge_into(kept if isinstance(kept, dict) else {}, json.loads(incoming)), indent=2,
-                      sort_keys=True).encode()
+    found = json.loads(incoming)
+    if not isinstance(found, dict):
+        raise ValueError("the workspace grants file is not a JSON object")
+    return json.dumps(merge_into(kept if isinstance(kept, dict) else {}, found), indent=2, sort_keys=True).encode()
 
 
 def status(config):
