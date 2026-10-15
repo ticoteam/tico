@@ -114,7 +114,7 @@ def release(tmp_path, monkeypatch):
     args = SimpleNamespace(source=source, artifacts=output, version=VERSION, commit=COMMIT, repository=REPO,
                            receipt=receipt_path, gate_log=gate, runner_dir=binaries, desktop_from=PREVIOUS)
     P.prepare(args)
-    return SimpleNamespace(source=source, output=output, receipt=receipt, state=state)
+    return SimpleNamespace(source=source, output=output, receipt=receipt, state=state, args=args)
 
 
 def test_checked_prebuilt_release_publishes_only_after_all_assets_and_no_builds(release):
@@ -172,3 +172,16 @@ def test_incomplete_upload_or_moved_tag_keeps_the_release_draft(release):
         with pytest.raises(ValueError): P.publish(release.source, release.output)
         assert release.state['draft']
         assert not any('--draft=false' in c for c in release.state['mutations'])
+
+
+def test_source_requiring_screen_relay_assets_fails_before_prepare_or_publication(release):
+    workflow = release.source / '.github/workflows/release.yml'
+    workflow.write_text(workflow.read_text() + '\njobs:\n  release:\n    steps:\n      - run: gh release upload "$GITHUB_REF_NAME" dist/tico-screen-relay-*.gz\n')
+    before = {p.name: p.read_bytes() for p in release.output.iterdir()}
+    for action in [lambda: P.prepare(release.args),
+                   lambda: P.validate(release.source, release.output),
+                   lambda: P.publish(release.source, release.output)]:
+        with pytest.raises(ValueError, match='Source requires screen-relay release assets'):
+            action()
+        assert release.state['mutations'] == []
+        assert {p.name: p.read_bytes() for p in release.output.iterdir()} == before

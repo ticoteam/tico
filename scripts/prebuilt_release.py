@@ -65,6 +65,9 @@ def check_source(source, version, commit, repo):
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo), "Invalid repository")
     require(command(["git", "-C", str(source), "rev-parse", "HEAD"]).strip() == commit, "Source HEAD differs from approval")
     require(not command(["git", "-C", str(source), "status", "--porcelain"]).strip(), "Source checkout must be clean")
+    # Newer sources also ship native screen relays; this runner-only publisher cannot omit them.
+    require("tico-screen-relay-" not in (source / ".github/workflows/release.yml").read_text(),
+            "Source requires screen-relay release assets; this publisher does not support them. Use the explicit manual fallback")
     notes = module(source, "scripts/changelog_notes.py")["section"]((source / "CHANGELOG.md").read_text(), version[1:])
     require(bool(notes.strip()), "Missing versioned release notes")
     return notes

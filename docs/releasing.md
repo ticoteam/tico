@@ -126,6 +126,9 @@ an older commit and stays immutable. No bot needs a Docker socket, package write
 for this path: the trusted operator owns image builds/uploads, and the publisher needs existing repository write.
 Keep build work and output directories outside the approved checkout. A normal full gate on its approved source
 must already be green; this tool neither runs nor retries that gate and never relabels its `v9.9.9` test images.
+The current publisher supports sources that ship the four runner assets. A source whose release workflow also
+requires native screen-relay assets is rejected during both preparation and validation until that asset set is
+supported; use an explicitly chosen complete manual fallback for those sources.
 
 1. Build the exact source with the **real release version**, full commit and repository arguments from the existing
    Docker recipe: server, runner and updater for both `linux/amd64` and `linux/arm64`. Upload all six platform images
