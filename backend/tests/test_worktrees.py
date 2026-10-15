@@ -211,6 +211,40 @@ def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_
         assert not c.execute('SELECT 1 FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
 
 
+def test_owner_unlink_finishes_a_missing_worktree_after_cleanup_gave_up(prepared):
+    # The folder and its git registration were removed outside Tico after the computer stopped retrying.
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    error = 'Worktree action failed; history kept. kept: ignored files'
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail.update(delete_requested=True, cleanup_requested=True, cleanup_attempts=W.CLEANUP_TRIES,
+                      cleanup_gave_up=True, cleanup_retry_at=H.shift(H.now(), minutes=60), error=error)
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+    report = {'link_id': link['link_id'], 'state': 'missing', 'checkout_state': 'ready',
+              'branch': link['branch'], 'error': error}
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'worktrees': True},
+            'worktrees': [report]}
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    with api.app_state.store.read() as c:
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'missing'
+    with api.app_state.store.transaction() as c:
+        H.task_unlink(c, 'bot:cmo', tid, link['link_id'])
+        saved = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        assert not any(key in saved for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'))
+        generation = saved['cleanup_retry_generation']
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['path'] == link['path']
+    assert actions[0]['cleanup_retry_generation'] == generation
+    # The computer prunes the absent folder and reports it removed; the link row goes.
+    report.pop('error')
+    report['state'] = 'removed'
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    with api.app_state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+
+
 def test_old_computer_token_needs_an_outstanding_action(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
