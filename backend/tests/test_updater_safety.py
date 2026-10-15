@@ -11,7 +11,7 @@ class Fake:
 
     def __init__(self, module, monkeypatch, healthy=(True,), fail=(), container=None, config=None):
         self.calls, self.answers, self.fail, self.container, self.config = [], list(healthy), set(fail), container, config
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
@@ -318,7 +318,7 @@ def test_prune_keeps_future_releases_and_removes_only_older_and_own_dangling_ima
         elif argv[:3] == ["docker", "image", "ls"]:
             out = "v0.3.46\n0.3.46\nv0.3.45\nv9.9.9\n9.9.9\nv0.3.100\n0.4.0\nv0.3.9\nlatest\n<none>\n"
         return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
-    monkeypatch.setattr(updater.subprocess, "run", run)
+    monkeypatch.setattr(updater, "docker_run", run)
     updater.prune_images(keep={"0.3.46", "v0.3.45"}, keep_ids={"sha256:old"})
     # Future staged releases and both spellings of the current release stay; only the older release and dangling IDs go.
     assert [a[2] for a in calls if a[:2] == ["docker", "rmi"]] == [

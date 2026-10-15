@@ -74,7 +74,7 @@ def load(monkeypatch, tmp_path, base, mode="server"):
 class Docker:
     def __init__(self, module, monkeypatch, healthy):
         self.calls, self.answers, self.compose_at_up = [], list(healthy), []
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
         monkeypatch.setattr(module, "pinned_services", lambda version: [])

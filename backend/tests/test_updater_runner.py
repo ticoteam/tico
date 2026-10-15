@@ -25,7 +25,7 @@ class Docker:
 
     def __init__(self, module, monkeypatch, healthy):
         self.calls, self.answers = [], list(healthy)
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
@@ -110,7 +110,7 @@ class Daemon:
     def __init__(self, module, monkeypatch, hang):
         import subprocess
         self.module, self.hang, self.calls, self.expired = module, hang, [], subprocess.TimeoutExpired
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
         monkeypatch.setattr(module, "POLL_SECONDS", 0)
 
@@ -160,7 +160,8 @@ def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeyp
     marker = tmp_path / "switched"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "docker").write_text(f"#!/bin/sh\nsleep 0.5\ntouch {marker}\n")
+    # docker compose is a plugin the docker CLI runs as its child: the switch happens in a grandchild
+    (bin_dir / "docker").write_text(f"#!/bin/sh\n(sleep 0.5; touch {marker}) &\nwait\n")
     (bin_dir / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     with pytest.raises(RuntimeError, match="did not finish within"):

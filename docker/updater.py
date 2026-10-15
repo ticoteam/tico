@@ -39,6 +39,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -125,6 +126,27 @@ def diagnostics():
             "compose": run("docker", "compose", "version", "--short"), "containers": containers, "errors": recent}
 
 
+def docker_run(argv, timeout, env=None, check=False, capture_output=True, text=True):
+    """subprocess.run for a docker command, in its own process group. `docker compose` runs as a plugin child of the
+    docker CLI, so killing only the CLI on a timeout would leave compose switching or rolling back later: the whole
+    group is killed and reaped before TimeoutExpired is raised."""
+    with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            raise
+    result = subprocess.CompletedProcess(argv, proc.returncode, out, err)
+    if check:
+        result.check_returncode()
+    return result
+
+
 def compose(*args, tag=None, timeout=600, extra_env=None):
     env = {**os.environ, **({"TICO_TAG": tag} if tag else {}), **(extra_env or {})}
     files = ["-f", os.path.join(PROJECT, COMPOSE_FILE)] if COMPOSE_FILE else []
@@ -132,9 +154,9 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
     if COMPOSE_FILE and os.path.exists(override):   # the installer's own additions (--server-network); an update keeps them
         files += ["-f", override]
     try:
-        result = subprocess.run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
+        result = docker_run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
                                 capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:   # run() has killed and reaped it: it cannot switch anything later
+    except subprocess.TimeoutExpired:   # docker_run killed and reaped its whole group: nothing of it switches later
         raise RuntimeError("docker compose %s did not finish within %d seconds" % (args[0], timeout))
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
@@ -145,7 +167,7 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
 def running_image():
     """(image id, tag) of the running service, so a failed update can put exactly that back."""
     container = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()[0]
-    out = subprocess.run(["docker", "inspect", "--format", "{{.Image}} {{.Config.Image}}", container],
+    out = docker_run(["docker", "inspect", "--format", "{{.Image}} {{.Config.Image}}", container],
                          capture_output=True, text=True, check=True, timeout=INSPECT_SECONDS).stdout.split()
     return out[0], image_tag(out[1])
 
@@ -215,7 +237,7 @@ def container_healthy(seconds):
     while time.time() < deadline:
         try:
             container = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
-            state = subprocess.run(["docker", "inspect", "--format", "{{.State.Health.Status}}", container[0]],
+            state = docker_run(["docker", "inspect", "--format", "{{.State.Health.Status}}", container[0]],
                                    capture_output=True, text=True, timeout=INSPECT_SECONDS).stdout.strip() if container else ""
             if state == "healthy":
                 return True
@@ -525,7 +547,7 @@ def load_status():
 
 
 def inspect(ref):
-    result = subprocess.run(["docker", "inspect", ref], capture_output=True, text=True, timeout=60)
+    result = docker_run(["docker", "inspect", ref], capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise RuntimeError("docker inspect %s failed" % ref)
     return json.loads(result.stdout)[0]
@@ -547,13 +569,13 @@ def replace_updater(tag):
         if image_tag(ref) == tag:
             return ""
         new_ref = ref.rsplit(":", 1)[0] + ":" + tag if ":" in ref.rsplit("/", 1)[-1] else ref + ":" + tag
-        pulled = subprocess.run(["docker", "pull", new_ref], capture_output=True, text=True, timeout=600)
+        pulled = docker_run(["docker", "pull", new_ref], capture_output=True, text=True, timeout=600)
         if pulled.returncode:
             return "The updater itself stayed on %s: could not pull %s." % (image_tag(ref), new_ref)
         # A second runner on the same host has its own updater; its helper must not remove this one's.
         project = (me["Config"].get("Labels") or {}).get("com.docker.compose.project", "")
         helper = SWAP_HELPER if project in ("", "tico", "tico-runner") else "%s-%s" % (SWAP_HELPER, project)
-        subprocess.run(["docker", "rm", "-f", helper], capture_output=True, timeout=60)
+        docker_run(["docker", "rm", "-f", helper], capture_output=True, timeout=60)
         env = {"TICO_UPDATER_MODE": MODE, "TICO_PROJECT_DIR": host_dir, "TICO_COMPOSE_FILE": COMPOSE_FILE,
                "TICO_SWAP_TAG": tag, "TICO_SWAP_OLD_ID": me["Image"], "TICO_SWAP_OLD_REF": ref,
                "TICO_SWAP_NAME": me["Name"].lstrip("/"), "DOCKER_CONFIG": "/tmp/.docker",
@@ -563,7 +585,7 @@ def replace_updater(tag):
                 "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "%s:%s" % (host_dir, host_dir)]
         for key, value in env.items():
             argv += ["-e", "%s=%s" % (key, value)]
-        subprocess.run([*argv, new_ref, "python", "/usr/local/bin/tico-updater", "replace-self"],
+        docker_run([*argv, new_ref, "python", "/usr/local/bin/tico-updater", "replace-self"],
                        capture_output=True, text=True, timeout=120, check=True)
         return "The updater is replacing itself with %s." % tag
     except (StopIteration, KeyError, IndexError, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -618,7 +640,7 @@ def replace_self():
     except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         print("tico-updater: replacing the updater failed: %s" % exc, flush=True)
     try:
-        subprocess.run(["docker", "tag", old_id, old_ref], check=False, timeout=INSPECT_SECONDS)
+        docker_run(["docker", "tag", old_id, old_ref], check=False, timeout=INSPECT_SECONDS)
     except subprocess.SubprocessError as exc:
         print("tico-updater: could not tag the old updater back: %s" % exc, flush=True)
     try:
@@ -645,7 +667,7 @@ def prune_images(keep, keep_ids=()):
     keep_ids = {str(i) for i in keep_ids if i}
     for repo in (IMAGE, IMAGE.replace("tico-runner", "tico-updater") if MODE == "runner" else IMAGE + "-updater"):
         try:
-            listed = subprocess.run(["docker", "image", "ls", repo, "--format", "{{.Tag}}"], capture_output=True, text=True,
+            listed = docker_run(["docker", "image", "ls", repo, "--format", "{{.Tag}}"], capture_output=True, text=True,
                                     timeout=60).stdout.split()
         except (OSError, subprocess.SubprocessError):
             continue
@@ -653,16 +675,16 @@ def prune_images(keep, keep_ids=()):
             version = core(tag)
             if version is None or newest is None or version in versions or version > newest:
                 continue
-            subprocess.run(["docker", "rmi", repo + ":" + tag], capture_output=True, check=False, timeout=120)
+            docker_run(["docker", "rmi", repo + ":" + tag], capture_output=True, check=False, timeout=120)
         # A release left untagged when `latest` (or a re-pulled tag) moved on: nothing would ever remove it.
         try:
-            dangling = subprocess.run(["docker", "image", "ls", repo, "--filter", "dangling=true", "--no-trunc",
+            dangling = docker_run(["docker", "image", "ls", repo, "--filter", "dangling=true", "--no-trunc",
                                        "--format", "{{.ID}}"], capture_output=True, text=True, timeout=60).stdout.split()
         except (OSError, subprocess.SubprocessError):
             continue
         for image in dangling:
             if image not in keep_ids:   # the image just replaced stays, untagged or not
-                subprocess.run(["docker", "rmi", image], capture_output=True, check=False, timeout=120)
+                docker_run(["docker", "rmi", image], capture_output=True, check=False, timeout=120)
 
 
 def update(version, running=""):
@@ -728,7 +750,7 @@ def update(version, running=""):
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
             restored = ""
             try:
-                subprocess.run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False, timeout=INSPECT_SECONDS)
+                docker_run(["docker", "tag", image_id, IMAGE + ":" + previous], check=False, timeout=INSPECT_SECONDS)
                 if bundled:
                     restore_bundle()
                 if switched and snapshot:
