@@ -448,8 +448,9 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   closed to the bots' user. The `connectors` job reads it there. A message bot's run gets, from the runner over its credential
   socket, a Gmail or Calendar access token that lasts an hour for one mailbox at a time. The mailboxes it may ask for are the
   one the bot declares (its human's own email only if it declares none). Those of the humans below that human in the
-  team chart are added only when that mailbox's `gmail` entry sets `org_read: true`. Any other bot, and any other
-  mailbox, is refused.
+  team chart are added only when that mailbox's `gmail` entry sets `org_read: true`. Calendar tokens come from the same
+  list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
+  other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
   mailbox for a run. Making a bot from the `inbox` template does that itself: adding it in Settings, in the team builder, or
   through BotOps records the bot as the `inbox_bot` of the person the `Mailbox:` line names (by their roster email; for a bot

@@ -134,5 +134,12 @@ class OrgRead(unittest.TestCase):
             access.resolve("inbox", "priya@acme.example", "send", m, self.roster)
 
 
+    def test_org_read_on_a_declared_mailbox_off_the_roster_reads_its_persons_reports(self):
+        m = {"access": [{"service": "gmail", "identity": "ana@acme.team", "can": ["read"], "org_read": True}]}
+        self.assertEqual(access.org_mailboxes("inbox", m, self.roster),
+                         ["ana@acme.example", "priya@acme.example", "omar@acme.example"])
+        self.assertEqual(access.org_mailboxes("other", m, self.roster), [])
+
+
 if __name__ == "__main__":
     unittest.main()

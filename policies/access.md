@@ -53,7 +53,8 @@ Rules:
   reads (below) never become the default, and two declared identities make `--mailbox` required.
 - A person's `inbox_bot` in `registry/people.yaml` may read that person's mailbox only. A gmail
   entry may set `org_read: true` to also read everyone who reports to that identity's person
-  (`reports_to`); without it, reports' mail is refused, for the mail command and for the runner's token. Draft and send stay on the declared mailbox. Each mailbox has
+  (`reports_to`); without it, reports' mail is refused, for the mail command and for the
+  runner's token. Draft and send stay on the declared mailbox. Each mailbox has
   its own rules in `registry/mail-rules.yaml`. `mail inbox --all-mailboxes` and
   `mail rules run --all-mailboxes` walk the tree. Marketing, skip-list, and notification rules
   file noise before a model reads anything.
