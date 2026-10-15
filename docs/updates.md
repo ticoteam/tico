@@ -107,7 +107,10 @@ The runner is a git checkout. When the server's release is newer, the runner:
 1. waits until no run is going, then updates. For the first 20 minutes it keeps taking new work as usual; after
    that it takes no new work until every run that is going has ended, so a busy computer cannot hold the update
    back for ever. It never interrupts a run. Work sent to it after those 20 minutes waits for the longest run still
-   going; Settings > Health shows the computer as Needs update meanwhile;
+   going; Settings > Health shows the computer as Needs update meanwhile, and names each run it waits for: the bot,
+   its task (unless the task is private) and when the run started. A run that only waits on something elsewhere
+   (another computer's update, a review) can note the wait on its task and end, and pick it up on its next run.
+   Stopping a run is left to a person (Runs); Tico never stops one to update;
 2. starts a separate update process, which fetches the tag `vX.Y.Z` from `origin` (the public repository) and
    checks that it exists and is not a tag that moved, then checks out that commit (detached);
 3. re-runs the install step: `pip install -r backend/requirements.txt` when the release changed it, and gets the

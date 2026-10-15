@@ -7,6 +7,13 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- When a computer holds new work to update, Settings > Health names each running turn it waits for: the bot, its
+  task (unless private) and when it started, and says a turn that only waits on something elsewhere can note the
+  wait and end. The Health Monitor's finding no longer tells BotOps to update such a computer by hand: it updates
+  by itself, and BotOps reads its update once, records the wait and ends the turn instead of watching it. Stopping
+  a turn stays a person's choice; the 20-minute update drain is unchanged.
+
 ### Fixed
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential
   as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
