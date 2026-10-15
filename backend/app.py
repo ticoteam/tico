@@ -3487,7 +3487,7 @@ def create_app(settings=None):
         path = botops_act.normalize(request.url.path)
         body = botops_act.parse_body(getattr(request, "_body", b"")) if request.method != "DELETE" else None
         body = body if isinstance(body, dict) else {}
-        if not path or botops_act.secret_in(body) or not assistant_valid(request.method, path, settings, BOTOPS):
+        if not path or botops_act.secret_in_request(request.method, path, body) or not assistant_valid(request.method, path, settings, BOTOPS):
             return None
         with store.transaction() as c:
             turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
@@ -3622,7 +3622,7 @@ def create_app(settings=None):
             if acting.actor == who.actor:
                 return None, None
             body = botops_act.parse_body(getattr(request, "_body", b"")) if request.method != "GET" else None
-            if botops_act.secret_in(body):
+            if botops_act.secret_in_request(request.method, request.url.path, body):
                 raise Problem("secret_in_request", botops_act.DETAIL_SECRET, 422)
             # The ordinary route checks the requester's rights, including its own outbound send switch.
             return None, acting

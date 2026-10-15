@@ -81,6 +81,19 @@ def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, bo
         assert said["to_actor"] == "human:ana" and said["from_actor"] == "bot:botops"
 
 
+def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops):
+    """A `${VAR}` header names a credential without holding one, so the person gets the card; a literal still gets none."""
+    from backend.tests.test_botops_parity import mcp_tool
+    assign(api, botops, "ops")
+    ready(api, botops, ["botops", "ops"])
+    _, attempt = _hand_off(api, botops, None)
+    card = api.post("/api/v2/bots/ops/tools", json=mcp_tool(), headers=headers(attempt["token"]))
+    assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
+    literal = api.post("/api/v2/bots/ops/tools", json=mcp_tool(authorization="Bearer abcdef"),
+                       headers=headers(attempt["token"]))
+    assert literal.json()["error"]["code"] == "secret_in_request" and "abcdef" not in literal.text
+
+
 def test_a_cited_message_never_raises_access_with_the_persons_rights(api, botops):
     """Ana only said thanks; Ops cites it anyway and asks for write access to every repository for itself. BotOps tries
     it with Ops' rights, and Ana gets a Confirm card: nothing changes until she taps it."""
