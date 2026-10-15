@@ -359,7 +359,7 @@ async fn isolated_existing_base_clone_left_by_the_supervisor_group_is_refreshed_
         // Git replaces the refs and config it updates; every inode the refresh only adopted keeps its mode.
         if path.metadata().is_ok_and(|m| std::os::unix::fs::MetadataExt::ino(&m) == *inode) {
             assert_eq!(owner_mode(path).1, *mode, "{path:?}");
-            if path.components().any(|c| c.as_os_str() == "objects") {
+            if path.symlink_metadata().is_ok_and(|m| m.is_file()) && path.components().any(|c| c.as_os_str() == "objects") {
                 assert_eq!(&std::fs::read(path).unwrap(), bytes, "{path:?}");
             }
         }
