@@ -26,11 +26,6 @@ All notable changes to Tico are recorded here. The format follows
   worktree") on a worktree acknowledged ready, so its finding never cleared. A ready acknowledgement now
   supersedes the failed action, and a computer's report without an error clears the one it reported before;
   a refused cleanup and a failure seen in the tree itself still show.
-- A deleted task worktree whose cleanup stopped after six refusals can be cleaned up again. Once the cause is fixed
-  (the bot's write access restored, kept files cleared), delete the worktree link again: the computer gets a fresh
-  set of cleanup attempts and skips its earlier wait once, with all of its usual save and safety checks. Deleting
-  it again used to change nothing, so the link and its folder stayed. The last refusal still shows until the
-  computer reports a new result.
 - BotOps working for a person can no longer take repository access away from another bot. Setting a bot to own,
   dropping a chosen repository or turning write into read now puts a Confirm card in the person's BotOps chat
   that names what would stop, and nothing changes until they tap it; giving access still goes through at once.
@@ -52,8 +47,11 @@ All notable changes to Tico are recorded here. The format follows
 - Installing or updating a harness that downloads a single binary (not a `.tar.gz`) no longer fails now and then
   with "Text file busy". The runner wrote the file itself, so another of its threads starting a process at that
   moment kept it open for writing when the install checked `--version`; a child `cp` now writes it, as `tar` does.
-- Explicitly removing a kept worktree retries exhausted cleanup on its original computer while preserving
-  unsaved work and waiting for the computer to confirm removal.
+- A deleted task worktree whose cleanup stopped retrying can be cleaned up again. Once the cause is fixed (the
+  bot's write access restored, kept files cleared), delete the worktree link again: its original computer gets a
+  fresh set of cleanup attempts once the bot is idle, with all of its usual save and safety checks, and a Rust
+  runner on this release skips its earlier wait once. Deleting it again used to change nothing, so the link and
+  its folder stayed.
 - Bots can read a pull request's checks (`gh pr checks`, commit statuses and check runs) on private
   repositories: run tokens carry Checks and Commit statuses read whenever the installation has accepted them. An
   App created by hand without them needs **Checks** and **Commit statuses** set to Read-only and accepted on the
