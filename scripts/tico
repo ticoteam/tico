@@ -213,7 +213,7 @@ PL
 }
 
 # One environment's local backend. The variables come from its own server.env, so the job and a
-# hand-run uvicorn read exactly the same configuration.
+# hand-run backend.server read exactly the same configuration.
 install_server_systemd() {
   local unit log extra=()
   unit="$(unit_name api)"; log="$LOG_DIR/api.log"
@@ -238,10 +238,8 @@ install_server() {
 <plist version="1.0"><dict>
   <key>Label</key><string>$service</string>
   <key>ProgramArguments</key><array>
-    <string>$PYTHON</string><string>-m</string><string>uvicorn</string>
-    <string>backend.app:create_app</string><string>--factory</string>
+    <string>$PYTHON</string><string>-m</string><string>backend.server</string>
     <string>--host</string><string>127.0.0.1</string><string>--port</string><string>$port</string>
-    <string>--workers</string><string>1</string><string>--no-access-log</string>
   </array>
   <key>WorkingDirectory</key><string>$HUB</string>
   <key>EnvironmentVariables</key><dict>

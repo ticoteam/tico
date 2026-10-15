@@ -48,8 +48,8 @@ def render(kind, *, python, config, root, log, path, env_slug="", home="", user=
     """The text of one unit. `kind` is bot, connectors, close-calls, importers, or api (an environment's local server,
     which reads its settings from `env_file`)."""
     if kind == "api":
-        exec_line = " ".join(quote(x) for x in (python, "-m", "uvicorn", "backend.app:create_app", "--factory", "--host",
-                                               "127.0.0.1", "--port", port, "--workers", "1", "--no-access-log"))
+        exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host",
+                                               "127.0.0.1", "--port", port))
     elif kind in COMMANDS:
         exec_line = " ".join(quote(x) for x in (python, "-m", "runner", "--config", config, COMMANDS[kind]))
     else:

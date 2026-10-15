@@ -1,24 +1,19 @@
-# Computer screen relay pilot
+# Computer screen relay
 
-Opt-in Tokio/Axum sidecar. Python retains every permission check, runner authentication, durable
-screen mode and audit event. Rust owns temporary tickets, admission limits, socket pairing,
-buffers, deadlines and cancellation. No session table is added. Default installations retain Python.
-
-## Routing contract
-
-Only these existing WebSocket paths go to Rust, with their query strings and Authorization/Origin
-headers intact. All other requests go to Python, including creation, mode changes and pending lists.
+Rust is the only screen relay. The standard server image includes this binary; `python -m backend.server`
+starts it, gives it the public listener and supervises both processes. Ordinary HTTP and streaming
+responses go through Rust to a private loopback Python API. Rust handles the two existing screen
+WebSocket paths directly, while Python retains authentication, permissions, durable modes and audit
+writes. No persistent session table or engine selection exists.
 
 - `/api/v2/runners/{rid}/screen/ws?ticket=...` (browser)
 - `/api/v2/runners/me/screen/{session_id}/ws` (runner)
 
-Python's `/_tico/screen/v1/authorize` and Rust's `/control/v1/*` are private and require an independent
-32-byte-or-longer shared secret. Ingress must refuse the private prefixes. Bind to loopback or an
-isolated container network, never publish a control port. Both hops use the trusted local network;
-remote multi-host deployment is outside this pilot. Never reuse an owner or runner token as the key.
-The runner and browser URLs, TLS termination, cookies, Cloudflare Access and public hostnames stay
-as configured. Native/direct installations opt in through a local reverse proxy; the normal installer
-and direct Python entrypoint remain supported with the default implementation.
+The parent creates a fresh private key and allocates loopback API/control ports on every start.
+Public ingress blocks `/control/*` and `/_tico/*`; policy callbacks and versioned control requests
+never leave loopback. Direct remote clients cannot spoof trusted proxy identity headers. Existing
+TLS termination, cookies, Cloudflare origins and public hostnames remain unchanged. See the
+installation matrix and native job migration in `docs/install.md`.
 
 ## Version 1 control protocol
 
@@ -47,26 +42,24 @@ idempotent, so delayed grant/control requests cannot resurrect closed sessions. 
    Origin permission is also checked by Python, keeping local aliases/demo/CORS semantics intact.
 6. Close reports contain session ID, actor, runner, control, seconds and close code. Python inserts
    at most one close event per open session, under its SQLite write lock, then acknowledges it.
-   Reports are retried until acknowledged. Audit events carrying the pilot lease allow Python to
+   Reports are retried until acknowledged. Audit events carrying the process lease allow Python to
    reconcile unclosed opens after either process restarts; they do not confer session authority.
 
 Bounds: three sessions per computer (unchanged); 1 MiB pre-browser backlog (unchanged), one-minute
-unused ticket, 30-second answer and one-hour session deadlines (unchanged). The pilot additionally
+unused ticket, 30-second answer and one-hour session deadlines (unchanged). The relay additionally
 caps global live sessions at 1,024, retained close reports at 8,192, individual messages at 16 MiB (matching uvicorn),
 and stalled writes at five seconds. Saturation refuses admission instead of growing memory.
 Cancellation interrupts stalled pumps; close handshakes have a one-second deadline per socket.
 A failed revocation RPC stops lease renewal, so durable revocation still closes sockets within the
 six-second lease plus close deadline. HTTP control calls have two-second deadlines.
 
-## Rollout gate
+## Startup and rollback
 
-Use the installation matrix in `docs/install.md`. Roll back by selecting Python and restoring its
-WebSocket ingress, then stop this sidecar; existing screens close and reopen with fresh tickets.
-No database rollback is needed. Never fall back automatically during an active Rust lease.
+Native release binaries are checksummed and checked against the checkout's source fingerprint.
+Development checkouts build with Cargo; Docker copies the release binary into the standard server
+image. There is no separate relay image or router required for normal installations. A relay crash
+stops the API, and an API stop terminates its owned relay process; launchd, systemd or Docker restarts
+the complete server. Screen tickets cannot survive a process restart.
 
-Python fallback removal milestone: after native, Docker/Caddy and both Cloudflare ingress modes
-pass the shared contract and restart/slow-consumer tests in release-owner rehearsals, and two
-successive releases have no relay regressions. At that milestone ship the sidecar through the
-normal installer/updater, make Rust the default, and remove the Python socket implementation in
-the following release. Until then, keep rollback and measure both implementations. Language alone
-is not evidence of lower latency or CPU for this I/O-bound workload.
+Rollback uses the previous complete server release. There is no Python relay switch or fallback.
+The existing durable modes and audit history remain in the same database.

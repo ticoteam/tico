@@ -144,12 +144,20 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s -
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
+FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS screen-bin
+WORKDIR /src/relay-rs
+COPY LICENSE /src/LICENSE
+COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
+COPY relay-rs/src ./src
+RUN cargo build --release --locked && install -D -m 0755 target/release/tico-screen-relay /out/tico-screen-relay
+
 FROM ${PYTHON_IMAGE} AS server
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 tico \
     && useradd --uid 10001 --gid tico --home-dir /data --no-create-home --shell /usr/sbin/nologin tico
 COPY --from=litestream /out/litestream /usr/local/bin/litestream
+COPY --from=screen-bin /out/tico-screen-relay /usr/local/bin/tico-screen-relay
 COPY docker/entrypoint.sh /usr/local/bin/tico-entrypoint
 # A named volume copies the ownership of the directory it first covers.
 RUN chmod 0755 /usr/local/bin/tico-entrypoint \

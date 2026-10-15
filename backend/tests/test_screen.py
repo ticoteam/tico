@@ -2,10 +2,19 @@
 one; a ticket opens one session once, and the hub pipes the bytes both ways."""
 
 import pytest
-from starlette.websockets import WebSocketDisconnect
 
 from backend.events import runner_read
-from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.test_api import assign, get, headers, post, runner  # noqa: F401  (the api fixture)
+
+
+pytestmark = pytest.mark.slow
+
+
+@pytest.fixture
+def api(tmp_path):
+    from backend.tests.test_screen_relay_contract import running_service
+    with running_service(tmp_path) as service:
+        yield service.api
 
 
 def offer(api, r):
@@ -47,33 +56,3 @@ def test_only_the_operator_or_an_admin_sets_or_opens_a_screen_and_only_once_the_
     post(api, f"computers/{rid}/screen", {"mode": "off"})
     assert get(api, "runners/me/screen/sessions", token=r["token"]) == {"sessions": []}     # off closes it
     post(api, f"computers/{rid}/screen/sessions", {"control": False}, expected=403)
-
-
-def test_a_ticket_opens_one_session_and_the_hub_pipes_both_ways(api):
-    r = runner(api)
-    rid = r["runner_id"]
-    offer(api, r)
-    post(api, f"computers/{rid}/screen", {"mode": "control"})
-    opened = post(api, f"computers/{rid}/screen/sessions", {"control": True})
-    assert get(api, "runners/me/screen/sessions", token=r["token"])["sessions"][0]["control"] is True
-    with api.websocket_connect(opened["ws_path"]) as browser:
-        with pytest.raises(WebSocketDisconnect):                                           # single use
-            with api.websocket_connect(opened["ws_path"]):
-                pass
-        with pytest.raises(WebSocketDisconnect):                                           # a computer's token only
-            with api.websocket_connect(f"/api/v2/runners/me/screen/{opened['session_id']}/ws", headers=headers()):
-                pass
-        with api.websocket_connect(f"/api/v2/runners/me/screen/{opened['session_id']}/ws",
-                                   headers=headers(r["token"])) as computer:
-            browser.send_bytes(b"RFB 003.008\n")
-            assert computer.receive_bytes() == b"RFB 003.008\n"
-            computer.send_bytes(b"\x01\x02")
-            assert browser.receive_bytes() == b"\x01\x02"
-            post(api, f"computers/{rid}/screen", {"mode": "off"})                          # off closes both
-            with pytest.raises(WebSocketDisconnect) as closed:
-                browser.receive_bytes()
-            assert closed.value.code == 4403
-    with api.app.state.store.read() as c:
-        actions = [row[0] for row in c.execute("SELECT action FROM events WHERE target=? AND action LIKE "
-                                               "'runner.screen%' ORDER BY ts", (rid,))]
-    assert actions[:3] == ["runner.screen", "runner.screen_open", "runner.screen"] and "runner.screen_close" in actions

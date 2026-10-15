@@ -1,4 +1,4 @@
-"""The same real WebSocket contract against Python and the opt-in Rust pilot.
+"""The real Rust screen WebSocket and lifecycle contract.
 
 These start only owned loopback services on allocated ports and use fictional identities/SQLite.
 Build relay-rs first, then run this file with -m slow -n 0 and TICO_SCREEN_RELAY_BIN set.
@@ -32,16 +32,15 @@ KEY = "fictional-relay-key-for-isolated-tests-only"
 
 
 class Service:
-    def __init__(self, engine, root, binary=None):
-        self.engine, self.root, self.binary = engine, root, binary
+    def __init__(self, root, binary=None):
+        self.root, self.binary = root, binary
         self.process, self.thread, self.server, self.initial = None, None, None, None
         self.listener = self.bind()
         self.origin = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
         self.relay_url = self.origin
-        if engine == "rust":
-            self.start_rust()
+        self.start_rust()
         self.settings = replace(api_helpers.api_settings(root), public_url=self.origin,
-                                screen_relay=engine, screen_relay_url=self.relay_url, screen_relay_key=KEY)
+                                screen_relay_url=self.relay_url, screen_relay_key=KEY)
         # Reuse the production-facing fictional API fixture without sharing its application or database.
         original = api_helpers.api_settings
         api_helpers.api_settings = lambda _: self.settings
@@ -65,9 +64,14 @@ class Service:
         if not binary or not Path(binary).is_file():
             raise RuntimeError("Build relay-rs and set TICO_SCREEN_RELAY_BIN to its executable")
         port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
+        if not hasattr(self, "public_origin"):
+            reserved = self.bind()
+            self.public_origin = f"http://127.0.0.1:{reserved.getsockname()[1]}"
+            reserved.close()
         self.process = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env={**os.environ, "TICO_SCREEN_RELAY_KEY": KEY, "TICO_SCREEN_PYTHON_URL": self.origin,
-                 "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}"})
+                 "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}",
+                 "TICO_SCREEN_PUBLIC_BIND": self.public_origin.removeprefix("http://")})
         line = self.process.stdout.readline()
         if not line.startswith("screen relay listening on "):
             raise RuntimeError("Relay did not start: " + line)
@@ -158,19 +162,19 @@ class Service:
 
 
 @contextlib.contextmanager
-def running_service(engine, root, binary=None):
+def running_service(root, binary=None):
     service = Service.__new__(Service)
     service.process = service.server = service.initial = None
     try:
-        service.__init__(engine, root, binary)
+        service.__init__(root, binary)
         yield service
     finally:
         service.close()
 
 
-@pytest.fixture(params=["python", "rust"])
-def service(request, tmp_path):
-    with running_service(request.param, tmp_path) as service:
+@pytest.fixture
+def service(tmp_path):
+    with running_service(tmp_path) as service:
         yield service
 
 
@@ -252,7 +256,7 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
     service.eventually(lambda: closes() == 1)
 
 
-def test_restart_invalidates_old_tickets_and_reconciles_pilot_audit(service):
+def test_restart_invalidates_old_tickets_and_reconciles_audit(service):
     r = service.computer()
     opened = service.opened(r)
     service.restart_python()
@@ -261,28 +265,13 @@ def test_restart_invalidates_old_tickets_and_reconciles_pilot_audit(service):
     with service.websocket(opened["ws_path"]) as browser:
         with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
             computer.send(b"new server"); assert browser.recv(timeout=5) == b"new server"
-    if service.engine == "rust":
-        opened = service.opened(r)
-        service.restart_rust()
-        denied(service, opened["ws_path"])
-        with service.api.app.state.store.read() as c:
-            count = c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                              "AND json_extract(detail_json,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
-        assert count == 1
-        # Rollback keeps durable modes while closing abandoned pilot audit opens without a session table.
-        abandoned = service.opened(r)
-        service.settings = replace(service.settings, screen_relay="python")
-        service.restart_python()
-        service.relay_url = service.origin
-        denied(service, abandoned["ws_path"])
-        with service.api.app.state.store.read() as c:
-            assert c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                             "AND json_extract(detail_json,'$.session_id')=?",
-                             (r["runner_id"], abandoned["session_id"])).fetchone()[0] == 1
-        fresh = service.opened(r)
-        with service.websocket(fresh["ws_path"]) as browser:
-            with service.websocket(service.runner_path(fresh), token=r["token"]) as computer:
-                computer.send(b"rolled back"); assert browser.recv(timeout=5) == b"rolled back"
+    opened = service.opened(r)
+    service.restart_rust()
+    denied(service, opened["ws_path"])
+    with service.api.app.state.store.read() as c:
+        count = c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
+                          "AND json_extract(detail_json,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
+    assert count == 1
 
 
 def test_backpressure_does_not_delay_revocation(service):
@@ -318,7 +307,6 @@ def test_backpressure_does_not_delay_revocation(service):
                 assert not producer.is_alive()
 
 
-@pytest.mark.parametrize("service", ["rust"], indirect=True)
 def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
     r = service.computer()
     remote = service.api.app.state.store.screen_sessions

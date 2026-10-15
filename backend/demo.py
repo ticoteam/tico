@@ -266,8 +266,9 @@ def main(argv=None):
         raise SystemExit("tico demo: --public-demo needs --url, the address people will open")
     for name in ("TICO_UPDATER_URL", "TICO_POSTHOG_KEY", "TICO_SENTRY_DSN", "TICO_SENTRY_SERVER_DSN"):
         os.environ.pop(name, None)
-    import uvicorn
-    from .app import create_app
+    from .server import run
+    from .screen_binary import prepare as prepare_relay
+    prepare_relay()
     directory = Path(args.data_dir or tempfile.mkdtemp(prefix="tico-demo-"))
     directory.mkdir(parents=True, exist_ok=True)
     print("Building the Acme demo ...", flush=True)
@@ -279,8 +280,7 @@ def main(argv=None):
         print(f"\nTico demo is ready: open {browser_url}\n"
               "It is fictional sample data (acme.example); bots do not run and nothing leaves this computer.\n"
               "Press Ctrl+C to stop; everything is discarded.\n", flush=True)
-        uvicorn.run(create_app(settings), host=host, port=args.port, log_level="warning",
-                    timeout_graceful_shutdown=2)
+        run(settings=settings, host=host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":

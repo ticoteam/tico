@@ -367,7 +367,7 @@ def main(argv=None):
         print(f"Emptied {table}: not classified in backend/devcopy.py (KEEP, HISTORY or EMPTY); decide and add it.")
     print(f"Copy: {dest} ({dest.stat().st_size // 1024} KB, rehearsal mode, no key files)")
     print(f"Start it from this checkout:\n"
-          f"  set -a; . {shlex.quote(str(env))}; set +a; python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 "
+          f"  set -a; . {shlex.quote(str(env))}; set +a; python -m backend.server --host 127.0.0.1 "
           f"--port {args.port}\n"
           f"Sign in: {url}/api/v2/local-signin?token=$(cat {shlex.quote(str(token))})")
     return 0

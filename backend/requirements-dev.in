@@ -3,3 +3,5 @@
 pytest>=8,<10
 playwright>=1.50,<2
 pytest-xdist>=3.6,<4
+
+websockets>=15,<16  # real Rust screen relay contract client

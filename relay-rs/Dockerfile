@@ -1,8 +1,8 @@
-# Opt-in pilot image; the standard Tico server and release images are unchanged.
+# Standalone relay utility. Normal installations use the main Dockerfile server target.
 FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS build
 WORKDIR /build
 COPY LICENSE /LICENSE
-COPY relay-rs/Cargo.toml relay-rs/Cargo.lock ./
+COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
 COPY relay-rs/src ./src
 RUN cargo build --release --locked
 

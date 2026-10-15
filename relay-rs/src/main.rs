@@ -1,4 +1,5 @@
-//! Private, leased computer-screen relay. Permission policy and audit writes remain in Python.
+//! The computer-screen relay and same-origin HTTP gateway. Permission policy and audit writes remain in Python.
+mod gateway;
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
@@ -157,6 +158,7 @@ struct App {
     key: Arc<String>,
     python: Arc<String>,
     http: reqwest::Client,
+    proxy: reqwest::Client,
 }
 impl App {
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -679,6 +681,10 @@ async fn relay(
 }
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--build-id") {
+        println!("{}", env!("TICO_SCREEN_BUILD_ID"));
+        return Ok(());
+    }
     let key = std::env::var("TICO_SCREEN_RELAY_KEY")?;
     if key.len() < 32 {
         return Err("TICO_SCREEN_RELAY_KEY must contain at least 32 bytes".into());
@@ -705,6 +711,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         hub: Arc::new(Mutex::new(Hub::new())),
         key: Arc::new(key),
         python: Arc::new(python.trim_end_matches('/').into()),
+        proxy: reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()?,
         http: reqwest::Client::builder()
             .timeout(Duration::from_secs(2))
             .redirect(reqwest::redirect::Policy::none())
@@ -728,7 +739,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .layer(DefaultBodyLimit::max(131072))
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let public = match std::env::var("TICO_SCREEN_PUBLIC_BIND") {
+        Ok(bind) => Some(tokio::net::TcpListener::bind(bind).await?),
+        Err(_) => None,
+    };
     println!("screen relay listening on {}", listener.local_addr()?);
+    if let Some(public) = public {
+        let gateway = gateway::routes(app.clone());
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(public, gateway.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+                eprintln!("screen gateway stopped: {error}");
+                std::process::exit(1);
+            }
+        });
+    }
     axum::serve(listener, routes)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;

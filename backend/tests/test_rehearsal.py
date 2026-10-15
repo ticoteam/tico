@@ -1,6 +1,8 @@
 """TICO_REHEARSAL=1: a server on a copy of real data runs its migrations and nothing else. It starts no timers,
 writes nothing to the backup location and sends nothing out, so restoring production data to try a move is safe."""
 import stat
+import shlex
+import sys
 import textwrap
 from types import SimpleNamespace
 
@@ -14,22 +16,24 @@ from backend.tests.test_onboarding import environment  # noqa: F401
 from backend.tests.test_replication import ENTRYPOINT, entrypoint, prepare  # noqa: F401
 
 
-def stub_uvicorn(tmp_path):
-    """A `uvicorn` that records what the server would start with instead of serving."""
-    stub = tmp_path / "bin" / "uvicorn"
+def stub_server(tmp_path):
+    """Record only the server entry point; initialization helpers still use the real interpreter."""
+    stub = tmp_path / "bin" / "python"
     stub.parent.mkdir(exist_ok=True)
-    stub.write_text(textwrap.dedent("""\
-        #!/bin/sh
-        env | grep -E '^(TICO_[A-Z_]*|AWS_[A-Z_]*REGION)=' | sort > "$STUB_ENV"
-        echo "uvicorn $@" >> "$STUB_LOG"
-    """))
+    stub.write_text("#!/bin/sh\n"
+                    'if [ "$1 $2" = "-m backend.server" ]; then\n'
+                    "  env | grep -E '^(TICO_[A-Z_]*|AWS_[A-Z_]*REGION)=' | sort > \"$STUB_ENV\"\n"
+                    '  echo "python $*" >> "$STUB_LOG"\n'
+                    '  exit 0\n'
+                    'fi\n'
+                    + "exec " + shlex.quote(sys.executable) + ' "$@"\n')
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     return tmp_path / "server.env"
 
 
 def serve(tmp_path, **extra):
-    """`docker/entrypoint.sh server` with fake uvicorn and litestream. Returns (result, env the server got, litestream log)."""
-    env_file = stub_uvicorn(tmp_path)
+    """`docker/entrypoint.sh server` with fake server and litestream. Returns (result, env the server got, litestream log)."""
+    env_file = stub_server(tmp_path)
     base = {"TICO_COMPANY_NAME": "Acme", "TICO_OWNER_EMAIL": "owner@example.com", "TICO_AUTH_PROXY": "none",
             "TICO_LOCAL_OWNER_TOKEN_FILE": str(tmp_path / "token"), "STUB_ENV": str(env_file),
             "STUB_DB": str(tmp_path / "no-replica"), "STUB_FAIL": "", **extra}
@@ -67,7 +71,7 @@ def test_rehearsal_turns_off_the_scheduler_backups_and_everything_outbound(tmp_p
     assert (seen["TICO_TELEMETRY"], seen["TICO_SUPPORT"], seen["TICO_BACKUP_MODE"]) == ("off", "off", "rehearsal")
     assert "TICO_UPDATER_URL" not in seen and "TICO_SENTRY_DSN" not in seen
     assert "replicate" not in log and "REHEARSAL: backups are off" in result.stdout      # no Litestream, and the log says so
-    assert "uvicorn backend.app:create_app" in log
+    assert "python -m backend.server" in log
 
 
 @pytest.mark.slow

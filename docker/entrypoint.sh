@@ -85,11 +85,7 @@ runner_host() {
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
-  local runner origin=${TICO_TUNNEL_ORIGIN:-http://server:8765}
-  case "$origin" in
-    http://server:8765|http://screen-proxy:8080) ;;
-    *) die "TICO_TUNNEL_ORIGIN must name the server or the opt-in screen proxy" ;;
-  esac
+  local runner origin=http://server:8765
   runner=$(runner_host)
   {
     echo "ingress:"
@@ -237,8 +233,7 @@ prepare() {  # everything `server` does before it starts serving: also what the 
 
 server() {
   prepare "$@"
-  local serve=(uvicorn backend.app:create_app --factory --host 0.0.0.0 --port 8765 --workers 1 --no-access-log
-               --timeout-graceful-shutdown 2)
+  local serve=(python -m backend.server --host 0.0.0.0 --port 8765)
   if rehearsal; then
     log "REHEARSAL: nothing runs or leaves this server. No scheduler, directory sync, release check, usage count, support, Slack or updater."
     log "REHEARSAL: backups are off: no Litestream, no replication loop, nothing is written to ${TICO_BACKUP_URL:-a backup location}."

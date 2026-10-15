@@ -107,9 +107,6 @@ def create_app(settings=None):
         from concurrent.futures import ThreadPoolExecutor
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
         store.initialize()
-        if settings.screen_relay == "python":
-            from .screen_relay import reconcile_pilot
-            await asyncio.to_thread(reconcile_pilot, store)  # a rollback also closes abandoned pilot audit opens
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         # A company from before the Librarian was built in gets it on update, once it can run it.
         try:
@@ -143,7 +140,7 @@ def create_app(settings=None):
         telemetry.start()
         stop = asyncio.Event()
         screen_relay_task = None
-        if getattr(screen_sessions, "remote", False):
+        if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
             screen_relay_task = asyncio.create_task(screen_sessions.run(stop))
         from .timing import watch_loop
@@ -222,6 +219,8 @@ def create_app(settings=None):
             stop.set()
             if screen_relay_task:
                 await screen_relay_task
+            else:
+                screen_sessions.http.close()
             app.state.doc_sources.stop.set()
             copy_stop.set()
             app.state.file_metadata.stop.set()

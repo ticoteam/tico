@@ -35,7 +35,7 @@ def test_the_local_server_reads_its_settings_from_the_environments_file():
     text = su.render("api", python="/py", config="", root="/srv/tico", log="/l", path="/usr/bin", env_slug="acme",
                      env_file="/home/ana/.config/tico/environments/acme/server.env", port="8123")
     assert "EnvironmentFile=/home/ana/.config/tico/environments/acme/server.env" in text
-    assert '"uvicorn" "backend.app:create_app" "--factory"' in text and '"--port" "8123"' in text
+    assert '"-m" "backend.server"' in text and '"--port" "8123"' in text
     with pytest.raises(ValueError):
         su.render("processing", **KW)
 

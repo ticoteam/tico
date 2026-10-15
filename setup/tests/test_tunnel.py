@@ -118,11 +118,8 @@ def test_the_server_and_setup_write_the_same_runner_hostname_route(tmp_path):
     written = yaml.safe_load((tmp_path / "cloudflared.yml").read_text())
     assert written == cloudflare.ingress_config("tico.example.com", "tico-runner.example.com")
     assert written["ingress"][1]["path"] == "^/(?:api/v2|download)(?:/.*)?$"
+    # Obsolete pilot settings cannot divert the standard tunnel away from the integrated server.
     done = write_config(tmp_path, "tico.example.com", TICO_RUNNER_URL="https://tico-runner.example.com",
-                        TICO_TUNNEL_ORIGIN="http://screen-proxy:8080")
+                        TICO_TUNNEL_ORIGIN="http://untrusted.example")
     assert done.returncode == 0, done.stderr
-    pilot = yaml.safe_load((tmp_path / "cloudflared.yml").read_text())
-    assert [r["service"] for r in pilot["ingress"]] == [
-        "http://screen-proxy:8080", "http://screen-proxy:8080", "http_status:404"]
-    assert pilot["ingress"][1]["path"] == written["ingress"][1]["path"]
-    assert write_config(tmp_path, "tico.example.com", TICO_TUNNEL_ORIGIN="http://untrusted.example").returncode != 0
+    assert yaml.safe_load((tmp_path / "cloudflared.yml").read_text()) == written

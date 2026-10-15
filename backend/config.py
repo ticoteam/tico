@@ -114,8 +114,7 @@ class Settings:
     local_owner_token: str = field(default="", repr=False)
     public_url: str = "http://127.0.0.1:8765"
     runner_url: str = ""
-    screen_relay: str = "python"
-    screen_relay_url: str = "http://127.0.0.1:8766"
+    screen_relay_url: str = ""
     screen_relay_key: str = field(default="", repr=False)
     owner_name: str = ""
     compose_project: str = "tico"
@@ -226,13 +225,11 @@ class Settings:
     rehearsal: bool = False
 
     def __post_init__(self):
-        if self.screen_relay not in ("python", "rust"):
-            raise ValueError("TICO_SCREEN_RELAY must be python or rust")
-        if self.screen_relay == "rust":
+        if self.screen_relay_url:
             relay = urlparse(self.screen_relay_url)
             if (len(self.screen_relay_key) < 32 or relay.scheme != "http" or not relay.hostname
                     or relay.username or relay.password or relay.query or relay.fragment or relay.path not in ("", "/")):
-                raise ValueError("Rust screen relay needs a private HTTP origin and a key of at least 32 characters")
+                raise ValueError("Screen relay needs a private HTTP origin and a key of at least 32 characters")
         self.blob_credentials = self.blob_credentials.strip().lower() or "auto"
         if self.blob_credentials not in ("auto", "role", "backup", "keys"):
             raise ValueError("TICO_BLOB_CREDENTIALS must be auto, role, backup or keys")
@@ -344,9 +341,8 @@ class Settings:
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
             runner_url=os.environ.get("TICO_RUNNER_URL", "").rstrip("/"),
-            screen_relay="python" if rehearsal else os.environ.get("TICO_SCREEN_RELAY", "python"),
-            screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", "http://127.0.0.1:8766"),
-            screen_relay_key=quiet(os.environ.get("TICO_SCREEN_RELAY_KEY", "")),
+            screen_relay_url=os.environ.get("TICO_SCREEN_RELAY_URL", ""),
+            screen_relay_key=os.environ.get("TICO_SCREEN_RELAY_KEY", ""),
             access_issuer=os.environ.get("TICO_ACCESS_ISSUER", "").rstrip("/"),
             access_audience=os.environ.get("TICO_ACCESS_AUDIENCE", ""),
             access_jwks_url=os.environ.get("TICO_ACCESS_JWKS_URL", "").strip(),

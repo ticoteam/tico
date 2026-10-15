@@ -38,10 +38,10 @@ def main():
               "parameters": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, "samples": []}
     payload = b"x" * args.bytes
     for repeat in range(args.repeats):
-        for engine in (["python", "rust"] if repeat % 2 == 0 else ["rust", "python"]):
+        for engine in ["rust"]:
             root = args.output / f"{engine}-{repeat}"
             root.mkdir()
-            with running_service(engine, root, args.rust_bin.resolve()) as service, ExitStack() as sockets:
+            with running_service(root, args.rust_bin.resolve()) as service, ExitStack() as sockets:
                 pairs = []
                 for _ in range(args.computers):
                     computer = service.computer()

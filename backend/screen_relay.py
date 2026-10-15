@@ -1,7 +1,7 @@
-"""Opt-in private control plane; temporary screen/session authority belongs to the Rust process.
+"""Private Rust relay control plane; temporary screen/session authority belongs to the Rust process.
 
 The only durable lifecycle records are existing audit events. SQLite write transactions deduplicate
-close reports and reconcile old pilot opens after a restart. No credentials or tickets are persisted.
+close reports and reconcile old session opens after a restart. No credentials or tickets are persisted.
 """
 import asyncio
 import hmac
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 
 def private_request(request, settings):
-    return (settings.screen_relay == "rust" and request.method == "POST" and request.url.path == PRIVATE_PATH
+    return (bool(settings.screen_relay_key) and request.method == "POST" and request.url.path == PRIVATE_PATH
             and hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + settings.screen_relay_key))
 
 
@@ -49,12 +49,10 @@ def install_policy(app, store, auth, execution, settings):
 
 
 class RemoteRegistry:
-    remote = True
-
     def __init__(self, store):
         self.store = store
         self.lock = threading.RLock()
-        self.http = httpx.Client(base_url=store.settings.screen_relay_url.rstrip("/"), timeout=2, trust_env=False,
+        self.http = httpx.Client(base_url=(store.settings.screen_relay_url or "http://127.0.0.1:1").rstrip("/"), timeout=2, trust_env=False,
                                  headers={"Authorization": "Bearer " + store.settings.screen_relay_key})
         self.lease, self.boot, self.sequence = "", "", 0
         self.generations, self.acks = {}, []
@@ -164,7 +162,7 @@ class RemoteRegistry:
                 {"session_id": sid, "control": report["control"], "seconds": report["seconds"], "code": report["code"]})
 
     def _reconcile(self):
-        reconcile_pilot(self.store, self.lease)
+        reconcile_sessions(self.store, self.lease)
 
     def tick(self):
         if self.superseded:
@@ -207,7 +205,7 @@ class RemoteRegistry:
             self.http.close()
 
 
-def reconcile_pilot(store, lease=""):
+def reconcile_sessions(store, lease=""):
     while True:
         with store.transaction() as c:
             rows = c.execute("SELECT o.target,o.actor,o.detail_json FROM events o WHERE o.action='runner.screen_open' "

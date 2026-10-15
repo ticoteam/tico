@@ -604,81 +604,49 @@ display (`:99`, 1440x900) and gives bots `DISPLAY=:99`; its VNC servers listen o
 sockets in a directory bots cannot open), and the server relays each session. Anyone allowed to open the screen sees everything on that display, including what a bot types into a page,
 and with Control can use it. All bots on one computer share one display. A Mac reports "Linux only for now".
 
-#### Opt-in Rust screen relay
+#### Rust screen relay
 
-The default remains the Python relay. The Rust pilot moves only computer-screen WebSockets to a
-Tokio/Axum sidecar. The API, permissions, durable screen settings and audit events stay in Python;
-no session table or new public hostname is introduced. Both implementations use the existing
-browser and runner socket paths. Run one Python server process per installation, as with the
-existing in-memory registry. [relay-rs/README.md](../relay-rs/README.md) specifies the private protocol,
-limits, rollout gate and fallback-removal milestone.
+Rust is the only screen WebSocket relay. The standard server image includes its binary, and
+`python -m backend.server` starts and supervises it together with the API. Rust keeps the existing
+public listener and forwards ordinary HTTP requests and event streams to a private loopback API.
+Python retains authentication, permission policy, durable screen settings and audit persistence.
+Tickets, sessions, buffering and socket forwarding live only in Rust. There is no Python fallback.
 
-| Installation | Default | Pilot ingress |
-|---|---|---|
-| Docker with Caddy | Python | Explicit Compose overlay adds an internal path router; the existing HTTPS front door forwards to it. |
-| Docker with locally managed Cloudflare Tunnel | Python | Overlay makes the generated tunnel origin the internal path router, for both public and runner hosts. |
-| Remotely managed Cloudflare Tunnel | Python | Change both applicable dashboard origins to `http://screen-proxy:8080`; keep existing hostname, Access and runner-path restrictions. Remote configuration overrides the generated local file. |
-| Native/local or native Tunnel server | Python | An explicitly configured local Caddy routes the two socket paths to Rust and all other requests to the private Python listener. |
-| Direct Python listener without a path router | Python | Keep Python. Rust mode refuses sockets arriving at Python so a routing error cannot silently start a second relay. |
+| Installation | Routing |
+|---|---|
+| Docker with Caddy | The existing front door continues forwarding to `server:8765`. |
+| Locally managed Cloudflare Tunnel | Both generated origins remain `http://server:8765`. |
+| Dashboard-managed Cloudflare Tunnel | Keep or restore both applicable origins to `http://server:8765`; preserve hostname, Access and runner-path restrictions. |
+| Native/local or native Tunnel | Run `python -m backend.server --host 127.0.0.1 --port 8765`; keep the existing public origin. |
 
-This is a source-checkout pilot. The standard installer, Compose file and updater continue to install
-Python. Use a reviewed server image built from the same revision as the sidecar; an older released
-server does not implement the private control plane. The automatic updater does not manage the
-pilot files or image: rehearse an update with the release owner or roll back before updating.
+Native release checkouts download the matching checksummed binary. Development checkouts build
+it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
+fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
+`TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
 
-For Docker, add a separate, random secret of at least 32 characters as `TICO_SCREEN_RELAY_KEY` in
-that installation's private `.env`. Never reuse an owner or runner token. Select a unique image tag
-for `TICO_SCREEN_RELAY_IMAGE`, then explicitly include the overlay:
+Existing native launchd/systemd server jobs need a one-time `scripts/tico -e <env> server install`
+after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already
+use that entry point. The server creates a fresh private control secret and allocated loopback ports
+on every start; no relay option or manually managed secret is required. The public listener refuses
+`/control/*` and `/_tico/*`. If either server process exits, its supervisor restarts the pair.
 
-```bash
-docker compose -f compose.yaml -f compose.screen-relay.yaml up -d --build
-```
+Former pilot installations should stop their own `screen-proxy` and `screen-relay` services and
+return to the standard Compose file. The old overlay is an empty compatibility file. For a manually
+configured native pilot, stop its old sidecar/proxy and use the standard server command. Obsolete
+`TICO_SCREEN_RELAY=python` or `rust` settings are ignored; they cannot select another implementation.
 
-The overlay publishes the path router on the same loopback port, leaves Python and Rust on the
-private Compose network, and retains the existing public URLs and authentication configuration.
-`/control/v1/*` and `/_tico/screen/v1/*` are blocked by the router. No relay control port is published.
-The sidecar image is built from the checked-in Cargo lock and digest-pinned base images.
+Rollback means returning to a previous complete TICO release, rather than selecting a relay engine.
+The database schema is unchanged; process restarts invalidate old tickets and reconcile audit opens.
+[relay-rs/README.md](../relay-rs/README.md) documents the private protocol and resource limits.
 
-For a native pilot, build the binary with Rust 1.92 or newer, keeping build data on your work disk:
-
-```bash
-mkdir -p .tmp-screen-relay/{tmp,cargo,target}
-TMPDIR="$PWD/.tmp-screen-relay/tmp" CARGO_HOME="$PWD/.tmp-screen-relay/cargo" \
-  CARGO_TARGET_DIR="$PWD/.tmp-screen-relay/target" cargo build --release --locked --manifest-path relay-rs/Cargo.toml
-```
-
-Keep `TICO_PUBLIC_URL` and the public listener unchanged. Move the Python listener to a private
-loopback port (for example 8767) and set `TICO_SCREEN_RELAY=rust`,
-`TICO_SCREEN_RELAY_URL=http://127.0.0.1:8766` and the private key in its environment. Start the sidecar
-with the same key, `TICO_SCREEN_RELAY_BIND=127.0.0.1:8766` and
-`TICO_SCREEN_PYTHON_URL=http://127.0.0.1:8767`. Supervise it alongside Python. Run Caddy with
-`relay-rs/Caddyfile`, `TICO_SCREEN_PYTHON_UPSTREAM=127.0.0.1:8767`,
-`TICO_SCREEN_RELAY_UPSTREAM=127.0.0.1:8766` and `TICO_SCREEN_LISTEN` set to the existing public
-listener (for a local install, `http://127.0.0.1:8765`). A native tunnel can continue pointing to that
-same local public listener. Keep all control traffic local; multi-host control transport is outside
-this pilot. Python deliberately fails startup when an explicitly configured sidecar is unavailable.
-
-**Rollback:** for Docker, stop only the pilot services with
-`docker compose -f compose.yaml -f compose.screen-relay.yaml stop screen-proxy screen-relay`,
-then run the normal `docker compose -f compose.yaml up -d` with the installation's existing profiles.
-Restore remotely managed tunnel origins to `http://server:8765` too. For native installations,
-select `TICO_SCREEN_RELAY=python`, stop the sidecar/path router and return the Python listener to its
-original address. Open screens reconnect with fresh tickets. Durable screen modes and audit history
-remain; no database rollback is needed. There is no automatic fallback during a Rust lease.
-
-For isolated validation, use unique Compose projects, image tags and ports; tear down only resources
-created for that validation. Run the shared real-socket contract locally after building the binary:
+For isolated validation, build the binary and run the permission, socket, streaming and startup checks:
 
 ```bash
 TICO_SCREEN_RELAY_BIN=/path/on/work-disk/to/tico-screen-relay \
-  python -m pytest -q -n 0 -m slow backend/tests/test_screen_relay_contract.py
+  python -m pytest -q -n 0 -m slow backend/tests/test_screen.py \
+    backend/tests/test_screen_relay_contract.py backend/tests/test_screen_relay_ingress.py
 ```
 
-`backend/tests/test_screen_relay_ingress.py` additionally needs `TICO_CADDY_BIN` and validates the
-actual path router. `scripts/benchmark_screen_relay.py --output /path/on/work-disk/to/new-results
---rust-bin /path/to/tico-screen-relay` compares both implementations using the same fictional
-computers, payloads and concurrency; its output includes every sample and machine load. These are
-targeted pilot checks, not the shared release journey.
 
 ### Mac
 

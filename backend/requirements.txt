@@ -115,5 +115,3 @@ uvicorn==0.52.4
     # via -r backend/requirements.in
 uvloop==0.23.0
     # via -r backend/requirements.in
-websockets==15.0.1
-    # via -r backend/requirements.in

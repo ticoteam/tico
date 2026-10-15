@@ -12,3 +12,5 @@ node_modules/
 .pytest_cache/
 app/.build/
 !docker/versions.env
+
+relay-rs/target/

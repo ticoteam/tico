@@ -1,12 +1,7 @@
+# Compatibility for a manually managed outer proxy; the server handles screen routing itself.
 {
-	admin off
+    admin off
 }
-
-# Same public paths and headers; control routes never reach either private control plane.
-{$TICO_SCREEN_LISTEN::8080} {
-	@private path /control/v1 /control/v1/* /_tico/screen/v1 /_tico/screen/v1/*
-	respond @private 403
-	@screens path_regexp screens ^/api/v2/runners/(?:[^/]+/screen/ws|me/screen/[^/]+/ws)$
-	reverse_proxy @screens {$TICO_SCREEN_RELAY_UPSTREAM:screen-relay:8766}
-	reverse_proxy {$TICO_SCREEN_PYTHON_UPSTREAM:server:8765}
+{$TICO_SCREEN_LISTEN:http://127.0.0.1:8765} {
+    reverse_proxy {$TICO_SERVER_UPSTREAM:127.0.0.1:8767}
 }
