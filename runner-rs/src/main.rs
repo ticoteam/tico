@@ -5,6 +5,7 @@
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
+mod accounts;
 mod backlog;
 mod client;
 mod commands;

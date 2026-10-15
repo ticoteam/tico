@@ -425,6 +425,28 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
         machine.stop()
 
 
+# The signed-in account a computer reports per tool (#610): allow-listed fields only, Codex's without a token refresh.
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api, computer):
+    computer.start()
+
+    def account():
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+        return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {}).get("account")
+
+    got = until(account, "the account in readiness", timeout=40)
+    got.pop("checked_at")
+    if computer.runtime == "codex":
+        # The fake answers account/read only when asked without a token refresh.
+        assert got == {"email": "dev@acme.example", "plan": "pro", "kind": "subscription"}
+    else:
+        assert got == {"email": "ops@acme.example", "plan": "max", "org": "Acme Ltd"}
+    with api.app.state.store.read() as c:
+        stored = json.dumps([list(r) for r in c.execute("SELECT readiness_json FROM runners")])
+    assert "sk-ant-oat01" not in stored and "acme-org-0001" not in stored
+
+
 @pytest.mark.parametrize("harness", ["codex"])
 @pytest.mark.parametrize("setup", [{"bot": {"session": "task"}, "git": True, "registration": {"capacity": 4},
                                     "env": {"FAKE_SLOW": "4"}}])

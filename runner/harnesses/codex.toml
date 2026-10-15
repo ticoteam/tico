@@ -34,6 +34,7 @@ subscription_marker = "chatgpt"
 subscription_profiles = true
 profile_home = "CODEX_HOME"
 weekly_usage = "refresh"
+account = "app-server"
 mcp_transports = ["http"]
 # The app-server aborts the next turn on an interrupted thread at once, so a retry starts a fresh one.
 resume_after_interrupt = false

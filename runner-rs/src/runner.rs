@@ -51,6 +51,9 @@ pub struct Runner {
     worktree_stamp: AtomicBool,
     /// The server takes runtimes' `credential_source` (its heartbeat reply said so); until then it is left out.
     credential_source: AtomicBool,
+    /// The server takes the signed-in account and the 5-hour window (its heartbeat reply said so); until then
+    /// they stay on this computer.
+    accounts: AtomicBool,
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
@@ -128,6 +131,7 @@ impl Runner {
             worktrees,
             worktree_stamp: AtomicBool::new(false),
             credential_source: AtomicBool::new(false),
+            accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
             assignments: Mutex::new(vec![]),
@@ -329,6 +333,9 @@ impl Runner {
         if !self.credential_source.load(Ordering::SeqCst) {
             strip_credential_source(&mut body);
         }
+        if !self.accounts.load(Ordering::SeqCst) {
+            strip_accounts(&mut body);
+        }
         // The repositories report rides only on full passes, which are always sent.
         let printed = steady(&body).to_string();
         if let Some(rows) = repository_rows {
@@ -371,6 +378,9 @@ impl Runner {
                 } else if strip_credential_source(&mut body) {
                     // A rollback to a server from before credential sources: the heartbeat keeps working.
                     self.credential_source.store(false, Ordering::SeqCst);
+                } else if strip_accounts(&mut body) {
+                    // A rollback to a server from before accounts: the rest of the report still goes.
+                    self.accounts.store(false, Ordering::SeqCst);
                 } else {
                     break Err(e);
                 }
@@ -386,6 +396,7 @@ impl Runner {
             }
             self.worktree_stamp.store(beat["worktree_record_stamp"] == true, Ordering::SeqCst);
             self.credential_source.store(beat["runtime_credential_source"] == true, Ordering::SeqCst);
+            self.accounts.store(beat["subscription_accounts"] == true, Ordering::SeqCst);
             if beat["restart"] == true && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {
@@ -485,6 +496,22 @@ fn strip_credential_source(body: &mut Value) -> bool {
     let mut any = false;
     for row in body["readiness"]["runtimes"].as_object_mut().into_iter().flat_map(|m| m.values_mut()).filter_map(|v| v.as_object_mut()) {
         any |= row.remove("credential_source").is_some();
+    }
+    any
+}
+
+/// Take the signed-in accounts and 5-hour windows out of a heartbeat body: what a server from before #610 has no
+/// field for. True when there was one.
+pub(crate) fn strip_accounts(body: &mut Value) -> bool {
+    let mut any = false;
+    for row in body["readiness"]["runtimes"].as_object_mut().into_iter().flat_map(|m| m.values_mut()).filter_map(|v| v.as_object_mut()) {
+        any |= row.remove("account").is_some();
+    }
+    for profile in body["profiles"].as_array_mut().into_iter().flatten() {
+        for state in profile["runtimes"].as_object_mut().into_iter().flat_map(|m| m.values_mut()).filter_map(|v| v.as_object_mut()) {
+            any |= state.remove("account").is_some();
+            any |= state.remove("five_hour").is_some();
+        }
     }
     any
 }
@@ -770,6 +797,16 @@ mod tests {
     fn credential_source_is_stripped_from_every_runtime() {
         let mut body = json!({"readiness": {"runtimes": {"codex": {"ok": true, "credential_source": "team"}}}});
         assert!(strip_credential_source(&mut body) && !strip_credential_source(&mut body));
+    }
+
+    #[test]
+    fn accounts_stay_here_until_the_server_takes_them() {
+        let mut body = json!({"readiness": {"runtimes": {"claude": {"installed": true, "account": {"email": "ops@acme.example"}}}},
+                              "profiles": [{"name": "acme", "runtimes": {"codex": {"signed_in": true, "weekly": {"used_percent": 3},
+                                            "account": {"plan": "pro"}, "five_hour": {"used_percent": 9}}}}]});
+        assert!(strip_accounts(&mut body) && !strip_accounts(&mut body));
+        assert_eq!(body["readiness"]["runtimes"]["claude"], json!({"installed": true}));
+        assert_eq!(body["profiles"][0]["runtimes"]["codex"], json!({"signed_in": true, "weekly": {"used_percent": 3}}));
     }
 
     #[test]

@@ -78,6 +78,11 @@ All notable changes to Tico are recorded here. The format follows
   with compatible AWS, cryptography, JWT and browser telemetry SDK updates.
 
 ### Added
+- Settings → Computers lists each AI tool on its own row: installed version, enabled, sign-in and the account it
+  is signed in to (`signed in as <email> · <plan>`), with one line per named profile and the weekly and 5-hour
+  windows as bars with the reading's age (#610). Tools without an account or usage source read "unavailable".
+  Accounts come from the tools' own status answers, never credential files, and are shown only to owners,
+  admins and the computer's operator; see PRIVACY.md.
 - An opt-in Rust relay for computer-screen WebSockets, with single-use tickets, leased permissions,
   bounded buffering and cancellation, and duplicate-safe audit reporting. Python remains the default;
   the explicit installation overlay and rollback are documented in docs/install.md.

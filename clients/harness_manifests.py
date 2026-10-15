@@ -24,6 +24,7 @@ FIELDS = {
     "profile_dirs": (list, []),
     "own_config_home": (bool, False),
     "weekly_usage": (str, ""),
+    "account": (str, ""),
     "tool_events": (bool, False),
     "mcp_transports": (list, []),
     "mcp_unsupported": (str, ""),
@@ -41,6 +42,7 @@ FIELDS = {
     "sign_in_status": (dict, {}),
 }
 CHOICES = {"api_keys": ("", "computer", "bot"), "weekly_usage": ("", "refresh", "turns", "manual"),
+           "account": ("", "status-json", "app-server"),
            "model_list": ("", "host", "command")}
 CHECKS = ("none", "command", "json", "file", "bot-key")
 TRANSPORTS = ("http", "sse")

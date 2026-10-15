@@ -75,6 +75,17 @@ pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, as
     };
     let models: Vec<String> = if caps.model_list == "host" { crate::hosts::models(runtime, profile) } else { vec![] };
     let mut row = Map::new();
+    // The account only beside a sign-in the check just confirmed; a signed-out login forgets it.
+    let account_key = profile.map(|p| p.name.clone()).unwrap_or_default();
+    if authenticated == "ready" && !caps.account.is_empty() {
+        let stored = crate::accounts::without_keys(env.cloned().unwrap_or_else(crate::env::process_environment));
+        crate::accounts::refresh_in_background(&account_key, runtime, stored);
+        if let Some(account) = crate::accounts::account(&account_key, runtime) {
+            row.insert("account".into(), account);
+        }
+    } else if authenticated == "missing" {
+        crate::accounts::forget(&account_key, runtime);
+    }
     row.insert("installed".into(), json!(exe.is_some()));
     row.insert("authenticated".into(), json!(authenticated));
     row.insert("version".into(), json!(version));
@@ -104,6 +115,7 @@ async fn sign_in_state(
     let name = crate::harness_tools::name_for(runtime);
     let missing = if status.missing_detail.is_empty() { format!("{name} login required") } else { status.missing_detail.clone() };
     let timed_out = if profile.is_some() { "unknown" } else { "failed" };
+    let account_key = profile.map(|p| p.name.clone()).unwrap_or_default();
     let computer_key = caps.api_keys == "computer";
     if computer_key && profile.is_none() && status.check != "command" && status.check != "json" {
         sign.team_model_keys(client, runtime).await;
@@ -139,6 +151,12 @@ async fn sign_in_state(
                     _ => match ran.ok().and_then(|(_, out, _)| serde_json::from_str::<Value>(&out).ok()).filter(|v| v.is_object()) {
                         None => Err(false),
                         Some(s) if s[&status.field] == true => {
+                            if caps.account == "status-json" {
+                                match crate::accounts::from_status_json(&s) {
+                                    Some(account) => crate::accounts::remember(&account_key, runtime, account),
+                                    None => crate::accounts::forget(&account_key, runtime),
+                                }
+                            }
                             let method = text_of(&s[&status.method_field]);
                             Ok(Some(if method.is_empty() { status.ready_detail.clone() } else { format!("Signed in with {method}") }))
                         }

@@ -72,17 +72,26 @@ fn rows<'a>(body: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     body[key].as_array().into_iter().flatten()
 }
 
-fn has_weekly(body: &Value) -> bool {
-    rows(body, "profiles").any(|p| p["runtimes"].as_object().is_some_and(|r| r.values().any(|s| s.get("weekly").is_some())))
+fn has_in_profiles(body: &Value, key: &str) -> bool {
+    rows(body, "profiles").any(|p| p["runtimes"].as_object().is_some_and(|r| r.values().any(|s| s.get(key).is_some())))
 }
+
 
 /// What to leave out after a heartbeat's 422 (service.py _report_heartbeat), as a hold name: only `weekly` of the
 /// profile report, the worktree reports' `record_updated` stamp, the newest refused capability, else a root field
 /// the detail names (or, for a bare "extra" with no path, the first one present). None: the refusal stands.
 pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     let extra = detail.to_lowercase().contains("extra");
-    if extra && detail.contains("weekly") && has_weekly(body) {
-        return Some("profiles.weekly".into()); // older servers keep receiving the sign-in report
+    // Older servers keep receiving the sign-in report without the field they refuse.
+    static FIELD: OnceLock<regex::Regex> = OnceLock::new();
+    let field = FIELD.get_or_init(|| regex::Regex::new(r"profiles\.(?:[^ :;]+\.)?runtimes\.[^ .:;]+\.(account|five_hour)(?:[.: ;]|$)").unwrap());
+    if let Some(key) = field.captures(detail).filter(|_| extra).map(|c| c[1].to_string()) {
+        if has_in_profiles(body, &key) {
+            return Some(format!("profiles.{key}"));
+        }
+    }
+    if extra && detail.contains("weekly") && has_in_profiles(body, "weekly") {
+        return Some("profiles.weekly".into());
     }
     if extra && detail.contains("record_updated") && rows(body, "worktrees").any(|r| r.get("record_updated").is_some()) {
         return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
@@ -113,7 +122,7 @@ pub fn drop_held(body: &mut Value) {
     if let Some(caps) = body["capabilities"].as_array_mut() {
         caps.retain(|c| !held_back(&text_of(c)));
     }
-    for (hold, list, path) in [("profiles.weekly", "profiles", "runtimes"), ("worktrees.record_updated", "worktrees", "")] {
+    for (hold, list, path) in [("profiles.weekly", "profiles", "runtimes"), ("profiles.account", "profiles", "runtimes"), ("profiles.five_hour", "profiles", "runtimes"), ("worktrees.record_updated", "worktrees", "")] {
         if !held_back(hold) {
             continue;
         }
@@ -171,5 +180,20 @@ mod tests {
         assert_eq!(body["profiles"][0]["runtimes"]["codex"], json!({"ok": true}));
         assert!(body.get("repositories").is_none() && body["worktrees"][0].get("record_updated").is_some());
         dropped().lock().unwrap().retain(|k, _| k != "profiles.weekly" && k != "repositories");
+    }
+
+    #[test]
+    fn an_older_server_loses_only_the_account_and_five_hour_window() {
+        let mut body = json!({"profiles": [{"name": "acme", "runtimes": {"codex": {"signed_in": true, "weekly": {"used_percent": 3},
+                              "account": {"email": "dev@acme.example", "plan": "pro"}, "five_hour": {"used_percent": 9}}}}], "readiness": {}});
+        let account = "body.profiles.list[ComputerProfile].0.runtimes.codex.account: Extra inputs are not permitted";
+        assert_eq!(refused_field(account, &body).as_deref(), Some("profiles.account"));
+        let window = "body.profiles.0.runtimes.codex.five_hour: Extra inputs are not permitted";
+        assert_eq!(refused_field(window, &body).as_deref(), Some("profiles.five_hour"));
+        hold_back("profiles.account");
+        hold_back("profiles.five_hour");
+        drop_held(&mut body);
+        assert_eq!(body["profiles"][0]["runtimes"]["codex"], json!({"signed_in": true, "weekly": {"used_percent": 3}}));
+        dropped().lock().unwrap().retain(|k, _| k != "profiles.account" && k != "profiles.five_hour");
     }
 }

@@ -305,18 +305,27 @@ pub fn claude_token_cold(profile: Option<&Profile>) -> bool {
     expires.is_some_and(|ms| ms / 1000.0 <= crate::util::epoch_s())
 }
 
-/// Weekly allowance snapshots per (profile, runtime) (runner/subscription_usage.py Reports): non-secret.
-fn weekly() -> &'static Mutex<HashMap<(String, String), Value>> {
-    static W: OnceLock<Mutex<HashMap<(String, String), Value>>> = OnceLock::new();
+/// Usage window snapshots per (profile, runtime, window) (runner/subscription_usage.py Reports): non-secret. The
+/// window is `weekly` (10080 minutes) or `five_hour` (300).
+fn weekly() -> &'static Mutex<HashMap<(String, String, &'static str), Value>> {
+    static W: OnceLock<Mutex<HashMap<(String, String, &'static str), Value>>> = OnceLock::new();
     W.get_or_init(Default::default)
 }
 
 pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
     // Only a runtime whose turns or refresh report a weekly window has one to keep.
     let weekly_usage = crate::harness_tools::caps(runtime, "").weekly_usage;
-    if profile.is_empty() || !["refresh", "turns"].contains(&weekly_usage.as_str()) || event["window_minutes"] != 10080 {
+    if profile.is_empty() || !["refresh", "turns"].contains(&weekly_usage.as_str()) {
         return;
     }
+    if !event["plan_type"].is_null() {
+        crate::accounts::remember_plan(profile, runtime, &event["plan_type"]);
+    }
+    let window = match event["window_minutes"].as_u64() {
+        Some(10080) => "weekly",
+        Some(300) => "five_hour",
+        _ => return,
+    };
     let percent = &event["used_percent"];
     if !percent.is_null() && !percent.as_f64().is_some_and(|p| p.is_finite() && (0.0..=100.0).contains(&p)) {
         return;
@@ -331,7 +340,7 @@ pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
     }
     let status = event["status"].as_str().filter(|s| ["allowed", "allowed_warning", "rejected"].contains(s)).map_or(Value::Null, |s| json!(s));
     let now = crate::util::iso(&json!(crate::util::epoch_s()));
-    weekly().lock().unwrap().insert((profile.into(), runtime.into()), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status}));
+    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status}));
 }
 
 struct Cached {
@@ -394,8 +403,19 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                                     signed = if status.check == "command" {
                                         json!(out.status.success() && text.contains(&status.ready) && (status.not_ready.is_empty() || !text.contains(&status.not_ready)))
                                     } else {
-                                        serde_json::from_slice::<Value>(&out.stdout).ok().filter(|v| v.is_object()).map_or(Value::Null, |v| json!(v[&status.field] == true))
+                                        serde_json::from_slice::<Value>(&out.stdout).ok().filter(|v| v.is_object()).map_or(Value::Null, |v| {
+                                            if crate::harness_tools::caps(runtime, "").account == "status-json" {
+                                                match crate::accounts::from_status_json(&v) {
+                                                    Some(account) => crate::accounts::remember(&name, runtime, account),
+                                                    None => crate::accounts::forget(&name, runtime),
+                                                }
+                                            }
+                                            json!(v[&status.field] == true)
+                                        })
                                     };
+                                    if signed == true {
+                                        crate::accounts::refresh_in_background(&name, runtime, env.clone());
+                                    }
                                 }
                             }
                         }
@@ -427,8 +447,16 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
             let name = text_of(&p["name"]);
             if let Some(rts) = p["runtimes"].as_object_mut() {
                 for (runtime, state) in rts.iter_mut() {
-                    if let Some(w) = weekly.get(&(name.clone(), runtime.clone())) {
-                        state["weekly"] = w.clone();
+                    for window in ["weekly", "five_hour"] {
+                        if let Some(w) = weekly.get(&(name.clone(), runtime.clone(), window)) {
+                            state[window] = w.clone();
+                        }
+                    }
+                    // The account only beside a login that is not known to be signed out.
+                    if state["signed_in"] != false {
+                        if let Some(account) = crate::accounts::account(&name, runtime) {
+                            state["account"] = account;
+                        }
                     }
                 }
             }
@@ -461,6 +489,24 @@ mod tests {
         assert_eq!(acme.environment("claude", &Env::new())["HOME"], "/p/acme/claude");
         assert!(select(c, Some("sales"), None).unwrap().environment("claude", &Env::new()).is_empty());
         assert_eq!(missing(c, "gone"), "profile gone not on this computer");
+    }
+
+    #[test]
+    fn turns_keep_the_weekly_and_five_hour_windows_and_the_plan() {
+        let reset = crate::util::iso(&json!(crate::util::epoch_s() + 3600.0));
+        remember_weekly("win-test", "codex", &json!({"used_percent": 12, "window_minutes": 10080, "resets_at": reset, "plan_type": "pro"}));
+        remember_weekly("win-test", "codex", &json!({"used_percent": 40, "window_minutes": 300, "resets_at": reset}));
+        remember_weekly("win-test", "codex", &json!({"used_percent": 1, "window_minutes": 60, "resets_at": reset}));
+        // Claude's turns say when a window resets, never how much is used: the percentage stays unknown.
+        remember_weekly("win-test", "claude", &json!({"used_percent": null, "window_minutes": 300, "resets_at": reset, "status": "allowed"}));
+        let windows = weekly().lock().unwrap().clone();
+        assert_eq!(windows[&("win-test".to_string(), "codex".to_string(), "weekly")]["used_percent"], 12);
+        assert_eq!(windows[&("win-test".to_string(), "codex".to_string(), "five_hour")]["used_percent"], 40);
+        assert!(windows[&("win-test".to_string(), "claude".to_string(), "five_hour")]["used_percent"].is_null());
+        assert_eq!(windows.keys().filter(|k| k.0 == "win-test").count(), 3);
+        assert_eq!(crate::accounts::account("win-test", "codex").unwrap()["plan"], "pro");
+        weekly().lock().unwrap().retain(|k, _| k.0 != "win-test");
+        crate::accounts::forget("win-test", "codex");
     }
 
     #[test]

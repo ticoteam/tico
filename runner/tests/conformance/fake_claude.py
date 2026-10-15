@@ -47,7 +47,9 @@ def main():
         print("Usage: claude [options]\n  --autocompact <tokens>  compact the conversation at this many tokens")
         return
     if args[:2] == ["auth", "status"]:
-        print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
+        # As Claude Code reports it, with an id and a token-shaped field the runner must not pass on.
+        print(json.dumps({"loggedIn": True, "authMethod": "claude.ai", "email": "ops@acme.example", "orgId": "acme-org-0001",
+                          "orgName": "Acme Ltd", "subscriptionType": "max", "oauthToken": "sk-ant-oat01-acmefakeacmefake"}))
         return
     session = flag("--session-id") or flag("--resume")
     parent = os.getppid()
