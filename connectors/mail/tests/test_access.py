@@ -106,9 +106,22 @@ class OrgRead(unittest.TestCase):
             ]
         })
 
-    def test_inbox_bot_reads_self_and_reports_but_cannot_send_as_them(self):
+    def test_inbox_bot_reads_only_its_own_mailbox_by_default(self):
+        for extra in ({}, {"org_read": False}):
+            m = {"access": [{"service": "gmail", "identity": "ana@acme.example",
+                             "can": ["read", "draft"], **extra}]}
+            self.assertEqual(sorted(access.holdings("inbox", m, self.roster)), ["ana@acme.example"])
+            self.assertEqual(access.org_mailboxes("inbox", m, self.roster), [])
+            with self.assertRaises(Refused):
+                access.resolve("inbox", "priya@acme.example", "read", m, self.roster)
+
+    def test_inbox_bot_without_a_gmail_entry_reads_its_person_only(self):
+        held = access.holdings("inbox", {"access": []}, self.roster)
+        self.assertEqual(held, {"ana@acme.example": {"gmail": ["read"]}})
+
+    def test_org_read_true_reads_reports_but_cannot_send_as_them(self):
         m = {"access": [{"service": "gmail", "identity": "ana@acme.example",
-                         "can": ["read", "draft"]}]}
+                         "can": ["read", "draft"], "org_read": True}]}
         held = access.holdings("inbox", m, self.roster)
         self.assertEqual(sorted(held),
                          ["ana@acme.example", "omar@acme.example", "priya@acme.example"])
@@ -119,6 +132,14 @@ class OrgRead(unittest.TestCase):
             access.resolve("inbox", "priya@acme.example", "draft", m, self.roster)
         with self.assertRaises(Refused):
             access.resolve("inbox", "priya@acme.example", "send", m, self.roster)
+
+
+    def test_org_read_on_a_declared_mailbox_off_the_roster_reads_its_persons_reports(self):
+        m = {"access": [{"service": "gmail", "identity": "ana@acme.team", "can": ["read"], "org_read": True}]}
+        self.assertEqual(access.org_mailboxes("inbox", m, self.roster),
+                         ["ana@acme.example", "priya@acme.example", "omar@acme.example"])
+        self.assertEqual(access.org_mailboxes("other", m, self.roster), [])
+
 
 if __name__ == "__main__":
     unittest.main()

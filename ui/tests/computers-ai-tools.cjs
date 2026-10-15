@@ -1,8 +1,9 @@
 // Settings > Computers > AI tools (#610): one aligned row per tool with its installed version, enabled, sign-in and
 // account, and usage; a line per named subscription. Covers each sign-in state (signed in as <email> · <plan>, signed
 // out, login expired or rejected, checking, couldn't check with the time), real usage against unavailable usage (never
-// 0% or a full allowance), the 5-hour window label, several profiles, a long version kept to its cell, revoked
-// computers hidden by default, and no account where the server sent none. Every request is intercepted.
+// 0% or a full allowance), an account reading older than its refresh marked with when it was last checked, the 5-hour
+// window label, several profiles, a long version kept to its cell, revoked computers hidden by default, and no account
+// where the server sent none. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,7 +21,7 @@ const {html, uiFile} = require('./support/page.cjs');
       needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
       readiness: {
         runtimes: {
-          claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', org: 'Acme'}},
+          claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', org: 'Acme', checked_at: at(-60000)}},
           codex: {installed: true, authenticated: 'ready'},
           cursor: {installed: true, authenticated: 'missing', detail: 'Cursor login required'},
           musecode: {installed: true, authenticated: 'rejected', rejected_at: at(-600000), rejected_reason: 'The provider refused the login', credential_source: 'computer'},
@@ -37,7 +38,7 @@ const {html, uiFile} = require('./support/page.cjs');
           claude: {signed_in: true, account: {email: 'ops@acme.example', plan: 'max'},
                    weekly: {used_percent: null, resets_at: at(2 * 86400000), reported_at: at(-3600000), status: 'allowed', source: 'provider'},
                    five_hour: {used_percent: null, resets_at: at(3 * 3600000), reported_at: at(-60000), status: 'allowed', source: 'provider'}},
-          codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro', kind: 'subscription'},
+          codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro', kind: 'subscription', checked_at: at(-14 * 60000)},
                   weekly: {used_percent: 38, resets_at: at(2 * 86400000), reported_at: at(-3600000), status: null, source: 'provider'},
                   five_hour: {used_percent: 90, resets_at: at(3600000), reported_at: at(-60000), status: null, source: 'provider'}}}},
         {name: 'beta', display_name: 'beta', runtimes: {
@@ -120,6 +121,13 @@ const {html, uiFile} = require('./support/page.cjs');
     const acmeClaude = table.locator('[data-machine-profile="acme"][data-machine-tool="claude"]');
     assert.match((await cells(acmeClaude))[4], /^Weekly percentage unavailable resets .*5-hour window percentage unavailable resets/);
     assert.equal(await acmeClaude.locator('meter').count(), 0);
+    // An account reading that missed its refresh says when it was last checked; a fresh one says nothing more.
+    assert.equal(await table.locator('[data-account-checked]').count(), 0, 'readings within the refresh interval carry no note');
+    box.profiles[0].runtimes.codex.account.checked_at = at(-25 * 60000);
+    await page.evaluate(() => loadSettings());
+    await acmeCodex.locator('[data-account-checked]').waitFor();
+    assert.equal((await cells(acmeCodex))[3], 'Signed in as dev@acme.example · Pro account last checked 25m ago');
+    assert.equal(await own('claude').locator('[data-account-checked]').count(), 0);
     // A signed-out profile and one that could not be checked: no account, no usage numbers.
     const beta = async tool => cells(table.locator(`[data-machine-profile="beta"][data-machine-tool="${tool}"]`));
     assert.deepEqual((await beta('claude')).slice(3), ['Signed out', '—']);
