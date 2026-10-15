@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- BotOps can register a remote MCP server for the person who asked when the server's header names its credential
+  as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
+  BotOps' requests refused every `Authorization` key, so the documented declaration failed with `secret_in_request`
+  before the tool's own checks ran. Only the tool routes' `mcp.headers` are read this way; a literal value, another
+  variable, or a secret anywhere else in the request is still refused.
 - A worktree whose cleanup was refused no longer loses that error when its computer restarts. The restarted computer
   no longer remembered the refusal, so the error vanished from Health and the cleanup was asked again early, before
   its wait was over. The error now stays while cleanup is asked and is forgotten once the task reopens. A computer

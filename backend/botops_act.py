@@ -308,6 +308,46 @@ def secret_in(value, _depth=0):
     return None
 
 
+# Registering or changing a bot's tool (backend/bot_tools.py): an MCP server's header names its credential as a
+# `${VAR}` placeholder, so `Authorization` there holds a variable's name, not a value.
+TOOL_ROUTES = _routes(("POST", rf"bots/{_S}/tools"), ("POST", rf"bots/{_S}/tools/{_S}/update"))
+SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,19}")
+
+
+def placeholder_only(value, env=None):
+    """Whether a header value is one optional scheme word and `${VAR}` placeholders, each for `env` when it is given:
+    the shape clients/access_entry.clean_mcp writes, with no literal that could be a credential."""
+    from clients.access_entry import PLACEHOLDER
+    if not isinstance(value, str) or len(value) > 500 or "\n" in value or "\r" in value:
+        return False
+    names, bare = PLACEHOLDER.findall(value), PLACEHOLDER.sub("", value).strip()
+    return (bool(names) and (not bare or bool(SCHEME.fullmatch(bare)))
+            and (env is None or all(name == env for name in names)))
+
+
+def secret_in_request(method, path, body):
+    """`secret_in` for a request: on a tool route only, a secret-named `mcp.headers` key passes when its value is
+    `placeholder_only` for the body's `env`. Every other key, and every other route, is checked as `secret_in`."""
+    path = normalize(path)
+    mcp = body.get("mcp") if isinstance(body, dict) else None
+    if (not path or not isinstance(mcp, dict) or not isinstance(mcp.get("headers"), dict)
+            or not any(m == str(method).upper() and p.fullmatch(path) for m, p in TOOL_ROUTES)):
+        return secret_in(body)
+    found = secret_in({**body, "mcp": {k: v for k, v in mcp.items() if k != "headers"}})
+    if found:
+        return found
+    env = body.get("env") if "env" in body else None
+    for name, value in mcp["headers"].items():
+        if SECRET_KEYS.match(str(name)):
+            if not placeholder_only(value, None if env is None else str(env)):
+                return str(name)
+        else:
+            found = secret_in(value, 2)
+            if found:
+                return found
+    return None
+
+
 def parse_body(raw):
     """The request body as JSON, or None when there is none."""
     if not raw:

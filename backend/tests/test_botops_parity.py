@@ -129,6 +129,58 @@ def test_secrets_are_refused_and_other_routes_use_the_humans_permissions(api, bo
     assert act(api, claim(api, botops, "botops"), "GET", "bots").status_code == 200
 
 
+def mcp_tool(env="OPS_ADMIN_MCP_TOKEN", authorization="Bearer ${OPS_ADMIN_MCP_TOKEN}", **extra):
+    """A remote MCP server registration whose header names its credential by placeholder (docs/connect-tools.md)."""
+    return {"service": "ops-admin", "can": ["read"], "env": env, **extra,
+            "mcp": {"url": "https://mcp.example.com/usage", "transport": "http", "headers": {"Authorization": authorization}}}
+
+
+def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still_does_not(api, botops):
+    from backend import botops_act
+    attempt = turn(api, botops, person="ana-test", text="Add the ops admin MCP server to ops")
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0]
+    refused = {
+        "mismatched env": mcp_tool(authorization="Bearer ${OTHER_TOKEN}"),
+        "literal bearer": mcp_tool(authorization="Bearer synthetic-not-a-real-token"),
+        "literal beside placeholder": mcp_tool(authorization="Bearer abc ${OPS_ADMIN_MCP_TOKEN}"),
+        "no placeholder": mcp_tool(authorization="Bearer"),
+        "malformed header": mcp_tool(authorization="Bearer ${OPS_ADMIN_MCP_TOKEN"),
+        "nested secret": mcp_tool(scope={"project": {"access_token": "synthetic-not-a-real-token"}}),
+        "secret beside mcp": mcp_tool(token="synthetic-not-a-real-token"),
+        "header object": mcp_tool(authorization={"token": "synthetic-not-a-real-token"}),
+    }
+    for why, body in refused.items():
+        answer = act(api, attempt, "POST", "bots/ops/tools", body)
+        assert answer.status_code == 422 and answer.json()["error"]["code"] == "secret_in_request", (why, answer.text)
+        assert "synthetic-not-a-real-token" not in answer.text
+    # Only the tool routes read a placeholder header; anywhere else `Authorization` is a secret's key.
+    revision = act(api, attempt, "GET", "bots/ops/access").json()["revision"]
+    elsewhere = act(api, attempt, "POST", "bots/ops/definition", {"description": "x", "expected_revision": revision,
+                                                                  "config": {"mcp": mcp_tool()["mcp"]}})
+    assert elsewhere.status_code == 422 and elsewhere.json()["error"]["code"] == "secret_in_request"
+    assert botops_act.secret_in_request("POST", "bots/ops/tools", {"access_token": "x"}) == "access_token"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM bot_tool_requests WHERE bot='ops'").fetchone()[0] == 0
+
+    made = act(api, attempt, "POST", "bots/ops/tools", mcp_tool())
+    assert made.status_code == 200, made.text
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT * FROM bot_tool_requests WHERE bot='ops'").fetchall()
+        assert len(rows) == 1 and rows[0]["state"] == "pending" and rows[0]["requested_by"] == "human:ana"
+        task = H.task(c, made.json()["task_id"])
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0] == before + 1
+    # The task carries the placeholder exactly, for BotOps to write into bot.yaml; no value is anywhere in it.
+    assert task["owner"] == "bot:botops" and "Authorization: 'Bearer ${OPS_ADMIN_MCP_TOKEN}'" in task["body"]
+    assert "env: OPS_ADMIN_MCP_TOKEN" in task["body"]
+    # The route's own parser still pairs the header with the entry's env when BotOps changes the server later.
+    assert botops_act.secret_in_request("POST", "bots/ops/tools/t1/update",
+                                        {"mcp": {"headers": {"Authorization": "Bearer ${ANY_NAME}"}}}) is None
+    assert botops_act.secret_in_request("POST", "bots/ops/tools/t1/update",
+                                        {"mcp": {"headers": {"Authorization": "Bearer abcdef"}}}) == "Authorization"
+
+
 # ------------------------------------------------------------------ a computer for every active bot
 def test_an_active_bot_goes_on_the_only_computer_or_the_least_busy_one(api):
     only = runner(api, label="Only Mac")
