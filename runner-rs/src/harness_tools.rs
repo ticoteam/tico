@@ -90,6 +90,8 @@ pub struct Capabilities {
     pub own_config_home: bool,
     /// "" | refresh | turns | manual
     pub weekly_usage: String,
+    /// "" | status-json | app-server: where the signed-in account is read (crate::accounts)
+    pub account: String,
     pub tool_events: bool,
     pub mcp_transports: Vec<String>,
     pub mcp_unsupported: String,
@@ -121,6 +123,7 @@ impl Default for Capabilities {
             profile_dirs: vec![],
             own_config_home: false,
             weekly_usage: String::new(),
+            account: String::new(),
             tool_events: false,
             mcp_transports: vec![],
             mcp_unsupported: String::new(),
@@ -437,6 +440,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "profile_dirs" => c.profile_dirs = list(k, v)?,
             "own_config_home" => c.own_config_home = flag(k, v)?,
             "weekly_usage" => c.weekly_usage = choice(k, v, &["refresh", "turns", "manual"])?,
+            "account" => c.account = choice(k, v, &["status-json", "app-server"])?,
             "tool_events" => c.tool_events = flag(k, v)?,
             "mcp_transports" => {
                 c.mcp_transports = list(k, v)?;

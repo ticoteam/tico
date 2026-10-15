@@ -318,6 +318,19 @@ p:empty{display:none}
 .machine-runtime-item{max-width:100%;min-width:0}
 .machine-login-command code{font-size:var(--t-sm);overflow-x:auto;white-space:nowrap;min-width:0;padding:1px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
 .machine-signin-link{font-size:var(--t-sm)}
+/* AI tools: one aligned row per tool (name | installed version | enabled | sign-in and account | usage), #610. */
+.machine-tools{display:grid;grid-template-columns:minmax(90px,max-content) minmax(0,110px) max-content minmax(160px,1.4fr) minmax(150px,1fr);column-gap:12px;min-width:0;font-size:var(--t-sm)}
+.machine-tool{display:contents}
+.machine-tool>[role=cell],.machine-tool>[role=columnheader]{padding:5px 0;border-top:1px solid var(--line);min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;gap:3px 4px}
+.machine-tool-head>[role=columnheader]{border-top:0;color:var(--muted);font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.04em}
+.machine-tool-profile>[role=cell]{border-top:1px dashed var(--line)}
+.machine-tool-name{font-weight:600}.machine-tool-profile .machine-tool-name{font-weight:400;padding-left:12px;color:var(--muted)}
+.machine-account{overflow-wrap:anywhere;min-width:0}
+.machine-tool-version{display:block!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.machine-usage-line{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;flex-basis:100%;min-width:0}.machine-usage-line.stale{color:var(--muted)}
+.machine-usage-line .muted{flex-basis:100%;font-size:var(--t-xs)}
+.machine-usage-bar{width:64px;height:8px;flex-shrink:0}
+@media (max-width:900px){.machine-tools{grid-template-columns:1fr 1fr}.machine-tool-head{display:none}.machine-tool>[role=cell]{border-top:0}.machine-tool-name{grid-column:1/-1;border-top:1px solid var(--line)!important}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 .settings-team-icon{display:flex;align-items:center;gap:20px;padding:16px 0}

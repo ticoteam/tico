@@ -35,6 +35,7 @@ subscription_profiles = true
 profile_home = "HOME"
 profile_dirs = [".claude"]
 weekly_usage = "turns"
+account = "status-json"
 mcp_transports = ["http", "sse"]
 # An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
 serial_cold_start = true

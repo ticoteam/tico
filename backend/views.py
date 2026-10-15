@@ -107,6 +107,9 @@ def computer_details(c, row, who, auth):
     readiness["bots"] = {bot: {k: v for k, v in report.items() if k != "tools"}
                          for bot, report in readiness.get("bots", {}).items()
                          if bot in assigned and (access.get(bot) or {}).get("read") and isinstance(report, dict)}
+    from .subscriptions import may_see_accounts, without_accounts
+    if not may_see_accounts(auth, who, value):
+        without_accounts(readiness.get("runtimes") or {})
     update = runner_versions.view(runner_versions.load(c).get(row["id"]))
     update["wanted_release"] = runner_versions.desired()["version"]
     from .repositories import metadata
@@ -1510,7 +1513,11 @@ def install_views(app, store, auth, mutate, task_view):
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
+                from .subscriptions import computer_profiles
+                # Each named subscription on it, with its sign-in, account and usage windows: this list is already
+                # limited to an administrator or the computer's operator, who may read its accounts.
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
+                                 "profiles": computer_profiles(c, row, True),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

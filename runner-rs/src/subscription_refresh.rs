@@ -24,7 +24,7 @@ fn now_iso_micros() -> String {
     base.replace("+00:00", &format!(".{:06}+00:00", now.subsec_micros()))
 }
 
-async fn rpc(
+pub(crate) async fn rpc(
     stdin: &mut tokio::process::ChildStdin,
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     id: u64,
@@ -70,6 +70,22 @@ pub fn weekly(reply: &Value, now: f64) -> Value {
            "status": if p >= 100.0 { json!("rejected") } else { Value::Null }}})
 }
 
+/// Every window of a `account/rateLimits/read` reply, kept as a turn's would be (the 5-hour one included), with
+/// its plan.
+fn remember_windows(profile: &str, reply: &Value) {
+    let buckets = &reply["rateLimitsByLimitId"];
+    let bucket = if buckets.is_object() { &buckets["codex"] } else { &reply["rateLimits"] };
+    if !bucket.is_object() || !(bucket["limitId"].is_null() || bucket["limitId"] == "codex") {
+        return;
+    }
+    for w in [&bucket["primary"], &bucket["secondary"]].into_iter().filter(|w| w.is_object()) {
+        let event = json!({"used_percent": w.get("usedPercent").cloned().unwrap_or(Value::Null),
+                           "window_minutes": w.get("windowDurationMins").cloned().unwrap_or(Value::Null),
+                           "resets_at": iso(&w["resetsAt"]), "plan_type": bucket.get("planType").cloned().unwrap_or(Value::Null)});
+        crate::profiles::remember_weekly(profile, "codex", &event);
+    }
+}
+
 /// One read, with the profile's own Codex home and no API keys.
 pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBool) -> Value {
     let Some(exe) = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()) else { return json!({"state": "unavailable"}) };
@@ -81,7 +97,8 @@ pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBo
     if cancelled.load(Ordering::SeqCst) {
         return json!({"state": "failed"});
     }
-    let mut cmd = tokio::process::Command::new(exe);
+    // The bot user's, like the profile's sign-in and turns: app-server writes in CODEX_HOME.
+    let mut cmd = crate::isolation::command(exe);
     cmd.arg("app-server").env_clear().envs(&env).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).kill_on_drop(true);
     let Ok(mut child) = cmd.spawn() else { return json!({"state": "failed"}) };
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else { return json!({"state": "failed"}) };
@@ -93,9 +110,19 @@ pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBo
         if cancelled.load(Ordering::SeqCst) {
             return Err(());
         }
-        rpc(&mut stdin, &mut lines, 2, "account/rateLimits/read", json!({})).await
+        let limits = rpc(&mut stdin, &mut lines, 2, "account/rateLimits/read", json!({})).await?;
+        // The same session names the account and plan, read without a token refresh (crate::accounts).
+        if let Ok(reply) = rpc(&mut stdin, &mut lines, 3, "account/read", json!({"refreshToken": false})).await {
+            if let Some(account) = crate::accounts::from_app_server(&reply) {
+                crate::accounts::remember(&profile.name, "codex", account);
+            }
+        }
+        Ok(limits)
     }
     .await;
+    if let Ok(reply) = &result {
+        remember_windows(&profile.name, reply);
+    }
     drop(stdin);
     if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;

@@ -214,34 +214,90 @@ async function enrollmentDownload(operator, label) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return filename;
 }
-// One chip per AI tool on a computer: its version and whether it is signed in, from the computer's readiness
-// (`harnesses` per tool, `runtimes` per runtime; an older runner sends only `runtimes`). Only what its bots use (with no bot
-// yet, the team's default), plus anything installed anyway. A CLI whose manifest has `browser_sign_in` signs in from here:
-// the computer runs the login as the bot user and relays only the link and one-time code (backend/model_login.py,
-// runner-rs/src/login.rs). One with only a `terminal_login` gets that command to run there; one whose keys belong to
-// each bot (`api_keys = "bot"`) gets a link to Credentials.
+// One row per AI tool on a computer, in aligned parts: the tool, its installed version, whether it is enabled here, its
+// sign-in and account, and its usage. From the computer's readiness (`harnesses` per tool, `runtimes` per runtime; an
+// older runner sends only `runtimes`) and its named subscriptions (`profiles`, one line each under the tool). Only what
+// its bots use (with no bot yet, the team's default), plus anything installed anyway. A CLI whose manifest has
+// `browser_sign_in` signs in from here: the computer runs the login as the bot user and relays only the link and
+// one-time code (backend/model_login.py, runner-rs/src/login.rs). One with only a `terminal_login` gets that command to
+// run there; one whose keys belong to each bot (`api_keys = "bot"`) gets a link to Credentials.
+// The account (email, plan) comes only from a provider's own status command (#610) and only to an administrator or the
+// computer's operator; anything not reported reads unavailable, never a guessed value.
 // The server's rule (model_login._operator): the owner, an admin, or the person whose computer it is.
 const machineCanSignIn = machine => settingsIsAdmin() || (!!S.me?.id && machine.operator === S.me.id);
 function machineLoginCommand(machine, name) {
   const command = harnessCaps(name).terminal_login;
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
 }
+const machinePlan = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
+// "Signed in as <email> · <plan>" from an account; what the provider did not say is left out, not guessed.
+function machineAccountHTML(account, runtime, title = '') {
+  const who = account?.kind === 'api_key' ? 'with an API key · no plan usage'
+    : [account?.email, machinePlan(account?.plan)].filter(Boolean).join(' · ');
+  const rest = who ? (account?.kind === 'api_key' ? who : `as ${who}`)
+    : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
+  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${account?.org ? ` title="${esc(account.org)}"` : ''}>${esc(rest)}</span>`;
+}
+// One usage window ("weekly" or "5-hour window"): what is left and when it resets, with the reading's age. A window with
+// no provider percentage says so; it never reads as 0% or a full allowance.
+function machineWindowHTML(label, reading, name) {
+  if (!reading) return '';
+  const percent = Number.isFinite(reading.used_percent) ? Math.min(100, Math.max(0, reading.used_percent)) : null;
+  const reported = Date.parse(reading.reported_at), reset = Date.parse(reading.resets_at);
+  const expired = Number.isFinite(reset) && reset <= Date.now();
+  const stale = Number.isFinite(reported) && Date.now() - reported > 86400000;
+  const left = percent === null ? null : Math.round(100 - percent);
+  const value = expired ? 'previous window; refresh needed' : left === null ? 'percentage unavailable' : `${left}% left`;
+  const notes = [Number.isFinite(reset) && !expired ? `resets ${new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'})}` : '',
+    reading.status === 'rejected' ? 'limit reached' : '',
+    Number.isFinite(reported) ? `${reading.source === 'manual' ? 'recorded' : 'as of'} ${ago(reading.reported_at)}${stale ? ', may be out of date' : ''}` : ''].filter(Boolean);
+  const bar = left !== null && !expired
+    ? `<meter class="machine-usage-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-label="${esc(name)} ${esc(label)}: ${left}% left"></meter>` : '';
+  return `<span class="machine-usage-line${stale || expired ? ' stale' : ''}" data-usage-window="${esc(label)}">${bar}<span>${esc(label)} ${esc(value)}</span>${notes.length ? `<span class="muted">${esc(notes.join(' · '))}</span>` : ''}</span>`;
+}
+function machineUsageHTML(runtime, state, name) {
+  const caps = harnessCaps(runtime);
+  if (!caps.weekly_usage) return '<span class="muted" data-usage-window="none">Usage unavailable</span>';
+  if (state?.account?.kind === 'api_key') return '<span class="muted" data-usage-window="none">No plan usage (API key)</span>';
+  const weekly = machineWindowHTML('Weekly', state?.weekly, name) || '<span class="muted" data-usage-window="Weekly">Weekly usage unavailable</span>';
+  return weekly + machineWindowHTML('5-hour window', state?.five_hour, name);
+}
+// The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
+// when the computer last reported).
+function machineSignInHTML(machine, online, name, auth, value) {
+  const checked = machine.last_seen ? ` · last checked ${ago(machine.last_seen)}` : '';
+  if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
+  if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
+  if (auth === 'missing') return `<span class="pill fail" title="${esc(value.detail || '')}">Signed out</span>`;
+  const couldNot = `<span class="pill waiting" title="${esc(value.detail || '')}">Couldn't check</span>${checked ? ` <span class="muted">${esc(checked.slice(3))}</span>` : ''}`;
+  if (auth === 'failed') return couldNot;
+  return online ? `<span class="pill waiting" title="${esc(value.detail || '')}">Checking…</span>` : couldNot;
+}
+function machineProfileSignIn(state, runtime) {
+  if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
+  if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
+  return '<span class="pill waiting">Couldn\'t check</span>';
+}
 function machineToolsHtml(machine, online) {
   const needed = Array.isArray(machine.needed_runtimes) ? new Set(machine.needed_runtimes) : null;
   const isNeeded = name => !needed || needed.has(name);
   const runtimes = machine.readiness?.runtimes || {};
-  const tools = Object.values(machine.readiness?.harnesses || {});
+  const tools = Object.entries(machine.readiness?.harnesses || {}).map(([id, tool]) => ({...tool, id}));
   const toolFor = name => tools.find(tool => tool.runtime === name && tool.installed) || tools.find(tool => tool.runtime === name) || {};
   const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
     .filter(name => isNeeded(name) || runtimes[name]?.installed || toolFor(name).installed);
   const manage = machineCanSignIn(machine) && !machine.revoked_at;
-  return names.map(name => {
+  const choices = machine.harness_choices || {};
+  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
+  const profiles = Array.isArray(machine.profiles) ? machine.profiles : [];
+  const rows = names.map(name => {
     const tool = toolFor(name), value = runtimes[name] || {installed: !!tool.installed, authenticated: tool.authenticated};
     const installed = value.installed || tool.installed, auth = value.authenticated;
-    const state = !installed ? 'not installed' : auth === 'ready' ? 'signed in' : auth === 'rejected' ? 'sign-in rejected'
-      : auth === 'unknown' ? 'checking' : 'not signed in';
-    const tone = auth === 'ready' ? 'ok' : auth === 'rejected' ? 'fail' : auth === 'unknown' || !isNeeded(name) ? 'waiting' : 'fail';
-    const label = `${tool.name || harnessWords(name)}${installed && tool.version ? ' ' + tool.version : ''} · ${state}`;
+    const label = tool.name || harnessWords(name);
+    const version = installed ? (tool.version || value.version || '') : '';
+    // Enabled is the owner's choice per computer (harness_choices), always on for what its bots run on; an older
+    // runner that reports no tools cannot say.
+    const enabled = !tool.id ? '' : botRuntimes.has(name) ? 'Enabled' : (choices[tool.id] ?? (tool.wanted || tool.installed)) ? 'Enabled' : 'Off';
     let action = '';
     if (manage && installed && auth !== 'ready') {
       const command = machineLoginCommand(machine, name);
@@ -253,8 +309,27 @@ function machineToolsHtml(machine, online) {
     }
     const rejected = auth === 'rejected'
       ? `<span class="err machine-rejected" data-rejected="${esc(name)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(name)} until then.</span>` : '';
-    return `<span class="machine-runtime-item" data-machine-tool="${esc(name)}"><span class="pill ${tone}" title="${esc(value.detail || '')}">${esc(label)}</span>${action}${rejected}</span>`;
+    const signIn = installed ? machineSignInHTML(machine, online, name, auth, value) : '<span class="muted">—</span>';
+    // The computer's own login reports no usage windows; each named subscription below carries its own.
+    const own = installed ? machineUsageHTML(name, {account: value.account}, label) : '<span class="muted">—</span>';
+    const lines = installed ? profiles.filter(p => p.runtimes?.[name]).map(p => {
+      const state = p.runtimes[name];
+      return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
+        <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
+        <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
+        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}</span>
+        <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`)}</span></div>`;
+    }).join('') : '';
+    return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">
+      <span role="cell" class="machine-tool-name">${esc(label)}</span>
+      <span role="cell" class="machine-tool-version"${version ? ` title="${esc(version)}"` : ''}>${installed ? esc(version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
+      <span role="cell" class="machine-tool-enabled"${botRuntimes.has(name) ? ' title="Its bots use it"' : ''}>${enabled ? esc(enabled) : '<span class="muted">—</span>'}</span>
+      <span role="cell" class="machine-tool-signin">${signIn}${action}${rejected}</span>
+      <span role="cell" class="machine-tool-usage">${own}</span></div>${lines}`;
   }).join('');
+  if (!rows) return '';
+  return `<div class="machine-tools" role="table" aria-label="AI tools on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
+    <span role="columnheader">Tool</span><span role="columnheader">Installed</span><span role="columnheader">Enabled</span><span role="columnheader">Sign-in</span><span role="columnheader">Usage</span></div>${rows}</div>`;
 }
 // The row's sign that the screen is on: a link to it for whoever may open it.
 function machineScreenHTML(machine) {
@@ -323,7 +398,7 @@ function renderSettingsMachines() {
     return `<tr class="machine-card"><td><strong>${esc(machine.label)}</strong><span class="settings-cell-note">${esc(machine.version || 'version not reported')}${machine.platform ? ` · ${esc(machine.platform)}` : ''}${engineLabel}</span>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}</td>
       <td data-label="Operator">${esc(settingsPersonName(machine.operator))}${!machine.revoked_at && machine.accepts_member_bots ? '<span class="settings-cell-note">Accepts members\' bots</span>' : ''}</td>
       <td data-label="Bots">${bots.length ? `<a href="#/settings" class="machine-bots" data-computer-bots="${esc(machine.id)}" title="${esc(botNames.join(', '))}"><strong>${bots.length} bot${bots.length === 1 ? '' : 's'}</strong><span class="settings-cell-note">${esc(botNames.join(', '))}</span></a>` : '<span class="muted">No bots</span>'}${failures ? `<span class="settings-cell-note err">${failures} not ready</span>` : ''}</td>
-      <td data-label="AI tools"><div class="machine-runtime" aria-label="AI tools on ${esc(machine.label)}">${tools || '<span class="muted">No AI tools reported</span>'}</div>${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
+      <td data-label="AI tools"><div class="machine-runtime">${tools || '<span class="muted">No AI tools reported</span>'}</div>${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><p class="settings-cell-note">Enabled tools stay installed. Sign-in status is shown above.</p><div class="machine-harnesses">${harnesses}</div></details>` : ''}</td>
       <td data-label="Status"><span class="machine-status"><span class="dot ${status[0]}" aria-hidden="true"></span>${status[1]}${machine.last_seen ? `<span class="muted"> · ${esc(ago(machine.last_seen))}</span>` : ''}</span>${machineScreenHTML(machine)}</td>
       <td class="settings-row-actions"><div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div></td></tr>`;
   }).join('');

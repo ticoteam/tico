@@ -142,32 +142,62 @@ pub fn adopt(paths: &[PathBuf]) {
     adopt_with(paths, uid, gid, &mut |_| {});
 }
 
-fn adopt_with(paths: &[PathBuf], uid: u32, gid: u32, before_directory: &mut impl FnMut(&std::ffi::CStr)) {
-    use std::ffi::{CStr, CString};
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: name is NUL-terminated; the returned descriptor has one owner and is close-on-exec.
+    let fd = unsafe { libc::openat(parent, name.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// The pinned parent directory of `path` and its last name, opened one component at a time without
+/// following a link. None for an empty path, / or . (never an ownership-handoff root).
+fn pinned_parent(path: &Path) -> Option<(std::os::fd::OwnedFd, std::ffi::CString)> {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Component;
+    let start = CString::new(if path.is_absolute() { "/" } else { "." }).ok()?;
+    let mut fd = open_at(libc::AT_FDCWD, &start, libc::O_RDONLY | libc::O_DIRECTORY)?;
+    let parts: Vec<_> = path.components().filter(|p| !matches!(p, Component::RootDir | Component::CurDir)).collect();
+    for (index, part) in parts.iter().enumerate() {
+        let name = match part {
+            Component::Normal(s) => CString::new(s.as_bytes()).ok()?,
+            Component::ParentDir => CString::new("..").ok()?,
+            _ => return None,
+        };
+        if index + 1 == parts.len() { return Some((fd, name)); }
+        fd = open_at(fd.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
+    }
+    None
+}
 
-    fn open_at(parent: i32, name: &CStr, flags: i32) -> Option<OwnedFd> {
-        // SAFETY: name is NUL-terminated; the returned descriptor has one owner and is close-on-exec.
-        let fd = unsafe { libc::openat(parent, name.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
-        (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
+/// Keep a directory the supervisor's own with exactly `mode`, through a descriptor pinned without following a
+/// link: one the bot user was given back is reclaimed, so the bot cannot rename what is in it.
+pub fn keep_supervisor_directory(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a plain directory");
+    let (parent, name) = pinned_parent(path).ok_or_else(invalid)?;
+    let fd = open_at(parent.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY).ok_or_else(invalid)?;
+    let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat, fchown and fchmod on a descriptor this process owns.
+    if unsafe { libc::fstat(fd.as_raw_fd(), info.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    fn parent(path: &Path) -> Option<(OwnedFd, CString)> {
-        let start = CString::new(if path.is_absolute() { "/" } else { "." }).ok()?;
-        let mut fd = open_at(libc::AT_FDCWD, &start, libc::O_RDONLY | libc::O_DIRECTORY)?;
-        let parts: Vec<_> = path.components().filter(|p| !matches!(p, Component::RootDir | Component::CurDir)).collect();
-        for (index, part) in parts.iter().enumerate() {
-            let name = match part {
-                Component::Normal(s) => CString::new(s.as_bytes()).ok()?,
-                Component::ParentDir => CString::new("..").ok()?,
-                _ => return None,
-            };
-            if index + 1 == parts.len() { return Some((fd, name)); }
-            fd = open_at(fd.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
-        }
-        None // never interpret an empty path, / or . as an ownership-handoff root
+    let info = unsafe { info.assume_init() };
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    if (info.st_uid, info.st_gid) != (uid, gid) && unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
+    if u32::from(info.st_mode) & 0o7777 != mode && unsafe { libc::fchmod(fd.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn adopt_with(paths: &[PathBuf], uid: u32, gid: u32, before_directory: &mut impl FnMut(&std::ffi::CStr)) {
+    use std::ffi::CStr;
+    use std::os::fd::AsRawFd;
+
     struct Directory(*mut libc::DIR);
     impl Drop for Directory {
         fn drop(&mut self) { unsafe { libc::closedir(self.0); } }
@@ -207,7 +237,7 @@ fn adopt_with(paths: &[PathBuf], uid: u32, gid: u32, before_directory: &mut impl
         }
     }
     for path in paths {
-        if let Some((parent, name)) = parent(path) {
+        if let Some((parent, name)) = pinned_parent(path) {
             walk(parent.as_raw_fd(), &name, uid, gid, before_directory);
         }
     }

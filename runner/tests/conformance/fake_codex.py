@@ -1,7 +1,7 @@
 """A stand-in for the `codex` CLI, for the runner conformance suite (runner/tests/test_conformance.py):
 `--version`, `login status`, `app-server generate-json-schema` (the protocol files that say goals, compact and
 review are there), and `app-server` speaking the part of the JSON-RPC protocol runner-rs/src/hosts/codex.rs uses
-(scripts/journey-fake-codex.py, plus token usage, native goals and steering). Every thread, goal, steer and turn
+(scripts/journey-fake-codex.py, plus token usage, native goals, steering and `account/read`). Every thread, goal, steer and turn
 request is appended to $FAKE_LOG, with the turn's homes, cwd and granted variables; a prompt containing
 REMEMBER leaves a file in that cwd's memory/.
 
@@ -108,6 +108,13 @@ def main():
             send({"method": "thread/goal/cleared", "params": {"threadId": thread}})
         elif method == "thread/goal/get":
             send({"id": rid, "result": {"goal": goals.get(thread)}})
+        elif method == "account/read":
+            # Not logged: the runner reads it in the background on every computer with codex signed in.
+            if params.get("refreshToken") is not False:
+                send({"id": rid, "error": {"code": -32600, "message": "refreshToken must be false"}})
+                continue
+            send({"id": rid, "result": {"account": {"type": "chatgpt", "email": "dev@acme.example", "planType": "pro"},
+                                        "requiresOpenaiAuth": True}})
         elif method == "turn/steer":
             text = " ".join(part.get("text", "") for part in params.get("input", []))
             record({"harness": "codex", "method": method, "thread": thread, "steer": text})

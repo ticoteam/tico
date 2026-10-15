@@ -170,6 +170,23 @@ questions, the value and confidence per answer, the model, token usage and laten
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
+## The AI accounts your computers are signed in to
+
+This stays on your own server; nothing here is sent to HQ or added to a support ticket's diagnostics.
+
+A current computer reports which account each AI tool is signed in to, per named profile, so **Settings → Computers**
+can show it: the account's email address, plan (for example Max or Pro), organization name, whether it is an API key
+rather than a subscription, and when that was checked. It is the first time Tico stores an account identity; until
+now it kept only whether a login was signed in. The computer reads these only from the tool's own status
+answer: `claude auth status --json`, and Codex app-server's `account/read`, which it always asks without a token
+refresh. It never reads a credential file (`.credentials.json`, `auth.json`, the keychain) or the text of
+`codex login status`. Every other field in those answers is dropped, and a value that looks like a key or token is
+left out on the computer and refused again by the server. The server keeps the latest report with the computer's
+readiness and profiles, replaces it on each heartbeat, and drops it when the tool signs out.
+
+Only owners, administrators and the computer's operator see an account. Other members see that a tool is signed in,
+not as whom, and bots never see one. An older computer reports none of this, and the page shows what it showed before.
+
 ## Support tickets
 
 Help > **Support** sends the Tico team a message. It is separate from the count, and it works whether counting is on or

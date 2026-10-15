@@ -349,6 +349,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     };
     let exe = exe.display().to_string();
     let profile = profile_for(&config, &s.profile);
+    if let Some(Err(e)) = profile.as_ref().map(crate::profiles::hand_to_bot) {
+        return fail("failed", &format!("The subscription profile is not ready for sign-in: {e}"));
+    }
     let process: Env = std::env::vars().collect();
     let mut env = match &profile {
         Some(p) => p.environment(&s.runtime, &process),

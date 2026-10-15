@@ -2,7 +2,9 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StrictBool, StrictStr, model_serializer, model_validator
+import re
+
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -651,6 +653,46 @@ class SlashCommand(Contract):
     sub: list[str] | None = None
 
 
+# Text that reads like a credential: a known key prefix, a JWT, or one unbroken run of 32 or more key characters
+# (runner-rs/src/accounts.rs token_like).
+TOKEN_LIKE = re.compile(r"(?i)(\b(?:sk-|sk_|ghp_|gho_|ghs_|ghu_|github_pat_|xox[abp]-|bearer\s)|eyJ[A-Za-z0-9_-]{8,}|[A-Za-z0-9_\-+/=]{32,})")
+
+
+class SubscriptionAccount(Contract):
+    """The account a model CLI says it is signed in to (#610), read only from its documented status command
+    (`claude auth status --json`, Codex app-server `account/read`). Never a credential: a value that reads like one
+    fails validation, and the account is then left out."""
+    email: str | None = Field(default=None, max_length=254,
+                              pattern=r"^[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$")
+    plan: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.+-]{0,39}$")
+    org: str | None = Field(default=None, min_length=1, max_length=100)
+    # "api_key": an API key signs the CLI in, so there is no plan usage.
+    kind: Literal["subscription", "api_key"] | None = None
+    checked_at: str | None = Field(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def _no_credentials(self):
+        for value in (self.email, self.plan, self.org):
+            if value and (TOKEN_LIKE.search(value) or any(ord(ch) < 32 for ch in value)):
+                raise ValueError("account fields hold names, never credentials")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _set_fields(self, handler):
+        return {k: v for k, v in handler(self).items() if v is not None}
+
+
+def _account_or_none(value, handler):
+    # An account that fails its checks is left out; the sign-in report it rides on still counts.
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
+Account = Annotated[SubscriptionAccount | None, WrapValidator(_account_or_none)]
+
+
 class GoalReadiness(Contract):
     goals: bool = False
     commands: list[SlashCommand] = Field(default_factory=list, max_length=30)
@@ -661,6 +703,8 @@ class GoalReadiness(Contract):
         for key in ("goals", "commands"):
             if key not in self.model_fields_set:
                 data.pop(key, None)
+        if "account" in data and data["account"] is None:
+            data.pop("account")
         return data
 
 
@@ -709,6 +753,9 @@ class RuntimeReadiness(GoalReadiness):
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
+    # The computer's own login's account, beside a ready sign-in. Shown only to an administrator or the
+    # computer's operator (backend/views.py computer_details, /api/v2/operations).
+    account: Account = None
 
 
 class McpReport(Contract):
@@ -903,6 +950,9 @@ class SubscriptionWeeklyEdit(Contract):
 class SubscriptionRuntime(Contract):
     signed_in: bool | None = None
     weekly: SubscriptionWeekly | None = None
+    # The 5-hour usage window, when the provider reports one (#610).
+    five_hour: SubscriptionWeekly | None = None
+    account: Account = None
 
 
 class ComputerProfile(Contract):
