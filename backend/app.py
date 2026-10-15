@@ -2845,7 +2845,10 @@ def create_app(settings=None):
                           (msg["id"], item["id"], item["version"]))
             msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
             return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)), "woke": bool(wake)}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        if body.attachments:
+            app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
+        return result
 
     @app.get("/api/v2/tasks/{tid}/comments")
     def task_comments(request: Request, tid: str):
