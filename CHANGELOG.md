@@ -7,6 +7,11 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Release operators can validate and publish complete locally built artifacts without GitHub rebuilding them.
+  Image provenance, native checksums and unchanged signed desktop files are checked before publication;
+  GitHub build workflows remain available only through an explicit manual run.
+
 ### Changed
 - Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,
   retains the same public listener, and no longer offers a Python relay or an opt-in overlay.

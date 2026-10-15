@@ -3,11 +3,8 @@
 name: Desktop app
 
 on:
-  push:
-    branches: [main]
-    paths: ["app/**", "scripts/app_release.py", ".github/workflows/app.yml"]
   workflow_dispatch:
-  workflow_call:    # a version tag whose shell changed (release.yml); the server release never waits for it
+  workflow_call:    # an explicitly dispatched release whose shell changed (release.yml); the server release never waits for it
 
 permissions:
   contents: read

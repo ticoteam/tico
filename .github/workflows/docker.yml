@@ -1,11 +1,9 @@
-# Builds the Tico images (server, runner and updater; linux/amd64 and linux/arm64) and publishes them to
-# ghcr.io/ticoteam: vX.Y.Z and latest on a v* tag. A manual run publishes edge from its branch.
+# Explicit build fallback: builds server, runner and updater for both architectures.
+# Dispatch from a version tag to publish that version, or a branch for edge.
 # Tests, including Docker smoke checks, run locally before release; CI only builds and publishes.
 name: Docker
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
