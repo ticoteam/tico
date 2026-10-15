@@ -1,17 +1,18 @@
 # Releasing
 
-A release is a version tag. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which builds the
-installer bundle, checks the tag against [CHANGELOG.md](../CHANGELOG.md) and publishes the GitHub
-release. Running installations look for that release to show "New version" in the sidebar.
+A release is a version tag and its complete published artifacts. The supported prebuilt path validates locally
+produced images and runner downloads, packages the exact installer source, reuses unchanged signed desktop files
+and publishes without GitHub compilation. Pushing a tag alone starts no build on current source. The Docker,
+Release and Desktop app workflows remain explicit manual build fallbacks. Running installations look for that release to show "New version" in the sidebar.
 The installed `CHANGELOG.md` also supplies the in-app, API and MCP product changelog, so each
 release's versioned notes automatically reach its users. No separate product announcement is required.
 Keep those versioned sections on `main` after publishing a tag; move only new work into Unreleased,
 so later builds retain the complete history and do not announce already shipped work again.
 
-**One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
-releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
-task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it,
-so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
+**One release authority.** On a team that runs Tico with a Release Manager bot, that bot coordinates publication
+and rollout. An outside coding session hands finished work to it on a task ("Release vX.Y.Z: <what>"). The owner may
+execute the exact approved prebuilt build/upload/publication handoff through existing trusted tools; the Release
+Manager keeps the version/SHA approval, staged rollout and release record, so waiting tasks learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
 only marks the merged PR links the running release contains as Shipped (backend/github.py).
 
 ## The fast path
@@ -19,9 +20,11 @@ only marks the merged PR links the running release contains as Shipped (backend/
 1. **Every PR** runs only the tests for what it changed (below).
 2. **Before you tag**, and only then, the full suite: the default suites, the opt-in tests and a short whole-product
    check, targeted under 8 minutes on a shared Mac: `python scripts/release_checks.py --release`.
-3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
+3. **Prepare, validate and publish** the exact approved version/SHA with the prebuilt commands below. Images must
+   already be uploaded through the operator’s existing registry credentials; publication does not rebuild them.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
-5. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
+5. **Desktop remains signed**: the prebuilt path carries unchanged desktop artifacts forward; a changed shell
+   requires an explicitly chosen signed desktop build fallback.
 
 ## Tests on a PR
 
@@ -44,9 +47,9 @@ python scripts/release_checks.py
 That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load and fails
 if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
-that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
-builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
-GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
+that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. The explicit manual fallback only
+builds and publishes: dispatch Docker from a version tag to build the three images, then dispatch Release from
+that same tag to publish the GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
 generates documentation images from the Actions tab (Run workflow). `--release` runs this suite too, so a
 release is the one place it runs.
 
@@ -115,14 +118,112 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
-## Tag
+## Publish locally produced artifacts
+
+Run `scripts/prebuilt_release.py` from the reviewed tooling checkout, using the backend virtualenv (it includes
+PyYAML), `gh` and Docker buildx with the operator’s existing authentication. The approved product checkout can be
+an older commit and stays immutable. No bot needs a Docker socket, package write, Actions write or new credential
+for this path: the trusted operator owns image builds/uploads, and the publisher needs existing repository write.
+Keep build work and output directories outside the approved checkout. A normal full gate on its approved source
+must already be green; this tool neither runs nor retries that gate and never relabels its `v9.9.9` test images.
+
+1. Build the exact source with the **real release version**, full commit and repository arguments from the existing
+   Docker recipe: server, runner and updater for both `linux/amd64` and `linux/arm64`. Upload all six platform images
+   and assemble the three versioned multi-architecture tags using existing authorized registry credentials. Retain
+   immutable platform manifest and config digests. This script only reads registry metadata; it cannot upload images.
+2. Retain a trusted owner build receipt for each platform image, bound to its **config digest**. Record actual
+   `release-manifest.json` commit/repository/code for server and runner, the actual runner `--build-id`, and the
+   updater file SHA256. The updater image has no embedded release manifest; its `/usr/local/bin/tico-updater` must
+   hash identically to the approved `docker/updater.py`. Version/source labels and runtime version are independently
+   read from each registry config. Revision labels are checked when present; missing runner/updater revision labels
+   are covered by this explicit trusted file receipt, not invented cryptographic attestation. Do not run image
+   entrypoints with production mounts to collect a receipt; use a throwaway stopped container and read files.
+3. Supply four locally produced native runner gzip assets and `tico-runner-SHA256SUMS`. Their checksums, actual
+   ELF/Mach-O architecture and embedded source fingerprint are validated without executing downloaded programs.
+   Platform runtime checks remain the trusted builder’s responsibility. Linux downloads use the existing musl
+   targets. The CLI crate version and product release version are separate; the source fingerprint binds them.
+4. Select the previous published generic desktop release. Its tagged desktop inputs must be unchanged. The tool
+   verifies GitHub SHA256 digests for its manifest and every reused bundle/signature, keeps its app version and
+   metadata, and rewrites only release URL prefixes. Changed desktop inputs stop this path; choose the explicit
+   signed desktop/build fallback instead. No company-specific manifest, URL or credential is accepted.
+
+The private build receipt has this shape; repeat the indicated platform row for **both architectures of all
+three images**. Digests and proof values come from the actual trusted build, never from a version-label guess:
+
+```json
+{
+  "version": "v1.2.3",
+  "commit": "<full approved 40-character lowercase SHA>",
+  "repository": "acme/tico",
+  "images": {
+    "tico": {"linux/amd64": {
+      "digest": "sha256:<platform manifest digest>",
+      "config_digest": "sha256:<image config digest>",
+      "commit": "<same approved SHA>", "repository": "acme/tico",
+      "code_sha256": "<actual release-manifest.json code hash>"
+    }},
+    "tico-runner": {"linux/amd64": {
+      "digest": "sha256:<platform manifest digest>",
+      "config_digest": "sha256:<image config digest>",
+      "commit": "<same approved SHA>", "repository": "acme/tico",
+      "code_sha256": "<actual release-manifest.json code hash>",
+      "runner_build_id": "<actual 16-character source fingerprint>"
+    }},
+    "tico-updater": {"linux/amd64": {
+      "digest": "sha256:<platform manifest digest>",
+      "config_digest": "sha256:<image config digest>",
+      "commit": "<same approved SHA>", "repository": "acme/tico",
+      "updater_sha256": "<actual installed updater file SHA256>"
+    }}
+  }
+}
+```
+
+Preparation emits a public manifest containing only those allowed proof fields, never arbitrary private receipt
+metadata. Only the gate log’s checksum is public; the complete gate log stays local. Its candidate prefix and
+nine zero-exit phases must match, and the trusted operator ties that retained log to the full approved source SHA.
+The installer bundle, Windows/Unix installers and release notes are packaged directly from that source and
+rechecked byte-for-byte before publishing.
+
+```sh
+python scripts/prebuilt_release.py prepare --source /scratch/approved-source \
+  --version v1.2.3 --commit FULL_APPROVED_SHA --repository acme/tico \
+  --receipt /scratch/build-receipt.json --gate-log /scratch/release-gate.log \
+  --runner-dir /scratch/native-assets --desktop-from v1.2.2 --artifacts /scratch/release-1.2.3
+python scripts/prebuilt_release.py validate --source /scratch/approved-source --artifacts /scratch/release-1.2.3
+python scripts/prebuilt_release.py publish --source /scratch/approved-source --artifacts /scratch/release-1.2.3
+```
+
+**Tags from older source:** an old commit can still contain automatic tag-triggered Docker/Release definitions.
+Before publishing one, the owner records the prior states of those specific workflows, disables them through the
+existing authorized GitHub controls, and reads the states back. The validator refuses an active automatic build
+workflow before creating a tag. A branch-only Desktop push does not trigger from a tag. Restore exactly the prior
+workflow states after the tag/publication operation, including on failure; do not enable a previously disabled
+workflow. Updating main alone cannot suppress the older tag’s workflow definitions. Current source needs no such
+setting change because all builds are manual. The publisher never changes workflow settings itself.
+
+`publish` validates everything before its first GitHub write, creates the approved tag if absent (or checks an
+existing lightweight/annotated tag), creates a draft release, uploads the desktop updater manifest last, reads
+back every uploaded SHA256, and rechecks registry digests and the remote tag before publishing. Unknown public
+manifest fields, incomplete assets/platforms, wrong source/version, changed checksums or moved tags fail closed.
+It does not overwrite an existing release. A failed upload leaves its draft for operator inspection; do not
+blindly retry, dispatch a competing build or publish around the missing check. Keep the ordinary staged rollout
+and independent server/runner health readbacks after publication. The public `prebuilt-release.json` preserves
+the exact artifact hashes, platform/config digests, source identity and gate-log checksum with the release.
+
+## Explicit GitHub build fallback
+
+Use this only when the owner explicitly chooses GitHub builds. Do not run it beside the prebuilt path.
+Dispatch `Docker` from the version tag, then `Release` from the same tag (uncheck the desktop override when
+reusing an unchanged shell). `Desktop app` also remains available by manual dispatch and workflow call.
+
 
 1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty
    `## [Unreleased]` above it, and update the link references at the bottom.
 2. Commit that to `main` once the release check is green.
-3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Tag and push the approved commit, then explicitly dispatch Docker and Release from that tag.
 
-The workflow then:
+The manual Release workflow then:
 
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
@@ -138,7 +239,7 @@ The workflow then:
 - publishes the release with those four files, the runner binaries and the notes. That is everything the installer, the server's update
   check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 
-Docker images are published by a separate workflow (on the same `v*` tag, plus a manual run) and set `TICO_VERSION` in the image, which is how the running app
+Docker images are published by a separate manually dispatched workflow (from the same version tag) and set `TICO_VERSION` in the image, which is how the running app
 knows its version (a source checkout reports `dev`). There is no source archive: the server and the runners run from
 the images, and a Mac runner is a git checkout that moves to the release's tag. The Dockerfile copies the source tree
 last, after system packages, tools and the Python dependencies, so with the GitHub Actions layer cache a release
@@ -146,7 +247,7 @@ rebuilds and pushes one small layer per image.
 
 ## Desktop apps follow the release
 
-The desktop app never holds up the server release. The Release workflow compares the tag with the previous release
+The desktop app never holds up the server release. The manually dispatched Release fallback compares the tag with the previous release
 tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
 two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
 release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
@@ -204,8 +305,8 @@ publish`) that the owner approved, or the owner's own message on the task naming
 `playbooks/rollout.md` (`software/rollout.py` in its repository) without waiting on anyone:
 
 1. it creates the tag `vX.Y.Z` at the approved commit through the GitHub API, with its own write grant on the
-   repository. A tag made with the GitHub App's installation token starts the Release and Docker workflows, which a
-   tag made with a workflow's `GITHUB_TOKEN` would not;
+   repository. For current source, a tag does not start any build. Use the supported prebuilt publication path
+   below, or dispatch the build fallback only when the owner explicitly selects it;
 2. it waits for the GitHub release, which installs update from, and stops if the Release or Docker workflow for the
    tag fails;
 3. it updates the canary, the team's own install, through that install's update key, and waits for the updater to
@@ -270,7 +371,8 @@ images from the same release as the UI. Preserve inbound links when moving pages
 
 ## Company apps
 
-A version tag whose shell changed builds, beside the generic desktop app, `.github/workflows/company-app.yml` for
+An explicitly dispatched Release fallback whose shell changed builds, beside the generic desktop app,
+`.github/workflows/company-app.yml` for
 each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
 installer with signature, and Linux AppImage with signature plus Debian package. The app version
 is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)

@@ -1,4 +1,4 @@
-# A pushed version tag becomes a GitHub release: the CHANGELOG section as notes and the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
+# Explicit build fallback from a version tag: the CHANGELOG section as notes and the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
 # The server release is published the moment the Docker workflow's images for the tag exist; it never waits for desktop builds.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
@@ -6,8 +6,6 @@
 name: Release
 
 on:
-  push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
   workflow_dispatch:   # run from a tag to rebuild its desktop apps (a new company, a failed build)
     inputs:
       desktop:
