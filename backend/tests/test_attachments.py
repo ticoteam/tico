@@ -2,8 +2,10 @@
 
 import hashlib
 import io
+import json
 
 import pytest
+import threading
 from PIL import Image
 
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
@@ -141,3 +143,40 @@ def test_sharing_a_chat_file_into_a_private_task_leaves_the_chat_file_readable(a
     tid = post(api, 'tasks', {'owner': 'cpo', 'title': 'Private', 'body': 'Read it.', 'private': True}, 'ben-test')['id']
     post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [attachment['id'] + '@1']}, 'ben-test')
     assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 200
+
+
+class CountedWake(threading.Event):
+    def __init__(self):
+        super().__init__()
+        self.sets = 0
+
+    def set(self):
+        self.sets += 1
+        super().set()
+
+
+def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
+    """Sharing a chat file to a task by comment adds the same task activity line, audit event and preview row as
+    uploading it, and wakes the preview worker rather than leaving it to the next poll."""
+    chat = upload(api, 'chat/product-design', {'text': 'Source export'}, 'ben-test', data=b'Chat bytes')
+    ref = chat['message']['refs']['attachments'][0]['id'] + '@1'
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
+    wake = CountedWake()
+    monkeypatch.setattr(api.app.state.file_metadata, 'wake', wake)
+    forwarded = post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [ref]},
+                     'ben-test')['comment']['refs']['attachments'][0]
+    assert wake.sets == 1
+    with api.app.state.store.read() as c:
+        blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
+                         (forwarded['id'], forwarded['version'])).fetchone()[0]
+        lines = c.execute("SELECT actor,new FROM task_events WHERE task_id=? AND field='file'", (tid,)).fetchall()
+        audit = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='task.file' AND target=?",
+                                                     (tid,))]
+        preview = c.execute("SELECT 1 FROM blob_media WHERE blob_id=?", (blob,)).fetchone()
+    assert [tuple(r) for r in lines] == [('human:ben', forwarded['name'])]
+    assert [a['file'] for a in audit] == [blob]
+    assert preview
+    # Sharing the same file again points at the copy already there: nothing new to record.
+    post(api, f'tasks/{tid}/comments', {'text': 'Again', 'attachments': [ref]}, 'ben-test')
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='file'", (tid,)).fetchone()[0] == 1

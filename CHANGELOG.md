@@ -8,6 +8,8 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- A chat file a person shares to a task in a comment now shows in the task's activity as a file added, is
+  recorded in the audit log, and gets its preview straight away, as an uploaded file does.
 - A message bot reads only its person's mailbox unless its `gmail` entry sets `org_read: true`, as the mail manual
   says. Being a person's `inbox_bot` used to add the mailboxes of everyone below that person too: in the mailboxes
   its runs could ask the runner for a token for, in the routine's and bot page's mail sources, and in the mail

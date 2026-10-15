@@ -609,7 +609,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
     @app.post("/api/v2/tasks/{tid}/files", openapi_extra=task_file_contract())
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
-        from .task_review import comment_rights, edit_version
+        from .task_review import comment_rights, edit_version, file_added
         with store.read() as c:
             tid = auth.resolve_task(c, who, tid)
             comment_rights(c, auth, who, tid)
@@ -692,10 +692,8 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                              M.FileVersionEdit(note=body.note, ask=body.ask))
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
-            H._task_event(c, tid, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}")
-            H.event(c, who.actor, "task.file", tid, {"file": item["id"], "name": item["name"], "size": item["size"]})
             preview = register(c, who, **poster)["id"] if poster else None
-            c.execute("INSERT INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], preview))
+            file_added(c, who, tid, item, number, preview)
             if preview:
                 c.execute("UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
                           (preview, fid, number))

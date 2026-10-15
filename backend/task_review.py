@@ -74,7 +74,16 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     copy = files.publish_task_deliverable(c, who, task_id, item, source["digest"])
     c.execute("INSERT INTO task_assets VALUES(?,?)", (task_id, item["id"]))
     current = c.execute("SELECT current_version FROM bot_files WHERE id=?", (copy,)).fetchone()[0]
+    file_added(c, who, task_id, item, current)
     return copy, file_version(c, task_id, copy, current)
+
+
+def file_added(c, who, task_id, item, number, poster=None):
+    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
+    the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
+    H._task_event(c, task_id, who.actor, "file", None, item["name"], "" if number == 1 else f"version {number}")
+    H.event(c, who.actor, "task.file", task_id, {"file": item["id"], "name": item["name"], "size": item["size"]})
+    c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
 
 def check_ask(c, task_id, ask, auth, who):
