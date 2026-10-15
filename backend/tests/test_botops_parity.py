@@ -149,6 +149,9 @@ def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still
         "nested secret": mcp_tool(scope={"project": {"access_token": "synthetic-not-a-real-token"}}),
         "secret beside mcp": mcp_tool(token="synthetic-not-a-real-token"),
         "header object": mcp_tool(authorization={"token": "synthetic-not-a-real-token"}),
+        "short literal beside placeholder": mcp_tool(authorization="a1B2c3D4e5F6g7H8i9J0 ${OPS_ADMIN_MCP_TOKEN}"),
+        "glued literal": mcp_tool(authorization="${OPS_ADMIN_MCP_TOKEN}a1B2c3D4e5F6g7H8i9J0"),
+        "spaced header name": {**mcp_tool(), "mcp": {**mcp_tool()["mcp"], "headers": {" Authorization": "Bearer shortlit"}}},
     }
     for why, body in refused.items():
         answer = act(api, attempt, "POST", "bots/ops/tools", body)
@@ -159,6 +162,9 @@ def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still
     elsewhere = act(api, attempt, "POST", "bots/ops/definition", {"description": "x", "expected_revision": revision,
                                                                   "config": {"mcp": mcp_tool()["mcp"]}})
     assert elsewhere.status_code == 422 and elsewhere.json()["error"]["code"] == "secret_in_request"
+    top = act(api, attempt, "POST", "bots/ops/definition", {"description": "x", "expected_revision": revision,
+                                                            "mcp": mcp_tool()["mcp"], "env": "OPS_ADMIN_MCP_TOKEN"})
+    assert top.status_code == 422 and top.json()["error"]["code"] == "secret_in_request"
     assert botops_act.secret_in_request("POST", "bots/ops/tools", {"access_token": "x"}) == "access_token"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0] == before

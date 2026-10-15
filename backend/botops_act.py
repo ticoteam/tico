@@ -311,17 +311,17 @@ def secret_in(value, _depth=0):
 # Registering or changing a bot's tool (backend/bot_tools.py): an MCP server's header names its credential as a
 # `${VAR}` placeholder, so `Authorization` there holds a variable's name, not a value.
 TOOL_ROUTES = _routes(("POST", rf"bots/{_S}/tools"), ("POST", rf"bots/{_S}/tools/{_S}/update"))
-SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,19}")
+SCHEMES = {"bearer", "basic", "token", "bot"}
 
 
 def placeholder_only(value, env=None):
-    """Whether a header value is one optional scheme word and `${VAR}` placeholders, each for `env` when it is given:
-    the shape clients/access_entry.clean_mcp writes, with no literal that could be a credential."""
+    """Whether a header value is one optional auth scheme (SCHEMES) and `${VAR}` placeholders, each for `env` when it is
+    given: the shape clients/access_entry.clean_mcp writes, with no literal that could be a credential."""
     from clients.access_entry import PLACEHOLDER
     if not isinstance(value, str) or len(value) > 500 or "\n" in value or "\r" in value:
         return False
     names, bare = PLACEHOLDER.findall(value), PLACEHOLDER.sub("", value).strip()
-    return (bool(names) and (not bare or bool(SCHEME.fullmatch(bare)))
+    return (bool(names) and (not bare or bare.lower() in SCHEMES)
             and (env is None or all(name == env for name in names)))
 
 
@@ -338,7 +338,7 @@ def secret_in_request(method, path, body):
         return found
     env = body.get("env") if "env" in body else None
     for name, value in mcp["headers"].items():
-        if SECRET_KEYS.match(str(name)):
+        if SECRET_KEYS.match(str(name).strip()):        # clean_mcp strips the name it stores
             if not placeholder_only(value, None if env is None else str(env)):
                 return str(name)
         else:
