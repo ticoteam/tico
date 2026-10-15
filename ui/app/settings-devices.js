@@ -230,13 +230,20 @@ function machineLoginCommand(machine, name) {
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
 }
 const machinePlan = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
-// "Signed in as <email> · <plan>" from an account; what the provider did not say is left out, not guessed.
+// A computer reads an account again every 10 minutes (runner-rs/src/accounts.rs READ_EVERY), the answer landing on a
+// later heartbeat's report, which is kept a minute; a reading older than this has missed its refresh.
+const MACHINE_ACCOUNT_FRESH_MS = 15 * 60000;
+// "Signed in as <email> · <plan>" from an account; what the provider did not say is left out, not guessed. A reading
+// that has missed its refresh says when it was last checked, since the login may have changed since.
 function machineAccountHTML(account, runtime, title = '') {
   const who = account?.kind === 'api_key' ? 'with an API key · no plan usage'
     : [account?.email, machinePlan(account?.plan)].filter(Boolean).join(' · ');
   const rest = who ? (account?.kind === 'api_key' ? who : `as ${who}`)
     : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
-  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${account?.org ? ` title="${esc(account.org)}"` : ''}>${esc(rest)}</span>`;
+  const checked = Date.parse(account?.checked_at);
+  const old = who && Number.isFinite(checked) && Date.now() - checked > MACHINE_ACCOUNT_FRESH_MS
+    ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account.checked_at))}</span>` : '';
+  return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${account?.org ? ` title="${esc(account.org)}"` : ''}>${esc(rest)}</span>${old}`;
 }
 // One usage window ("weekly" or "5-hour window"): what is left and when it resets, with the reading's age. A window with
 // no provider percentage says so; it never reads as 0% or a full allowance.

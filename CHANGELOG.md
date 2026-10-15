@@ -14,6 +14,10 @@ All notable changes to Tico are recorded here. The format follows
   command. `org_read: false` or no `org_read` now keeps all three to the one mailbox. On a Docker runner with the
   two-user layout, calendar tokens come from the same list, so a message bot reaches its reports' calendars only with
   `org_read: true` too.
+- Settings > Computers no longer shows a named subscription's old account after it signs out and back in as
+  someone else. A computer kept a Codex account it had read for up to 10 minutes, so the old email could show beside
+  the new login; signing out now forgets it. An account reading that has missed its refresh now says when it was last
+  checked ("account last checked 25m ago"), and a turn's plan no longer counts as a fresh account read.
 - A worktree whose cleanup was refused no longer loses that error when its computer restarts. The restarted computer
   no longer remembered the refusal, so the error vanished from Health and the cleanup was asked again early, before
   its wait was over. The error now stays while cleanup is asked and is forgotten once the task reopens. A computer
@@ -29,7 +33,8 @@ All notable changes to Tico are recorded here. The format follows
   Permission denied" before showing a link, on the first try and every retry. Each runtime's home in a profile now
   belongs to the bot user; the profile folder stays the supervisor's, traversable only (0711), so `profile.json`
   stays private. A profile made before is repaired when its sign-in starts and when the runner starts, without
-  following a link or taking over a hardlinked file, and keeping each file's bytes and mode.
+  following a link or taking over a hardlinked file, and keeping each file's bytes and mode. Codex's sign-in account
+  read for Computers runs as the bot user too, since it writes in that home.
 - The worktrees manual says a refused cleanup stops: the server asks the computer again at most six times over about
   two hours, then the link shows `cleanup_gave_up`. It says what a person does next: fix the cause the refusal names
   (the bot's write access, or the kept files), then remove the link (again, if it was already removed). It

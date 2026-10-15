@@ -63,7 +63,8 @@ Rules run before any model. Marketing (unsubscribe links), notification senders,
 `registry/mail-rules.yaml` `skip:` addresses/domains are filed and never opened by the bot.
 Each mailbox can add its own rules under that address after `common`. A message bot for a
 human reads only its assigned mailbox by default (`org_read: false`). This boundary applies to
-Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules. The owner can deliberately
+Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules, except for the token limit
+on a two-user Docker runner. The owner can deliberately
 turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
 switches it on. Change its timezone in **Settings → Routines** for your team.
@@ -253,7 +254,8 @@ reading, drafting or sending. The equivalent shell commands are `hub calendar li
 
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
-change that calendar access. An address outside the roster needs an explicit `google-calendar`
+change that calendar access. On a Docker runner with the two-user layout the bot gets calendar tokens only for its
+own mailboxes, so `org_read` does limit it there (see [Who can read the key](#who-can-read-the-key)). An address outside the roster needs an explicit `google-calendar`
 Tool entry with the required verbs. The private Google service-account setup must also be working
 on that computer. These commands do not expand the MCP/API rule above:
 

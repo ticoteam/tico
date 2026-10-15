@@ -482,6 +482,10 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                     if rejected(runtime, &name) {
                         signed = json!(false);
                     }
+                    // A signed-out login has no account: the next sign-in, maybe as someone else, reads it afresh.
+                    if signed == false {
+                        crate::accounts::forget(&name, runtime);
+                    }
                     runtimes.insert(runtime.into(), json!({"signed_in": signed}));
                 }
                 rows.push(json!({"name": name, "runtimes": runtimes}));
@@ -559,6 +563,30 @@ mod tests {
         assert_eq!(crate::accounts::account("win-test", "codex").unwrap()["plan"], "pro");
         weekly().lock().unwrap().retain(|k, _| k.0 != "win-test");
         crate::accounts::forget("win-test", "codex");
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_profile_forgets_its_account() {
+        let dir = std::env::temp_dir().join(format!("tico-signout-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("codex")).unwrap();
+        let config = json!({"profiles": {"out-test": {"dir": dir.to_string_lossy()}}});
+        let config = config.as_object().unwrap();
+        let shown = |rows: &[Value]| rows.iter().find(|r| r["name"] == "out-test").map(|r| r["runtimes"]["codex"]["account"].clone()).unwrap_or(Value::Null);
+        crate::accounts::remember("out-test", "codex", json!({"email": "old@acme.example", "plan": "pro"}));
+        // Signed out (here the provider refused the login, which reports signed out whatever the CLI says).
+        forget_report();
+        let rows = report(config, &|runtime, name| runtime == "codex" && name == "out-test").await;
+        assert_eq!(rows.iter().find(|r| r["name"] == "out-test").unwrap()["runtimes"]["codex"]["signed_in"], false);
+        assert!(crate::accounts::account("out-test", "codex").is_none(), "signing out forgets the cached account");
+        // Signed back in as someone else: the old email never shows, within the read interval or not.
+        crate::accounts::remember_plan("out-test", "codex", &json!("plus"));
+        forget_report();
+        let rows = report(config, &|_, _| false).await;
+        assert!(!shown(&rows).to_string().contains("old@acme.example"), "{rows:?}");
+        crate::accounts::forget("out-test", "codex");
+        crate::accounts::forget("out-test", "claude");
+        forget_report();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
