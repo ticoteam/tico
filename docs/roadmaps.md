@@ -96,7 +96,10 @@ a person. Publishing, public edits/replies, and attaching an enabled roadmap lab
 public task need a new approval each time. Owners/admins can relax this in Public roadmap settings. Moderation uses
 `POST /api/v2/tasks/{id}/comments/{comment_id}/moderate` with `action: hide|show|delete`.
 
-These routes also have hub MCP tools; `hub api` reaches every route. `hub task update` supports
+These routes also have hub MCP tools and CLI commands of the same names: `hub task requesters`, `hub task
+requester-save`, `hub task requester-remove`, `hub task publication-preview`, `hub task comment-moderate`, `hub
+roadmap tasks` and `hub roadmap settings` (flags change only the settings named). `hub api` reaches every route.
+`hub task create` takes `--public-title`/`--public-summary` beside `--visibility`, and `hub task update` supports
 publication fields, size and approval id. `waits_on` / `waiting_on` still means blocked on someone;
 requesters are independent. Nothing sends automatically; follow-ups require a person's request
 and the existing outbound send switch.

@@ -131,6 +131,19 @@ def run(args, who=None):
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn in ("task child create", "task tree"):
         return via_tool(client, args)
+    if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
+              "task comment-moderate", "roadmap tasks"):
+        return via_tool(client, args)
+    if fn == "roadmap settings":
+        # Any flag is a partial update of those settings; none reads them. An empty value clears a list.
+        names = ("labels", "cors_origins", "action_limit", "suggestion_limit", "bot_public_approval")
+        changes = {k: getattr(args, k) for k in names if getattr(args, k) is not None}
+        for k in ("labels", "cors_origins"):
+            if k in changes:
+                changes[k] = [v for v in changes[k] if v]
+        from clients import hubtools
+        return hubtools.roadmap_settings(client, {"settings": changes or None,
+                                                  "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
     if fn in ("health-monitor findings", "health-monitor report"):
