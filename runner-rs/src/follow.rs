@@ -21,6 +21,8 @@ use crate::client::Client;
 use crate::util::{epoch_s, log, text_of};
 
 const STATUS_FILE: &str = "update-status.json";
+/// The Docker update this runner saw changing containers, until the updater reports how it ended (Follower::unsettled).
+const HOLD_FILE: &str = "docker-update-hold.json";
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
 const DRAIN_S: u64 = 20 * 60;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
@@ -433,15 +435,37 @@ impl Follower {
         format!("no updater is set up; move this runner onto the compose file that has one: on this box run curl -fsSL https://github.com/ticoteam/tico/releases/download/v{want}/install.sh -o install.sh && sh install.sh --runner --url <your Tico address> --code <new code from Settings > Computers > Add computer> --label <name>")
     }
 
-    /// The Docker updater's message while the last update's outcome is unknown: a command that changes containers
-    /// did not report back, and Docker may still stop this runner. Holds whatever the versions say, since the
-    /// container still up may be the new one.
+    /// Why this runner must hold work for a Docker update that may still change containers, or None. Once the updater
+    /// says `restarting` or `uncertain`, Docker may stop this runner (an accepted stop outlives its client), so the
+    /// hold is written to disk and ends only when the updater answers with that update's outcome: not when it stops
+    /// answering, loses its status, or this runner restarts. A missing updater with no such update keeps claiming.
     async fn unsettled(&self) -> Option<String> {
         if self.kind != "docker" || self.sidecar.url.is_empty() {
             return None;
         }
-        let status = self.sidecar.call(None).await.ok()?;
-        (status["state"].as_str() == Some("uncertain")).then(|| text_of(&status["message"]))
+        let path = self.directory.join(HOLD_FILE);
+        let held = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|h| text_of(&h["to"]));
+        let answer = self.sidecar.call(None).await;
+        let (state, to) = match &answer {
+            Ok(status) => (status["state"].as_str().unwrap_or_default().to_string(), text_of(&status["to"])),
+            Err(_) => (String::new(), String::new()),
+        };
+        if state == "restarting" || state == "uncertain" {
+            if held.as_deref() != Some(to.as_str()) {
+                let _ = std::fs::write(&path, json!({"to": to}).to_string());
+            }
+            return Some(answer.map(|status| text_of(&status["message"])).unwrap_or_default());
+        }
+        let held = held?;
+        if matches!(state.as_str(), "rolled_back" | "failed" | "healthy") && to == held {
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        Some(match answer {
+            Ok(_) => format!("holding work: the updater was changing containers for {held} and has not said how that ended (it says {})", if state.is_empty() { "nothing" } else { &state }),
+            Err(code) if code == "unreachable" => format!("holding work: the updater was changing containers for {held} and does not answer"),
+            Err(code) => format!("holding work: the updater was changing containers for {held} and answered {code}"),
+        })
     }
 
     async fn decide(&self) {
@@ -776,44 +800,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[tokio::test]
-    async fn a_docker_runner_holds_work_while_the_updater_has_not_settled_even_on_the_new_release() {
+    /// A Docker updater on a local port that answers `/status` with whatever `body` holds at the time.
+    async fn fake_updater(body: std::sync::Arc<Mutex<String>>) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            let body = r#"{"state": "uncertain", "from": "0.3.46", "to": "0.3.47", "message": "Not settled: docker compose up did not finish"}"#;
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else { return };
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf).await;
-                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let text = body.lock().unwrap().clone();
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
                 let _ = stream.write_all(reply.as_bytes()).await;
             }
         });
-        // The container still up is the new release, so nothing is behind; Docker may still stop it.
-        let f = Follower {
-            directory: dir.clone(),
-            root: dir.clone(),
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn docker_follower(dir: &Path, url: &str, release: &str) -> Follower {
+        Follower {
+            directory: dir.to_path_buf(),
+            root: dir.to_path_buf(),
             kind: "docker",
-            release: "0.3.47".into(),
+            release: release.into(),
             started: String::new(),
             commit: String::new(),
             pinned: false,
             self_update: true,
             prepare: vec!["true".into()],
-            sidecar: Sidecar { url: format!("http://127.0.0.1:{port}"), token_file: dir.join("t") },
-            inner: Mutex::new(Inner { state: "idle".into(), desired: Some("0.3.47".into()), ..Default::default() }),
-        };
+            sidecar: Sidecar { url: url.into(), token_file: dir.join("t") },
+            inner: Mutex::new(Inner { state: "idle".into(), desired: Some(release.into()), ..Default::default() }),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_docker_runner_holds_work_until_the_updater_reports_how_an_unsettled_update_ended() {
+        // Docker accepted a stop of this runner that has not landed yet. The container still up is the new release,
+        // so nothing is behind; the hold must outlast the updater going quiet and this runner restarting.
+        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = std::sync::Arc::new(Mutex::new(
+            r#"{"state": "uncertain", "from": "v0.3.46", "to": "v0.3.47", "message": "Not settled: docker compose up did not finish"}"#.to_string()));
+        let url = fake_updater(body.clone()).await;
+        let holds = |f: &Follower| f.inner.lock().unwrap().running;
+        let f = docker_follower(&dir, &url, "0.3.47");
         f.decide().await;
-        let mut body = json!({});
-        f.fields(&mut body);
-        assert_eq!(body["update"]["state"], "updating");
-        assert_eq!(body["update"]["error"], "Not settled: docker compose up did not finish");
-        assert!(f.blocks_claims(true).await);
-        assert!(f.blocks_claims(false).await);
+        let mut fields = json!({});
+        f.fields(&mut fields);
+        assert_eq!(fields["update"]["state"], "updating");
+        assert_eq!(fields["update"]["error"], "Not settled: docker compose up did not finish");
+        assert!(f.blocks_claims(true).await && f.blocks_claims(false).await);
+
+        // The updater stops answering (nothing listens on the discard port), and this runner restarts.
+        let f = docker_follower(&dir, "http://127.0.0.1:9", "0.3.47");
+        f.decide().await;
+        assert!(holds(&f) && f.blocks_claims(false).await);
+        assert!(f.inner.lock().unwrap().error.contains("does not answer"));
+
+        // Back, but with no outcome for that update: a lost status, or an older update's outcome.
+        let f = docker_follower(&dir, &url, "0.3.47");
+        for answer in [r#"{"state": "idle", "to": ""}"#, r#"{"state": "healthy", "to": "v0.3.46"}"#] {
+            *body.lock().unwrap() = answer.into();
+            f.decide().await;
+            assert!(holds(&f) && f.blocks_claims(false).await, "{answer}");
+        }
+
+        // Settled: Docker confirmed the old version, and the updater says so for that update. Claims resume.
+        *body.lock().unwrap() = r#"{"state": "rolled_back", "to": "v0.3.47", "message": "Docker then confirmed the runner on v0.3.46."}"#.into();
+        let f = docker_follower(&dir, &url, "0.3.46");
+        *f.inner.lock().unwrap() = Inner { state: "idle".into(), desired: Some("0.3.46".into()), ..Default::default() };
+        f.decide().await;
+        assert!(!holds(&f) && !f.blocks_claims(false).await);
+        assert!(!dir.join(HOLD_FILE).exists());
+        // With no unsettled update, an updater that does not answer still leaves the runner claiming.
+        let f = docker_follower(&dir, "http://127.0.0.1:9", "0.3.46");
+        f.decide().await;
+        assert!(!f.blocks_claims(false).await);
         let _ = std::fs::remove_dir_all(dir);
     }
 

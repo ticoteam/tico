@@ -550,10 +550,10 @@ def load_status():
         saved = json.load(open(os.path.join(PROJECT, STATUS_FILE)))
     except (OSError, ValueError):
         return
-    if isinstance(saved, dict) and saved.get("state") in ("healthy", "rolled_back", "failed", "uncertain"):
+    if isinstance(saved, dict) and saved.get("state") in ("healthy", "rolled_back", "failed", "uncertain", "restarting"):
         with lock:
             status.update({k: v for k, v in saved.items() if isinstance(v, (str, bool, int))})
-        if saved.get("state") == "uncertain" and saved.get("settle_tag"):   # this updater settles what the last left
+        if saved.get("state") in ("uncertain", "restarting") and saved.get("settle_tag"):   # settles what the last left
             threading.Thread(target=settle, args=(saved["settle_tag"], str(saved.get("settle_outcome") or "")),
                              daemon=True).start()
 
@@ -783,7 +783,14 @@ def update(version, running=""):
                 except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                     raise RuntimeError("could not snapshot the database first (%s)" % exc)
                 set_status(snapshot=snapshot)
-            set_status(state="restarting")
+            if MODE == "runner":
+                # Saved, so an updater stopped during the switch settles it when it starts again (load_status); the
+                # server keeps its old way, since settling there would bring back the old image on a migrated database.
+                set_status(state="restarting", settle_tag=previous,
+                           settle_outcome="the updater stopped while it was switching to " + version)
+                save_status()
+            else:
+                set_status(state="restarting")
             switched = True
             compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=version)
             if not healthy(HEALTH_SECONDS):
@@ -815,7 +822,7 @@ def update(version, running=""):
             if unsettled:
                 settle(previous, str(exc) + restored)
                 return
-            set_status(state="rolled_back" if back else "failed",
+            set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)
             return
         remember(version)
@@ -828,7 +835,7 @@ def update(version, running=""):
                     compose("up", "-d", "--no-deps", name, tag=version)
                 except RuntimeError as exc:
                     message = "Updated, but %s did not restart: %s" % (name, exc)
-        set_status(state="healthy", message=message)
+        set_status(state="healthy", message=message, settle_tag="", settle_outcome="")
         save_status()
         note = replace_updater(version)   # last: this container may be gone a moment after it starts the helper
         if note:

@@ -286,6 +286,41 @@ def test_an_uncertain_outcome_survives_a_restart_and_is_settled_by_the_next_upda
     assert [c["tag"] for c in docker.containers.values()] == ["v0.1.0"]
 
 
+def test_an_updater_stopped_during_the_switch_settles_it_when_it_starts_again(monkeypatch, tmp_path):
+    """The updater container itself stops mid-switch (its compose client with it); Docker's accepted stop has not
+    landed. What it saved before the switch makes the next updater hold and settle, not answer an old outcome."""
+    import json
+    import time
+    updater = load(monkeypatch, "runner", tmp_path)
+    saved = []
+
+    class Stopped(BaseException):
+        pass
+
+    def hang(argv, tag, n):
+        if "up" in argv and tag == "v0.2.0":
+            saved.append(json.loads((tmp_path / updater.STATUS_FILE).read_text()))
+            raise Stopped()                                          # the process is gone: nothing after this runs
+        return False
+    docker = Moby(updater, monkeypatch, hang)
+    try:
+        updater.update("v0.2.0")
+    except Stopped:
+        pass
+    assert saved[0]["state"] == "restarting" and saved[0]["settle_tag"] == "v0.1.0"
+    docker.pending = [["c1", 50]]                                    # the switch's stop, accepted, still to land
+    restarted = load(monkeypatch, "runner", tmp_path)
+    again = Moby(restarted, monkeypatch, lambda argv, tag, n: False)
+    again.containers, again.pending = docker.containers, docker.pending
+    restarted.load_status()
+    deadline = time.time() + 10
+    while restarted.status["state"] in ("restarting", "uncertain") and time.time() < deadline:
+        time.sleep(0.01)
+    assert restarted.status["state"] == "rolled_back" and again.ended == [("rolled_back", [])]
+    assert "the updater stopped while it was switching to v0.2.0" in restarted.status["message"]
+    assert [c["tag"] for c in again.containers.values()] == ["v0.1.0"]
+
+
 def test_an_update_is_refused_while_the_last_one_is_unsettled(monkeypatch, tmp_path):
     import json
     import threading

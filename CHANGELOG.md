@@ -27,7 +27,9 @@ All notable changes to Tico are recorded here. The format follows
   update, and the updater reports the outcome only after its last command. Stopping a command does not undo what
   Docker already accepted, so when one that changes containers runs over, the updater says `uncertain` and the runner
   keeps holding work until Docker confirms the runner was recreated on the old version (it retries every minute,
-  also after the updater restarts). A runner whose image cannot be read is reported "Not updated" instead.
+  also after the updater restarts, including one stopped mid-switch). The runner keeps that hold on disk: an updater
+  that stops answering, loses its status or reports an older update's outcome does not end it, and neither does a
+  runner restart; only the updater's outcome for that update does. A runner whose image cannot be read is reported "Not updated" instead.
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential
   as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
   BotOps' requests refused every `Authorization` key, so the documented declaration failed with `secret_in_request`
