@@ -393,14 +393,20 @@ def repository_health(service):
                       'Refresh Settings > Repositories or check the GitHub App installation.')
 
 
-def workflow_health(service, accepted):
+def workflow_health(service, accepted, refused=False):
     """Remember whether the installation lets flagged repositories run workflows (Actions: write), for Health;
-    written only when it changes."""
+    `refused` when it reports Actions: write but GitHub refuses the token anyway. Written only when it changes."""
     with service.store.read() as c:
-        if metadata(c, WORKFLOWS + ':accepted').get('accepted') is accepted:
+        last = metadata(c, WORKFLOWS + ':accepted')
+        if last.get('accepted') is accepted and bool(last.get('refused')) is refused:
             return
     with service.store.transaction() as c:
-        save_metadata(c, WORKFLOWS + ':accepted', {'accepted': accepted, 'at': H.now()})
+        save_metadata(c, WORKFLOWS + ':accepted', {'accepted': accepted, 'refused': refused, 'at': H.now()})
+
+
+def workflows_refused(c):
+    """True when the last refusal came with the installation reporting Actions: write."""
+    return bool(metadata(c, WORKFLOWS + ':accepted').get('refused'))
 
 
 def workflows_waiting(c):

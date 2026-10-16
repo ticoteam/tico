@@ -309,8 +309,22 @@ def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token(ap
     # The refusal was Actions', not the reads': the fallback keeps them, and Health blames neither.
     fallback = gh.of('/access_tokens')[-1][2]['permissions']
     assert fallback['actions'] == 'read' and fallback['checks'] == 'read'
+    # Health names the refusal, not the Actions setting, and leaves the GitHub connection alone.
     checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
-    assert 'github_workflows' not in checks
+    assert 'although the installation reports it' in checks['github_workflows']['summary']
     with api.app_state.store.read() as c:
         row = c.execute("SELECT last_error FROM service_health WHERE service='github:token'").fetchone()
     assert row is None or row['last_error'] is None
+    # Remembered: a git call within the minute asks GitHub for no Actions: write token again.
+    asked = len(gh.of('/access_tokens'))
+    api.app_state.github_app.cache.clear()
+    one = api.post('/api/v2/github/token', json={'bot': 'cpo', 'repository': 'Acme/product', 'purpose': 'git'},
+                   headers=auth('runner-test')).json()
+    assert 'although the installation reports it' in one['workflows_withheld']['reason']
+    assert [r[2]['permissions']['actions'] for r in gh.of('/access_tokens')[asked:]] == ['read']
+    # Accepted once the minute passes: Health clears with the first good token.
+    gh.refuse_actions_write = False
+    api.app_state.github_app.live.pop('workflows-refused')
+    token = turn_token(api).json()
+    assert 'workflows_withheld' not in token and token['tokens'][-1]['actions'] == 'write'
+    assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
