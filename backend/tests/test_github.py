@@ -401,10 +401,10 @@ def _arm(api, task_id, armed=True, url=PR):
     return post(api, 'tasks/' + task_id + '/links', {'url': url, 'wake_once': armed})['links']
 
 
-def _suite(api, slug, status, conclusion=None, sha='a' * 40):
+def _suite(api, slug, status, conclusion=None, sha='a' * 40, id=None):
     hook(api, 'check_suite', {'action': 'completed' if status == 'completed' else 'requested',
                               'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': status, 'conclusion': conclusion, 'head_sha': sha, 'app': {'slug': slug},
+        'id': id, 'status': status, 'conclusion': conclusion, 'head_sha': sha, 'app': {'slug': slug},
         'pull_requests': [{'number': 412}]}})
 
 
@@ -464,19 +464,22 @@ def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
     hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
     _arm(api, task['id'])
-    def run(name, status, conclusion=None, suite='in_progress'):
+    def run(name, status, conclusion=None, suite='in_progress', id=2):
         hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
-            'name': name, 'status': status, 'conclusion': conclusion, 'head_sha': 'a' * 40,
-            'app': {'slug': 'github-actions'}, 'check_suite': {'status': suite, 'app': {'slug': 'github-actions'}},
-            'pull_requests': [{'number': 412}]}})
+            'name': name, 'status': status, 'conclusion': conclusion, 'head_sha': 'a' * 40, 'app': {'slug': 'github-actions'},
+            'check_suite': {'id': id, 'status': suite, 'app': {'slug': 'github-actions'}}, 'pull_requests': [{'number': 412}]}})
     run('build', 'in_progress')
     _suite(api, 'vercel', 'completed', 'success')
+    _suite(api, 'github-actions', 'completed', 'success', id=1)   # another workflow, its own suite
     run('build', 'completed', 'success')                      # its workflow has more jobs to come
     run('deploy', 'completed', 'failure')
     assert _burst(api, task['id']) == ['Checks failing on tico#412: deploy']
-    _suite(api, 'github-actions', 'completed', 'failure')
+    _suite(api, 'github-actions', 'completed', 'failure', id=2)
     assert _burst(api, task['id'])[1:] == [
         f"Checks finished on tico#412: failed (github-actions, deploy) {PR}/checks at {'a' * 12}"]
+    run('deploy', 'completed', 'failure')                     # delivered late: does not reopen its suite
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
+    assert detail['checks']['suite:github-actions#2'] == 'failing'
 
 
 def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):

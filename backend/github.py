@@ -222,6 +222,12 @@ def _own_comment(c, task, payload, key, detail):
                          (str(app[0]) + "[bot]").lower() if app else ""})
 
 
+def _suite_key(suite, run):
+    """One key per check suite: an App such as GitHub Actions makes one suite per workflow."""
+    slug = str((suite.get("app") or run.get("app") or {}).get("slug") or "Checks")
+    return ("suite:" + slug[:150] + (f"#{suite['id']}" if suite.get("id") else ""))[:200]
+
+
 def pr_signal(c, event, payload):
     """Checks, commit statuses, reviews and review comments update every attached PR."""
     repo = str((payload.get("repository") or {}).get("full_name") or "")
@@ -256,16 +262,16 @@ def pr_signal(c, event, payload):
             state = "passing" if result in ("success", "neutral", "skipped") else (
                     "pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
             checks = detail.get("checks", {})
-            name = str("suite:" + str((signal.get("app") or {}).get("slug") or signal.get("id") or "Checks")
-                       if event == "check_suite" else signal.get("name") or signal.get("context") or "Checks")[:200]
+            name = (_suite_key(signal, signal) if event == "check_suite"
+                    else str(signal.get("name") or signal.get("context") or "Checks")[:200])
             wake = state == "failing" and checks.get(name) != "failing"
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
-            if own and own.get("status") != "completed":
-                # A finished run says its suite is still running even when that suite's `requested` never came here.
-                slug = (own.get("app") or signal.get("app") or {}).get("slug") or own.get("id") or "Checks"
-                checks["suite:" + str(slug)[:194]] = "pending"
+            if own and own.get("status") != "completed" and checks.get(_suite_key(own, signal), "pending") == "pending":
+                # A finished run says its suite is still running even when that suite's `requested` never came here;
+                # a run delivered after its suite completed is a stale snapshot and does not reopen it.
+                checks[_suite_key(own, signal)] = "pending"
             detail["checks"] = dict(list(checks.items())[-100:])
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
             item = f"Checks {state} on {label}: {name}"
@@ -278,7 +284,8 @@ def pr_signal(c, event, payload):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
                 sha = str(signal.get("head_sha") or payload.get("sha") or detail.get("head_sha") or "")[:12]
-                failed = [k[6:] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing"]
+                failed = list(dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k
+                                            for k, v in checks.items() if v == "failing"))
                 done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
                         f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                 if fire_once(detail, done):
