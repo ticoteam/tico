@@ -5274,7 +5274,7 @@
     },
     "/api/v2/goals/needs-you": {
       "get": {
-        "summary": "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm",
+        "summary": "The caller's open tasks from the Goal Manager: red KPIs on goals they own, stale KPIs they own, and definitions or targets they are asked to confirm",
         "operationId": "getGoalsNeedsYou",
         "responses": {
           "200": {
@@ -19011,7 +19011,9 @@
             "items": {
               "type": "object",
               "required": [
-                "kind"
+                "kind",
+                "task_id",
+                "title"
               ],
               "additionalProperties": true,
               "properties": {
@@ -19022,8 +19024,24 @@
                     "proposal"
                   ]
                 },
-                "goal_id": {
+                "task_id": {
+                  "type": "string",
+                  "description": "The caller's open task from the Goal Manager"
+                },
+                "title": {
                   "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "goal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "goal_title": {
                   "type": [
@@ -19031,10 +19049,25 @@
                     "null"
                   ]
                 },
+                "goal_owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "kpi_id": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "kpi_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "proposal_id": {
                   "type": [
                     "string",
                     "null"
@@ -19044,10 +19077,14 @@
                   "type": "string"
                 },
                 "freshness": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "proposal": {
-                  "type": "object"
+                  "type": "object",
+                  "description": "A pending proposal, with may_decide"
                 }
               }
             }

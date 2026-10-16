@@ -45,8 +45,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       {id: 'g-gm', title: 'Every KPI read on time', owner: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
     const other = [kpi('k-cash', 'Cash runway', {owner: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
-    const needs = [{kind: 'kpi_red', goal_id: 'g-cmo', goal_title: 'Double organic signups', kpi_id: 'k-act', kpi_name: 'Activation', reason: 'Activation 52% vs 58% needed on pace'},
-      {kind: 'proposal', proposal: {id: 'p1', kind: 'kpi_target', goal_id: 'g-cmo', kpi_id: 'k-act', payload: {kind: 'improve', target: 60, deadline: '2027-12-31'},
+    const needs = [{kind: 'kpi_red', task_id: 't-red', title: "Activation is off track on Double organic signups: say what's happening", goal_id: 'g-cmo', goal_title: 'Double organic signups', kpi_id: 'k-act', kpi_name: 'Activation', reason: 'Activation 52% vs 58% needed on pace'},
+      {kind: 'proposal', task_id: 't-prop', title: 'Confirm the change to Activation', proposal: {id: 'p1', kind: 'kpi_target', goal_id: 'g-cmo', kpi_id: 'k-act', payload: {kind: 'improve', target: 60, deadline: '2027-12-31'},
        reason: 'The deadline cannot be met at this pace', proposed_by: 'bot:goal-manager'}, kpi_name: 'Activation', goal_title: 'Double organic signups'}];
     const people = [{id: 'ana', name: 'Ana Silva', org_parent: '', inbox_bot: 'inbox'}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana', goals: 'Keep the board honest.'}];
     const detail = {kpi: activation, links: [{...activation.link, goal_title: 'Double organic signups', goal_owner: 'bot:cmo', target_label: activation.target_label, status: 'yellow', reason: activation.reason}],
@@ -189,8 +189,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const chips = row('bot:cmo').locator('.gt-chip');
     assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.querySelector('.gdot').className.replace('gdot ', '') + ' ' + el.innerText.trim())), ['yellow 52%', 'gray –']);
     assert.equal(await row('company').locator('.gt-goal .gdot').getAttribute('class'), 'gdot red');
-    // Needs you: a count and its lines; a proposal is confirmed there.
-    assert.match(await page.locator('#goal-needs').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
+    // Needs you: a count and its lines, each the caller's task from the Goal Manager, which a tap opens; a proposal is
+    // confirmed there.
+    assert.match(await page.locator('#goal-needs').innerText(), /Needs you\s*2[\s\S]*Activation is off track on Double organic signups/i);
+    await page.locator('#goal-needs [data-need-task="t-red"]').click();
+    await until(() => requests.includes('GET /api/v2/tasks/t-red'), 'the task opens');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');
     assert.deepEqual(last(), {path: '/api/v2/proposals/p1/decide', body: {decision: 'confirm'}});

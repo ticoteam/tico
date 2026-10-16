@@ -1019,8 +1019,8 @@ def goal_checkins(api, args):
     return api.get(f"goals/{args['id']}/checkins")
 
 
-@tool("hub_goal_needs_you", "What waits on you among goals: red KPIs on goals you own, stale KPIs you own, "
-      "and definition or target changes you are asked to confirm.", {})
+@tool("hub_goal_needs_you", "What waits on you among goals, each an open task from the Goal Manager (task_id): red KPIs "
+      "on goals you own, stale KPIs you own, and definition or target changes you are asked to confirm.", {})
 def goal_needs_you(api, args):
     return api.get("goals/needs-you")
 

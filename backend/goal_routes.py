@@ -12,6 +12,7 @@ person confirms.
 from fastapi import Request
 
 from . import botkpis
+from . import goal_tasks as GT
 from . import goals as G
 from . import kpis as K
 from . import models as M
@@ -120,6 +121,15 @@ def install(app, store, auth, mutate, settings):
                 names[owner] = {"kind": "person", "id": H.actor_id(owner), "name": human.get("name") or H.actor_id(owner)}
         return names
 
+    def boss(c):
+        """Who acts for a company goal or KPI: the environment's owner."""
+        return GT.company_owner(c, auth.owner_id(c))
+
+    def reconcile(c, result):
+        """The Goal Manager's tasks follow the write that may have changed what waits on whom (backend/goal_tasks.py)."""
+        GT.safely(c, boss(c))
+        return result
+
     def decider(c, who, item):
         """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes."""
         if who.role not in ("owner", "human") or who.via:
@@ -193,36 +203,16 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/goals/needs-you")
     def goals_needs_you(request: Request):
-        """What waits on the caller here: red KPIs on goals they own, stale KPIs they own, and definitions and
-        targets they are asked to confirm."""
+        """What waits on the caller here: their open tasks from the Goal Manager (backend/goal_tasks.py), each a red
+        KPI on a goal they own, a stale KPI they own, or a proposal they decide, with the task's id."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            def mine(owner):
-                return owner == who.actor or (owner == G.COMPANY and who.role == "owner")
-            items = []
-            goals = [g for g in readable_goals(c, who, G.goals(c, live_only=True)) if mine(g["owner"])]
-            for goal_id, kpis in K.goal_views(c, [g["id"] for g in goals]).items():
-                title = next(g["title"] for g in goals if g["id"] == goal_id)
-                for k in kpis:
-                    if k["status"] == "red":
-                        items.append({"kind": "kpi_red", "goal_id": goal_id, "goal_title": title, "kpi_id": k["id"],
-                                      "kpi_name": k["name"], "reason": k["reason"]})
-            owned = [dict(r) for r in c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created")
-                     if mine(r["owner"])]
-            data = K.effective_many(c, [r["id"] for r in owned])
-            for record in owned:
-                rows = data.get(record["id"], [])
-                state = K.assess(record, None, rows)
-                if state["freshness"] != "fresh":
-                    items.append({"kind": "kpi_stale", "kpi_id": record["id"], "kpi_name": record["name"],
-                                  "freshness": state["freshness"], "reason": state["reason"]})
-            for p in G.proposals(c, "pending"):
-                if decider(c, who, p):
-                    goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
-                    record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
-                    items.append({"kind": "proposal", "proposal": p, "goal_title": goal and goal["title"],
-                                  "kpi_name": record and record["name"]})
+            items = GT.open_for(c, who.actor, boss(c))
+            for item in items:
+                p = G.proposal(c, item["proposal_id"]) if item["kind"] == "proposal" and item.get("proposal_id") else None
+                if p and p["status"] == "pending":
+                    item["proposal"] = {**p, "may_decide": decider(c, who, p)}
             return {"actor": who.actor, "items": items}
 
     @app.post("/api/v2/goals/refresh")
@@ -234,7 +224,7 @@ def install(app, store, auth, mutate, settings):
             auth.domain(who)
             if not (is_manager(who) or who.role == "owner"):
                 raise Problem("forbidden", "The Goal Manager or the owner runs the status pass", 403)
-            return G.refresh(c, body.goal_ids)
+            return reconcile(c, G.refresh(c, body.goal_ids))
         return mutate(request, body, work)
 
     @app.get("/api/v2/goals/{gid}")
@@ -282,7 +272,7 @@ def install(app, store, auth, mutate, settings):
                     who.actor == parent_owner(c, row) or stands_above(c, who, row["owner"])):
                 raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
                               "it serves; that is the acceptance", 403)
-            return {"goal": G.view(c, G.set_status(c, who.actor, gid, body.status, body.note))}
+            return reconcile(c, {"goal": G.view(c, G.set_status(c, who.actor, gid, body.status, body.note))})
         return mutate(request, body, work)
 
     @app.post("/api/v2/goals/{gid}/status/auto")
@@ -318,9 +308,9 @@ def install(app, store, auth, mutate, settings):
             if not structural and not may_colour(c, who, row):
                 raise Problem("forbidden", "You cannot edit this goal", 403)
             owner = goal_owner(c, who, body.owner) if body.owner else None
-            return {"goal": G.view(c, G.update(c, who.actor, gid, title=body.title, body=body.body,
-                                               parent_id=body.parent_id, owner=owner, rank=body.rank,
-                                               top=body.top))}
+            return reconcile(c, {"goal": G.view(c, G.update(c, who.actor, gid, title=body.title, body=body.body,
+                                                            parent_id=body.parent_id, owner=owner, rank=body.rank,
+                                                            top=body.top))})
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ check-ins
@@ -365,13 +355,13 @@ def install(app, store, auth, mutate, settings):
             if body.kpi_id:
                 kpi_or_404(c, who, body.kpi_id)
                 G.kpi_link(c, who.actor, gid, body.kpi_id, target)
-                return {"kpi": views_of(c, gid, body.kpi_id)}
+                return reconcile(c, {"kpi": views_of(c, gid, body.kpi_id)})
             if not body.name:
                 raise Problem("validation", "Give a kpi_id to link, or a name to make a new KPI", 422)
             owner = goal_owner(c, who, body.owner) if body.owner else row["owner"]
             made = G.kpi_create(c, who.actor, owner, {k: getattr(body, k) for k in (
                 "name", "definition", "unit", "direction", "cadence", "source_note")}, goal_id=gid, target=target)
-            return {"kpi": views_of(c, gid, made["id"])}
+            return reconcile(c, {"kpi": views_of(c, gid, made["id"])})
         return mutate(request, body, work)
 
     def views_of(c, goal_id, kpi_id):
@@ -391,7 +381,7 @@ def install(app, store, auth, mutate, settings):
             if not K.link(c, gid, kid):
                 raise Problem("not_found", "That KPI is not linked to this goal", 404)
             G.kpi_link(c, who.actor, gid, kid, body.model_dump())
-            return {"kpi": views_of(c, gid, kid)}
+            return reconcile(c, {"kpi": views_of(c, gid, kid)})
         return mutate(request, body, work)
 
     @app.post("/api/v2/goals/{gid}/kpis/{kid}/unlink")
@@ -404,7 +394,7 @@ def install(app, store, auth, mutate, settings):
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them removes a measure", 403)
             G.kpi_unlink(c, who.actor, gid, kid)
-            return {"goal": G.view(c, G.goal(c, gid))}
+            return reconcile(c, {"goal": G.view(c, G.goal(c, gid))})
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ KPIs
@@ -478,7 +468,7 @@ def install(app, store, auth, mutate, settings):
             target = {k: getattr(body, k) for k in ("kind", "baseline", "baseline_at", "target", "deadline", "min", "max")}
             made = G.kpi_create(c, who.actor, owner, {k: getattr(body, k) for k in (
                 "name", "definition", "unit", "direction", "cadence", "source_note")}, goal_id=body.goal_id, target=target)
-            return kpi_detail(c, who, made)
+            return reconcile(c, kpi_detail(c, who, made))
         return mutate(request, body, work)
 
     @app.get("/api/v2/kpis/{kid}")
@@ -503,7 +493,7 @@ def install(app, store, auth, mutate, settings):
             owner = goal_owner(c, who, body.owner) if body.owner else None
             fields = body.model_dump(exclude={"owner"})
             G.kpi_edit(c, who.actor, kid, fields, owner)
-            return kpi_detail(c, who, K.kpi(c, kid))
+            return reconcile(c, kpi_detail(c, who, K.kpi(c, kid)))
         return mutate(request, body, work)
 
     def kpi_archive_change(request, kid, body, archived):
@@ -515,7 +505,7 @@ def install(app, store, auth, mutate, settings):
             if K.auto(kid) or not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them archives or restores it", 403)
             updated = K.set_archived(c, who.actor, kid, archived)
-            return kpi_detail(c, who, updated)
+            return reconcile(c, kpi_detail(c, who, updated))
         return mutate(request, body, work)
 
     @app.post("/api/v2/kpis/{kid}/archive")
@@ -548,7 +538,7 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("forbidden", "The KPI's owner, the Goal Manager, or the owner of a goal that uses it "
                               "logs a reading", 403)
             fields = body.model_dump(exclude={"value", "note", "source", "at"})
-            return {"reading": G.kpi_log(c, who.actor, kid, body.value, body.note, body.source, body.at, **fields)}
+            return reconcile(c, {"reading": G.kpi_log(c, who.actor, kid, body.value, body.note, body.source, body.at, **fields)})
         return mutate(request, body, work)
 
     @app.get("/api/v2/bots/{bot}/kpis")
@@ -591,7 +581,8 @@ def install(app, store, auth, mutate, settings):
             record = kpi_or_404(c, who, body.kpi_id) if body.kpi_id else None
             if goal and not readable_goals(c, who, [goal]):
                 raise Problem("not_found", "Unknown goal", 404)
-            return {"proposal": G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload, body.reason)}
+            return reconcile(c, {"proposal": G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload,
+                                                       body.reason)})
         return mutate(request, body, work)
 
     @app.post("/api/v2/goal-proposals/{pid}/decide")
@@ -605,5 +596,5 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("not_found", "Unknown proposal", 404)
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
-            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note)}
+            return reconcile(c, {"proposal": G.decide(c, who.actor, pid, body.decision, body.note)})
         return mutate(request, body, work)

@@ -46,6 +46,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Health | Whether the installation is working. |
 | Live events | One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, messages, runs, bots and Needs you as they change, resumable from a change number. |
 | Tags | Tags, metadata, markdown checklists and reusable templates. |
+| Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).

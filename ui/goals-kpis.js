@@ -149,11 +149,11 @@ function kpiProposalLine(p) {
     : `${pl.issue || ''}${pl.note ? ': ' + pl.note : ''}`;
   return {what, detail, reason: p.reason || ''};
 }
-function proposalHtml(p, extra = '') {
+function proposalHtml(p, extra = '', task = '') {
   const x = kpiProposalLine(p);
   return `<li class="kpi-prop" data-proposal="${esc(p.id)}"><div class="kpi-prop-main"><span><b>${esc(x.what)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}</span><span class="kpi-prop-detail">${esc(x.detail)}</span>
     ${x.reason ? `<span class="muted kpi-prop-why">${esc(x.reason)} · ${esc(goalActorName(p.proposed_by))}</span>` : `<span class="muted kpi-prop-why">${esc(goalActorName(p.proposed_by))}</span>`}</div>
-    ${p.may_decide ? `<div class="kpi-prop-do"><button class="primary" type="button" data-decide="confirm">Confirm</button><button class="ghost" type="button" data-decide="reject">Reject</button></div>` : ''}</li>`;
+    ${p.may_decide ? `<div class="kpi-prop-do"><button class="primary" type="button" data-decide="confirm">Confirm</button><button class="ghost" type="button" data-decide="reject">Reject</button>${task ? `<button class="linkish" type="button" data-need-task="${esc(task)}">Task</button>` : ''}</div>` : ''}</li>`;
 }
 function bindProposals(root, after) {
   for (const li of root.querySelectorAll('[data-proposal]')) for (const b of li.querySelectorAll('[data-decide]')) b.onclick = async () => {
@@ -511,7 +511,7 @@ function goalsRender(state) {
     li.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
   }
   const needs = body.querySelector('#goal-needs');
-  if (needs) { bindKpiLines(needs); bindProposals(needs, () => goalsReload(state)); }
+  if (needs) { bindNeedTasks(needs); bindProposals(needs, () => goalsReload(state)); }
 }
 async function goalsReload(state) {
   await goalsRefresh();
@@ -690,12 +690,20 @@ function goalPanelRender(state) {
 }
 
 // ---------------------------------------------------------------- Needs you
+// Each row is one of the caller's tasks from the Goal Manager (GET /api/v2/goals/needs-you): a tap opens the task. A
+// proposal still pending is decided in the row, which finishes its task.
 function goalNeedsHtml(items) {
   if (!items?.length) return '';
   const rows = items.map(it => {
-    if (it.kind === 'proposal') return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '');
-    const red = it.kind === 'kpi_red';
-    return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span></li>`;
+    if (it.proposal) return proposalHtml({...it.proposal, may_decide: true}, it.kpi_name || it.goal_title || '', it.task_id);
+    const dot = it.kind === 'kpi_red' ? 'red' : 'gray';
+    return `<li class="need-row" data-need-task="${esc(it.task_id)}" tabindex="0" role="button">${gdot(dot)}<span class="need-text"><b>${esc(it.title)}</b>${it.reason ? `<span class="muted">: ${esc(it.reason)}</span>` : ''}</span></li>`;
   }).join('');
   return `<section class="gt-needs" id="goal-needs" aria-label="Needs you"><div class="gt-needs-h">Needs you<span class="cnt tnum">${items.length}</span></div><ul>${rows}</ul></section>`;
+}
+function bindNeedTasks(root) {
+  for (const el of root.querySelectorAll('[data-need-task]')) {
+    el.onclick = ev => { ev.stopPropagation(); void taskModalOpen('t' + el.dataset.needTask); };
+    if (el.tagName === 'LI') el.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); el.onclick(ev); } };
+  }
 }

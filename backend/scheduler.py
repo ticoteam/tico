@@ -184,6 +184,9 @@ class Scheduler:
             try:
                 with self.store.transaction() as c:
                     G.refresh(c)
+                    # ...and so do the Goal Manager's tasks: a reading going stale is a new ask (backend/goal_tasks.py).
+                    from . import goal_tasks
+                    goal_tasks.safely(c, goal_tasks.company_owner(c, self.execution.auth.owner_id(c)))
             except Exception as exc:
                 failures.append({"goals": type(exc).__name__})
         if self.health_scanned is None or at - self.health_scanned >= timedelta(hours=1):

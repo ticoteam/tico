@@ -128,6 +128,29 @@ It does five things:
 Its routines start paused, like a starter bot's first routine. Because it is built in, Tico starts its daily KPI pass once
 the first KPI exists, once: a human who pauses it afterwards is not overruled.
 
+### Its asks are tasks
+
+What a goal or a KPI waits on someone for is an ordinary task from the Goal Manager (`bot:goal-manager`), owned by whoever
+must act, so it is in their **Tasks**, **Decide** and Needs you like any other work:
+
+| When | Task | Owner |
+|---|---|---|
+| a KPI has no fresh reading (stale or missing) | "Log a new reading for *KPI*" | the KPI's owner |
+| a KPI is red on a live goal | "*KPI* is off track on *goal*: say what's happening" | the goal's owner |
+| a proposal is pending | "Confirm the change to *KPI*" (or the goal's wording, its new KPI, a flag) | its decider: the goal's owner, the KPI's owner for a definition change |
+
+A team goal or KPI's task goes to the environment's owner. A bot owns its own KPI's and goal's tasks; a proposal on a bot's
+goal or KPI goes to the nearest person above the bot, since only a person decides. The task's first line is the ask, then the
+reason, then where to find it on the Goals page.
+
+There is one open task per condition (kind, KPI or proposal, and who acts). When it clears (a fresh reading, the KPI no longer
+red, the proposal decided, the KPI archived, the goal done or dropped, or the work moving to someone else) Tico marks the task
+done with a line saying why. A task its owner finishes while the condition still holds is not filed again until it clears.
+Tico reconciles these tasks in the same transaction as every write that may change them (a reading, a proposal or its decision,
+a KPI created, edited, archived or restored, a link or target, a goal's colour or owner) and in every status pass (the
+hourly one and the Goal Manager's, `POST /api/v2/goals/refresh`), which is how a reading going stale becomes a task. While the Goal Manager
+is not set up the tasks come from Tico itself.
+
 ### Proposals
 
 A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
@@ -141,7 +164,8 @@ their own click) or rejects it; confirming makes the change as that human.
 | `kpi_target` | the target fields, with `goal_id` | the goal's owner or the KPI's |
 | `flag` | `issue`: `vague`, `duplicate` or `unmeasured`, and a `note` | the goal's owner |
 
-Pending proposals appear under **Needs you** on the Goals page for the human who decides them.
+A pending proposal is a task for the human who naturally decides it (above), shown under **Needs you** on the Goals page
+with **Confirm** and **Reject**.
 
 ## Automatic bot KPIs
 
@@ -184,8 +208,9 @@ check-in and **Add KPI**; tapping a KPI shows its history (a chart and the readi
 and version, its owner, its targets and the Goal Manager's latest check-in, with a way back. **Add goal** and **Add KPI**
 (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. **Needs you** is a short strip at the
-top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
-waiting for your confirmation. Initial page load makes two requests, the tree and Needs you; the Goal Manager panel and
+top, shown only when something waits: your open tasks from the Goal Manager (red KPIs on goals you own, stale data on KPIs
+you own, and definitions and targets waiting for your confirmation). A row opens its task; a proposal is confirmed or
+rejected in the row. Initial page load makes two requests, the tree and Needs you; the Goal Manager panel and
 the historical KPI view load only when opened.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
@@ -235,7 +260,7 @@ The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
 | `POST /api/v2/goals/{id}/status/auto` | hand the colour back to the Goal Manager |
 | `POST /api/v2/goals/refresh` | the status pass (the Goal Manager or the owner) |
 | `GET/POST /api/v2/goals/{id}/checkins` | the owner's words on how it is going |
-| `GET /api/v2/goals/needs-you` | red KPIs, stale KPIs and proposals that need the caller |
+| `GET /api/v2/goals/needs-you` | the caller's open Goal Manager tasks: `kind` (`kpi_red`, `kpi_stale`, `proposal`), `task_id`, `title`, the goal and KPI, `reason`, and a pending `proposal` |
 | `POST /api/v2/goals/{id}/kpis` | link a KPI (`kpi_id`) or make one and link it (`name`), with the target |
 | `POST /api/v2/goals/{id}/kpis/{kpi}` and `/unlink` | change the target on a link; remove the link |
 | `GET/POST /api/v2/kpis`, `GET/POST /api/v2/kpis/{id}` | list, create, read (with its links, readings, definition history and check-ins) and edit |

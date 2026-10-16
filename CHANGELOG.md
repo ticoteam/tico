@@ -118,6 +118,11 @@ All notable changes to Tico are recorded here. The format follows
   ranked roadmap view, and requesters (Requested by) on tasks.
 
 ### Changed
+- What goals and KPIs wait on someone for is now a task from the Goal Manager, owned by whoever must act, so it shows in
+  **Tasks** and **Decide**: "Log a new reading for *KPI*" for its owner, "*KPI* is off track on *goal*: say what's happening"
+  for the goal's owner, and "Confirm the change to *KPI*" for a proposal's decider. One open task per condition; Tico marks it
+  done, saying why, when the reading arrives, the KPI recovers, the proposal is decided or the KPI is archived. The Goals
+  page's **Needs you** lists those tasks, and a row opens its task.
 - Help is about a quarter of its old length on every screen: what Tico is, where to start (your first result, the tour,
   the Assistant) and how to get help, with links to the docs. The map, Who does what, the agent platforms and the
   glossary moved to [How Tico works](docs/how-it-works.md) and the [Glossary](docs/glossary.md).
