@@ -129,7 +129,7 @@ def _review_role(c, task, payload, role):
                          note="GitHub review " + ("request withdrawn" if action == "review_request_removed" else "requested"))
 
 
-def pull_request(c, payload, review_role=""):
+def pull_request(c, payload, review_role="", release_repo=""):
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
@@ -177,6 +177,12 @@ def pull_request(c, payload, review_role=""):
                     detail["head_login"] = login
                 else:
                     detail.pop("head_login", None)
+        wake_once = False
+        if (state == "merged" and link["state"] != "merged" and match
+                and f"{match.group(1)}/{match.group(2)}".lower() != str(release_repo).lower()):
+            # Only the release's own repository ships, so a merge elsewhere is the last result an armed link gets.
+            wake_once = fire_once(detail, f"Merged: {link['title']}; it is not in the repository Tico releases, "
+                                          f"so no shipped wake follows {url}")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
         if mergeable == "conflict":
@@ -190,6 +196,8 @@ def pull_request(c, payload, review_role=""):
         item = f"{link['title']} {state}" if state != "closed" else f"{link['title']} was closed without merging"
         if mergeable == "conflict":
             item += ": Merge conflict"
+        if wake_once:
+            queue_wake(c, task, detail["wake_once_fired"]["item"])
         if (state == "closed" and link["state"] != state
                 or conflict_wake):
             queue_wake(c, task, item)
@@ -256,9 +264,11 @@ def pr_signal(c, event, payload):
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
             item = f"Checks {state} on {label}: {name}"
             # A suite completes once all of its runs have; a single run or commit status may be one of many.
-            if event == "check_suite" and signal.get("status") == "completed" and state != "pending":
+            if (event == "check_suite" and signal.get("status") == "completed" and state != "pending"
+                    and not any(k.startswith("suite:") and v == "pending" for k, v in checks.items())):
                 sha = str(signal.get("head_sha") or detail.get("head_sha") or "")[:12]
-                done = (f"Checks finished on {label}: {'passed' if state == 'passing' else 'failed'} ({name}) "
+                failed = [k[6:] for k, v in checks.items() if k.startswith("suite:") and v == "failing"]
+                done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
                         f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                 if fire_once(detail, done):
                     wake, item = True, done
@@ -369,7 +379,8 @@ def refresh_task_prs(service, task_id):
                                 success = True
                                 continue
                             pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
-                                         review_role=service.settings.github_review_role)
+                                         review_role=service.settings.github_review_role,
+                                         release_repo=service.settings.release_repo)
                         success = True
                 except Exception:
                     logging.getLogger("tico.github").exception("PR refresh failed for %s #%s", *key)
@@ -555,7 +566,8 @@ def install_github(app, settings, store):
             return {"ok": True}
         with store.transaction() as c:
             if event == "pull_request":
-                result = pull_request(c, payload, review_role=settings.github_review_role)
+                result = pull_request(c, payload, review_role=settings.github_review_role,
+                                      release_repo=settings.release_repo)
             elif event in ("check_run", "check_suite", "status", "pull_request_review", "pull_request_review_comment"):
                 result = pr_signal(c, event, payload)
             elif event == "push":

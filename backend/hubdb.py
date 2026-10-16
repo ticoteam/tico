@@ -2978,8 +2978,8 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         kind = "url"
     if kind not in LINK_KINDS:
         refuse(conn, actor, "kind", f"a link is {'|'.join(LINK_KINDS)}, not {kind}")
-    if wake_once is not None and kind != "pr":
-        refuse(conn, actor, "kind", "a one-shot wake needs a pull request link in this team's GitHub organization")
+    if wake_once is not None and (kind != "pr" or not app):
+        refuse(conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization")
     have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
         return _arm_wake_once(conn, actor, have, wake_once)
@@ -4429,8 +4429,11 @@ def waiting_for(conn, row):
         return "an undecided approval"
     if row.get("waiting_on"):
         return f"{actor_id(row['waiting_on'])} to act"
-    armed = _one(conn, "SELECT title FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft','merged') "
-                       "AND json_extract(detail_json,'$.wake_once') IS NOT NULL LIMIT 1", (row["id"],))
+    # Only a PR GitHub reports on can wake it: one the App has sent an event for, or in a repository it reaches.
+    armed = _one(conn, "SELECT l.title FROM task_links l WHERE l.task_id=? AND l.kind='pr' "
+                       "AND l.state IN ('open','draft','merged') AND json_extract(l.detail_json,'$.wake_once') IS NOT NULL "
+                       "AND (json_extract(l.detail_json,'$.tracked') OR EXISTS(SELECT 1 FROM repositories r "
+                       "WHERE lower(r.full_name)=lower(l.repo) AND r.reachable=1)) LIMIT 1", (row["id"],))
     if armed:
         return f"GitHub on {armed['title']}"
     return None

@@ -384,92 +384,96 @@ def test_a_review_request_puts_the_person_in_the_configured_role(api):
     assert roles() == {"reviewer": ["human:ana"]}
 
 
+
 def _burst(api, task_id):
     from backend import repositories as R
     with api.app.state.store.transaction() as c:
         return R.metadata(c, 'github-task-wake:' + task_id).get('items', [])
 
 
+def _app(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created,created_by) "
+                  "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)", (H.now(), 'human:ana'))
+
+
 def _arm(api, task_id, armed=True, url=PR):
     return post(api, 'tasks/' + task_id + '/links', {'url': url, 'wake_once': armed})['links']
 
 
-def test_wake_once_fires_once_on_finished_checks_and_never_moves_the_task(api):
+def _suite(api, slug, status, conclusion=None, sha='a' * 40):
+    hook(api, 'check_suite', {'action': 'completed' if status == 'completed' else 'requested',
+                              'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
+        'status': status, 'conclusion': conclusion, 'head_sha': sha, 'app': {'slug': slug},
+        'pull_requests': [{'number': 412}]}})
+
+
+def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task(api):
+    _app(api)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
     hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
-    hook(api, 'check_suite', {'action': 'requested', 'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': 'queued', 'conclusion': None, 'head_sha': 'a' * 40, 'app': {'slug': 'github-actions'},
-        'pull_requests': [{'number': 412}]}})
+    _suite(api, 'github-actions', 'completed', 'success')
     assert _burst(api, task['id']) == []                      # unarmed: a passing suite wakes nobody
-    hook(api, 'check_suite', {'action': 'completed', 'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40, 'app': {'slug': 'github-actions'},
-        'pull_requests': [{'number': 412}]}})
-    assert _burst(api, task['id']) == []
     links = _arm(api, task['id'])
     assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
     assert _arm(api, task['id']) == links                     # arming twice changes nothing
-    # A single run finishing or a suite still running is not the end of the checks.
+    # A single run, or one suite while another still runs, is not the end of the checks.
     hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
         'name': 'Unit tests', 'conclusion': 'success', 'head_sha': 'a' * 40, 'pull_requests': [{'number': 412}]}})
-    hook(api, 'check_suite', {'action': 'requested', 'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': 'in_progress', 'conclusion': None, 'head_sha': 'a' * 40, 'app': {'slug': 'github-actions'},
-        'pull_requests': [{'number': 412}]}})
+    _suite(api, 'github-actions', 'in_progress')
+    _suite(api, 'vercel', 'completed', 'success')
     assert _burst(api, task['id']) == []
-    completed = {'action': 'completed', 'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40, 'app': {'slug': 'github-actions'},
-        'pull_requests': [{'number': 412}]}}
-    hook(api, 'check_suite', completed)
-    hook(api, 'check_suite', completed)                       # a redelivery
+    _suite(api, 'github-actions', 'completed', 'failure')
+    _suite(api, 'github-actions', 'completed', 'failure')     # a redelivery
     assert _burst(api, task['id']) == [
-        f"Checks finished on tico#412: passed (suite:github-actions) {PR}/checks at {'a' * 12}"]
-    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
-    detail = json.loads(link['detail_json'])
+        f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
     assert get(api, 'tasks/' + task['id'])['task']['status'] == task['status']
 
 
-def test_wake_once_on_a_review_and_a_failed_suite_says_which(api):
+def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
+    _app(api)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on review', 'body': 'x', 'links': [PR]})
     _arm(api, task['id'])
     review = {'action': 'submitted', 'pull_request': {'html_url': PR}, 'repository': {'full_name': 'ticoteam/tico'},
               'review': {'id': 7, 'state': 'approved', 'user': {'login': 'ana'},
                          'html_url': PR + '#pullrequestreview-7'}}
     hook(api, 'pull_request_review', review)
-    hook(api, 'pull_request_review', review)
+    hook(api, 'pull_request_review', {**review, 'review': {**review['review'], 'id': 8}})   # disarmed: quiet
     assert _burst(api, task['id']) == [f'Review approved on tico#412 by ana {PR}#pullrequestreview-7']
-    # Disarmed: a later approval is quiet again, and a failed suite wakes only by the usual rule.
-    hook(api, 'pull_request_review', {**review, 'review': {**review['review'], 'id': 8}})
-    assert len(_burst(api, task['id'])) == 1
-    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI again', 'body': 'x', 'links': [PR]})
-    _arm(api, other['id'])
-    hook(api, 'check_suite', {'action': 'completed', 'repository': {'full_name': 'ticoteam/tico'}, 'check_suite': {
-        'status': 'completed', 'conclusion': 'failure', 'app': {'slug': 'github-actions'},
-        'pull_requests': [{'number': 412}]}})
-    assert _burst(api, other['id']) == [f'Checks finished on tico#412: failed (suite:github-actions) {PR}/checks']
-
-
-def test_wake_once_on_ship_and_disarm(api):
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release', 'body': 'x', 'links': [PR]})
-    _arm(api, task['id'])
+    # Armed again: a merge in the release repository waits for the release that ships it.
     assert 'wake_once' not in json.loads(_arm(api, task['id'], armed=False)[0]['detail_json'])
-    _arm(api, task['id'])
+    shipping = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release', 'body': 'x', 'links': [PR]})
+    _arm(api, shipping['id'])
     hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='b' * 40))
-    assert _burst(api, task['id']) == []                      # merged is not one of the three
+    assert _burst(api, shipping['id']) == []
     api.app.state.store.settings.release_commit = 'b' * 40
     with api.app.state.store.transaction() as c:
-        assert G.ship_deployed(c, api.app.state.store.settings) == [task['id']]
+        assert shipping['id'] in G.ship_deployed(c, api.app.state.store.settings)
         assert G.ship_deployed(c, api.app.state.store.settings) == []
-        assert H.task(c, task['id'])['status'] == task['status']
-    assert _burst(api, task['id']) == [f"Shipped: tico#412 is in the running release {'b' * 12} {PR}"]
+        assert H.task(c, shipping['id'])['status'] == shipping['status']
+    assert _burst(api, shipping['id']) == [f"Shipped: tico#412 is in the running release {'b' * 12} {PR}"]
+    # A merge anywhere else never ships, so it is the last result.
+    other = 'https://github.com/ticoteam/site/pull/9'
+    elsewhere = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the site', 'body': 'x', 'links': [other]})
+    _arm(api, elsewhere['id'], url=other)
+    hook(api, 'pull_request', pr_event('closed', html_url=other, merged=True, merge_commit_sha='c' * 40))
+    assert _burst(api, elsewhere['id']) == [
+        f"Merged: site#9; it is not in the repository Tico releases, so no shipped wake follows {other}"]
 
 
-def test_wake_once_needs_a_pr_link_and_keeps_a_waiting_task_waiting(api):
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on GitHub', 'body': 'x'})
+def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on GitHub', 'body': 'x', 'links': [PR]})
+    post(api, 'tasks/' + task['id'] + '/links', {'url': PR, 'wake_once': True}, expected=422)   # no App
+    _app(api)
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://example.com/deploy', 'wake_once': True}, expected=422)
     _arm(api, task['id'])
     with api.app.state.store.transaction() as c:
-        row = H.task(c, task['id'])
-        assert H.waiting_for(c, row) == 'GitHub on tico#412'
+        assert H.waiting_for(c, H.task(c, task['id'])) is None      # nothing from GitHub on it yet
+    hook(api, 'pull_request', pr_event('opened'))
+    with api.app.state.store.transaction() as c:
+        assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
         H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
         assert H.sweep_stranded(c) == []
