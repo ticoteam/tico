@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Run workflows** on a bot's chosen write repository (Settings, `hub bot repos ... owner/repo:write+actions`, the
+  repositories API): an Owner or admin lets the bot start, rerun and cancel GitHub Actions runs there. Those
+  repositories get their own token with Actions: write once the GitHub App has Actions set to Read and write and the
+  installation accepted it; until then the token answer and Health say why. Workflows: write is never asked for.
 - **Want help setting up?** in the setup wizard, on Health and on a bot in Needs setup opens Support with a setup
   snapshot (steps done, computer online, model signed in, first bot ready, bots in Needs setup) that the person reads and
   edits before sending; the request goes marked `setup`. After the install's first bot result, and 7 and 30 days later,
