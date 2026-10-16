@@ -470,16 +470,28 @@ def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
             'check_suite': {'id': id, 'status': suite, 'app': {'slug': 'github-actions'}}, 'pull_requests': [{'number': 412}]}})
     run('build', 'in_progress')
     _suite(api, 'vercel', 'completed', 'success')
-    _suite(api, 'github-actions', 'completed', 'success', id=1)   # another workflow, its own suite
+    _suite(api, 'github-actions', 'completed', 'failure', id=1)   # another workflow, its own suite
     run('build', 'completed', 'success')                      # its workflow has more jobs to come
     run('deploy', 'completed', 'failure')
-    assert _burst(api, task['id']) == ['Checks failing on tico#412: deploy']
+    assert _burst(api, task['id']) == ['Checks failing on tico#412: suite:github-actions',
+                                       'Checks failing on tico#412: deploy']
     _suite(api, 'github-actions', 'completed', 'failure', id=2)
-    assert _burst(api, task['id'])[1:] == [
+    assert _burst(api, task['id'])[2:] == [
         f"Checks finished on tico#412: failed (github-actions, deploy) {PR}/checks at {'a' * 12}"]
     run('deploy', 'completed', 'failure')                     # delivered late: does not reopen its suite
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
     assert detail['checks']['suite:github-actions#2'] == 'failing'
+    # A re-run on the same commit keeps its suite id; its runs reopen the suite until it completes again.
+    _arm(api, task['id'])
+    before = _burst(api, task['id'])
+    run('build', 'in_progress')
+    run('deploy', 'queued')
+    run('build', 'completed', 'success')
+    run('deploy', 'completed', 'success')
+    assert _burst(api, task['id']) == before
+    _suite(api, 'github-actions', 'completed', 'success', id=2)
+    assert _burst(api, task['id'])[len(before):] == [
+        f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
 
 
 def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):

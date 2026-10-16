@@ -268,13 +268,15 @@ def pr_signal(c, event, payload):
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
-            if own and own.get("status") != "completed" and checks.get(_suite_key(own, signal), "pending") == "pending":
-                # A finished run says its suite is still running even when that suite's `requested` never came here;
-                # a run delivered after its suite completed is a stale snapshot and does not reopen it.
+            if own and own.get("status") != "completed" and (
+                    signal.get("status") != "completed" or checks.get(_suite_key(own, signal), "pending") == "pending"):
+                # A run says its suite is still running even when that suite's `requested` never came here. A run
+                # that is still going reopens it (a re-run keeps the suite id); a finished run delivered after its
+                # suite completed is a stale snapshot and does not.
                 checks[_suite_key(own, signal)] = "pending"
             detail["checks"] = dict(list(checks.items())[-100:])
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
-            item = f"Checks {state} on {label}: {name}"
+            item = f"Checks {state} on {label}: {name.split('#')[0] if event == 'check_suite' else name}"
             # A suite completes once all of its runs have; a single run or commit status may be one of many.
             # A run or status that finishes after a suite already has can be the last one, so it counts too.
             suite_done = any(k.startswith("suite:") and v != "pending" for k, v in checks.items())
