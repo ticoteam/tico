@@ -261,6 +261,11 @@ def pr_signal(c, event, payload):
             wake = state == "failing" and checks.get(name) != "failing"
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
+            own = (signal.get("check_suite") or {}) if event == "check_run" else {}
+            if own and own.get("status") != "completed":
+                # A finished run says its suite is still running even when that suite's `requested` never came here.
+                slug = (own.get("app") or signal.get("app") or {}).get("slug") or own.get("id") or "Checks"
+                checks["suite:" + str(slug)[:194]] = "pending"
             detail["checks"] = dict(list(checks.items())[-100:])
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
             item = f"Checks {state} on {label}: {name}"

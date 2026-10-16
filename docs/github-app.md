@@ -258,7 +258,7 @@ A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link
 owner then hears once, in the task's conversation, at the first of: every check suite, check run and status
 GitHub has reported on the PR's current head has completed (passed, or failed naming every failing suite, run
 and status, with the checks link and commit; judged when a suite completes, or when a run or status that was
-pending finishes after one has), a review is submitted approving or requesting changes (with the reviewer and
+pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
 review link), or a release ships the merged PR. A PR merged in a repository other than the one Tico releases
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
 it; the link's `detail_json.wake_once_fired` records what fired. Arming needs the connected App and is refused

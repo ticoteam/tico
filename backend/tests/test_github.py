@@ -459,6 +459,26 @@ def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(
     assert 'wake_once' not in detail
 
 
+def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _arm(api, task['id'])
+    def run(name, status, conclusion=None, suite='in_progress'):
+        hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+            'name': name, 'status': status, 'conclusion': conclusion, 'head_sha': 'a' * 40,
+            'app': {'slug': 'github-actions'}, 'check_suite': {'status': suite, 'app': {'slug': 'github-actions'}},
+            'pull_requests': [{'number': 412}]}})
+    run('build', 'in_progress')
+    _suite(api, 'vercel', 'completed', 'success')
+    run('build', 'completed', 'success')                      # its workflow has more jobs to come
+    run('deploy', 'completed', 'failure')
+    assert _burst(api, task['id']) == ['Checks failing on tico#412: deploy']
+    _suite(api, 'github-actions', 'completed', 'failure')
+    assert _burst(api, task['id'])[1:] == [
+        f"Checks finished on tico#412: failed (github-actions, deploy) {PR}/checks at {'a' * 12}"]
+
+
 def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     _app(api)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on review', 'body': 'x', 'links': [PR]})
