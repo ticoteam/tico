@@ -18057,6 +18057,17 @@
             ],
             "title": "Access",
             "default": "write"
+          },
+          "run_workflows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Workflows"
           }
         },
         "additionalProperties": false,

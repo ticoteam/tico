@@ -230,3 +230,61 @@ def test_a_github_token_recovery_clears_the_old_failure_message(api):
     with store.read() as c:
         row = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service='github:token'").fetchone()
     assert row['last_success'] and row['last_error'] is None and row['detail_json'] == '{}'
+
+
+def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_accepts_it(api, gh):
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    for name in ('product', 'docs'):
+        put(api, 'repositories/Acme/' + name, {'enabled': True})
+    flagged = [{'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]
+    refused = api.put('/api/v2/bots/cpo/repositories', json={'mode': 'chosen', 'chosen': [{**flagged[0], 'access': 'read'}]},
+                      headers={**auth(), 'Idempotency-Key': uuid.uuid4().hex})
+    assert refused.status_code == 422, refused.text
+    data = put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': flagged + [{'full_name': 'Acme/docs', 'access': 'write'}]})
+    assert [r for r in data['effective'] if r.get('run_workflows')] == [{'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]
+    with api.app_state.store.read() as c:
+        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='bot.repos_changed' AND target='cpo' "
+                                     "ORDER BY rowid DESC").fetchone()[0])
+    assert audit['after']['chosen'][1] == flagged[0] and audit['before']['chosen'] == []
+    # Actions: read only on the installation: one ordinary write token, and the answer and Health say why.
+    gh.permissions = {'actions': 'read', 'checks': 'read', 'statuses': 'read'}
+    token = turn_token(api).json()
+    assert [t['repositories'] for t in token['tokens']] == [['Acme/docs', 'Acme/emp-cpo', 'Acme/product']]
+    assert token['workflows_withheld']['repositories'] == ['Acme/product'] and 'Read and write' in token['workflows_withheld']['reason']
+    assert all(r[2]['permissions'].get('actions') != 'write' for r in gh.of('/access_tokens'))
+    checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    assert checks['github_workflows']['status'] == 'warn' and 'cpo: Acme/product' in checks['github_workflows']['summary']
+    # Accepted: the flagged repository gets its own token with Actions: write, and the others never carry it.
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    api.app_state.github_app.live.clear()
+    token = turn_token(api).json()
+    assert 'workflows_withheld' not in token
+    assert [(t['repositories'], t.get('actions')) for t in token['tokens']] == [
+        (['Acme/docs', 'Acme/emp-cpo'], None), (['Acme/product'], 'write')]
+    asked = {tuple(r[2]['repositories']): r[2]['permissions'] for r in gh.of('/access_tokens')[-2:]}
+    assert asked[('docs', 'emp-cpo')]['actions'] == 'read'
+    assert asked[('product',)] == {'contents': 'write', 'pull_requests': 'write', 'issues': 'write', 'metadata': 'read',
+                                   'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    assert 'workflows' not in asked[('product',)]
+    one = api.post('/api/v2/github/token', json={'bot': 'cpo', 'repository': 'Acme/product', 'purpose': 'git'},
+                   headers=auth('runner-test')).json()
+    assert one['tokens'][0]['actions'] == 'write' and one['token'] == one['tokens'][0]['token']
+    assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    # Actions dropped back to read inside the live cache: the refused mint falls back and says why.
+    gh.permissions = {'actions': 'read', 'checks': 'read', 'statuses': 'read'}
+    api.app_state.github_app.cache.clear()
+    token = turn_token(api).json()
+    assert token['workflows_withheld']['repositories'] == ['Acme/product']
+    assert all(t.get('actions') is None for t in token['tokens'])
+    assert 'github_workflows' in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    # An installation without Checks: the refusal is the reads', not Actions'; the flagged repository still gets it.
+    gh.permissions = {'actions': 'write', 'statuses': 'read'}
+    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.live.clear()
+    one = api.post('/api/v2/github/token', json={'bot': 'cpo', 'repository': 'Acme/product', 'purpose': 'git'},
+                   headers=auth('runner-test')).json()
+    assert one['tokens'][0]['actions'] == 'write' and 'workflows_withheld' not in one
+    # Turning it off is a narrowing, said on the reply.
+    off = put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [{**flagged[0], 'run_workflows': False}]})
+    assert off['workflows_stopped'] == ['Acme/product']

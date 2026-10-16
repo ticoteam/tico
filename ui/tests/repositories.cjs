@@ -194,6 +194,17 @@ async function owner(browser) {
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories'), {mode: 'chosen', all_access: 'write', create_repositories: false,
     chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}, {full_name: 'acme/mobile', access: 'write'}]});
+  // Run workflows: only on a ticked write repo; sent when turned on or off, left out otherwise.
+  const runs = name => box.locator(`[data-brepo="${name}"] [data-brepo-run]`);
+  assert.equal(await runs('acme/api').isDisabled(), true, 'a read grant cannot run workflows');
+  await runs('acme/mobile').check();
+  await page.waitForFunction(() => /acme\/mobile write \+ workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
+    {full_name: 'acme/mobile', access: 'write', run_workflows: true});
+  await runs('acme/mobile').uncheck();
+  await page.waitForFunction(() => !/workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/mobile'),
+    {full_name: 'acme/mobile', access: 'write', run_workflows: false});
   await box.locator('[data-brepo="acme/api"] label:has(input[value=write])').click();
   await page.waitForFunction(() => /acme\/api write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').chosen.find(c => c.full_name === 'acme/api'), {full_name: 'acme/api', access: 'write'});

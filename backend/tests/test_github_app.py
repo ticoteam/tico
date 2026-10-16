@@ -84,7 +84,8 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             if self.refuse:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
-            if any(name in body.get("permissions", {}) and name not in (self.permissions or {})
+            if any(name in body.get("permissions", {}) and (name not in (self.permissions or {}) or
+                   body["permissions"][name] == "write" and self.permissions[name] != "write")
                    for name in ("actions", "checks", "statuses")):
                 return httpx.Response(422, json={"message": "The permissions requested are not granted to this installation."})
             if body and any(name in self.missing for name in body.get("repositories", [])):

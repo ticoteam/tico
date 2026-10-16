@@ -2997,7 +2997,9 @@ def bot_repos_get(api, args):
       {"bot": _s("Bot slug"), "mode": _s("Access mode", enum=["own", "all", "chosen"]),
        "all_access": _s("Default access for all repos", enum=["read", "write"]),
        "chosen": {"type": "array", "items": {"type": "object", "properties": {
-           "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"])},
+           "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"]),
+           "run_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may start, rerun "
+                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"}},
            "required": ["full_name", "access"], "additionalProperties": False}}},
       required=("bot", "mode"), writes=True)
 def bot_repos_set(api, args):

@@ -13,7 +13,7 @@ changes; bots keep using whatever git access their computer already has.
 | Pull requests | write | a bot opens pull requests for its work |
 | Issues | write | a bot files and comments on issues |
 | Metadata | read | required by GitHub for every app |
-| Actions | read | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. It cannot start, rerun or cancel them |
+| Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
@@ -25,6 +25,23 @@ Run tokens carry write permissions for write grants and contents read for read g
 and Commit statuses read for whichever of them the installation has. An App made before one of these was in its
 manifest keeps working without it: add it as **Read-only** on the App's GitHub settings page and accept the updated
 permissions on the installation, and the next run's token carries it (at once when the App's webhook is active, otherwise within six hours). Mixed grants use separate tokens; see [Repositories](repositories.md). Tico checks the bot's own repository and effective grants, and refuses a bot the caller does not run or a repository outside the connected organization.
+
+### Letting a bot run workflows
+
+A bot that must start a workflow (`gh workflow run`, `gh api .../dispatches`), rerun or cancel one needs Actions:
+write, which Tico never puts in an ordinary run token. To allow it for one repository:
+
+1. On the App's GitHub settings page (**Permissions & events → Repository permissions**), set **Actions** to
+   **Read and write** and save. GitHub asks the organization to accept the change: open the installation
+   (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
+2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant (Settings → bot → Repositories), or runs
+   `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
+
+The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
+repositories keep their own tokens, since GitHub permissions apply to a whole token. Tico asks GitHub for the
+installation's live permissions first: until it reports Actions as read and write, the flagged repositories get the
+ordinary write token, the token answer says why in `workflows_withheld`, and Health shows **Bots can't run workflows
+yet**. Workflows: write is never added, so the bot still cannot edit `.github/workflows` files.
 
 ## Set up
 

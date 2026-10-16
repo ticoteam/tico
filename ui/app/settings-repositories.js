@@ -202,7 +202,8 @@ document.addEventListener('click', async event => {
 });
 
 // ----------------------------------------------------------------- a bot's Repositories
-// In the bot editor: Own repo only, All ticked repos (read or write), or Chosen repos with read or write each.
+// In the bot editor: Own repo only, All ticked repos (read or write), or Chosen repos with read or write each; a
+// chosen write repo may also let the bot run workflows there (GitHub Actions: write).
 // Each change saves on its own, like the other rows there. Owners and admins change it; the bot's other
 // managers see it read only. Hidden while GitHub is not connected.
 const BOT_REPO_MODES = [['own', 'Own repo only'], ['all', 'All ticked repos'], ['chosen', 'Chosen repos']];
@@ -217,6 +218,8 @@ async function botReposMount(host, slug) {
   const admin = settingsIsAdmin();
   const state = {mode: view.mode || 'own', all_access: view.all_access || 'write', create_repositories: !!view.create_repositories,
     chosen: new Map((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write'])),
+    workflows: new Set((view.chosen || []).filter(c => c.run_workflows).map(c => c.full_name)),
+    served: new Set((view.chosen || []).filter(c => c.run_workflows).map(c => c.full_name)),
     effective: view.effective || []};
   // The ticked repositories, less bot repositories, plus anything already chosen that has since left that list.
   const pickable = () => {
@@ -235,16 +238,19 @@ async function botReposMount(host, slug) {
       ${state.mode === 'chosen' ? `<ul class="brepo-list" aria-label="Chosen repos">${pick.length ? pick.map(name => {
         const on = state.chosen.has(name);
         return `<li class="brepo-row" data-brepo="${esc(name)}"><label class="repo-name" title="${esc(name)}"><input type="checkbox" data-brepo-pick${on ? ' checked' : ''}${admin ? '' : ' disabled'}><span>${repoNameHTML(name)}</span></label>
-          ${repoSegHTML(`${id}-r-${name}`, `Access to ${name}`, BOT_REPO_ACCESS, state.chosen.get(name) || 'write', !admin || !on, ' repo-seg-sm')}</li>`;
+          ${repoSegHTML(`${id}-r-${name}`, `Access to ${name}`, BOT_REPO_ACCESS, state.chosen.get(name) || 'write', !admin || !on, ' repo-seg-sm')}
+          <label class="brepo-run" title="Start, rerun and cancel workflow runs (GitHub Actions: write)"><input type="checkbox" data-brepo-run aria-label="Run workflows in ${esc(name)}"${on && state.chosen.get(name) === 'write' && state.workflows.has(name) ? ' checked' : ''}${admin && on && state.chosen.get(name) === 'write' ? '' : ' disabled'}>Run workflows</label></li>`;
       }).join('') : '<li class="empty">No ticked repos.</li>'}</ul>` : ''}
       ${state.effective.length ? `<div class="brepo-eff"><span class="brepo-k">Effective</span><span>${state.effective.map(r =>
-        `<span class="brepo-eff-item">${esc(r.full_name)} <span class="brepo-acc">${esc(r.access || 'write')}</span></span>`).join('')}</span></div>` : ''}`;
+        `<span class="brepo-eff-item">${esc(r.full_name)} <span class="brepo-acc">${esc(r.access || 'write')}${r.run_workflows ? ' + workflows' : ''}</span></span>`).join('')}</span></div>` : ''}`;
     host.hidden = false;
   };
   // What the server holds, drawn as it is: after the latest save, and after a refused one.
   const adopt = view => {
     state.mode = view.mode || 'own'; state.all_access = view.all_access || 'write'; state.create_repositories = !!view.create_repositories;
     state.chosen = new Map((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write']));
+    state.workflows = new Set((view.chosen || []).filter(c => c.run_workflows).map(c => c.full_name));
+    state.served = new Set(state.workflows);
     state.effective = view.effective || [];
   };
   const say = html => { const el = host.querySelector('[data-brepo-status]'); if (el) el.innerHTML = html; };
@@ -252,7 +258,7 @@ async function botReposMount(host, slug) {
   const repaint = () => {
     const at = document.activeElement, keep = host.contains(at) ? (at.type === 'radio'
       ? `input[name="${CSS.escape(at.name)}"][value="${CSS.escape(at.value)}"]`
-      : at.matches('[data-brepo-create]') ? '[data-brepo-create]' : at.closest('[data-brepo]') ? `[data-brepo="${CSS.escape(at.closest('[data-brepo]').dataset.brepo)}"] [data-brepo-pick]` : '') : '';
+      : at.matches('[data-brepo-create]') ? '[data-brepo-create]' : at.closest('[data-brepo]') ? `[data-brepo="${CSS.escape(at.closest('[data-brepo]').dataset.brepo)}"] ${at.matches('[data-brepo-run]') ? '[data-brepo-run]' : '[data-brepo-pick]'}` : '') : '';
     paint();
     if (keep) host.querySelector(keep)?.focus();
   };
@@ -269,7 +275,10 @@ async function botReposMount(host, slug) {
         again = false; failure = null; view = null;
         say('Saving…');
         const body = {mode: state.mode, all_access: state.all_access, create_repositories: state.create_repositories,
-          chosen: [...state.chosen].map(([full_name, access]) => ({full_name, access}))};
+          // Run workflows goes only when on or being turned off; left out, the server keeps what it holds.
+          chosen: [...state.chosen].map(([full_name, access]) => access === 'write' && state.workflows.has(full_name)
+            ? {full_name, access, run_workflows: true}
+            : access === 'write' && state.served.has(full_name) ? {full_name, access, run_workflows: false} : {full_name, access})};
         try {
           const saved = await put(`/v2/bots/${encodeURIComponent(slug)}/repositories`, body);
           view = saved?.mode ? saved : await read();
@@ -294,12 +303,13 @@ async function botReposMount(host, slug) {
     if (t.matches('[data-brepo-create]')) state.create_repositories = t.checked;
     else if (t.name === `${id}-mode`) state.mode = t.value;
     else if (t.name === `${id}-all`) state.all_access = t.value;
-    else if (t.matches('[data-brepo-pick]') && row) { if (t.checked) state.chosen.set(row, 'write'); else state.chosen.delete(row); }
-    else if (row && t.type === 'radio') state.chosen.set(row, t.value);
+    else if (t.matches('[data-brepo-pick]') && row) { if (t.checked) state.chosen.set(row, 'write'); else { state.chosen.delete(row); state.workflows.delete(row); } }
+    else if (t.matches('[data-brepo-run]') && row) { if (t.checked) state.workflows.add(row); else state.workflows.delete(row); }
+    else if (row && t.type === 'radio') { state.chosen.set(row, t.value); if (t.value === 'read') state.workflows.delete(row); }
     else return;
     // Redraw, then put the keyboard back on the control that changed.
     const back = t.type === 'radio' ? `input[name="${CSS.escape(t.name)}"][value="${CSS.escape(t.value)}"]`
-      : t.matches('[data-brepo-create]') ? '[data-brepo-create]' : `[data-brepo="${CSS.escape(row)}"] [data-brepo-pick]`;
+      : t.matches('[data-brepo-create]') ? '[data-brepo-create]' : `[data-brepo="${CSS.escape(row)}"] ${t.matches('[data-brepo-run]') ? '[data-brepo-run]' : '[data-brepo-pick]'}`;
     paint(); host.querySelector(back)?.focus();
     void save();
   };

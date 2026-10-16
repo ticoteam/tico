@@ -1615,7 +1615,8 @@ def parser():
     modes = s.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true")
     modes.add_argument("--own", action="store_true")
-    modes.add_argument("--chosen", nargs="*")
+    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write|:write+actions|:write-actions]",
+                       help="+actions lets the bot run workflows there (Owner or admin)")
     s.set_defaults(fn="bot repos")
     repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
     s = repos.add_parser("list")
