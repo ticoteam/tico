@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import sqlite3
+import time
 
 from clients import sessions
 
@@ -90,6 +91,26 @@ def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
     return {r[0]: r[1] for r in c.execute("SELECT bot,count(*) FROM attempts WHERE runner_id=? "
                                           "AND state IN ('leased','running') GROUP BY bot", (runner_id,))}
+
+
+# The busy lists each runner sent with its latest claim: {runner id: (bots, lanes, monotonic time)}. Only the runner
+# knows a lapsed lease whose worker still runs, or a bot whose worktrees it is maintaining: Health reads them here
+# (bot_refusal). In memory: after a server restart they are empty until each runner's next claim, a second later.
+CLAIMED_BUSY = {}
+CLAIMED_FRESH = 120         # seconds a runner's busy lists are believed; a runner claims several times a second
+
+
+def note_claim(runner_id, body):
+    """Keep the busy lists of this claim for Health."""
+    CLAIMED_BUSY[runner_id] = (frozenset(body.busy_bots or ()), frozenset(body.busy_lanes or ()), time.monotonic())
+
+
+def claimed_busy(runner_id):
+    """(bots, {(bot, lane)}) the runner said were busy on its latest claim; empty when it has not claimed lately."""
+    seen = CLAIMED_BUSY.get(runner_id)
+    if not seen or time.monotonic() - seen[2] > CLAIMED_FRESH:
+        return frozenset(), frozenset()
+    return seen[0], frozenset(tuple(entry.split("|", 1)) for entry in seen[1] if "|" in entry)
 
 
 def lanes_on(runner):
@@ -418,6 +439,128 @@ def checkpoint_safe(c, aid, task):
     run, so it holds nothing from these other tasks, and a stale starting point beats none."""
     return not any(other and H.task_private(c, other)
                    for other in (H.task(c, tid) for tid in privacy.attempt_tasks(c, aid) if tid != task["id"]))
+
+
+# A drained bot (a deploy finishing its running turns, or a person's pause) is given no new work.
+DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1)"
+
+
+def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
+                  default=None):
+    """Why `runner`'s claim passes over all of `bot`'s queued work before it looks at any one job: (reason, None), or
+    (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
+    this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
+    says are busy (a lane runner sends only the bots whose worktrees it is maintaining) and, for a runner without
+    lanes, every bot with a running turn. `ready` is the computer's readiness document."""
+    from .repositories import metadata
+    from .subscriptions import context, covers, effective, refusal
+    if draining:
+        return "draining", None
+    if bot in held_bots:
+        return ("maintaining" if lanes_on(runner) else "lane_held"), None
+    try:
+        config = json.loads(config_json)
+    except (ValueError, TypeError):
+        config = None
+    if not isinstance(config, dict):
+        return "config", None
+    profile = effective(c, bot, subscription_context if subscription_context is not None else context(c))[0]
+    if profile:
+        if not metadata(c, "computer-profiles:" + runner["id"]).get("reported"):
+            return "profile", None
+        runtime = providers.bot_choice(c, settings, config)[0]
+        blocked = refusal(c, runner["id"], bot)
+        if not covers({**config, "runtime": runtime}) or (blocked.get("profile") == profile
+                and blocked.get("primary_runtime") == runtime
+                and blocked.get("primary_harness") == config.get("harness")):
+            return "profile", None
+        report = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
+                           (runner["id"], profile)).fetchone()
+        if not report or json.loads(report[0] or "{}").get(runtime, {}).get("signed_in") is False:
+            return "profile", None
+    check = bot_readiness(ready, bot)
+    if check.get("ready") is not True:
+        reported = check.get("ready") is False and bot in (ready.get("bots") or {})
+        return ("not_ready" if reported else "readiness_unknown"), None
+    if ((ready.get("runtimes", {}).get(check.get("runtime")) or {}).get("authenticated") == "rejected"
+            and not check.get("profile") and check.get("sign_in") != "ready"):
+        return "sign_in_rejected", None
+    if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
+        return "limit", None
+    if cooling_off(c, bot):
+        return "cooling_off", None
+    return None, config
+
+
+def unfenced_sql():
+    """SQL over a queued job's message `m` and conversation `cv`: true unless the bot's interrupted work holds it.
+    Unconfirmed effects hold the interrupted task and conversation until review; other tasks and routines of the same
+    bot continue, and a person's chat outside any task stays claimable so an interrupted routine cannot silence its
+    owner."""
+    task_sql = queued_task_sql()
+    return (f"((m.from_actor LIKE 'human:%' AND cv.kind='chat' AND {task_sql} IS NULL) "
+            "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
+            "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot AND u.state='uncertain' "
+            f"AND (({task_sql} IS NOT NULL AND "
+            + H.MESSAGE_TASK_SQL.replace("m.", "um.").replace("cv.", "uc.") + f"={task_sql}) "
+            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))))")
+
+
+def job_refusal(c, job, followed, ready, busy, lanes, roots):
+    """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
+    `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs."""
+    message = H.message(c, job["message_id"])
+    if not privacy.message_readable(c, "bot:" + job["bot"], message):
+        return "unreadable"
+    conversation = H.conversation(c, message["conversation_id"])
+    task_id = H.message_task_id(message, conversation)
+    wanted = check_models.of(c, task_id, job["bot"])
+    if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
+        return "check_model"
+    config = check_models.apply(followed, wanted)
+    if (job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy:
+        return "lane_held"
+    return None
+
+
+def bot_refusal(c, settings, runner_id, bot):
+    """Why `runner_id`'s next claim would give none of `bot`'s queued work, by the claim's own rules (claim_refusal,
+    the interrupted-work fence, job_refusal) and the busy lists the runner sent with its latest claim; None when it
+    could take one. For Health, about a bot with no leased or running attempt: the reason of its oldest held job."""
+    from .shared_bots import follow
+    runner = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
+    row = c.execute(f"SELECT bc.config_json,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc "
+                    "WHERE bc.bot=?", (bot,)).fetchone()
+    if not runner:
+        return None
+    if not row:
+        return "config"            # the claim reads only bots with a configuration
+    held_bots, held_lanes = claimed_busy(runner_id)
+    ready = readiness_document(runner["readiness_json"])
+    why, config = claim_refusal(c, settings, runner, bot, row["config_json"], row["draining"], ready, held_bots)
+    if why:
+        return why
+    lanes, roots = lanes_on(runner), roots_on(runner)
+    busy = {(r["bot"], r["lane"]) for r in c.execute(
+        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")} | held_lanes
+    # A lapsed lease whose worker still runs counts against the bot's turns here, as in the claim; only a person's
+    # message is never held behind them.
+    mine = sum(1 for b, _ in held_lanes if b == bot)
+    at_share = mine and mine >= turn_limit(turn_share(c, runner_id, runner["capacity"]), runner["capacity"], False)
+    followed, first = follow(c, bot, config), None
+    for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' "
+                         "ORDER BY j.created,j.id", (bot,)).fetchall():
+        if not job["free"]:
+            why = "uncertain"
+        elif at_share and not str(job["from_actor"]).startswith("human:"):
+            why = "lane_held"
+        else:
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots)
+        if why is None:
+            return None
+        first = first or why
+    return first
 
 
 class Execution:
@@ -831,9 +974,8 @@ class Execution:
 
     def candidate(self, c, who, body, runner):
         """The queued job this runner would be given next, or None. Reads only."""
-        runner_capabilities = set(H._json(runner["capabilities_json"], []) or [])
-        lanes = LANES in runner_capabilities
-        roots = ROOTS in runner_capabilities
+        note_claim(runner["id"], body)
+        lanes, roots = lanes_on(runner), roots_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = {(r["bot"], r["lane"]) for r in c.execute(
@@ -854,46 +996,20 @@ class Execution:
         # tasks and routines for the same bot can continue. A person's unrelated chat also
         # remains claimable so an interrupted routine cannot silence its owner.
         default = usage_limits.company(c)
-        from .subscriptions import context, effective, covers, refusal
-        from .repositories import metadata
+        from .subscriptions import context
         from .shared_bots import follow
         subscription_context = context(c)
+        held_bots = set(body.busy_bots or ()) | busy_bots
         bots = []
-        for row in c.execute("SELECT a.bot,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+        for row in c.execute(f"SELECT a.bot,bc.config_json,{DRAINING_SQL} draining FROM assignments a "
+                             "JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
-                             "AND EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued') "
-                             "AND NOT EXISTS(SELECT 1 FROM bot_control bc WHERE bc.bot=a.bot AND bc.draining=1)",
+                             "AND EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued')",
                              (who.runner_id, body.bot, body.bot)).fetchall():
             bot = row["bot"]
-            if bot in (body.busy_bots or ()) or bot in busy_bots:
-                continue
-            try:
-                config = json.loads(row["config_json"])
-                if not isinstance(config, dict):
-                    continue
-            except (ValueError, TypeError):
-                continue
-            profile = effective(c, bot, subscription_context)[0]
-            if profile:
-                if not metadata(c, "computer-profiles:" + runner["id"]).get("reported"):
-                    continue
-                runtime = providers.bot_choice(c, self.store.settings, config)[0]
-                blocked = refusal(c, runner['id'], bot)
-                if not covers({**config, 'runtime': runtime}) or (blocked.get('profile') == profile
-                        and blocked.get('primary_runtime') == runtime
-                        and blocked.get('primary_harness') == config.get('harness')):
-                    continue
-                report = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
-                                   (runner["id"], profile)).fetchone()
-                if not report or json.loads(report[0] or "{}").get(runtime, {}).get("signed_in") is False:
-                    continue
-            check = bot_readiness(ready, bot)
-            if check.get("ready") is not True or (
-                    ready.get("runtimes", {}).get(check.get("runtime")) or {}).get("authenticated") == "rejected" and not check.get("profile") and check.get("sign_in") != "ready":
-                continue
-            if usage_limits.blocked(c, bot, default=default):
-                continue
-            if cooling_off(c, bot):
+            why, config = claim_refusal(c, self.store.settings, runner, bot, row["config_json"], row["draining"], ready,
+                                        held_bots, subscription_context, default)
+            if why:
                 continue
             bots.append(bot)
             followed[bot] = follow(c, bot, config)
@@ -902,7 +1018,6 @@ class Execution:
         marks = ",".join("?" for _ in bots)
         limit = turn_limit(share, runner["capacity"], any(held.get(bot, 0) < share for bot in bots))
         full = [bot for bot in bots if held.get(bot, 0) >= limit]
-        task_sql = queued_task_sql()
         # Readiness, spend and cooldown are checked once per bot, never once per queued job.
         # Keep human chat priority and interrupted-task/conversation fencing in the query.
         candidates = c.execute(
@@ -912,12 +1027,7 @@ class Execution:
             f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
-            f"AND ((m.from_actor LIKE 'human:%' AND cv.kind='chat' AND {task_sql} IS NULL) "
-            "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
-            "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot AND u.state='uncertain' "
-            f"AND (({task_sql} IS NOT NULL AND "
-            + H.MESSAGE_TASK_SQL.replace("m.", "um.").replace("cv.", "uc.") + f"={task_sql}) "
-            f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id)))) "
+            f"AND {unfenced_sql()} "
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then the longest waiting.
@@ -925,18 +1035,8 @@ class Execution:
             f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
             (*bots, who.runner_id, *full, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
-            message = H.message(c, row["message_id"])
-            if not privacy.message_readable(c, "bot:" + row["bot"], message):
-                continue
-            conversation = H.conversation(c, message["conversation_id"])
-            task_id = H.message_task_id(message, conversation)
-            wanted = check_models.of(c, task_id, row["bot"])
-            if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
-                continue
-            config = check_models.apply(followed[row["bot"]], wanted)
-            if (row["bot"], job_lane(c, row["bot"], config, message, conversation, lanes, roots)) in busy:
-                continue
-            return row
+            if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots) is None:
+                return row
         return None
 
     def idle_claim(self, c, who, body, key=None, selected=None):

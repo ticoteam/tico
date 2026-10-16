@@ -632,6 +632,17 @@ def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_tak
         "Team box runs the Python runner, which Tico no longer ships. Update this computer.")
 
 
+def claimable(c, runner, *bots):
+    """`bots` as a claim on `runner` could take their work: configured, and ready there. Anything less is a reason the
+    claim holds the work (execution.claim_refusal), which Health names instead of "slow"."""
+    import json
+    for bot in bots:
+        c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES(?,'{}','ana')", (bot,))
+    document = json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner,)).fetchone()[0] or "{}")
+    document.setdefault("bots", {}).update({bot: {"ready": True} for bot in bots})
+    c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), runner))
+
+
 def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(environment):
     """Someone is sitting there waiting for the reply: two minutes, not the fifteen other queued work gets."""
     from backend import health
@@ -642,6 +653,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('ops',?,1,?,'t')",
                   (runner, H.now()))
+        claimable(c, runner, "ops")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:ops"], kind="chat")
         H._write_message(c, owner, "bot:ops", "hello?", chat, "say", {}, None, None)
@@ -667,6 +679,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         for bot in ("ops", "dev"):
             c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
                       (bot, runner, H.now()))
+        claimable(c, runner, "ops", "dev")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         for bot in ("ops", "dev"):
             chat = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")

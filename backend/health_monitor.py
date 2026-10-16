@@ -168,7 +168,7 @@ def _runner_checks(c, settings):
     computers = health._computers(c, online, settings)
     # Work a computer holds while it waits to update is said here, on its update, never as a queue_idle Tico bug.
     held = {}
-    for row in health._waiting(c, {r["id"] for r in online})[2]:
+    for row in health._waiting(c, {r["id"] for r in online}, settings)[2]:
         if row["reason"] == "updating":
             held.setdefault(row["runner_id"], []).append(row)
     for machine in computers:
@@ -244,7 +244,7 @@ def _near_start(line, starts):
     return any(start - RESTART_BEFORE <= at <= start + RESTART_AFTER for start in starts)
 
 
-def _bot_checks(c):
+def _bot_checks(c, settings=None):
     from . import health
     from .harnesses import normalize_fallback
     out = []
@@ -269,12 +269,16 @@ def _bot_checks(c):
                             f"{name} is still in setup and holds {count} {what}(s), the oldest from {oldest[:16]} UTC.",
                             f"BotOps: finish {name}'s setup with the person it serves, or pause it so its work is not held."))
     online_ids = {r["id"] for r in health._online_runners(c)}
-    for row in health._waiting(c, online_ids)[2]:
+    for row in health._waiting(c, online_ids, settings)[2]:
+        # Only work the claim has no reason to hold (execution.bot_refusal) is a Tico bug; a held bot's row on Health
+        # names its reason instead.
         if row["reason"] == "slow":
             out.append(_finding("queue_idle:" + row["bot"], "queue_idle", BUG,
                                 f"{row['name']}'s work is queued but no turn starts",
                                 f"{row['queued']} job(s) for {row['name']} queued since {str(row['oldest'])[:16]} UTC on "
-                                f"{row['computer']}, which is online, not full and not limited.",
+                                f"{row['computer']}, which is online, not full and not limited. The claim's own checks "
+                                "(draining, worktree maintenance, a lapsed lease still running, interrupted work, usage "
+                                "limit, readiness, sign-in, subscription profile, check model, lane) hold none of it.",
                                 BUG_FIX["queue_idle"]))
     from .worktrees import current_error, supported
     if supported(c):
@@ -311,7 +315,7 @@ def _server_checks(c):
 def findings(c, settings):
     """Everything wrong right now, each once by key."""
     out = {}
-    for part in (_runner_checks(c, settings), _bot_checks(c), _server_checks(c)):
+    for part in (_runner_checks(c, settings), _bot_checks(c, settings), _server_checks(c)):
         for item in part:
             out.setdefault(item["key"], item)
     return list(out.values())
@@ -363,6 +367,18 @@ def scan(c, auth, settings):
 
 
 # ---------------------------------------------------------------------------------------------------- reporting
+def _where(c, row):
+    """`bot-N on runner-M` for a queue_idle finding: the labels of the diagnostics bundle sent with it
+    (diagnostics.bot_label, runner_label), so the Tico team can find the bot and computer in it without their names."""
+    if row["check_id"] != "queue_idle":
+        return ""
+    slug = row["key"].split(":", 1)[1]
+    bot = diagnostics.bot_label(c, slug)
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (slug,)).fetchone()
+    computer = diagnostics.runner_label(c, place["runner_id"]) if place else None
+    return f"{bot} on {computer}" if bot and computer else bot or ""
+
+
 def report_message(c, row):
     """The ticket text, written here from the check alone: no finding text (it names bots and computers), task, message
     or person's words go in it."""
@@ -370,8 +386,10 @@ def report_message(c, row):
     seen = c.execute("SELECT count(*) n, sum(occurrences) times FROM health_findings WHERE signature=?",
                      (row["signature"],)).fetchone()
     process = public_process(row["key"].split(":", 1)[1]) if row["check_id"] == "local_busy" else ""
+    where = _where(c, row)
     return (f"[Health Monitor] {row['check_id']}: {MEANING.get(row['check_id'], row['check_id'])}\n\n"
             + (f"Process: {process}\n" if process else "")
+            + (f"Where: {where}\n" if where else "")
             + f"Signature: {row['signature']}\nKind: {row['kind']}\nTico: {releases.version()}\n"
             f"First seen: {row['first_seen'][:16]} UTC; seen {seen['times'] or 1} time(s) in {seen['n']} place(s).\n\n"
             "What it means: " + BUG_FIX.get(row["check_id"], "Tico bug.") + "\n\nThe redacted diagnostics bundle is attached.")

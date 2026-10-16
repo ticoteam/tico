@@ -17,7 +17,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | `worktree_error` | setup | A task worktree failed on its computer |
 | `push_stuck` | setup | A runner reports a checkout with commits it cannot push (diverged) |
 | `cannot_fetch` | setup | A runner keeps failing to fetch a bot's repository |
-| `queue_idle` | tico-bug | Work queued 15 minutes or more (a person's message: 2 minutes) on an online computer that has room, no limit and no update waiting |
+| `queue_idle` | tico-bug | Work queued 15 minutes or more (a person's message: 2 minutes) on an online computer that has room, no limit and no update waiting, and none of the claim's own reasons to hold it (drained, worktrees being maintained, a lapsed lease still running, interrupted work awaiting review, a usage-limit cooldown, readiness not reported, a rejected sign-in, a subscription profile, a check model, a busy lane). A held bot's Health row names that reason instead. Its report says where as `Where: bot-N on runner-M`, the labels of the attached diagnostics bundle |
 | `worktree_fallback` | tico-bug | A task's turn ran in the bot's checkout because its worktree hit Permission denied |
 | `event_stream` | tico-bug | A runner lost its event stream three times in its last 50 error lines, not counting drops from 5 minutes before a server start (a deploy, an update, a restart) to 2 minutes after, nor drops the runner says were back within 30 seconds (a proxy or tunnel resetting the long-lived stream; the runner polls meanwhile and catches up on reconnect) |
 | `readiness_403` | tico-bug | A runner's readiness report keeps being refused |

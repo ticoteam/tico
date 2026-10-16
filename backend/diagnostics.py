@@ -437,12 +437,26 @@ def _lines(lines, keep):
     return [str(x)[:LINE] for x in list(lines or [])[-keep:]]
 
 
+def bot_label(c, slug):
+    """The label a bundle built now gives the bot `slug` (`bot-N`, as `Redactor` numbers the bots), or None."""
+    slugs = sorted(b["slug"] for b in H.bots(c))
+    return "bot-%d" % (slugs.index(slug) + 1) if slug in slugs else None
+
+
+RUNNERS_SQL = "SELECT id,label,last_seen,version,platform,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id"
+
+
+def runner_label(c, runner_id):
+    """The label a bundle built now gives the computer `runner_id` (`runner-N`, as `_runner_rows`), or None."""
+    ids = [r["id"] for r in c.execute(RUNNERS_SQL)]
+    return "runner-%d" % (ids.index(runner_id) + 1) if runner_id in ids else None
+
+
 def _runner_rows(c, fleet, online_ids):
     from .store import readiness_document
     from . import runner_versions
     rows = []
-    for index, row in enumerate(c.execute("SELECT id,label,last_seen,version,platform,readiness_json FROM runners "
-                                          "WHERE revoked_at IS NULL ORDER BY id"), 1):
+    for index, row in enumerate(c.execute(RUNNERS_SQL), 1):
         doc = readiness_document(row["readiness_json"])
         bots = doc.get("bots") or {}
         problems = []

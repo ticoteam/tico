@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, usage_limits, watchers
+from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, watchers
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -377,11 +377,13 @@ def quiet_minutes(last_seen):
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
 
 
-def _waiting(c, online_ids):
+def _waiting(c, online_ids, settings=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
     The third list is every bot with queued work that is not starting, with the computer's own
-    reason (`_stuck`)."""
+    reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
+    claim has no reason to hold is "slow", a Tico bug."""
+    from .execution import bot_refusal
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
@@ -448,9 +450,11 @@ def _waiting(c, online_ids):
                 slow.append({**row, "reason": "slow"})
         elif where and count and slug not in parked and (
                 (oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff)):
-            # A bot over its spend limit takes no new job on purpose (backend/usage_limits.py): say so, not "slow".
+            # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
+            # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             idle = slug not in busy and where[0] not in full
-            reason = "limit" if idle and usage_limits.blocked(c, slug) else "updating" if where[0] in updating else "slow"
+            refused = bot_refusal(c, settings, where[0], slug) if idle else None
+            reason = "limit" if refused == "limit" else "updating" if where[0] in updating else refused or "slow"
             slow.append({**row, "reason": reason if idle else "busy"})
             if idle:
                 stuck.append({**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
@@ -510,6 +514,26 @@ def runtime_choice(c, bot, runtime, who, computers, harness=""):
     return view
 
 
+# Why the claim holds an idle bot's queued work on purpose (execution.claim_refusal, job_refusal): what Health says, and
+# where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
+RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/runs"), ("Open Computers", "#/settings", "devices"), \
+    ("Open bot settings", "#/settings", "bots")
+HELD = {
+    "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
+    "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
+    "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
+                  RUNS),
+    "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    "cooling_off": ("Waiting out a usage limit before it tries again", RUNS),
+    "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
+    "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
+    "config": ("Its settings cannot be read", BOT_SETTINGS),
+    "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
+    "unreadable": ("Its queued message is one it may not read", RUNS),
+}
+
+
 def _stuck(c, rows, online_ids, who, full, auth=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
@@ -544,7 +568,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                                      _can(c, row["bot"], runtime, rid, harness)), None)
         elif reason == "not_ready":
             choice = runtime_choice(c, row["bot"], runtime, who, computers, harness=harness) if runtime else {}
-            problem = str(choice.get("problem") or row["problem"]) if choice.get("can_run") is False else row["problem"]
+            problem = row.get("problem") or "Not ready"
+            problem = str(choice.get("problem") or problem) if choice.get("can_run") is False else problem
             text = problem if label and label in problem else f"{problem} on {label}"
             if choice.get("can_run") is False:
                 # Signing in where it is beats moving it; otherwise a computer that can run it, else where the fix is.
@@ -563,6 +588,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         elif reason == "updating":
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
+        elif reason in HELD:
+            words, where = HELD[reason]
+            text = words.format(computer=label or "its computer")
+            fix = _fix(*where)
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix("Open Runs", "#/runs")
@@ -1019,7 +1048,7 @@ def view(c, who, settings, auth, github, config):
     online = _online_runners(c)
     online_ids = {r["id"] for r in online}
     computers = _computers(c, online, settings)
-    waiting, slow, stuck_rows = _waiting(c, online_ids)
+    waiting, slow, stuck_rows = _waiting(c, online_ids, settings)
     # A bot parked in setup for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
     listed = {row["bot"] for row in stuck_rows}
     stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
@@ -1309,7 +1338,8 @@ def view(c, who, settings, auth, github, config):
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     if blocking:
         # A count: each bot, its reason and its fix are listed once, under `stuck` (Health's Stuck list, Overview).
-        bad = any(s["reason"] not in ("slow", "updating") for s in blocking)
+        bad = any(s["reason"] not in ("slow", "updating", "draining", "maintaining", "lane_held", "cooling_off")
+                  for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              f"{_plural(len(blocking), 'bot')} with work that is not starting.", []))
     elif slow and all(s["reason"] == "busy" for s in slow):
