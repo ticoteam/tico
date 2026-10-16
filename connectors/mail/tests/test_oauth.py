@@ -383,12 +383,18 @@ class ServerRefreshed(Base):
         self.key.write_text("{}")                        # a service-account key on the same computer
         os.chmod(self.key, 0o600)
         for kind, expected in (("signin", "signin"), ("admin_policy", "admin_policy"), ("app_config", "app_config"),
-                               ("network", "network"), ("error", "signin")):
+                               ("network", "network"), ("error", "error")):
             refusal = APIError("google_refused", "Google refused it (x)", 409, extra={"kind": kind})
             with patch.object(oauth, "broker", return_value=Server(refusal)):
                 with self.assertRaises(oauth.SignInFailed) as caught:
                     auth.mint_token("ana@acme.example", "gmail")
             self.assertEqual(caught.exception.kind, expected)
+        unknown = APIError("not_this_grant", "no", 403)        # e.g. its connected result never reached the server
+        with patch.object(oauth, "broker", return_value=Server(unknown)):
+            with self.assertRaises(oauth.SignInFailed) as caught:
+                auth.mint_token("ana@acme.example", "gmail")
+        self.assertEqual(caught.exception.kind, "signin")
+        self.assertIn("Reconnect", caught.exception.hint)
         with patch.object(oauth, "broker", return_value=Server(APIError("forbidden", "no", 403))):
             with self.assertRaises(Failure) as caught:
                 auth.mint_token("ana@acme.example", "gmail")

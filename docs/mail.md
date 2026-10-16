@@ -508,8 +508,9 @@ The app's client secret never leaves the Tico server, for either kind of app: on
 every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server does
 it on the computers' behalf. The computer that holds the grant sends its refresh token to the server
 (`POST /api/v2/connectors/mail/google/token`, with its runner registration). The server adds the secret, asks Google
-for one service's read-only scopes and returns only an hour-long access token and its expiry. It keeps nothing,
-and logs no token. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
+for one service's read-only scopes and returns only an hour-long access token and its expiry. It keeps no token
+and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
+issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
 claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
 grant from this server may ask, and only for `gmail.readonly` or the calendar read scopes, one service at a time. The
 computer's runner gives the mail CLI the server's address and its registration for this; a mail CLI run by hand, or

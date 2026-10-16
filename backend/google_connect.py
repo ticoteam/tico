@@ -166,7 +166,8 @@ def google_token(settings, fields):
             error = str(json.loads(e.read().decode() or "{}").get("error") or "")
         except (OSError, ValueError, AttributeError):
             error = ""
-        kind = TOKEN_ERRORS.get(error.strip().lower(), "error")
+        # Google's own outage is a network failure to the person, not a refused grant.
+        kind = "network" if e.code >= 500 else TOKEN_ERRORS.get(error.strip().lower(), "error")
         raise Problem("google_refused", f"Google refused it ({error or e.code})", 409, extra={"kind": kind})
     except (OSError, ValueError) as e:
         raise Problem("google_refused", f"Tico's server could not reach Google ({type(e).__name__})", 409,
@@ -393,14 +394,19 @@ def install(app, store, publisher, mutate):
                              "LIMIT 1", (body.mailbox.strip().lower(), runner["id"],
                                          fingerprint(body.refresh_token))).fetchone()
             if not held:
-                raise Problem("forbidden", "This computer holds no Connect Google grant from this server for that "
-                                           "mailbox", 403)
+                # Also a grant whose connected result never reached the server: the computer reconnects.
+                raise Problem("not_this_grant", "This computer holds no Connect Google grant from this server for that "
+                                                "mailbox", 403)
         if not configured(settings):
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
                           extra={"kind": "app_config"})
         answer = google_token(settings, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
                                          "scope": " ".join(sorted(wanted))})
-        granted = sorted(set(str(answer.get("scope") or "").split()) & wanted) or sorted(wanted)
+        returned = set(str(answer.get("scope") or "").split())
+        if returned - wanted:
+            raise Problem("google_refused", "Google answered with more access than was asked for", 409,
+                          extra={"kind": "error"})
+        granted = sorted(returned) or sorted(wanted)
         expires = int(answer.get("expires_in") or 3600)
         return {"access_token": answer["access_token"], "expires_in": expires,
                 "expiry": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + expires)), "scopes": granted}

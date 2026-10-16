@@ -297,8 +297,10 @@ def _broker_call(path, body, mailbox, retries=1):
             raise SignInFailed("network", f"Tico's server could not reach Google for {mailbox}",
                                "Try again in a few minutes.")
         if e.code == "google_refused":
-            raise refused(kind if kind in ("admin_policy", "app_config", "app_unavailable") else "signin", mailbox,
-                          e.detail)
+            raise refused(kind if kind in ("admin_policy", "app_config", "app_unavailable", "signin") else "error",
+                          mailbox, e.detail)
+        if e.code == "not_this_grant":                  # the server does not know this grant: connect again
+            raise refused("signin", mailbox, "not known to Tico's server")
         raise Failure(f"Tico's server would not give access to {mailbox}: {e.code}",
                       "Check this computer's runner is registered and online, then try again.")
 

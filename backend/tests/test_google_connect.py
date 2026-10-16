@@ -144,15 +144,15 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
 class FakeGoogle:
     """Google's token endpoint as google_connect.post_token sees it."""
 
-    def __init__(self, answer=None, error=None):
-        self.calls, self.answer, self.error = [], answer, error
+    def __init__(self, answer=None, error=None, status=400):
+        self.calls, self.answer, self.error, self.status = [], answer, error, status
 
     def __call__(self, fields):
         self.calls.append(dict(fields))
         if isinstance(self.error, OSError) and not hasattr(self.error, "code"):
             raise self.error
         if self.error:
-            raise urllib.error.HTTPError(google_connect.TOKEN_URI, 400, "Bad Request", {},
+            raise urllib.error.HTTPError(google_connect.TOKEN_URI, self.status, "Refused", {},
                                          io.BytesIO(json.dumps({"error": self.error}).encode()))
         return dict(self.answer or {"access_token": "ya29.fresh", "expires_in": 3599,
                                     "scope": oauth.G + "gmail.readonly"})
@@ -252,9 +252,10 @@ def test_a_refresh_carries_one_service_s_read_only_scopes_only(app, monkeypatch)
         r = refresh(app, machine["token"], service=service, scopes=scopes)
         assert r.status_code == 422, (scopes, service, r.text)
     assert google.calls == []
+    google.answer = {"access_token": "ya29.cal", "expires_in": 3599, "scope": oauth.G + "calendar.freebusy"}
     r = refresh(app, machine["token"], service="calendar",
                 scopes=[oauth.G + "calendar.freebusy", oauth.G + "calendar.events.readonly"])
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.json()["scopes"] == [oauth.G + "calendar.freebusy"]
     assert google.calls[-1]["scope"].split() == sorted([oauth.G + "calendar.events.readonly",
                                                         oauth.G + "calendar.freebusy"])
 
@@ -278,6 +279,7 @@ def test_only_a_computer_holding_a_grant_from_this_server_may_refresh(app, monke
     post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])
     post(app, "connectors/mail/google/cara/result", {"status": "disconnected"}, machine["token"])
     assert refresh(app, machine["token"]).status_code == 403        # disconnected: nothing left to refresh
+    assert row(app)["grant_hash"] is None
     assert google.calls == []
 
 
@@ -315,10 +317,19 @@ def test_a_refused_refresh_says_why_and_nothing_else(app, monkeypatch, error, ki
     assert "1//grant" not in r.text and "tico-secret" not in r.text
 
 
-def test_google_out_of_reach_is_a_network_refusal(app, monkeypatch):
-    machine, _ = holding(app, monkeypatch, FakeGoogle(error=OSError("unreachable")))
+@pytest.mark.parametrize("google", [FakeGoogle(error=OSError("unreachable")),
+                                    FakeGoogle(error="internal_failure", status=503)])
+def test_google_out_of_reach_or_down_is_a_network_refusal(app, monkeypatch, google):
+    machine, _ = holding(app, monkeypatch, google)
     r = refresh(app, machine["token"])
     assert r.status_code == 409 and r.json()["error"]["kind"] == "network"
+
+
+def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):
+    machine, _ = holding(app, monkeypatch, FakeGoogle({"access_token": "ya29.wide", "expires_in": 3599,
+                                                       "scope": oauth.G + "gmail.readonly " + oauth.G + "gmail.modify"}))
+    r = refresh(app, machine["token"])
+    assert r.status_code == 409 and "ya29.wide" not in r.text
 
 
 def test_another_account_signing_in_is_shown_as_refused(app):
