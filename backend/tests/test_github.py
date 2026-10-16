@@ -422,10 +422,17 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
         'name': 'Unit tests', 'conclusion': 'success', 'head_sha': 'a' * 40, 'pull_requests': [{'number': 412}]}})
     _suite(api, 'github-actions', 'in_progress')
     _suite(api, 'vercel', 'completed', 'success')
-    assert _burst(api, task['id']) == []
+    hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+        'name': 'Deploy preview', 'status': 'in_progress', 'conclusion': None, 'head_sha': 'a' * 40,
+        'pull_requests': [{'number': 412}]}})
+    _suite(api, 'github-actions', 'completed', 'failure')    # the usual failing-check notice, not the one wake
+    assert _burst(api, task['id']) == ['Checks failing on tico#412: suite:github-actions']
+    hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
+        'name': 'Deploy preview', 'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40,
+        'pull_requests': [{'number': 412}]}})
     _suite(api, 'github-actions', 'completed', 'failure')
     _suite(api, 'github-actions', 'completed', 'failure')     # a redelivery
-    assert _burst(api, task['id']) == [
+    assert _burst(api, task['id'])[1:] == [
         f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
@@ -461,6 +468,11 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     hook(api, 'pull_request', pr_event('closed', html_url=other, merged=True, merge_commit_sha='c' * 40))
     assert _burst(api, elsewhere['id']) == [
         f"Merged: site#9; it is not in the repository Tico releases, so no shipped wake follows {other}"]
+    # Arming it again has nothing left to wake on, and neither has a shipped PR.
+    r = api.post('/api/v2/tasks/' + elsewhere['id'] + '/links', json={'url': other, 'wake_once': True}, headers=headers())
+    assert r.status_code >= 400 and 'no result is left' in r.text
+    r = api.post('/api/v2/tasks/' + shipping['id'] + '/links', json={'url': PR, 'wake_once': True}, headers=headers())
+    assert r.status_code >= 400 and 'shipped' in r.text
 
 
 def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):

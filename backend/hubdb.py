@@ -2955,7 +2955,7 @@ def link_kind(url):
 
 
 @private_task_write
-def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None):
+def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo=""):
     """Attach a link to a task. A pull request link is what moves a product-lane task.
 
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
@@ -2982,6 +2982,11 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         refuse(conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization")
     have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
+        if wake_once and (have["state"] in ("closed", "shipped") or have["state"] == "merged"
+                          and str(have.get("repo") or "").lower() != str(release_repo).lower()):
+            refuse(conn, actor, "state", f"{have['title']} is {have['state']}"
+                   + (" outside the repository Tico releases" if have["state"] == "merged" else "")
+                   + ": no result is left to wake on")
         return _arm_wake_once(conn, actor, have, wake_once)
     title = str(title or "").strip()
     if not title:

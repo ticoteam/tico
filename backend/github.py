@@ -265,7 +265,9 @@ def pr_signal(c, event, payload):
             item = f"Checks {state} on {label}: {name}"
             # A suite completes once all of its runs have; a single run or commit status may be one of many.
             if (event == "check_suite" and signal.get("status") == "completed" and state != "pending"
-                    and not any(k.startswith("suite:") and v == "pending" for k, v in checks.items())):
+                    and "pending" not in checks.values()):
+                # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
+                # is often the only sign that another service's checks are not done.
                 sha = str(signal.get("head_sha") or detail.get("head_sha") or "")[:12]
                 failed = [k[6:] for k, v in checks.items() if k.startswith("suite:") and v == "failing"]
                 done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
