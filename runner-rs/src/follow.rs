@@ -433,9 +433,22 @@ impl Follower {
         format!("no updater is set up; move this runner onto the compose file that has one: on this box run curl -fsSL https://github.com/ticoteam/tico/releases/download/v{want}/install.sh -o install.sh && sh install.sh --runner --url <your Tico address> --code <new code from Settings > Computers > Add computer> --label <name>")
     }
 
+    /// The Docker updater's message while the last update's outcome is unknown: a command that changes containers
+    /// did not report back, and Docker may still stop this runner. Holds whatever the versions say, since the
+    /// container still up may be the new one.
+    async fn unsettled(&self) -> Option<String> {
+        if self.kind != "docker" || self.sidecar.url.is_empty() {
+            return None;
+        }
+        let status = self.sidecar.call(None).await.ok()?;
+        (status["state"].as_str() == Some("uncertain")).then(|| text_of(&status["message"]))
+    }
+
     async fn decide(&self) {
         let want = self.inner.lock().unwrap().desired.clone().unwrap_or_default();
-        let verdict: Option<(String, String)> = if want.is_empty() || !behind(&self.release, &want) {
+        let verdict: Option<(String, String)> = if let Some(error) = self.unsettled().await {
+            Some(("updating".into(), error))
+        } else if want.is_empty() || !behind(&self.release, &want) {
             Some(("idle".into(), String::new()))
         } else if self.pinned {
             Some(("pinned".into(), format!("pinned to this release; the server runs {want}")))
@@ -760,6 +773,47 @@ mod tests {
         assert_eq!(body["update"], json!({"state": "failed", "target": "0.3.47", "error": "the updater did not answer"}));
         assert!(!f.blocks_claims(true).await); // past the drain time, a turn running: still claims
         assert!(!f.blocks_claims(false).await); // idle: claims rather than launching an update nobody can run
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_docker_runner_holds_work_while_the_updater_has_not_settled_even_on_the_new_release() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let body = r#"{"state": "uncertain", "from": "0.3.46", "to": "0.3.47", "message": "Not settled: docker compose up did not finish"}"#;
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else { return };
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        // The container still up is the new release, so nothing is behind; Docker may still stop it.
+        let f = Follower {
+            directory: dir.clone(),
+            root: dir.clone(),
+            kind: "docker",
+            release: "0.3.47".into(),
+            started: String::new(),
+            commit: String::new(),
+            pinned: false,
+            self_update: true,
+            prepare: vec!["true".into()],
+            sidecar: Sidecar { url: format!("http://127.0.0.1:{port}"), token_file: dir.join("t") },
+            inner: Mutex::new(Inner { state: "idle".into(), desired: Some("0.3.47".into()), ..Default::default() }),
+        };
+        f.decide().await;
+        let mut body = json!({});
+        f.fields(&mut body);
+        assert_eq!(body["update"]["state"], "updating");
+        assert_eq!(body["update"]["error"], "Not settled: docker compose up did not finish");
+        assert!(f.blocks_claims(true).await);
+        assert!(f.blocks_claims(false).await);
         let _ = std::fs::remove_dir_all(dir);
     }
 

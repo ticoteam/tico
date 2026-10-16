@@ -130,18 +130,168 @@ class Daemon:
         return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
 
 
-def test_a_switch_that_runs_over_is_rolled_back_before_the_update_says_how_it_ended(monkeypatch, tmp_path):
-    """The runner holds new work while the update says pulling or restarting: the outcome must come after the last
-    call that could restart the runner, the rollback's included."""
+class Moby:
+    """A Docker daemon with containers, for what a killed client leaves behind. `up` resolves the runner's container
+    and asks the daemon to stop it; once accepted, that stop runs to its end even if the client is killed (Moby
+    stops with a context that ignores cancellation). `hang(argv, tag, n)` names the calls whose client is killed
+    after the daemon accepted; their stop lands `lag` calls later. `n` counts the calls so far."""
+
+    def __init__(self, module, monkeypatch, hang, lag=3, healthy_tags=("v0.1.0",)):
+        import subprocess
+        self.module, self.hang, self.lag, self.healthy_tags = module, hang, lag, healthy_tags
+        self.expired, self.calls, self.n = subprocess.TimeoutExpired, [], 0
+        self.containers = {"c1": {"tag": "v0.1.0", "running": True}}   # what the update starts from
+        self.pending = []      # [container id, calls until it lands]: accepted stops nobody waited for
+        self.stopped = []      # containers an accepted stop stopped after the client was gone, with the status then
+        self.ended = []        # (state, accepted stops still aimed at a container that exists) at each outcome
+        monkeypatch.setattr(module, "docker_run", self.run)
+        monkeypatch.setattr(module, "pinned_services", lambda version: [])
+        monkeypatch.setattr(module, "check_switched", lambda version, release: None)
+        monkeypatch.setattr(module, "POLL_SECONDS", 0)
+        monkeypatch.setattr(module, "SETTLE_RETRY_SECONDS", 0)
+        monkeypatch.setattr(module, "HEALTH_SECONDS", 1)
+        set_status = module.set_status
+
+        def watched(**fields):
+            set_status(**fields)
+            if fields.get("state") in ("healthy", "rolled_back", "failed"):
+                self.ended.append((fields["state"], [c for c, _ in self.pending if c in self.containers]))
+        monkeypatch.setattr(module, "set_status", watched)
+
+    def land(self):
+        for item in list(self.pending):
+            item[1] -= 1
+            if item[1] <= 0:
+                self.pending.remove(item)
+                if item[0] in self.containers and self.containers[item[0]]["running"]:
+                    self.containers[item[0]]["running"] = False
+                    self.stopped.append((item[0], self.module.status["state"]))
+
+    def run(self, argv, env=None, timeout=None, **kw):
+        assert timeout, argv                                        # nothing the worker runs may hang it
+        self.n += 1
+        self.land()
+        tag = (env or {}).get("TICO_TAG")
+        self.calls.append((argv, tag, self.module.status["state"]))
+        args = argv[argv.index("--project-directory") + 2:] if "--project-directory" in argv else argv[1:]
+        out = ""
+        if args[:1] == ["up"]:
+            current = list(self.containers)
+            if "--force-recreate" not in args and any(self.containers[c]["tag"] == tag and self.containers[c]["running"]
+                                                      for c in current):
+                pass                                                # up to date: nothing to recreate
+            else:
+                accepted = [[c, self.lag] for c in current]
+                if self.hang(argv, tag, self.n):
+                    self.pending += accepted                        # the client is killed; the daemon is not
+                    raise self.expired(argv, timeout)
+                for c in current:                                   # an answered recreate: stopped and removed
+                    del self.containers[c]
+                self.pending = [p for p in self.pending if p[0] in self.containers]
+                self.containers["c%d" % (self.n + 100)] = {"tag": tag, "running": True}
+        elif args[:1] == ["ps"]:
+            out = "".join(c + "\n" for c, v in self.containers.items() if "-a" in args or v["running"])
+        elif argv[:2] == ["docker", "inspect"] and "{{.State.Health.Status}}" in argv:
+            box = self.containers.get(argv[-1])
+            out = "healthy\n" if box and box["running"] and box["tag"] in self.healthy_tags else "unhealthy\n"
+        elif argv[:2] == ["docker", "inspect"]:
+            tag = self.containers[argv[-1]]["tag"]
+            out = "sha256:%s ghcr.io/ticoteam/tico-runner:%s\n" % (tag, tag)
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+
+def test_a_switch_that_runs_over_holds_work_until_docker_confirms_the_old_version(monkeypatch, tmp_path):
+    """The runner holds new work while the update says pulling, restarting or uncertain. The new version's `up`
+    is killed after Docker accepted the stop of the running runner: the update may not say how it ended (and let
+    the runner claim again) while that stop could still land on a runner that is working."""
     updater = load(monkeypatch, "runner", tmp_path)
-    docker = Daemon(updater, monkeypatch, lambda argv, tag: "up" in argv and tag == "v0.2.0")
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: "up" in argv and tag == "v0.2.0")
     updater.update("v0.2.0")
     assert updater.status["state"] == "rolled_back", updater.status
-    assert "did not finish within" in updater.status["message"] and "Went back to v0.1.0" in updater.status["message"]
-    ups = [i for i, (argv, _, _) in enumerate(docker.calls) if "up" in argv]
-    assert [docker.calls[i][1] for i in ups] == ["v0.2.0", "v0.1.0"]
-    assert ups[-1] < max(i for i, (argv, _, _) in enumerate(docker.calls) if "{{.State.Health.Status}}" in argv)
-    assert {state for _, _, state in docker.calls} <= {"idle", "pulling", "restarting"}   # nothing said until then
+    assert "did not finish within" in updater.status["message"] and "Docker then confirmed the runner on v0.1.0" in updater.status["message"]
+    assert docker.ended == [("rolled_back", [])]                     # no accepted stop left that could land
+    assert [c["tag"] for c in docker.containers.values() if c["running"]] == ["v0.1.0"]
+    assert {state for _, state in docker.stopped} <= {"restarting", "uncertain"}
+    assert any(state == "uncertain" for _, _, state in docker.calls)
+    assert any("--force-recreate" in argv and tag == "v0.1.0" for argv, tag, _ in docker.calls)
+
+
+def test_a_rollback_that_runs_over_holds_work_until_docker_confirms_the_old_version(monkeypatch, tmp_path):
+    """The case a killed client cannot settle: the new version is unhealthy, and the rollback's `up` is killed after
+    Docker accepted the stop of the new container. Saying `failed` then would let the runner claim work that the
+    accepted stop then kills. It stays uncertain, holding, until a recreate Docker answered is the only container."""
+    updater = load(monkeypatch, "runner", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: "up" in argv and tag == "v0.1.0"
+                  and "--force-recreate" not in argv, lag=40)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back", updater.status
+    assert updater.status["message"].startswith("the runner did not come up healthy")
+    assert docker.ended == [("rolled_back", [])]
+    assert [c["tag"] for c in docker.containers.values() if c["running"]] == ["v0.1.0"]
+    assert not docker.stopped                                        # the force-recreate removed what it aimed at
+    first_uncertain = next(i for i, (_, _, state) in enumerate(docker.calls) if state == "uncertain")
+    assert all(state in ("idle", "pulling", "restarting") for _, _, state in docker.calls[:first_uncertain])
+
+
+def test_a_settling_recreate_that_runs_over_is_tried_again_and_the_hold_stays(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "runner", tmp_path)
+    tries = []
+
+    def hang(argv, tag, n):
+        if "up" in argv and tag == "v0.1.0" and "--force-recreate" not in argv:
+            return True
+        if "--force-recreate" in argv:
+            tries.append(n)
+            return len(tries) == 1                                   # the first settling recreate is killed too
+        return False
+    docker = Moby(updater, monkeypatch, hang, lag=2)
+    updater.update("v0.2.0")
+    assert len(tries) == 2 and updater.status["state"] == "rolled_back", updater.status
+    assert docker.ended == [("rolled_back", [])]
+    assert {state for _, state in docker.stopped} <= {"restarting", "uncertain"}   # landed while holding
+    assert (tmp_path / updater.STATUS_FILE).exists()
+
+
+def test_an_uncertain_outcome_survives_a_restart_and_is_settled_by_the_next_updater(monkeypatch, tmp_path):
+    import json
+    import time
+    updater = load(monkeypatch, "runner", tmp_path)
+    (tmp_path / updater.STATUS_FILE).write_text(json.dumps({
+        "state": "uncertain", "from": "v0.1.0", "to": "v0.2.0", "settle_tag": "v0.1.0",
+        "settle_outcome": "docker compose up did not finish within 600 seconds", "message": "Not settled"}))
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    docker.containers = {"c1": {"tag": "v0.2.0", "running": True}}
+    docker.pending = [["c1", 50]]
+    updater.load_status()
+    deadline = time.time() + 10
+    while updater.status["state"] == "uncertain" and time.time() < deadline:
+        time.sleep(0.01)
+    assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
+    assert [c["tag"] for c in docker.containers.values()] == ["v0.1.0"]
+
+
+def test_an_update_is_refused_while_the_last_one_is_unsettled(monkeypatch, tmp_path):
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    updater = load(monkeypatch, "runner", tmp_path)
+    (tmp_path / "token").write_text("secret\n")
+    updater.status.update(state="uncertain", message="Not settled")
+    server = updater.ThreadingHTTPServer(("127.0.0.1", 0), updater.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        ask = urllib.request.Request("http://127.0.0.1:%d/update" % server.server_port, method="POST",
+                                     data=json.dumps({"version": "v0.2.0"}).encode(),
+                                     headers={"Authorization": "Bearer secret"})
+        try:
+            urllib.request.urlopen(ask, timeout=5)
+            code = 202
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+    finally:
+        server.shutdown()
+    assert code == 409 and updater.status["state"] == "uncertain"
 
 
 def test_a_runner_that_cannot_be_read_is_not_updated_and_says_so(monkeypatch, tmp_path):

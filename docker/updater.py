@@ -74,6 +74,9 @@ NEVER_TOUCH = {".env"}
 MAX_BUNDLE = 20 * 1024 * 1024
 # A docker inspect, ps or tag answers in seconds; one a stalled daemon holds must not keep an update running.
 INSPECT_SECONDS = 60
+# compose verbs that change containers: one that does not report back may still be carried out by Docker (Settle).
+MUTATING = {"up", "stop", "run", "rm", "down", "restart", "kill", "start", "create"}
+SETTLE_RETRY_SECONDS = 60
 VERSION = re.compile(r"latest|v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?")
 
 lock = threading.Lock()
@@ -147,6 +150,11 @@ def docker_run(argv, timeout, env=None, check=False, capture_output=True, text=T
     return result
 
 
+class Unsettled(RuntimeError):
+    """A command that changes containers did not report back. Killing the client does not cancel what the daemon
+    already accepted (an accepted stop runs to its end), so what that command does to the containers is unknown."""
+
+
 def compose(*args, tag=None, timeout=600, extra_env=None):
     env = {**os.environ, **({"TICO_TAG": tag} if tag else {}), **(extra_env or {})}
     files = ["-f", os.path.join(PROJECT, COMPOSE_FILE)] if COMPOSE_FILE else []
@@ -156,8 +164,9 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
     try:
         result = docker_run(["docker", "compose", *files, "--project-directory", PROJECT, *args], env=env,
                                 capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:   # docker_run killed and reaped its whole group: nothing of it switches later
-        raise RuntimeError("docker compose %s did not finish within %d seconds" % (args[0], timeout))
+    except subprocess.TimeoutExpired:   # docker_run killed and reaped its whole group; the daemon may not have stopped
+        message = "docker compose %s did not finish within %d seconds" % (args[0], timeout)
+        raise Unsettled(message) if args[0] in MUTATING else RuntimeError(message)
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
         raise RuntimeError(lines[-1] if lines else "docker compose failed")
@@ -541,9 +550,40 @@ def load_status():
         saved = json.load(open(os.path.join(PROJECT, STATUS_FILE)))
     except (OSError, ValueError):
         return
-    if isinstance(saved, dict) and saved.get("state") in ("healthy", "rolled_back", "failed"):
+    if isinstance(saved, dict) and saved.get("state") in ("healthy", "rolled_back", "failed", "uncertain"):
         with lock:
             status.update({k: v for k, v in saved.items() if isinstance(v, (str, bool, int))})
+        if saved.get("state") == "uncertain" and saved.get("settle_tag"):   # this updater settles what the last left
+            threading.Thread(target=settle, args=(saved["settle_tag"], str(saved.get("settle_outcome") or "")),
+                             daemon=True).start()
+
+
+def settle(tag, outcome):
+    """After a command that changes containers did not report back, the outcome is unknown, and the runner keeps
+    holding work while this says `uncertain`. Settled means: a recreate of the service that did report back, and
+    exactly one container for it, made by that recreate. An earlier request can act only on the containers it was
+    given, and that recreate removed them. Until then this keeps trying, saying why."""
+    set_status(state="uncertain", settle_tag=tag, settle_outcome=outcome,
+               message="Not settled: %s. Holding new work until Docker confirms the %s on %s." % (outcome, SERVICE, tag))
+    save_status()
+    while True:
+        try:
+            before = set(compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split())
+            compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
+            now = compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
+            if len(now) == 1 and now[0] not in before:
+                back = healthy(HEALTH_SECONDS)
+                set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
+                           message="%s. Docker then confirmed the %s on %s%s." % (
+                               outcome, SERVICE, tag, "" if back else ", but it did not come up healthy"))
+                save_status()
+                return
+            set_status(message="Not settled: %s. Holding new work: %d %s containers after the recreate." % (
+                outcome, len(now), SERVICE))
+        except Exception as exc:   # anything: only a confirmed recreate may end the hold
+            set_status(message="Not settled: %s. Holding new work: %s." % (outcome, exc))
+        save_status()
+        time.sleep(SETTLE_RETRY_SECONDS)
 
 
 def inspect(ref):
@@ -692,11 +732,14 @@ def update(version, running=""):
     The image tag only says what to put back if this fails, and can be `latest`.
 
     A runner holds new work while this says pulling or restarting, so it must always end, and say how only once it
-    can change nothing more: every docker call has a time limit (run() kills and reaps one that runs over), an
-    overrun goes through the same rollback as a failure, and the outcome is set after the last call."""
+    can change nothing more: every docker call has a time limit (docker_run() kills and reaps one that runs over), an
+    overrun goes through the same rollback as a failure, and the outcome is set after the last call. Killing the
+    client does not undo what Docker accepted, so after a container-changing command overran this says uncertain
+    (still holding) until settle() has Docker confirm the old version."""
     staging = None
     bundled = False
     snapshot, switched = "", False
+    unsettled = False   # a command that changes containers did not report back: settle() before any outcome
     try:
         try:
             image_id, previous = running_image()
@@ -747,6 +790,7 @@ def update(version, running=""):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
             check_switched(version, target)
         except (RuntimeError, subprocess.SubprocessError) as exc:
+            unsettled = isinstance(exc, Unsettled)
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
             restored = ""
             try:
@@ -764,8 +808,12 @@ def update(version, running=""):
                     print("tico-updater: rollback:" + restored, flush=True)
                 compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
                 back = healthy(HEALTH_SECONDS)
-            except (RuntimeError, OSError, subprocess.SubprocessError):
+            except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
+                unsettled = unsettled or isinstance(rollback_exc, Unsettled)
                 back = False
+            if unsettled:
+                settle(previous, str(exc) + restored)
+                return
             set_status(state="rolled_back" if back else "failed",
                        message=str(exc) + (". Went back to " + previous + "." if back else ". The old version did not start either.") + restored)
             return
@@ -839,7 +887,7 @@ class Handler(BaseHTTPRequestHandler):
         if older_than_running(version, running):   # a bot could otherwise move the box to a release that predates the bot user
             return self.reply(409, {"error": "older than the running version"})
         with lock:
-            if status["state"] in ("pulling", "restarting"):
+            if status["state"] in ("pulling", "restarting", "uncertain"):
                 return self.reply(409, {"error": "an update is already running", **status})
             # A whole new status, in one step: a read before the thread gets going must not show the last update's
             # "from", snapshot or outcome next to this one's "to". update() settles "from" against the image.
