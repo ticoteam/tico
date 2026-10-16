@@ -902,11 +902,15 @@ def task_label(api, args):
       {"id": TASK_ID, "url": _s("The URL; for a session also a resume command or a reference"),
        "title": _s("A short name; a pull request needs none"),
        "kind": {"type": "string", "enum": ["session"], "description": "session: another session on this task"},
+       "wake_once": {"type": "boolean", "description": "A pull request: true wakes this task once when its checks "
+                     "finish (pass or fail), it is approved or gets changes requested, or a release ships it, so "
+                     "you can end the turn instead of polling. It never changes the task's status. false disarms it"},
        "on_behalf_of": ASKED},
       required=("id", "url"), writes=True)
 def task_link(api, args):
     return _asked(api, args).post(f"tasks/{args['id']}/links", {"url": args["url"], "title": args.get("title"),
-                                                               **({"kind": "session"} if args.get("kind") == "session" else {})},
+                                                               **({"kind": "session"} if args.get("kind") == "session" else {}),
+                                                               **({"wake_once": args["wake_once"]} if args.get("wake_once") is not None else {})},
                                   key=_key(args))
 
 

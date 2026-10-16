@@ -44,6 +44,10 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
   `waiting` with the child ID in its note. On your own task also record it with
   `hub task relate <task-id> <child-id> --kind blocked_by`; do not retry a refused relation. Tico wakes the parent
   owner when the child closes.
+- What you are waiting on, when it is your linked pull request's checks, review or release: arm one wake with
+  `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
+  instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
+  requested, or a release ships it, whichever comes first. The wake changes nothing on the task; you decide.
 - Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat.
 

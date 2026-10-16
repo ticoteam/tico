@@ -386,7 +386,9 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/restore", {})
         if sub == "link":
             return post(f"tasks/{args.id}/links", {"url": args.url, "title": args.title,
-                                                   **({"kind": "session"} if args.session else {})}, delegate=asked)
+                                                   **({"kind": "session"} if args.session else {}),
+                                                   **({"wake_once": args.wake_once} if args.wake_once is not None else {})},
+                        delegate=asked)
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
         if sub == "label":

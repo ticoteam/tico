@@ -332,6 +332,8 @@ class TaskLink(Contract):
     # Only a session link is asked for by kind: its value may be a resume command, not a URL. Tico sets
     # which session is primary; a client never does.
     kind: Literal["session"] | None = None
+    # A pull request link: true wakes the owner once when its checks finish, it is reviewed or it ships; false disarms.
+    wake_once: bool | None = None
 
 
 class TaskRelation(Contract):

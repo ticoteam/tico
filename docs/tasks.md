@@ -386,6 +386,8 @@ number, branch, checks, mergeability, review state and pending review comments. 
 Failing, Conflict, Changes requested, Open, then Merged. Closed PRs are excluded; shipped PRs
 count as merged. A PR link is information only: adding, removing, opening, merging, closing or
 shipping a PR leaves the task's status and step as they are.
+`hub task link <id> <pr url> --wake-once` arms one wake for the PR's next finished checks, approving or
+change-requesting review, or release ([GitHub App](github-app.md)); it also leaves the task as it is.
 
 Opening a task returns its last known PR state immediately and schedules a background
 refresh for repositories the App can reach. Refreshes are grouped, capped at 20 links and

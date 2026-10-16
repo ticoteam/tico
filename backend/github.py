@@ -7,6 +7,9 @@ step. A person moves the task. The repository's webhook posts here signed with
 
 - a pull request opened, merged or closed -> the link is `open`, `draft`, `merged` or `closed`
 - checks, conflicts and reviews     -> specific owner notices grouped within three minutes
+- a link armed with `wake_once`     -> one notice when its checks finish (pass or fail), it gets an
+                                       approving or change-requesting review, or a release ships it;
+                                       then it disarms. It wakes the owner's turn and changes nothing else.
 - a review requested or withdrawn   -> that person is on or off the task in `github_review_role`
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
@@ -61,6 +64,15 @@ def queue_wake(c, task, item):
     if item not in items:
         items = (items + [item[:1000]])[-50:]
     save_metadata(c, key, {"due": burst.get("due") or H.shift(H.now(), seconds=170), "items": items})
+
+
+def fire_once(detail, item):
+    """A link armed with `wake_once` gives this result, once: disarm it in the same write that queues it."""
+    if not detail.get("wake_once"):
+        return False
+    detail.pop("wake_once")
+    detail["wake_once_fired"] = {"at": H.now(), "item": item[:500]}
+    return True
 
 
 def flush_wakes(c):
@@ -243,6 +255,13 @@ def pr_signal(c, event, payload):
             detail["checks"] = dict(list(checks.items())[-100:])
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
             item = f"Checks {state} on {label}: {name}"
+            # A suite completes once all of its runs have; a single run or commit status may be one of many.
+            if event == "check_suite" and signal.get("status") == "completed" and state != "pending":
+                sha = str(signal.get("head_sha") or detail.get("head_sha") or "")[:12]
+                done = (f"Checks finished on {label}: {'passed' if state == 'passing' else 'failed'} ({name}) "
+                        f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
+                if fire_once(detail, done):
+                    wake, item = True, done
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -261,6 +280,11 @@ def pr_signal(c, event, payload):
             wake = fresh and payload.get("action") != "dismissed" and (
                 state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
             item = f"Review {state.replace('_', ' ')} on {label}"
+            if fresh and payload.get("action") == "submitted" and state in ("approved", "changes_requested"):
+                who = str((review.get("user") or {}).get("login") or "")
+                done = item + (f" by {who}" if who else "") + " " + str(review.get("html_url") or link["url"])
+                if fire_once(detail, done):
+                    wake, item = True, done
         else:
             action = payload.get("action")
             if action not in ("created", "deleted"):
@@ -493,6 +517,11 @@ def ship_deployed(c, settings, *, ancestry=None):
                 continue
             c.execute("UPDATE task_links SET state='shipped',updated=? WHERE id=?", (H.now(), link["id"]))
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), link["task_id"]))
+            detail = H._json(link.get("detail_json"), {}) or {}
+            item = f"Shipped: {link['title']} is in the running release {commit[:12]} {link['url']}"
+            if fire_once(detail, item):
+                c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+                queue_wake(c, H.task(c, link["task_id"]), item)
             evidence = {"release": commit, "url": link["url"]}
             if (repo.lower(), link["pr_sha"], commit) in (ancestry or ()):
                 evidence["ancestry"] = {"repository": repo.lower(), "merge": link["pr_sha"], "deployed": commit,

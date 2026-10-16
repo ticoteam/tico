@@ -8,6 +8,10 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- A bot waiting on a linked pull request can end its turn instead of polling: `hub task link <task> <pr url>
+  --wake-once` (or `wake_once` on `hub_task_link`) wakes the task once, in its conversation, when the PR's checks
+  finish (pass or fail), it is approved or gets changes requested, or a release ships it, with the result and link.
+  It is off unless armed, disarms after one wake, creates no task and never changes the task's status.
 - The desktop app keeps a log file (`~/Library/Logs/<bundle ID>/tico.log` on macOS, two files of 1 MB at most) with each
   start and update check, so an app opened from the Dock no longer loses its update failures. Help shows the app's
   version beside the server's and a **Show the app's log** button; a Support request from the app carries the app's

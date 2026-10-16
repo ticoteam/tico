@@ -871,6 +871,10 @@ def parser():
     s.add_argument("--title")
     s.add_argument("--session", action="store_true",
                    help="another session working this task, tracked only: task chat goes to the owning bot")
+    s.add_argument("--wake-once", action=argparse.BooleanOptionalAction, default=None,
+                   help="a pull request: wake this task once when its checks finish (pass or fail), it is approved or "
+                        "gets changes requested, or a release ships it; never changes the task's status. "
+                        "--no-wake-once disarms it")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task link")
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")

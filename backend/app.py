@@ -3062,7 +3062,8 @@ def create_app(settings=None):
             if body.remove:
                 H.task_unlink(c, who.actor, task_id, body.remove, mover=mover(c, who))
             elif body.url:
-                H.task_link(c, who.actor, task_id, body.url, body.title, kind=body.kind, mover=mover(c, who))
+                H.task_link(c, who.actor, task_id, body.url, body.title, kind=body.kind, mover=mover(c, who),
+                            wake_once=body.wake_once)
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
             return {"links": H.task_links(c, task_id)}
