@@ -88,6 +88,19 @@ All notable changes to Tico are recorded here. The format follows
   to the provider's requests) as well as its events. Eight captures to start: a plain Claude turn, a subagent, a
   steer while a tool runs, an interrupt mid-tool, compaction, an expired Claude login, Codex out of quota, and a
   rejected Codex key.
+- **Public roadmaps** (docs/roadmaps.md): owners and admins pick labels in Settings > Public roadmap, and anonymous
+  `/public/roadmaps/<label>` endpoints let the company's own website list and show the published tasks under each,
+  with their public step names, request counts and progress, for exact allowlisted origins only. A task is public
+  only when someone publishes it with a public title (and summary) written for it; every type starts private and the
+  internal title, body, contacts, discussion and children are never shown. Bots publish, edit public text and reply
+  publicly only through an exact approved payload. Visitors follow a task with optional contact details and get a
+  token that withdraws their request later, even once the task is unpublished, unlabelled or deleted; they can also
+  comment publicly (team can hide or delete) and suggest new tasks, which arrive private at Suggested for the
+  Product Manager. Visitor writes share a daily limit per address (default 10), and at most 20 visitor suggestions
+  wait at once (`suggestion_limit`). The server and relay believe forwarded addresses only from
+  `TICO_TRUSTED_PROXIES`; the Compose file gives Caddy and cloudflared fixed addresses on their own network and
+  trusts exactly those, so each visitor keeps their own limit. Adds Product roadmap and Engineering task types, a
+  ranked roadmap view, and requesters (Requested by) on tasks.
 
 ### Changed
 - A bot that hits a Claude or Codex usage limit now resumes at the provider's own reset time instead of after a fixed
