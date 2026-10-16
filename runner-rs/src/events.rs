@@ -22,6 +22,8 @@ pub const LEGACY_RETRY_S: f64 = 1800.0;
 /// The server sends a keepalive every 15 s by default and at most every 50 s (backend/events.py).
 pub const READ_TIMEOUT_S: u64 = 90;
 pub const HEARTBEAT_LIVE_S: f64 = 60.0;
+/// A stream that stayed up this long before it dropped had a fresh drop: its reconnect backoff starts over.
+pub const STABLE_S: u64 = 30;
 pub const ALL: &[&str] = &["claim", "sync", "config", "heartbeat", "logins", "harness", "imports", "refresh"];
 
 /// What each event kind asks the runner to read again.
@@ -110,6 +112,7 @@ impl Events {
                 tokio::time::sleep((legacy_until - Instant::now()).min(Duration::from_secs(60))).await;
                 continue;
             }
+            let started = Instant::now();
             let clean = match self.read_once(&client).await {
                 Ok(clean) => clean,
                 Err(Failure::NotSupported) => {
@@ -122,6 +125,7 @@ impl Events {
                 }
                 Err(Failure::Broken(why)) => {
                     if self.state() == Stream::Up {
+                        delay = backoff_after_drop(delay, started.elapsed());
                         log(&format!("Tico runner: event stream lost ({why}); polling until it is back"));
                         *self.down_since.lock().unwrap() = Some(Instant::now());
                     } else if !said_down {
@@ -252,6 +256,14 @@ impl Events {
     }
 }
 
+/// The reconnect delay after a live stream dropped. A stream that stayed up STABLE_S had a fresh drop and starts over
+/// at 1 s; otherwise a proxy that resets the stream every few minutes would stretch each short reset to
+/// RECONNECT_MAX_S. One that drops soon after `ready` keeps backing off, so a stream that cannot stay up does not
+/// reconnect, with a full catch-up, every second.
+fn backoff_after_drop(delay: f64, lasted: Duration) -> f64 {
+    if lasted >= Duration::from_secs(STABLE_S) { 1.0 } else { delay }
+}
+
 /// Why a stream's body ended early, in words: a read timeout is the server going quiet past READ_TIMEOUT_S
 /// (keepalives come every 15 s), anything else is the connection, named down to its cause.
 fn body_error(e: &reqwest::Error) -> String {
@@ -284,6 +296,12 @@ mod tests {
         e.dispatch("runner", Some("8".into()), &serde_json::json!({"kind": "work"}), false);
         assert!(e.take("claim") && !e.take("sync"));
         assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn a_drop_after_a_stable_stream_restarts_the_backoff_and_a_quick_one_does_not() {
+        assert_eq!(backoff_after_drop(32.0, Duration::from_secs(STABLE_S)), 1.0);
+        assert_eq!(backoff_after_drop(32.0, Duration::from_secs(STABLE_S - 1)), 32.0);
     }
 
     #[test]

@@ -54,6 +54,10 @@ REWAKE_HOURS = 24            # a finding back within this long of its last wake 
 # A server start (a deploy, an update, a restart) ends every runner's event stream: a drop from this long before a start
 # to this long after it is the restart, not the stream. The span allows for the old server stopping first and for clocks.
 RESTART_BEFORE, RESTART_AFTER = 300, 120
+# A drop the runner says was back this soon cost nothing: it polled for those seconds and caught up on reconnect. A proxy
+# in between (a tunnel's edge) resets a long-lived stream now and then; only a drop that stays down is the stream's fault.
+BRIEF_DROP_S = 30
+BACK = re.compile(r"event stream back after (\d+) s", re.I)
 STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?)Z")
 # Error lines a runner reports (runner/outage.py RECENT, sent as `recent_errors`) that point at a known problem.
 LOG_PATTERNS = (
@@ -197,12 +201,28 @@ def _runner_checks(c, settings):
             hits = [line for line in lines if pattern.search(line)]
             if check_id == "event_stream" and hits:
                 starts = _server_starts(c) if starts is None else starts
-                hits = [line for line in hits if not _near_start(line, starts)]
+                brief = _brief_drops(lines)
+                hits = [line for i, line in enumerate(lines) if pattern.search(line) and i not in brief
+                        and not _near_start(line, starts)]
             if len(hits) >= least:
                 out.append(_finding(f"{check_id}:{r['id']}", check_id, kind, f"{title} ({r['label']})",
                                     f"{len(hits)} of the last {len(lines)} error lines from {r['label']} match. "
                                     "Latest: " + hits[-1][:280], fix))
     return out
+
+
+def _brief_drops(lines):
+    """Where the "lost" lines are whose next word on the stream, before another drop, is that it was back within
+    BRIEF_DROP_S."""
+    brief, open_drop = set(), None
+    for i, line in enumerate(lines):
+        if "event stream lost" in line.lower():
+            open_drop = i
+        elif open_drop is not None and (m := BACK.search(line)):
+            if int(m.group(1)) <= BRIEF_DROP_S:
+                brief.add(open_drop)
+            open_drop = None
+    return brief
 
 
 def _server_starts(c):
