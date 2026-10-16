@@ -71,7 +71,11 @@ function taskCodeLineHTML(l, mover, siblings = []) {
   const what = l.kind === 'pr' ? (taskPRNumber(l) ? `#${taskPRNumber(l)}` : 'pull request') : [wtRepo || 'unknown repo', l.branch].filter(Boolean).join(' · ');
   const x = mover && l.id && (l.kind === 'pr' || l.state === 'removed')
     ? `<button type="button" class="code-x" data-code-drop="${esc(l.id)}" aria-label="Remove ${esc(what)}" title="Remove">✕</button>` : '';
-  const retry = mover && l.id && l.kind === 'worktree' && l.state !== 'removed' && taskLinkDetail(l).cleanup_gave_up === true
+  // A released worktree (an open task whose pull requests are all finished) also stops retrying, but its cleanup resumes
+  // by itself once its work is saved; a removal request there would remove it from a task that is still open.
+  const wtDetail = l.kind === 'worktree' ? taskLinkDetail(l) : {};
+  const retry = mover && l.id && l.kind === 'worktree' && l.state !== 'removed' && wtDetail.cleanup_gave_up === true
+    && wtDetail.release_requested !== true
     ? `<div class="code-retry-row"><span class="code-retry-hint">Cleanup stopped retrying. Fix the cause above, then retry.</span><button type="button" class="ghost code-retry" data-code-drop="${esc(l.id)}" data-code-retry aria-label="Retry cleanup of ${esc(what)}">Retry cleanup</button></div>` : '';
   if (l.kind === 'worktree') {
     const repo = taskLinkRepo(l), ahead = taskLinkNum(l, 'ahead'), behind = taskLinkNum(l, 'behind'), files = taskLinkNum(l, 'dirty_files');

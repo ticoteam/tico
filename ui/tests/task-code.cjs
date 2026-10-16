@@ -216,6 +216,15 @@ async function desktop(browser) {
   const retry = rail.locator('.code-line[data-code-link="w4"] [data-code-retry]');
   assert.equal(await retry.isVisible(), true);
   assert.equal(await retry.getAttribute('aria-label'), 'Retry cleanup of web · tico/t-check-old');
+  // Not offered on a removed worktree, nor on a released one of an open task (its cleanup resumes once work is saved),
+  // nor when the flag is only truthy.
+  const offered = await page.evaluate(() => [
+    {state: 'removed', detail_json: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: 'true'})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true})},
+  ].map(l => taskCodeLineHTML({id: 'w9', kind: 'worktree', url: 'worktree:9', repo: 'acme/web', branch: 'tico/x', ...l}, true).includes('data-code-retry')));
+  assert.deepEqual(offered, [false, false, false, true]);
   assert.equal(await rail.locator('.code-line[data-code-link="p1"] .code-chip[aria-label="Checks failing"]').count(), 1, 'a glyph chip has words');
   assert.equal(await rail.locator('.code-line.pr a').first().getAttribute('href'), 'https://github.com/acme/web/pull/212');
   assert.equal(await rail.locator('.code-line.pr a').first().getAttribute('target'), '_blank');
