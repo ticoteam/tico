@@ -142,6 +142,7 @@ class Moby:
         self.expired, self.calls, self.n = subprocess.TimeoutExpired, [], 0
         self.containers = {"c1": {"tag": "v0.1.0", "running": True}}   # what the update starts from
         self.pending = []      # [container id, calls until it lands]: accepted stops nobody waited for
+        self.idle_recreates = 0   # answered recreates that change nothing (a daemon that has not caught up)
         self.stopped = []      # containers an accepted stop stopped after the client was gone, with the status then
         self.ended = []        # (state, accepted stops still aimed at a container that exists) at each outcome
         monkeypatch.setattr(module, "docker_run", self.run)
@@ -181,6 +182,9 @@ class Moby:
                                                       for c in current):
                 pass                                                # up to date: nothing to recreate
             else:
+                if "--force-recreate" in args and self.idle_recreates:
+                    self.idle_recreates -= 1
+                    return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
                 accepted = [[c, self.lag] for c in current]
                 if self.hang(argv, tag, self.n):
                     self.pending += accepted                        # the client is killed; the daemon is not
@@ -250,6 +254,18 @@ def test_a_settling_recreate_that_runs_over_is_tried_again_and_the_hold_stays(mo
     assert docker.ended == [("rolled_back", [])]
     assert {state for _, state in docker.stopped} <= {"restarting", "uncertain"}   # landed while holding
     assert (tmp_path / updater.STATUS_FILE).exists()
+
+
+def test_an_answered_recreate_that_leaves_the_old_container_does_not_settle(monkeypatch, tmp_path):
+    """Settled needs the recreate's own container to be the only one: an answer alone is not enough."""
+    updater = load(monkeypatch, "runner", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: "up" in argv and tag == "v0.1.0"
+                  and "--force-recreate" not in argv, lag=60)
+    docker.idle_recreates = 2
+    updater.update("v0.2.0")
+    recreates = [state for argv, _, state in docker.calls if "--force-recreate" in argv]
+    assert recreates == ["uncertain"] * 3 and updater.status["state"] == "rolled_back"
+    assert docker.ended == [("rolled_back", [])] and not docker.stopped
 
 
 def test_an_uncertain_outcome_survives_a_restart_and_is_settled_by_the_next_updater(monkeypatch, tmp_path):

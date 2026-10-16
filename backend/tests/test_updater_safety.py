@@ -75,6 +75,25 @@ def test_the_restore_script_swaps_the_database_and_clears_litestreams_tracking(m
     assert not (tmp_path / "hub.sqlite.restoring").exists()
 
 
+def test_a_snapshot_restore_that_runs_over_is_not_called_a_rollback(monkeypatch, tmp_path):
+    """A killed `compose run` restore may still put the snapshot in place later: the outcome is unknown."""
+    import subprocess
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [False, True])
+    run = docker.run
+
+    def hang(argv, env=None, **kw):
+        if argv[:2] == ["docker", "compose"] and "run" in argv:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return run(argv, env=env, **kw)
+    monkeypatch.setattr(updater, "docker_run", hang)
+    settled = []
+    monkeypatch.setattr(updater, "settle", lambda tag, outcome: settled.append((tag, outcome)))
+    updater.update("v0.2.0")
+    assert settled and settled[0][0] == "v0.1.0" and "Could not restore the database snapshot" in settled[0][1]
+    assert updater.status["state"] not in ("rolled_back", "failed", "healthy")
+
+
 def test_a_pull_failure_or_snapshot_failure_does_not_touch_the_database(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)
     docker = Fake(updater, monkeypatch, [True], fail=["exec"])

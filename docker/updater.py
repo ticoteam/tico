@@ -804,6 +804,7 @@ def update(version, running=""):
                         restored = " Restored the database from the snapshot taken before the update (%s); changes made since then are not in it." % snapshot
                         set_status(restored=True)
                     except (RuntimeError, OSError, subprocess.SubprocessError) as snap_exc:
+                        unsettled = unsettled or isinstance(snap_exc, Unsettled)   # a killed restore may still run
                         restored = " Could not restore the database snapshot %s (%s); it is in %s." % (snapshot, snap_exc, SNAPSHOTS)
                     print("tico-updater: rollback:" + restored, flush=True)
                 compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
