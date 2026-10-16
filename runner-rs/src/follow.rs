@@ -465,9 +465,29 @@ impl Follower {
         if self.kind != "docker" {
             return None;
         }
+        let mut unsaved = None;
+        let reason = self.hold_reason(&mut unsaved).await?;
+        // Until the hold is saved, every check says why a restart would lose it.
+        Some(match unsaved {
+            Some(e) => format!("{reason} (could not save this hold, so a restart would lose it: {e})").trim().to_string(),
+            None => reason,
+        })
+    }
+
+    /// Follower::unsettled without the save error, which goes to `unsaved`.
+    async fn hold_reason(&self, unsaved: &mut Option<String>) -> Option<String> {
         let path = self.directory.join(HOLD_FILE);
-        let saved = read_hold(&path);
+        let mut saved = read_hold(&path);
         let memory = self.inner.lock().unwrap().docker_hold.clone();
+        // A hold only memory has is saved again on every check, whatever the updater answers, until it is on disk.
+        if let Some(to) = memory.as_ref().filter(|to| !to.is_empty()) {
+            if saved.as_ref().ok() != Some(&Some(to.clone())) {
+                match write_hold(&self.directory, to) {
+                    Ok(()) => saved = Ok(Some(to.clone())),
+                    Err(e) => *unsaved = Some(e.to_string()),
+                }
+            }
+        }
         let held: Option<Result<String, String>> = match (&memory, &saved) {
             (Some(to), _) => Some(Ok(to.clone())),
             (None, Ok(to)) => to.clone().map(Ok),
@@ -489,13 +509,10 @@ impl Follower {
         };
         if state == "restarting" || state == "uncertain" {
             self.inner.lock().unwrap().docker_hold = Some(to.clone());
-            let mut message = answer.map(|status| text_of(&status["message"])).unwrap_or_default();
             if saved.as_ref().ok() != Some(&Some(to.clone())) {
-                if let Err(e) = write_hold(&self.directory, &to) {   // tried again on every check while it fails
-                    message = format!("{message} (could not save this hold, so a restart would lose it: {e})").trim().to_string();
-                }
+                *unsaved = write_hold(&self.directory, &to).err().map(|e| e.to_string());
             }
-            return Some(message);
+            return Some(answer.map(|status| text_of(&status["message"])).unwrap_or_default());
         }
         let held = match held? {
             Ok(to) => to,
@@ -951,7 +968,22 @@ mod tests {
         let quiet = Follower { sidecar: Sidecar { url: "http://127.0.0.1:9".into(), token_file: dir.join("t") }, ..f };
         quiet.decide().await;
         assert!(holds(&quiet) && quiet.blocks_claims(false).await);
+        assert!(quiet.inner.lock().unwrap().error.contains("could not save this hold"));
+
+        // Storage recovers while the updater is still away: the next check saves it, and a restart still holds.
         std::fs::remove_dir(dir.join("docker-update-hold.tmp")).unwrap();
+        quiet.decide().await;
+        assert!(holds(&quiet) && !quiet.inner.lock().unwrap().error.contains("could not save"));
+        assert_eq!(read_hold(&dir.join(HOLD_FILE)), Ok(Some("v0.3.47".to_string())));
+        let restarted = docker_follower(&dir, "http://127.0.0.1:9", "0.3.47");
+        restarted.decide().await;
+        assert!(holds(&restarted) && restarted.blocks_claims(false).await);
+        // The same with no updater set up: a hold only memory has is saved on that check too.
+        std::fs::remove_file(dir.join(HOLD_FILE)).unwrap();
+        let unset = Follower { sidecar: Sidecar { url: String::new(), token_file: dir.join("t") }, ..quiet };
+        unset.decide().await;
+        assert!(holds(&unset) && read_hold(&dir.join(HOLD_FILE)) == Ok(Some("v0.3.47".to_string())));
+        std::fs::remove_file(dir.join(HOLD_FILE)).unwrap();
 
         // The same with the hold's own place blocked, so it can be neither saved nor read.
         std::fs::create_dir_all(dir.join(HOLD_FILE)).unwrap(); // a directory where the hold goes
