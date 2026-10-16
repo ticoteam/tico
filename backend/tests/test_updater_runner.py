@@ -130,6 +130,10 @@ class Daemon:
         return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
 
 
+class NeverSettled(BaseException):
+    """settle() catches every Exception and tries again, so a fake daemon stops a settle that would hold forever."""
+
+
 class Moby:
     """A Docker daemon with containers, for what a killed client leaves behind. `up` resolves the runner's container
     and asks the daemon to stop it; once accepted, that stop runs to its end even if the client is killed (Moby
@@ -145,6 +149,8 @@ class Moby:
         self.idle_recreates = 0   # answered recreates that change nothing (a daemon that has not caught up)
         self.stopped = []      # containers an accepted stop stopped after the client was gone, with the status then
         self.ended = []        # (state, accepted stops still aimed at a container that exists) at each outcome
+        self.restores = {}     # one-off id -> calls until its restore replaces the database (then it ends, --rm)
+        self.restored = []     # (live service containers, status) when a restore replaced the database
         monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
         monkeypatch.setattr(module, "check_switched", lambda version, release: None)
@@ -158,8 +164,24 @@ class Moby:
             if fields.get("state") in ("healthy", "rolled_back", "failed"):
                 self.ended.append((fields["state"], [c for c, _ in self.pending if c in self.containers]))
         monkeypatch.setattr(module, "set_status", watched)
+        save_status, self.saves = module.save_status, 0
+
+        def counted():
+            self.saves += 1
+            if self.saves > 500:
+                raise NeverSettled(module.status["message"])
+            save_status()
+        monkeypatch.setattr(module, "save_status", counted)
+
+    def live(self):
+        return [c for c, v in self.containers.items() if v["running"] and not v.get("oneoff")]
 
     def land(self):
+        for cid in list(self.restores):
+            self.restores[cid] -= 1
+            if self.restores[cid] <= 0 and self.containers.get(cid, {}).get("running"):
+                del self.restores[cid], self.containers[cid]
+                self.restored.append((self.live(), self.module.status["state"]))
         for item in list(self.pending):
             item[1] -= 1
             if item[1] <= 0:
@@ -176,8 +198,23 @@ class Moby:
         self.calls.append((argv, tag, self.module.status["state"]))
         args = argv[argv.index("--project-directory") + 2:] if "--project-directory" in argv else argv[1:]
         out = ""
-        if args[:1] == ["up"]:
-            current = list(self.containers)
+        if args[:1] == ["run"]:                                     # a --rm one-off: the snapshot restore
+            cid = "r%d" % self.n
+            self.containers[cid] = {"tag": tag, "running": True, "oneoff": True}
+            self.restores[cid] = self.lag
+            if self.hang(argv, tag, self.n):
+                raise self.expired(argv, timeout)                   # the client is killed; the container is not
+            del self.restores[cid], self.containers[cid]
+            self.restored.append((self.live(), self.module.status["state"]))
+        elif args[:1] == ["stop"]:
+            for c in self.live():
+                self.containers[c]["running"] = False
+        elif argv[:2] == ["docker", "rm"]:
+            if self.containers.get(argv[2], {}).get("running"):
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": "cannot remove a running container"})()
+            self.containers.pop(argv[2], None)
+        elif args[:1] == ["up"]:
+            current = [c for c in self.containers if not self.containers[c].get("oneoff")]
             if "--force-recreate" not in args and any(self.containers[c]["tag"] == tag and self.containers[c]["running"]
                                                       for c in current):
                 pass                                                # up to date: nothing to recreate
@@ -194,7 +231,12 @@ class Moby:
                 self.pending = [p for p in self.pending if p[0] in self.containers]
                 self.containers["c%d" % (self.n + 100)] = {"tag": tag, "running": True}
         elif args[:1] == ["ps"]:
-            out = "".join(c + "\n" for c, v in self.containers.items() if "-a" in args or v["running"])
+            out = "".join(c + "\n" for c, v in self.containers.items()
+                          if "-a" in args or (v["running"] and not v.get("oneoff")))
+        elif argv[:2] == ["docker", "inspect"] and "{{.State.Status}}" in argv[3]:
+            out = "".join("%s %s %s\n" % (c, v.get("state") or ("running" if v["running"] else "exited"),
+                                          "True" if v.get("oneoff") else "")
+                          for c, v in self.containers.items() if c in argv[4:])
         elif argv[:2] == ["docker", "inspect"] and "{{.State.Health.Status}}" in argv:
             box = self.containers.get(argv[-1])
             out = "healthy\n" if box and box["running"] and box["tag"] in self.healthy_tags else "unhealthy\n"

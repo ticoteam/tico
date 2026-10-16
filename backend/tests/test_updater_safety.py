@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from backend.tests.test_updater_runner import load
+from backend.tests.test_updater_runner import Moby, load
 
 
 class Fake:
@@ -90,8 +90,39 @@ def test_a_snapshot_restore_that_runs_over_is_not_called_a_rollback(monkeypatch,
     settled = []
     monkeypatch.setattr(updater, "settle", lambda tag, outcome: settled.append((tag, outcome)))
     updater.update("v0.2.0")
-    assert settled and settled[0][0] == "v0.1.0" and "Could not restore the database snapshot" in settled[0][1]
+    assert settled and settled[0][0] == "v0.1.0" and "restore did not report back" in settled[0][1]
     assert updater.status["state"] not in ("rolled_back", "failed", "healthy")
+
+
+def test_a_killed_snapshot_restore_ends_before_the_server_is_started_again(monkeypatch, tmp_path):
+    """The restore is a `compose run` one-off: killing its client leaves the container to the daemon, still putting
+    the snapshot in place. The old server starts only after it has ended, and the hold lasts until then."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: "run" in argv, lag=8)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+    updater.update("v0.2.0")
+    assert docker.restored == [([], "uncertain")]                    # the database was replaced under no live server
+    assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
+    assert "may or may not have put" in updater.status["message"] and "confirmed the server on v0.1.0" in updater.status["message"]
+    assert [v["tag"] for v in docker.containers.values()] == ["v0.1.0"]
+    waits = [i for i, (argv, _, _) in enumerate(docker.calls) if "{{.State.Status}}" in " ".join(argv)]
+    recreate = next(i for i, (argv, _, _) in enumerate(docker.calls) if "--force-recreate" in argv)
+    assert len([i for i in waits if i < recreate]) > 2               # it waited, asking more than once
+
+
+def test_settling_removes_a_restore_that_never_started_and_leaves_an_ended_one(monkeypatch, tmp_path):
+    """A one-off created but never started cannot act unless started, and Docker will not remove it without force
+    once it is: removing it lets the settle finish instead of holding forever. One that exited can do nothing more."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    docker.containers = {"c1": {"tag": "v0.2.0", "running": True},
+                         "r1": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "created"},
+                         "r2": {"tag": "v0.1.0", "running": False, "oneoff": True, "state": "exited"}}
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    updater.settle("v0.1.0", "the restore did not report back")
+    assert updater.status["state"] == "rolled_back" and docker.ended == [("rolled_back", [])]
+    assert (["docker", "rm", "r1"], None, "uncertain") in docker.calls and not any(a[-1:] == ["r2"] and "rm" in a for a, _, _ in docker.calls)
+    assert set(docker.containers) == {"r2", next(c for c in docker.containers if c.startswith("c"))}
 
 
 def test_a_pull_failure_or_snapshot_failure_does_not_touch_the_database(monkeypatch, tmp_path):

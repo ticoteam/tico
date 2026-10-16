@@ -40,6 +40,11 @@ All notable changes to Tico are recorded here. The format follows
   tokens and their maker from the model catalog, null when mixed, Cursor auto, unlisted or uncounted); Runs and `hub run list` show it too; and the
   `attempt.fallback` event names the configured runtime as `primary_runtime` beside the model that ran. A shared rule
   tells reviewers to check a different-family review against `ran_on`, never a configured model.
+- The server's updater no longer starts the old server while a snapshot restore that ran over its time limit may still
+  be putting the database back. Stopping the `docker compose run` command leaves its container running, so the update
+  says `uncertain` and starts the old server only after no one-off server container is still running (one created but
+  never started is removed). Before, the restore could replace the database under a live server, and a restore
+  container that never started could keep the update `uncertain` for ever.
 - A Docker runner's updater can no longer leave the runner holding new work for ever. Each Docker command it
   runs has a time limit and is stopped when it runs over; a switch that runs over is rolled back like any failed
   update, and the updater reports the outcome only after its last command. Stopping a command does not undo what

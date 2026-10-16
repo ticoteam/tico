@@ -184,7 +184,9 @@ migrate the database and then fail its health check, and the old image cannot re
 stops the server (Litestream runs inside it), puts the snapshot back through a temporary file, clears Litestream's tracking directory so it does not take the restored file for a break (the migrated database stays beside it as `hub.sqlite.failed-update`) and starts
 the old image. Changes made between the snapshot and the rollback are not in it. The update status says which snapshot
 was taken and whether it was restored (`snapshot`, `restored`, and the message). If the snapshot cannot be taken the
-update does not go ahead.
+update does not go ahead. The restore runs in a one-off container (`docker compose run`); if it runs over its time limit,
+stopping the command does not stop that container, so the updater says `uncertain` and starts the old server only once
+no one-off container of the server is still running (one that was created but never started is removed).
 
 After a successful update the updater replaces itself, so updater fixes reach existing installs. It pulls the new updater
 image and starts a short-lived container (`tico-updater-swap`) from it, which recreates the `updater` service,

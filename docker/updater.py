@@ -558,28 +558,68 @@ def load_status():
                              daemon=True).start()
 
 
+def containers_of_service():
+    """{id: (one-off, state)} for every container of the service. `compose ps -a` lists `compose run` one-offs too
+    (the snapshot restore is one); their oneoff label tells them apart."""
+    ids = compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
+    if not ids:
+        return {}
+    result = docker_run(["docker", "inspect", "--format",
+                         '{{.Id}} {{.State.Status}} {{index .Config.Labels "com.docker.compose.oneoff"}}', *ids],
+                        capture_output=True, text=True, timeout=INSPECT_SECONDS)
+    if result.returncode:   # one went away between ps and inspect (a --rm one-off ending): ask again later
+        raise RuntimeError("could not read the %s containers" % SERVICE)
+    found = {}
+    for line in result.stdout.splitlines():
+        cid, state, oneoff = (line.split(" ", 2) + [""])[:3]
+        found[cid] = (oneoff.strip() == "True", state)
+    return found
+
+
+def one_offs_done(outcome):
+    """True when no one-off of the service can still act. A killed `compose run` (the snapshot restore) leaves its
+    container to the daemon: running, it may still replace the database, so the server must not be started under it.
+    One that was created but never started is removed without force, which Docker refuses if it has started since.
+    An exited one can do nothing more and is left alone."""
+    waiting = []
+    for cid, (oneoff, state) in containers_of_service().items():
+        if not oneoff or state in ("exited", "dead"):
+            continue
+        if state == "created" and not docker_run(["docker", "rm", cid], capture_output=True, text=True,
+                                                 timeout=INSPECT_SECONDS).returncode:
+            continue
+        waiting.append(state)
+    if waiting:
+        set_status(message="Not settled: %s. Holding new work until the one-off %s container (%s) ends: it may "
+                           "still be restoring the database snapshot." % (
+                               outcome, SERVICE, ", ".join(waiting)))
+    return not waiting
+
+
 def settle(tag, outcome):
     """After a command that changes containers did not report back, the outcome is unknown, and the runner keeps
-    holding work while this says `uncertain`. Settled means: a recreate of the service that did report back, and
-    exactly one container for it, made by that recreate. An earlier request can act only on the containers it was
-    given, and that recreate removed them. Until then this keeps trying, saying why."""
+    holding work while this says `uncertain`. Settled means: no one-off of the service still running (a killed
+    snapshot restore), then a recreate of the service that did report back, and exactly one container for it, made
+    by that recreate. An earlier request can act only on the containers it was given, and that recreate removed
+    them. Until then this keeps trying, saying why."""
     set_status(state="uncertain", settle_tag=tag, settle_outcome=outcome,
                message="Not settled: %s. Holding new work until Docker confirms the %s on %s." % (outcome, SERVICE, tag))
     save_status()
     while True:
         try:
-            before = set(compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split())
-            compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
-            now = compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
-            if len(now) == 1 and now[0] not in before:
-                back = healthy(HEALTH_SECONDS)
-                set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
-                           message="%s. Docker then confirmed the %s on %s%s." % (
-                               outcome, SERVICE, tag, "" if back else ", but it did not come up healthy"))
-                save_status()
-                return
-            set_status(message="Not settled: %s. Holding new work: %d %s containers after the recreate." % (
-                outcome, len(now), SERVICE))
+            if one_offs_done(outcome):
+                before = {cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff}
+                compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", SERVICE, tag=tag)
+                now = [cid for cid, (oneoff, _) in containers_of_service().items() if not oneoff]
+                if len(now) == 1 and now[0] not in before:
+                    back = healthy(HEALTH_SECONDS)
+                    set_status(state="rolled_back" if back else "failed", settle_tag="", settle_outcome="",
+                               message="%s. Docker then confirmed the %s on %s%s." % (
+                                   outcome, SERVICE, tag, "" if back else ", but it did not come up healthy"))
+                    save_status()
+                    return
+                set_status(message="Not settled: %s. Holding new work: %d %s containers after the recreate." % (
+                    outcome, len(now), SERVICE))
         except Exception as exc:   # anything: only a confirmed recreate may end the hold
             set_status(message="Not settled: %s. Holding new work: %s." % (outcome, exc))
         save_status()
@@ -798,6 +838,7 @@ def update(version, running=""):
             check_switched(version, target)
         except (RuntimeError, subprocess.SubprocessError) as exc:
             unsettled = isinstance(exc, Unsettled)
+            restoring = False
             # The old image is still on disk; point its tag back at it and start it again, with the old bundle.
             restored = ""
             try:
@@ -811,11 +852,16 @@ def update(version, running=""):
                         restored = " Restored the database from the snapshot taken before the update (%s); changes made since then are not in it." % snapshot
                         set_status(restored=True)
                     except (RuntimeError, OSError, subprocess.SubprocessError) as snap_exc:
-                        unsettled = unsettled or isinstance(snap_exc, Unsettled)   # a killed restore may still run
-                        restored = " Could not restore the database snapshot %s (%s); it is in %s." % (snapshot, snap_exc, SNAPSHOTS)
+                        restoring = isinstance(snap_exc, Unsettled)   # a killed restore may still run
+                        unsettled = unsettled or restoring
+                        restored = (" The database snapshot restore did not report back (%s), so it may or may not have put %s back; it is in %s." if restoring
+                                    else " Could not restore the database snapshot %s (%s); it is in %s.") % (
+                            (snap_exc, snapshot, SNAPSHOTS) if restoring else (snapshot, snap_exc, SNAPSHOTS))
                     print("tico-updater: rollback:" + restored, flush=True)
-                compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
-                back = healthy(HEALTH_SECONDS)
+                back = False
+                if not restoring:   # else settle() starts the old server once the restore has ended
+                    compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
+                    back = healthy(HEALTH_SECONDS)
             except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
                 unsettled = unsettled or isinstance(rollback_exc, Unsettled)
                 back = False
