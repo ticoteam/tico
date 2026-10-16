@@ -40,7 +40,7 @@ def test_the_app_gets_the_list_and_diagnostics_name_what_is_on(environment):
 UI = Path(__file__).resolve().parents[2] / "ui"
 # A pill the app draws by id: `betaPill('id')` in a script, or `data-beta="id"` in a static spot. ui/app/state.js
 # defines both and is left out.
-SPOT = re.compile(r"""betaPill\('([a-z_]+)'\)|data-beta="([a-z_]+)\"""")
+SPOT = re.compile(r"""betaPill\(['"]([a-z_]+)['"]\)|data-beta="([a-z_]+)\"""")
 
 
 def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():

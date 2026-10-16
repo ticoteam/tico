@@ -88,6 +88,7 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     assert.equal(await page.locator('[data-nav=market] .pill.beta').count(), 1);
     assert.equal(await page.locator('#nav-inboxes-section .pill.beta').count(), 1);
     assert.equal(await page.locator('.help-platforms .pill.beta').count(), 2);
+    assert.equal(await page.locator('.help-who .pill.beta').count(), 1);
     // A bot is Beta by its template or harness; a bot off the list gets no pill.
     assert.deepEqual(await page.evaluate(() => [{template: 'listening'}, {template: 'inbox'}, {harness: 'hermes'},
       {agent: {harness: 'openclaw'}}, {template: 'support'}, {harness: 'claude'}].map(e => !!botBetaPill(e))),

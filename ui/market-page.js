@@ -337,7 +337,7 @@ function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
-// Market is a Beta feature (backend/beta.py): its pill sits on the empty form's title and on the Overview's kicker.
+// Market is a Beta feature (backend/beta.py): its pill sits on the empty form's title and on every Market page's kicker.
 const marketBeta = () => typeof betaPill === 'function' ? betaPill('market') : '';
 
 // The note's kicker, and Research for a page or entry the Librarian can add to.
