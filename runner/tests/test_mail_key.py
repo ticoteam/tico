@@ -50,7 +50,8 @@ def test_the_key_moves_out_of_the_bots_reach_when_isolated(tmp_path, monkeypatch
     (secrets / "google-sa.json").write_text('{"type": "service_account"}')
     os.chmod(secrets / "google-sa.json", 0o600)
     config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
-    monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
+    bot_uid = os.getuid() + 1                     # any bot user other than the supervisor running this test
+    monkeypatch.setattr(isolation, "identity", lambda: (bot_uid, 10002))
     assert mail_key.status(config) == "exposed"
     assert mail_key.protect(config) is True
     moved = home / "state-r1" / "google-sa.json"
@@ -58,7 +59,7 @@ def test_the_key_moves_out_of_the_bots_reach_when_isolated(tmp_path, monkeypatch
     # Closed to the bot user: no group or other bits on the file or its directory, and the mail
     # job now reads it there.
     assert stat.S_IMODE(moved.stat().st_mode) == 0o600 and stat.S_IMODE(moved.parent.stat().st_mode) == 0o700
-    assert moved.stat().st_uid != 10003
+    assert moved.stat().st_uid == os.getuid() != bot_uid
     assert mail_secret_path(config) == moved and mail_key.status(config) == "protected"
     assert mail_key.protect(config) is False
 
@@ -181,7 +182,8 @@ def test_failed_carryover_can_retry_without_leaving_temporary_keys(tmp_path, mon
         assert not mail_key.carry_protected(config, tmp_path / "runner.json")
     new = tmp_path / "state-new" / mail_key.FILE
     assert warnings and "free space and permissions" in warnings[0]
-    assert not list(new.parent.iterdir()) and key.is_file()
+    # Only the grants' marker: the old registration had no grants file, which is recorded once.
+    assert [p.name for p in new.parent.iterdir()] == [".google-oauth-carried"] and key.is_file()
     assert mail_key.carry_protected(config, tmp_path / "runner.json")
     assert new.read_bytes() == key.read_bytes()
 
@@ -214,3 +216,73 @@ def test_reenrollment_never_imports_another_operators_key(tmp_path, monkeypatch,
         monkeypatch.setattr(Path, "lstat", different_volume)
     assert not mail_key.carry_protected(config, tmp_path / "runner.json")
     assert not (tmp_path / "state-new" / mail_key.FILE).exists()
+
+
+def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bots_reach(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_GRANTS", raising=False)
+    monkeypatch.setenv("TICO_SIDE_JOBS", "1")
+    home = tmp_path / "home"
+    secrets = home / "workspace" / "secrets"
+    secrets.mkdir(parents=True)
+    (secrets / mail_key.GRANTS).write_text('{"grants": {}}')
+    os.chmod(secrets / mail_key.GRANTS, 0o600)
+    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
+    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
+    assert mail_key.status(config) == "exposed"
+    assert mail_key.protect(config) is True
+    moved = home / "state-r1" / mail_key.GRANTS
+    assert moved.read_text() == '{"grants": {}}' and stat.S_IMODE(moved.stat().st_mode) == 0o600
+    assert not (secrets / mail_key.GRANTS).exists() and not (home / "state-r1" / mail_key.FILE).exists()
+    assert mail_key.status(config) == "protected" and mail_key.held_by_computer(config)
+    from runner.connectors import mail_credential_present, mail_grants_path
+    assert mail_grants_path(config) == moved and mail_credential_present(config)
+
+
+def test_a_connected_accounts_scopes_reach_the_turn_with_its_token(tmp_path):
+    def mail(service, mailbox):
+        return {"token": "ya29.t", "expiry": "", "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}
+    server = C.Server(str(tmp_path / "cred.sock"), lambda bot: "ghs", mail).start()
+    try:
+        server.register("attempt", "inbox", ["ben@acme.example"])
+        reply = C.request_mail(server.path, "attempt", "gmail", "ben@acme.example")
+        assert reply["scopes"] == ["https://www.googleapis.com/auth/gmail.readonly"]
+        with pytest.raises(ValueError):            # the grant is bound to its own mailbox only
+            C.request_mail(server.path, "attempt", "gmail", "ana@acme.example")
+    finally:
+        server.stop()
+
+
+def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
+    home = tmp_path / "home"
+    secrets = home / "workspace" / "secrets"
+    secrets.mkdir(parents=True)
+    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
+    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
+    for mailbox in ("ben@x.example", "ana@x.example"):
+        (secrets / mail_key.GRANTS).write_text('{"grants": {"%s": {"refresh_token": "t-%s"}}}' % (mailbox, mailbox))
+        os.chmod(secrets / mail_key.GRANTS, 0o600)
+        assert mail_key.protect(config) is True
+    import json
+    kept = json.loads((home / "state-r1" / mail_key.GRANTS).read_text())["grants"]
+    assert sorted(kept) == ["ana@x.example", "ben@x.example"]
+
+
+def test_a_corrupt_workspace_grants_file_leaves_the_protected_one_alone(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_SA_KEY", raising=False)
+    home = tmp_path / "home"
+    secrets = home / "workspace" / "secrets"
+    secrets.mkdir(parents=True)
+    config = {"projects_dir": str(home / "workspace"), "state_dir": str(home / "state-r1")}
+    monkeypatch.setattr(isolation, "identity", lambda: (os.getuid() + 1, 10002))
+    (secrets / mail_key.GRANTS).write_text('{"grants": {"ben@x.example": {"refresh_token": "t-ben"}}}')
+    os.chmod(secrets / mail_key.GRANTS, 0o600)
+    assert mail_key.protect(config) is True
+    protected = (home / "state-r1" / mail_key.GRANTS).read_text()
+    for broken in ("{not json", "[]"):
+        (secrets / mail_key.GRANTS).write_text(broken)
+        os.chmod(secrets / mail_key.GRANTS, 0o600)
+        mail_key.protect(config)                                    # logs, never raises
+        assert (home / "state-r1" / mail_key.GRANTS).read_text() == protected
+        assert (secrets / mail_key.GRANTS).is_file()                # left for a person to look at

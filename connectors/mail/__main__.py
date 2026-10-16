@@ -48,7 +48,7 @@ from pathlib import Path
 from . import AUDIT_PATH, DB_PATH, DEFAULT_TZ, INTERNAL_DOMAIN, Failure, RULES_FILE, Refused
 from . import now_utc, parse_since, repo_dir, report, stamp, zone
 from . import access, audit as audit_log, auth, db, gmail as gm, labels as lb, rules as rl
-from . import calendar as cal, compose, judge as jd, lint as ln, policy as pl, review as rv
+from . import calendar as cal, compose, judge as jd, lint as ln, oauth, policy as pl, review as rv
 
 MAX_SEARCH = 50                         # docs/mail-service.md: search is bounded to 50 results
 REVIEW_FRESH_HOURS = 24                 # a send re-uses a verdict only while it is this new
@@ -247,8 +247,87 @@ def cmd_e2e(args):
 def cmd_mint_token(args):
     """A short-lived access token for one mailbox, for the runner's supervisor to hand a turn
     (runner/credential_socket.py). Prints the token and its expiry; the key itself never leaves."""
-    token, expiry = auth.mint_token(args.mailbox, args.service)
-    print(json.dumps({"token": token, "expiry": expiry}))
+    try:
+        token, expiry, granted = auth.mint_token(args.mailbox, args.service)
+    except oauth.SignInFailed as e:
+        # The supervisor passes the reason to the turn, so a bot can say "reconnect" or "admin policy".
+        print(json.dumps({"error_kind": e.kind}))
+        raise
+    print(json.dumps({"token": token, "expiry": expiry, **({"scopes": granted} if granted is not None else {})}))
+    return 0
+
+
+def cmd_google_connect(args):
+    """Connect one person's own Google account (connectors/mail/oauth.py): they sign in, this stores the grant."""
+    mailbox = args.mailbox.strip().lower()
+    path = oauth.grants_path()
+    client = oauth.read_client(args.client_file) if args.client_file else oauth.load(path).get("client")
+    if not client or not client.get("client_id"):
+        raise Failure("no Google OAuth client on this computer yet",
+                      "Pass --client-file with the JSON of a Desktop app OAuth client from your Google Cloud project "
+                      "(docs/mail.md, Connect your Google account). It is kept with the grant, not in any bot's reach.")
+    capabilities = sorted({c.strip() for raw in args.allow or [] for c in raw.split(",") if c.strip()})
+    flow = oauth.authorization(client, mailbox, capabilities)
+    out = sys.stderr
+    print(f"Connect {mailbox} to Tico on this computer: read-only"
+          + (f", plus {', '.join(capabilities)}" if capabilities else "") + ".", file=out)
+    print("1. Open this address in a browser and sign in to Google as " + mailbox + ":\n\n" + flow["url"] + "\n", file=out)
+    print("2. Approve. The browser then goes to http://127.0.0.1:8765/ and shows that it cannot connect: that is "
+          "expected.\n3. Copy that whole address from the browser's address bar and paste it here.", file=out)
+    try:
+        answer = input("Address: ")
+    except EOFError:
+        answer = ""
+    found = oauth.connect(mailbox, client, oauth.code_from(answer, flow["state"]), flow["verifier"], capabilities,
+                          path, flow["redirect_uri"])
+    audit_log.record("owner", "google.connect", mailbox, "", {"can": found["can"]})
+    if args.json:
+        print(json.dumps(found, indent=2))
+    else:
+        print(f"connected {mailbox}: can {', '.join(found['can'])}. Stored at {path} (mode 600).")
+    return 0
+
+
+def cmd_google_finish(args):
+    """Finish a sign-in the server started: the connectors job pipes the request (code, verifier, Tico's client)
+    on stdin, so nothing of it is on a command line or in the environment."""
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        request = {}
+    result = oauth.finish(request if isinstance(request, dict) else {})
+    audit_log.record("owner", "google.connect", result.get("mailbox", ""), "",
+                     {k: result.get(k) for k in ("status", "kind", "can") if result.get(k)})
+    print(json.dumps(result))
+    return 0 if result["status"] == "connected" else 1
+
+
+def cmd_google_status(args):
+    rows = oauth.status()
+    if args.json:
+        print(json.dumps({"grants": rows, "path": str(oauth.grants_path())}, indent=2))
+        return 0
+    if not rows:
+        print("no Google accounts connected on this computer")
+    for row in rows:
+        print(f"{row['mailbox']}  can {', '.join(row['can']) or 'nothing'}  (connected {row['connected_at']})")
+    return 0
+
+
+def cmd_google_revoke(args):
+    mailbox = args.mailbox.strip().lower()
+    if args.json and not oauth.grant(mailbox):
+        print(json.dumps({"status": "revoked", "mailbox": mailbox, "google_confirmed": False, "absent": True}))
+        return 0                                        # already gone here: repeating a revoke is not an error
+    confirmed = oauth.revoke(mailbox)
+    audit_log.record("owner", "google.revoke", mailbox, "", {"google_confirmed": confirmed})
+    if args.json:
+        print(json.dumps({"status": "revoked", "mailbox": mailbox, "google_confirmed": confirmed}))
+    elif confirmed:
+        print(f"revoked {mailbox} at Google and removed it from this computer")
+    else:
+        print(f"removed {mailbox} from this computer; Google did not confirm the revocation, so also remove "
+              "the app at myaccount.google.com/permissions")
     return 0
 
 
@@ -262,6 +341,14 @@ def cmd_doctor(args):
         c.ok("credential source", "runner supervisor socket (key remains on the runner)")
     else:
         try:
+            connected = oauth.status()
+        except Failure as e:
+            connected = []
+            c.fail("google accounts", e.msg, e.hint)
+        if connected:
+            c.ok("google accounts", f"{len(connected)} connected without delegation: "
+                 + ", ".join(row["mailbox"] for row in connected))
+        try:
             info = auth.key_info()
             c.ok("service-account key", f"{info['path']} (mode 600, parses)")
             c.ok("service account", info["client_email"])
@@ -269,7 +356,8 @@ def cmd_doctor(args):
             if info["project_id"]:
                 c.ok("google cloud project", info["project_id"])
         except Failure as e:
-            c.fail("service-account key", e.msg, e.hint)
+            if not connected:
+                c.fail("service-account key", e.msg, e.hint)
 
     try:
         import google.oauth2                              # noqa: F401
@@ -295,12 +383,21 @@ def cmd_doctor(args):
             c.skip(box, "impersonation, labels and calendar not checked",
                    "fix the failures above, then run doctor again")
             continue
+        personal = not socket_mode and auth.source(box) == "oauth"
+        if not personal and not socket_mode and info is None:
+            c.fail(f"{box} access", "no connected Google account and no service-account key",
+                   f"Connect it: {oauth.connect_command(box)}")
+            continue
         try:
             g = open_gmail(box)
             prof = g.profile()
-            c.ok(f"{box} impersonation",
-                 f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} messages"
-                 + (f", used by {', '.join(slugs)}" if slugs else ""))
+            if personal:
+                c.ok(f"{box} google account", f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} "
+                     "messages, connected without delegation" + (f", used by {', '.join(slugs)}" if slugs else ""))
+            else:
+                c.ok(f"{box} impersonation",
+                     f"{prof.get('emailAddress', box)}, {prof.get('messagesTotal', '?')} messages"
+                     + (f", used by {', '.join(slugs)}" if slugs else ""))
         except Failure as e:
             c.fail(f"{box} impersonation", e.msg,
                    e.hint or auth.delegation_hint(auth.GMAIL_SCOPE,
@@ -331,8 +428,8 @@ def cmd_doctor(args):
             c.fail(f"{box} calendar", e.msg, e.hint)
         except Exception as e:
             c.fail(f"{box} calendar", str(e),
-                   auth.delegation_hint(auth.CALENDAR_SCOPE,
-                                        (info or {}).get("client_id", "NNN")))
+                   oauth.refresh_failed_hint(box) if personal else
+                   auth.delegation_hint(auth.CALENDAR_SCOPE, (info or {}).get("client_id", "NNN")))
 
     rc = 1 if c.failed else 0
     if args.json:
@@ -2843,6 +2940,26 @@ def build_parser():
     sc.add_argument("--summary", default=None, help="the event title")
     sc.add_argument("--approval-issue", default=None, metavar="N")
     sc.set_defaults(func=cmd_schedule)
+
+    go = sub.add_parser("google", help="connect, list or revoke one person's own Google account (no delegation)")
+    gosub = go.add_subparsers(dest="google_cmd", required=True)
+    gc = gosub.add_parser("connect", help="sign in as one mailbox and store its grant on this computer")
+    gc.add_argument("--mailbox", required=True, metavar="ADDR", help="the address that signs in; nothing else is accepted")
+    gc.add_argument("--client-file", default=None, metavar="PATH",
+                    help="Desktop app OAuth client JSON from your Google Cloud project (once; kept for later connects)")
+    gc.add_argument("--allow", action="append", default=None, metavar="CAP",
+                    help="add a write capability to read-only access: " + ", ".join(sorted(oauth.CAPABILITIES)))
+    gc.add_argument("--json", action="store_true")
+    gc.set_defaults(func=cmd_google_connect)
+    gf = gosub.add_parser("finish", help=argparse.SUPPRESS)
+    gf.set_defaults(func=cmd_google_finish)
+    gs = gosub.add_parser("status", help="the connected accounts and what each may do (never a token)")
+    gs.add_argument("--json", action="store_true")
+    gs.set_defaults(func=cmd_google_status)
+    gr = gosub.add_parser("revoke", help="revoke one account's grant at Google and remove it here")
+    gr.add_argument("--mailbox", required=True, metavar="ADDR")
+    gr.add_argument("--json", action="store_true")
+    gr.set_defaults(func=cmd_google_revoke)
 
     mt = sub.add_parser("mint-token", help=argparse.SUPPRESS)
     mt.add_argument("--mailbox", required=True)

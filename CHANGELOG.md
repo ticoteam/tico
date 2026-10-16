@@ -7,6 +7,20 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A person can connect their own Google account for their inbox and calendar from Settings > Inbox > Connect
+  Google: sign in, approve, done. No service account, no domain-wide delegation, no Workspace admin and no Google Cloud
+  project of their own; Tico supplies the Google app (docs/mail.md, Connect your Google account). The grant is read
+  only at Google (`gmail.readonly`, calendar events read-only and free/busy), and Tico refuses label, archive, draft,
+  send and calendar changes before calling Google. Only the person can connect their own mailbox, and a sign-in by any
+  other account is refused and revoked. The computer that syncs mail keeps the grant, out of bots' reach; a bot's run
+  still gets only an hour-long token for its own mailbox. A Workspace policy that blocks Tico is named as the admin's
+  ("has a policy that blocks Tico"), a revoked or expired grant says to reconnect, and neither falls back to a service
+  account. Disconnect revokes the grant at Google. Each server names its own Google app: a private one for a few known
+  people (Google's personal-use exemption, with its unverified-app screen and 100-user cap), or Tico's public app,
+  which needs Google's verification for lasting grants; in Google's Testing state grants end after 7 days
+  (docs/mail.md).
+
 ### Changed
 - When a computer holds new work to update, Settings > Health names each running turn it waits for: the bot, its
   task and when it started (only what the reader may read), and says a turn that only waits on something elsewhere
