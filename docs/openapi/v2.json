@@ -20865,6 +20865,77 @@
         ],
         "title": "QuestionOption"
       },
+      "RanOn": {
+        "type": "object",
+        "properties": {
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "provider": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "runtime": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "harness": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "family": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "family",
+                "harness",
+                "model",
+                "provider",
+                "runtime"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fallback harness that ran the turn, if any"
+          },
+          "family": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The maker of the model that did the work, from the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor auto, OpenRouter, an unlisted model, nothing counted). Never the bot's configured model."
+          }
+        },
+        "required": [
+          "fallback",
+          "family",
+          "segments"
+        ],
+        "additionalProperties": true
+      },
       "Recent": {
         "type": "object",
         "properties": {
@@ -23045,6 +23116,12 @@
           "mover": {
             "type": "boolean"
           },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskRun"
+            }
+          },
           "actors": {
             "type": "object",
             "additionalProperties": {
@@ -23389,6 +23466,47 @@
           "by",
           "questions",
           "who"
+        ],
+        "additionalProperties": true
+      },
+      "TaskRun": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "string"
+          },
+          "bot": {
+            "type": "string"
+          },
+          "started": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ran_on": {
+            "$ref": "#/components/schemas/RanOn"
+          }
+        },
+        "required": [
+          "bot",
+          "finished",
+          "outcome",
+          "ran_on",
+          "run",
+          "started"
         ],
         "additionalProperties": true
       },

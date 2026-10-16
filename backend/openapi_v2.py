@@ -644,8 +644,15 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
+    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "family": "n"})),
+                  "fallback": {"type": ["string", "null"], "description": "The fallback harness that ran the turn, if any"},
+                  "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
+                             "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
+                             "auto, OpenRouter, an unlisted model, nothing counted). Never the bot's configured model."}}),
+    "TaskRun": obj({"run": "s", "bot": "s", "started": "n", "finished": "n", "outcome": "n", "ran_on": ref("RanOn")}),
     "TaskDetail": obj({"task": ref("Task"), "events": "a", "children": "a", "comments": items(ref("Message")),
-                       "messages": items(ref("Message")), "has_more": "b", "can_comment": "b", "mover": "b"},
+                       "messages": items(ref("Message")), "has_more": "b", "can_comment": "b", "mover": "b",
+                       "runs": items(ref("TaskRun"))},
                        required=["task", "events", "children", "comments", "messages", "has_more"], actors=ACTORS),
     "TaskReviewAskView": obj({"questions": "a", "who": "n", "by": "s"}),
     "ReviewAnswer": {"oneOf": [

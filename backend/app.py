@@ -2563,7 +2563,7 @@ def create_app(settings=None):
                     "runs": task_runs(c, who, tid),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
 
-    def task_runs(c, who, tid, limit=50):
+    def task_runs(c, who, tid, limit=200):
         """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
         weighs who built what reads this, never the bot's configured model: a fallback turn ran elsewhere."""
         from .usage_records import ran_on

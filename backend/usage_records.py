@@ -13,12 +13,11 @@ RESELLERS = {"cursor", "openrouter"}
 
 
 def family(part):
-    """The model maker behind one segment (`anthropic`, `openai`, ...), or None when it is not known."""
+    """The model maker behind one segment (`anthropic`, `openai`, ...), from Tico's model catalog only. A model the
+    catalog does not list is unknown (None) whatever ran it: Claude Code or Codex can run another maker's model."""
     from . import providers
-    model = part.get("model") or ""
-    row = providers.MODEL_BY_ID.get(model) or {}
-    maker = row.get("provider") or part.get("provider") or providers.runtime_provider(part.get("runtime"))
-    return None if not maker or maker in RESELLERS or model in ("", "auto", "cursor-auto") else maker
+    maker = (providers.MODEL_BY_ID.get(part.get("model") or "") or {}).get("provider")
+    return maker if maker and maker not in RESELLERS else None
 
 
 def ran_on(c, turn_ids):
