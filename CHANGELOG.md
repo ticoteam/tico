@@ -16,7 +16,8 @@ All notable changes to Tico are recorded here. The format follows
   other account is refused and revoked. The computer that syncs mail keeps the grant, out of bots' reach; a bot's run
   still gets only an hour-long token for its own mailbox. A Workspace policy that blocks Tico is named as the admin's
   ("has a policy that blocks Tico"), a revoked or expired grant says to reconnect, and neither falls back to a service
-  account. Disconnect revokes the grant at Google. Each server names its own Google app: a private one for a few known
+  account. Disconnect revokes the grant at Google; if the computer holding it stays offline, Settings says so and
+  points to Google's own permissions page. Each server names its own Google app: a private one for a few known
   people (Google's personal-use exemption, with its unverified-app screen and 100-user cap), or Tico's public app,
   which needs Google's verification for lasting grants; in Google's Testing state grants end after 7 days
   (docs/mail.md).
