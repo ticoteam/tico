@@ -18,7 +18,8 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 1. **Every PR** runs only the tests for what it changed (below).
 2. **Before you tag**, and only then, the full suite: the default suites, the opt-in tests and a short whole-product
-   check, targeted under 8 minutes on a shared Mac: `python scripts/release_checks.py --release`.
+   check: the manual Release validation workflow on a fresh GitHub-hosted Linux VM, or
+   `python scripts/release_checks.py --release` on a suitable local machine. The 8-minute target is report-only.
 3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 5. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
@@ -44,11 +45,36 @@ python scripts/release_checks.py
 That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load and fails
 if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
-that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. CI only
-builds and publishes: the Docker workflow builds the three images for a `v*` tag, and the Release workflow publishes the
-GitHub release; no GitHub Actions workflow runs tests. The manual screenshots workflow
+that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. The Docker workflow builds the three images for a `v*` tag and the Release workflow publishes the
+GitHub release. The manual Release validation workflow runs the full gate only when explicitly dispatched;
+there are no push or PR test triggers. The manual screenshots workflow
 generates documentation images from the Actions tab (Run workflow). `--release` runs this suite too, so a
 release is the one place it runs.
+
+## Hosted release validation
+
+Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
+interactive work. It uses a standard ephemeral native Ubuntu24.04 x64 VM for this public repository, with read-only
+repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy.
+
+```sh
+gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48
+```
+
+The reviewed workflow controls and selected candidate have separate checkouts: a workflow merged after a candidate was
+frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
+Native runner/relay prerequisites are built from that candidate and their fingerprints checked before tests. Python and
+Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
+architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must
+stay clean through completion. It checkpoints the command and actual process start so an interrupted run stays honest.
+Only one manual release validation runs at a time. A missing prerequisite, insufficient space or failed phase blocks it.
+
+On this disposable hosted VM only, the controls may remove fixed unused Android, .NET and Haskell SDK directories to
+retain at least30GiBfree after prerequisites and before the gate. They refuse local/self-hosted execution. No paid runner,
+new machine, production mount or broad Docker prune is used. A capacity refusal requires fixing that environment rather
+than skipping tests. Keep affected Linux/root two-user contracts explicit; ordinary Cargo tests ignore those fixtures.
+Targeted macOS compile/native checks can use a standard hosted Mac; desktop permissions, keychain, launchd and physical
+computer acceptance still need the corresponding Mac environment. The full Docker gate belongs on Linux.
 
 ## Before you tag
 

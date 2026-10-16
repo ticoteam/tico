@@ -54,7 +54,7 @@ Loop until nothing is left that you can move:
    it guards a privacy or permission boundary, data safety, or a core task/run flow. Before merging, run
    the test files for what you touched, plus the checks the change obviously affects (catalog, docs
    counts, tool parity). Do not run the full suite for a merge: it runs once, right before a release
-   (docs/releasing.md). GitHub Actions only builds and publishes; it does not run tests. Compare a local
+   (docs/releasing.md). GitHub Actions builds and publishes, and its manual Release validation workflow runs one exact-SHA full release gate when requested; no push or PR triggers run tests. Compare a local
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.

@@ -81,6 +81,7 @@ INBOX = "/#/settings/inbox"    # Settings > Inbox (ui/app/router.js), which read
 SIGN_IN_SECONDS = 600           # Google's codes last about ten minutes; a sign-in left open longer starts again
 CLAIM_SECONDS = 300             # a computer that claimed and never answered
 HOLDER_SECONDS = 600            # a computer that said it holds mail credentials, this recently
+STALLED_SECONDS = 900           # a disconnect its computer has not taken this long: that computer is offline
 QUEUED = ("ready", "disconnecting")
 # What Google may put in the callback's `error`, as the kind the person is shown.
 CALLBACK_ERRORS = {"admin_policy_enforced": "admin_policy", "org_internal": "app_unavailable",
@@ -216,6 +217,12 @@ def view(row, settings, mailbox, syncing):
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
                          or (row["message"] or "Connecting failed.", row["hint"] or "Connect again."))
         out.update(kind=kind, message=message, hint=hint)
+    if row and status == "disconnecting" and (row["started"] or 0) < time.time() - STALLED_SECONDS:
+        # It stays queued, so the computer still revokes when it is back; the person can revoke at Google now.
+        out.update(stalled=True, message="The computer that holds your Google access hasn't come online, so Tico "
+                                         "hasn't revoked it yet.",
+                   hint="Remove Tico now at myaccount.google.com/permissions. The computer finishes the disconnect "
+                        "when it is back online.")
     return out
 
 
@@ -340,6 +347,9 @@ def install(app, store, publisher, mutate):
             holds = bool(body and body.holds_mail)
             c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen) VALUES(?,?,?) ON CONFLICT(runner_id) "
                       "DO UPDATE SET holds=excluded.holds,seen=excluded.seen", (runner["id"], int(holds), time.time()))
+            # Only recent answers count (claimable), so older ones and revoked computers' go.
+            c.execute("DELETE FROM google_mail_holders WHERE seen<? OR runner_id IN "
+                      "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
             row = claimable(c, runner["id"], holds)
             if not row:
                 return {"connect": None}

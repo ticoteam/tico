@@ -8,6 +8,8 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Maintainers can manually validate an exact release candidate on an isolated GitHub-hosted Linux computer, with
+  native prerequisites, capacity checks and retained results, without changing or publishing the candidate.
 - A person can connect their own Google account for their inbox and calendar from Settings > Inbox > Connect
   Google: sign in, approve, done. No service account, no domain-wide delegation, no Workspace admin and no Google Cloud
   project of their own; Tico supplies the Google app (docs/mail.md, Connect your Google account). The grant is read
@@ -16,7 +18,8 @@ All notable changes to Tico are recorded here. The format follows
   other account is refused and revoked. The computer that syncs mail keeps the grant, out of bots' reach; a bot's run
   still gets only an hour-long token for its own mailbox. A Workspace policy that blocks Tico is named as the admin's
   ("has a policy that blocks Tico"), a revoked or expired grant says to reconnect, and neither falls back to a service
-  account. Disconnect revokes the grant at Google. Each server names its own Google app: a private one for a few known
+  account. Disconnect revokes the grant at Google; if the computer holding it stays offline, Settings says so and
+  points to Google's own permissions page. Each server names its own Google app: a private one for a few known
   people (Google's personal-use exemption, with its unverified-app screen and 100-user cap), or Tico's public app,
   which needs Google's verification for lasting grants; in Google's Testing state grants end after 7 days
   (docs/mail.md). The app's client secret stays on the server: the server exchanges the sign-in code and refreshes

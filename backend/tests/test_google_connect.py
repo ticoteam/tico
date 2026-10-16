@@ -409,6 +409,35 @@ def test_a_holder_that_was_removed_no_longer_keeps_the_row(app):
     assert post(app, "connectors/mail/google/claim", {}, server["token"])["connect"]["action"] == "disconnect"
 
 
+def test_a_disconnect_its_offline_computer_never_takes_says_so_and_stays_queued(app):
+    mac = runner(app, label="Mac")
+    connected(app, mac)
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    assert "stalled" not in get(app, "mail/google", "cara-test")
+    with app.app.state.store.transaction() as c:
+        c.execute("UPDATE google_connects SET started=? WHERE person_id='cara'",
+                  (time.time() - google_connect.STALLED_SECONDS - 1,))
+    seen = get(app, "mail/google", "cara-test")
+    assert seen["status"] == "disconnecting" and seen["stalled"] is True
+    assert "hasn't come online" in seen["message"] and "myaccount.google.com/permissions" in seen["hint"]
+    # When the computer is back it still revokes.
+    assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, mac["token"])["connect"]["action"] == \
+        "disconnect"
+
+
+def test_only_recent_live_computers_keep_a_holder_record(app):
+    old, gone, now = runner(app, label="Old"), runner(app, label="Gone"), runner(app, label="Now")
+    for machine in (old, gone):
+        post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])
+    with app.app.state.store.transaction() as c:
+        c.execute("UPDATE google_mail_holders SET seen=? WHERE runner_id=?",
+                  (time.time() - google_connect.HOLDER_SECONDS - 1, old["runner_id"]))
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone["runner_id"]))
+    post(app, "connectors/mail/google/claim", {}, now["token"])
+    with app.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT runner_id FROM google_mail_holders")] == [now["runner_id"]]
+
+
 def test_nobody_acting_for_the_person_connects_or_disconnects(app):
     settings = app.app.state.store.settings
     settings.test_identities["cara-assistant"] = Identity("human:cara", "human", "cara@acme.example", via="assistant")

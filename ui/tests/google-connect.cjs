@@ -71,6 +71,15 @@ const {html, uiFile} = require('./support/page.cjs');
     await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
 
+    // A disconnect the holding computer never takes says so, and points to Google's own page to revoke now.
+    google = {...google, status: 'disconnecting', stalled: true,
+      message: "The computer that holds your Google access hasn't come online, so Tico hasn't revoked it yet."};
+    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));
+    await page.locator('#set-google [role=alert]').waitFor();
+    assert.match(await page.locator('#set-google').innerText(), /hasn't come online/);
+    assert.doesNotMatch(await page.locator('#set-google').innerText(), /within two minutes/);
+    assert.equal(await page.locator('#set-google a[href="https://myaccount.google.com/permissions"]').count(), 1);
+
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
     await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')));

@@ -481,7 +481,9 @@ Reconnect and revoke:
 - **Disconnect** in Settings > Inbox revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
   already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
-  holds nothing, and Settings shows that instead of "disconnected".
+  holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,
+  Settings says so and points to myaccount.google.com/permissions to remove Tico now; the disconnect stays queued, and
+  the computer still revokes and deletes the grant when it is back.
 
 Where the grant is kept: `google-oauth.json` beside `google-sa.json` (the runner's state directory on Linux, mode 0600,
 closed to bots). It moves out of `workspace/secrets` without dropping other grants, and follows a re-enrollment the
