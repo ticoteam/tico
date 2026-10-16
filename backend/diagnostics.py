@@ -283,7 +283,7 @@ ALLOWED = {
     "database": {"migration": None, "cloud_migration": None},
     "features": {},
     # The Beta features this install has on or in use (backend/beta.py), by id.
-    "beta": None,
+    "beta": [None],
     "counts": {"bots": None, "people": None, "routines": None},
     "logs": {"server": None, "updater": None, "app": None},
     "browser": [{"kind": None, "at": None, "file": None, "line": None, "column": None, "count": None}],

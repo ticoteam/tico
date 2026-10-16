@@ -2,6 +2,7 @@
 and support diagnostics list the Beta features turned on."""
 
 import json
+import re
 from pathlib import Path
 
 from backend import beta
@@ -34,3 +35,30 @@ def test_the_app_gets_the_list_and_diagnostics_name_what_is_on(environment):
                    json={"app": {"version": "0.3.51", "lines": [], "mac": True}, "performance_hours": 0})
     assert got.status_code == 200, got.text
     assert json.loads(got.json()["text"])["beta"] == ["mac_app"]
+
+
+UI = Path(__file__).resolve().parents[2] / "ui"
+# A pill the app draws by id: `betaPill('id')` in a script, or `data-beta="id"` in a static spot. ui/app/state.js
+# defines both and is left out.
+SPOT = re.compile(r"""betaPill\('([a-z_]+)'\)|data-beta="([a-z_]+)\"""")
+
+
+def test_every_pill_in_the_app_is_a_listed_feature_and_every_feature_has_one():
+    used = {}
+    for path in sorted(UI.rglob("*")):
+        rel = path.relative_to(UI)
+        if path.suffix not in (".js", ".html") or "tests" in rel.parts or rel.as_posix() == "app/state.js":
+            continue
+        for match in SPOT.finditer(path.read_text()):
+            used.setdefault(match.group(1) or match.group(2), []).append(rel.as_posix())
+    # A pill for an id off the list draws nothing, so a typo would hide it silently and a new id would label an
+    # unapproved feature once listed.
+    assert set(used) <= set(beta.IDS), {k: v for k, v in used.items() if k not in beta.IDS}
+    # A feature that is a bot gets its pill from the bot (botBetaPill); every other one needs a spot of its own.
+    assert {f.id for f in beta.FEATURES if not f.bots} <= set(used)
+
+
+def test_diagnostics_keep_beta_only_as_a_list():
+    from backend import diagnostics
+    assert diagnostics.allowed({"beta": ["market"]}) == {"beta": ["market"]}
+    assert diagnostics.allowed({"beta": {"market": "x"}}) == {"beta": []}

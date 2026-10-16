@@ -86,6 +86,12 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     assert.deepEqual(await page.locator('#help-beta li').evaluateAll(rows => rows.map(li => li.firstChild.textContent)), beta.map(f => f.name));
     assert.equal(await page.locator('#help-beta li .pill.beta').count(), beta.length);
     assert.equal(await page.locator('[data-nav=market] .pill.beta').count(), 1);
+    assert.equal(await page.locator('#nav-inboxes-section .pill.beta').count(), 1);
+    assert.equal(await page.locator('.help-platforms .pill.beta').count(), 2);
+    // A bot is Beta by its template or harness; a bot off the list gets no pill.
+    assert.deepEqual(await page.evaluate(() => [{template: 'listening'}, {template: 'inbox'}, {harness: 'hermes'},
+      {agent: {harness: 'openclaw'}}, {template: 'support'}, {harness: 'claude'}].map(e => !!botBetaPill(e))),
+      [true, true, true, true, false, false]);
     const form = page.locator('[data-compose]'), box = form.locator('[name=message]');
     const requests = page.locator('[data-requests] .support-item'), help = page.locator('#help-open');
     // No requests yet: a friendly prompt with the composer, no list.
