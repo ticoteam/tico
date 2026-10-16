@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Manual validation controls, separate from the immutable candidate.
 
-Only ephemeral GitHub Ubuntu VMs may reclaim the fixed unused SDKs.
+Only ephemeral GitHub Ubuntu VMs may reclaim the fixed unused SDKs. Each VM runs one part of the candidate's own
+release gate (TICO_RELEASE_PART, and TICO_RELEASE_SHARD for the Python tests); together the parts are the whole gate.
 Never tags, publishes, deploys, or uses a production installation.
 """
 import argparse
@@ -19,6 +20,7 @@ import time
 GIB = 1024 ** 3
 UNUSED_SDKS = ("/usr/local/lib/android", "/usr/share/dotnet", "/opt/ghc", "/usr/local/.ghcup")
 LOG_LIMIT = 5 * 1024 ** 2
+NATIVE_PARTS = ("all", "python")   # the parts whose tests run the candidate's native runner and relay
 
 
 def require(ok, reason):
@@ -31,6 +33,14 @@ def inputs(env):
     require(re.fullmatch(r"[0-9a-f]{40}", sha), "candidate must be a full lowercase commit SHA")
     require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", previous), "previous must be an explicit stable release tag")
     return sha, previous
+
+
+def selection(env):
+    part, shard = env.get("TICO_RELEASE_PART", "all"), env.get("TICO_RELEASE_SHARD", "")
+    require(part in ("all", "docker", "python", "browser"), "the release part must be all, docker, python or browser")
+    require(not shard or (part == "python" and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
+            "a shard is K/N and only splits the python part")
+    return part, shard
 
 
 def hosted(env):
@@ -134,6 +144,7 @@ def main():
     args = parser.parse_args()
     hosted(os.environ)
     sha, previous = inputs(os.environ)
+    part, shard = selection(os.environ)
     temp = Path(os.environ["RUNNER_TEMP"])
     root = Path(os.environ["GITHUB_WORKSPACE"]) / "candidate"
     report = temp / "release-validation-report"
@@ -146,6 +157,7 @@ def main():
                "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                "architecture": platform.machine(), "python": platform.python_version(),
                "cpu_count": os.cpu_count(), "started_unix": time.time(), "mode": args.mode,
+               "part": part, "shard": shard or None,
                "test_settings": {name: os.environ.get(name) for name in
                                  ("TICO_PYTHON_WORKERS", "TICO_UI_JOBS", "TICO_UI_SLOWDOWN", "TICO_BROWSER_CHANNEL")},
                "gate_started": False, "success": False}
@@ -162,12 +174,15 @@ def main():
         if args.mode == "prepare":
             receipt["success"] = True
             return 0
-        receipt["native_binaries"] = native_binaries(root)
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
-        env = {**os.environ, "TMPDIR": str(gate_temp),
-               "TICO_SCREEN_RELAY_BIN": receipt["native_binaries"]["relay"]["path"]}
+        env = {**os.environ, "TMPDIR": str(gate_temp)}
+        if part in NATIVE_PARTS:
+            receipt["native_binaries"] = native_binaries(root)
+            env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         command = [sys.executable, "scripts/release_checks.py", "--release", "--previous", previous]
+        if part != "all":
+            command += ["--part", part] + (["--shard", shard] if shard else [])
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})
         checkpoint()  # Survives timeout/cancellation even when the finalizer cannot run.
         gate_clock = time.monotonic()

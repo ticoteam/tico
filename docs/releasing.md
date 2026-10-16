@@ -54,18 +54,27 @@ release is the one place it runs.
 ## Hosted release validation
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
-interactive work. It uses a standard ephemeral native Ubuntu24.04 x64 VM for this public repository, with read-only
+interactive work. It uses standard ephemeral native Ubuntu24.04 x64 VMs for this public repository, with read-only
 repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy.
+
+The gate is split across five VMs that run side by side, each running one part of the candidate's own gate
+(`release_checks.py --release --part ...`): `docker` (image builds, journey, smoke, side jobs and Docker isolation),
+`browser` (every browser test) and `python-1` to `python-3` (the Python tests, `--shard K/3`: whole test files
+balanced by test count, slow tests weighed heavier, the same split on every VM). Together they run every test once.
+The `release-check` job is the one verdict: it passes only when every part passed. pip, npm, Playwright browser and
+Cargo dependency caches save the downloads; each VM still installs from the candidate's pinned lock files and builds
+the candidate's own crates.
 
 ```sh
 gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48
 ```
 
 The reviewed workflow controls and selected candidate have separate checkouts: a workflow merged after a candidate was
-frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
-Native runner/relay prerequisites are built from that candidate and their fingerprints checked before tests. Python and
+frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged;
+a candidate older than `--part` cannot be checked by the split workflow. Native runner/relay prerequisites are built
+from that candidate on each Python VM and their fingerprints checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
-architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must
+architecture, capacity, part, worker settings, phase exits and bounded log tails as a three-day artifact per VM; the candidate must
 stay clean through completion. It checkpoints the command and actual process start so an interrupted run stays honest.
 Only one manual release validation runs at a time. A missing prerequisite, insufficient space or failed phase blocks it.
 

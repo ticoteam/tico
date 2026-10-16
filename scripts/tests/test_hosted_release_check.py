@@ -11,6 +11,11 @@ def test_inputs_and_host_are_checked_before_any_reclamation(tmp_path, monkeypatc
     for sha, previous in [('main', 'v0.3.48'), ('a' * 40, 'v0.3.48;touch unwanted')]:
         with pytest.raises(RuntimeError):
             check.inputs({'CANDIDATE_SHA': sha, 'PREVIOUS_RELEASE': previous})
+    assert check.selection({}) == ('all', '')
+    assert check.selection({'TICO_RELEASE_PART': 'python', 'TICO_RELEASE_SHARD': '2/3'}) == ('python', '2/3')
+    for part, shard in [('docker', '1/3'), ('python', '2/3;touch unwanted'), ('everything', '')]:
+        with pytest.raises(RuntimeError):
+            check.selection({'TICO_RELEASE_PART': part, 'TICO_RELEASE_SHARD': shard})
     monkeypatch.setattr(check.subprocess, 'run', lambda *a, **kw: pytest.fail('must not remove anything on a local host'))
     with pytest.raises(RuntimeError, match='never run on a user or bot host'):
         check.capacity(tmp_path, 30 * check.GIB, {'GITHUB_ACTIONS': 'true', 'TICO_HOSTED_ENVIRONMENT': 'self-hosted'})

@@ -36,7 +36,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
                 return 'synthetic build failure'
 
         monkeypatch.setattr(release_checks, 'Check', Check)
-        assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
+        assert release_checks.release(SimpleNamespace(previous=None, part='all', shard=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
         python_command = calls['all-python'][0]
         isolation_file = 'runner/tests/test_isolation_docker.py'
@@ -78,3 +78,29 @@ def test_a_test_step_that_passes_nothing_fails(tmp_path):
     assert run('4 skipped in 0.5s') == 1                # all skipped: the step proved nothing
     assert run('no tests ran in 0.4s') == 1
     assert run('4 skipped in 0.5s', tests=False) == 0   # a non-test step is judged by its exit code alone
+
+
+def test_parts_and_shards_together_run_the_whole_gate(tmp_path, monkeypatch):
+    listing = {'slow': 'b.py::s1\nb.py::s2\n', 'slow or not slow': 'a.py::t1\na.py::t2\nb.py::s1\nb.py::s2\nc.py::t\n'}
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=lambda command, **kwargs: SimpleNamespace(
+        stdout=listing[command[command.index('-m', 3) + 1]] if '--collect-only' in command else 'a' * 40)))
+    shards = [release_checks.shard_files(index, 2) for index in (1, 2)]
+    assert sorted(shards[0] + shards[1]) == ['a.py', 'b.py', 'c.py'] and shards[0] == ['b.py']   # every file, once
+
+    monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
+    for part, expected in (('docker', {'journey', 'build-server', 'build-runner', 'build-updater', 'smoke', 'side-jobs',
+                                       'isolation'}), ('python', {'all-python'}), ('browser', {'all-browser'})):
+        calls = {}
+
+        class Check:
+            def __init__(self, name, command, log_dir, env, tests=False):
+                calls[name], self.name, self.code, self.seconds, self.started = command, name, 0, 1.0, 0.0
+
+            def join(self):
+                return 0
+
+        monkeypatch.setattr(release_checks, 'Check', Check)
+        shard = (2, 2) if part == 'python' else None
+        assert release_checks.release(SimpleNamespace(previous=None, part=part, shard=shard)) == 0
+        assert set(calls) == expected
+    assert calls == {'all-browser': ['node', 'scripts/ui-tests.cjs', '--all']}
