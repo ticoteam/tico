@@ -7,6 +7,24 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.52] - 2026-10-16
+
+### Added
+- Features still in Beta carry a **Beta** pill wherever they appear in the app (for example Windows (WSL 2) in Add
+  computer, chat goals and steering, Message bots, the Slack gateway, Listening and every Market page). One approved list
+  drives the pills, Help's Beta features list and the manual's Beta notes, and Support diagnostics name the Beta features
+  turned on.
+- **Want help setting up?** in the setup wizard, on Health and on a bot in Needs setup opens Support with a setup
+  snapshot (steps done, computer online, model signed in, first bot ready, bots in Needs setup) that the person reads and
+  edits before sending; the request goes marked `setup`. After the install's first bot result, and 7 and 30 days later,
+  each person is asked once, skippably, "How is Tico working for you?"; an answer goes as a `feedback` request. HQ keeps
+  each ticket's `kind`, and the Support Agent's tasks are titled `Support (setup):` or `Support (feedback):`. An HQ
+  from before `kind` still gets the ticket, with the kind named in the message.
+- The anonymous usage count carries a third yes/no flag, `first_result` (a bot turn has ever finished here), and HQ's
+  public `/v1/stats` adds `first_result` (installs that reached a first result) and `first_result_median_days` (the
+  median days from first seen to it, over installs that sent the flag from the start; shown from 5 such installs).
+  PRIVACY.md lists the field.
+
 ## [0.3.51] - 2026-10-16
 
 ### Added
@@ -2894,7 +2912,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.51...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.52...HEAD
+[0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.51...v0.3.52
 [0.3.51]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
