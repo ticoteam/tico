@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Bots can post Block Kit, keep a Slack message current, and upload charts.** `connectors/slack.py post --blocks` sends a
+  Block Kit layout (with `--text` as the notification text), `update --ts` edits a message the same bot posted in that
+  channel, as this computer's audit log recorded it, and `upload --file` adds a png, jpg or gif, shared to a listed channel
+  or kept private for an image block's `slack_file`. Every channel rule still applies; blocks may not carry `image_url`,
+  so no data leaves the workspace in an image address. Posts now record their message ts in the audit log. **Uploading
+  needs the `files:write` scope:** paste the current manifest over the app's old one, reinstall it, and paste the new Bot
+  User OAuth Token in Tools > Slack. See [Slack](integrations/slack.md).
 - **Want help setting up?** in the setup wizard, on Health and on a bot in Needs setup opens Support with a setup
   snapshot (steps done, computer online, model signed in, first bot ready, bots in Needs setup) that the person reads and
   edits before sending; the request goes marked `setup`. After the install's first bot result, and 7 and 30 days later,

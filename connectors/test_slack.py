@@ -4,7 +4,7 @@
     python3 -m unittest discover -s connectors
 """
 
-import contextlib, io, json, os, stat, sys, tempfile, unittest
+import contextlib, io, json, os, stat, sys, tempfile, unittest, urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
@@ -81,8 +81,10 @@ class FakeHTTP:
         self.responses, self.calls = list(responses), []
 
     def __call__(self, url, data, headers, timeout):
-        self.calls.append({"url": url, "data": json.loads(data) if data else None,
-                           "auth": headers.get("Authorization")})
+        form = headers.get("Content-Type", "").startswith("application/x-www-form-urlencoded")
+        body = ({k: v[0] for k, v in urllib.parse.parse_qs(data.decode()).items()} if form
+                else json.loads(data) if data else None)
+        self.calls.append({"url": url, "data": body, "auth": headers.get("Authorization")})
         status, hdrs, payload = self.responses.pop(0)
         return status, hdrs, json.dumps(payload).encode()
 
@@ -276,6 +278,82 @@ class ChannelList(FakeSlack):
         self.assertEqual(rc, 2)
         self.assertEqual(len(calls), 1)                               # conversations.info, then it stopped
         self.assertEqual(self.audited, [])
+
+
+class RichPosts(FakeSlack):
+    """Block Kit, edits and images keep every posting gate, and a bot edits only its own posts."""
+
+    def setUp(self):
+        super().setUp()
+        real_get, answer = slack.HUB_GET, {"channels": ChannelList.rows, "registry_file": {"imported": True}}
+        slack.HUB_GET = lambda path: answer
+        self.addCleanup(setattr, slack, "HUB_GET", real_get)
+
+    info = (200, {}, {"ok": True, "channel": {"id": "C0000000010", "name": "customer_success"}})
+    blocks = [{"type": "header", "text": {"type": "plain_text", "text": "Bot health"}},
+              {"type": "section", "text": {"type": "mrkdwn", "text": "Healthy \u25b0\u25b0\u25b0\u25b1 86/88"}}]
+
+    def write(self, name, data):
+        path = Path(self.tmp.name) / name
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def test_blocks_are_posted_with_the_text_and_image_urls_are_refused_before_any_call(self):
+        rc, out, calls = self.run_cli(["post", "--as", self.slug, "--channel", "C0000000010", "--text", "Bot health",
+                                       "--blocks", self.write("b.json", {"blocks": self.blocks}), "--json"],
+                                      [self.info, OK_POST, OK_AUTH])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((calls[1]["data"]["blocks"], calls[1]["data"]["text"]), (self.blocks, "Bot health"))
+        self.assertEqual(self.audited[0][1]["message_ts"], "1756742400.000100")
+        leak = self.blocks + [{"type": "image", "image_url": "https://charts.example/?d=secret", "alt_text": "x"}]
+        for bad in (leak, [{"text": "no type"}], [self.blocks[1]] * 51):
+            rc, out, calls = self.run_cli(["post", "--as", self.slug, "--channel", "C0000000010", "--text", "x",
+                                           "--blocks", self.write("bad.json", bad), "--json"])
+            self.assertEqual((rc, calls), (2, []), out)
+
+    def test_a_bot_edits_only_a_message_the_audit_log_shows_it_posted_there(self):
+        log = Path(self.tmp.name) / "runtime" / "slack-audit.jsonl"
+        log.parent.mkdir(parents=True)
+        log.write_text("\n".join(json.dumps(r) for r in [
+            {"kind": "post", "slug": "reader", "channel": "C0000000010 #customer_success", "message_ts": "1.1"},
+            {"kind": "post", "slug": self.slug, "channel": "C0000000099 #other", "message_ts": "2.2"},
+            {"kind": "post", "slug": self.slug, "channel": "C0000000010 #customer_success", "message_ts": "3.3"}]) + "\n")
+        real_file, slack.AUDIT_FILE = slack.AUDIT_FILE, log
+        self.addCleanup(setattr, slack, "AUDIT_FILE", real_file)
+        for ts in ("1.1", "2.2", "9.9"):                             # another bot's, another channel's, unknown
+            rc, out, calls = self.run_cli(["update", "--as", self.slug, "--channel", "C0000000010", "--ts", ts,
+                                           "--text", "x", "--json"])
+            self.assertEqual((rc, calls), (2, []), out)
+        rc, out, calls = self.run_cli(["update", "--as", self.slug, "--channel", "C0000000010", "--ts", "3.3",
+                                       "--text", "Bot health", "--blocks", self.write("b.json", self.blocks), "--json"],
+                                      [self.info, (200, {}, {"ok": True, "ts": "3.3"}), OK_AUTH])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls[1]["url"], slack.API + "chat.update")
+        self.assertEqual((calls[1]["data"]["ts"], calls[1]["data"]["blocks"]), ("3.3", self.blocks))
+        self.assertEqual(self.audited[0][1]["kind"], "update")
+
+    def test_an_image_goes_to_slacks_upload_address_and_is_shared_only_to_a_listed_channel(self):
+        chart = Path(self.tmp.name) / "chart.png"
+        chart.write_bytes(PNG)
+        sent = []
+        real_upload, slack._upload = slack._upload, lambda url, raw, timeout: (sent.append((url, raw)), 200)[1]
+        self.addCleanup(setattr, slack, "_upload", real_upload)
+        slot = (200, {}, {"ok": True, "upload_url": "https://files.slack.com/upload/v1/abc", "file_id": "F0CHART"})
+        done = (200, {}, {"ok": True, "files": [{"id": "F0CHART", "title": "chart.png"}]})
+        rc, out, calls = self.run_cli(["upload", "--as", self.slug, "--channel", "C0000000010", "--file", str(chart),
+                                       "--comment", "waiting tasks by person", "--json"], [self.info, slot, done])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sent, [("https://files.slack.com/upload/v1/abc", PNG)])
+        self.assertEqual(calls[1]["data"]["length"], str(len(PNG)))
+        self.assertEqual((calls[2]["data"]["channel_id"], json.loads(calls[2]["data"]["files"])[0]["id"]),
+                         ("C0000000010", "F0CHART"))
+        rc, out, calls = self.run_cli(["upload", "--as", self.slug, "--channel", "#release_notes", "--file", str(chart),
+                                       "--json"])
+        self.assertEqual((rc, calls), (2, []))                        # the list says bots may not post there
+        notes = Path(self.tmp.name) / "notes.txt"
+        notes.write_text("hi")
+        rc, out, calls = self.run_cli(["upload", "--as", self.slug, "--file", str(notes), "--json"])
+        self.assertEqual((rc, calls), (2, []))
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64

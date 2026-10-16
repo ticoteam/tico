@@ -5,6 +5,9 @@
   connectors/slack.py channels
   connectors/slack.py history --as doc-updater --channel '#release_notes' --since yesterday --threads --format md
   connectors/slack.py post --as doc-updater --channel '#agents' --text 'shipped 3 docs'
+  connectors/slack.py post --as doc-updater --channel '#agents' --text 'Weekly docs' --blocks digest.json
+  connectors/slack.py update --as doc-updater --channel '#agents' --ts 1756742400.000100 --text 'Weekly docs' --blocks digest.json
+  connectors/slack.py upload --as doc-updater --channel '#agents' --file chart.png --comment 'docs shipped per week'
   connectors/slack.py join --channel C0000000002
   connectors/slack.py dm --as doc-updater --to someone@example.com --text 'the pricing doc is live'
   connectors/slack.py inbox --since 24h --format md --mark
@@ -19,7 +22,16 @@ Posting is gated in code, not in prompts:
     and that entry must allow bots to post (it does unless an owner or admin turned it off)
   - externally shared (Slack Connect) channels are refused: posting there is an outbound send
   - text over 4000 characters is refused
-  - every accepted post is appended to <projects>/runtime/slack-audit.jsonl
+  - every accepted post is appended to <projects>/runtime/slack-audit.jsonl, with the message's ts
+
+Block Kit, edits and images go through the same gates:
+  - `--blocks` (a file, or - for stdin) is a Block Kit array of at most 50 blocks; `--text` stays required as the
+    notification and screen-reader text. Blocks may not carry `image_url`: Slack would fetch that address, so any
+    data in it leaves the workspace. Upload the image and use an image block with `slack_file: {id: F...}` instead.
+  - `update` edits a message only when this computer's audit log shows the same bot posted it in that channel:
+    every bot shares the app's token, and Slack itself would let one edit another's posts.
+  - `upload` takes a png, jpg or gif up to 10 MB (the app needs `files:write`). With `--channel` it is shared there
+    (in a thread with `--thread`); without it, it stays private to the app and its id goes in an image block.
 
 Channel reads are scoped when an employee's Slack access entry declares `channels:`; a channel whose list entry
 names the bot as a reader is in that scope too. `history` uses `--as <slug>`, or `HUB_BOT` (older: `HUB_EMPLOYEE`)
@@ -77,6 +89,11 @@ DIRECTORY_CACHE = PROJECTS / "runtime" / "slack-user-directory.json"
 INBOX_FILE = PROJECTS / "runtime" / "slack-inbox.json"
 USER_CACHE_TTL = 24 * 3600
 MAX_POST_CHARS = 4000
+MAX_BLOCKS = 50                                         # Slack's limit for one message
+MAX_BLOCKS_CHARS = 40000
+UPLOAD_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+AUDIT_SCAN_BYTES = 5 * 1024 * 1024                      # how far back `update` looks for the bot's own post
 MAX_FILE_BYTES = 50 * 1024 * 1024
 # Outside every repository, and one folder per local user: a shared /tmp must not hand it to someone else.
 FILES_DIR = Path(tempfile.gettempdir()) / (f"slack-files-{os.getuid()}" if hasattr(os, "getuid")
@@ -174,6 +191,18 @@ def _download(url, headers, timeout, limit):
         return e.code, dict(e.headers or {}), b""
 
 
+def _upload(url, raw, timeout):
+    """POST a file's bytes to the upload address Slack handed out; it is signed, so no token travels.
+    Tests replace this."""
+    req = urllib.request.Request(url, data=raw, method="POST",
+                                 headers={"Content-Type": "application/octet-stream", "User-Agent": "tico-slack/1"})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def token_or_die():
     tok = (os.environ.get("SLACK_BOT_TOKEN") or "").strip()
     if not tok:
@@ -190,7 +219,10 @@ def call(method, params=None, post=False, token=None, timeout=30, sleep=time.sle
     params = {k: v for k, v in (params or {}).items() if v is not None and v != ""}
     headers = {"Authorization": "Bearer " + token, "User-Agent": "tico-slack/1"}
     url, body = API + method, None
-    if post:
+    if post == "form":                                  # methods documented as form-encoded only
+        body = urllib.parse.urlencode(params).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif post:
         body = json.dumps(params).encode("utf-8")
         headers["Content-Type"] = "application/json; charset=utf-8"
     else:
@@ -740,6 +772,54 @@ def check_text(text):
     return t
 
 
+def _has_key(node, key):
+    if isinstance(node, dict):
+        return key in node or any(_has_key(v, key) for v in node.values())
+    if isinstance(node, list):
+        return any(_has_key(v, key) for v in node)
+    return False
+
+
+def check_blocks(data):
+    """Parsed --blocks JSON -> the blocks list, or a refusal. An object with a "blocks" array is accepted too."""
+    blocks = data.get("blocks") if isinstance(data, dict) else data
+    if not isinstance(blocks, list) or not blocks or not all(
+            isinstance(b, dict) and isinstance(b.get("type"), str) for b in blocks):
+        raise Refused("--blocks must be a non-empty Block Kit array, each block an object with a \"type\".",
+                      "Build it in Block Kit Builder (app.slack.com/block-kit-builder) and save its \"blocks\" array.")
+    if len(blocks) > MAX_BLOCKS:
+        raise Refused(f"the message has {len(blocks)} blocks; Slack's limit is {MAX_BLOCKS}.",
+                      "Post the summary and put the detail in a thread reply or on the task.")
+    if len(json.dumps(blocks)) > MAX_BLOCKS_CHARS:
+        raise Refused(f"the blocks are over {MAX_BLOCKS_CHARS} characters of JSON.",
+                      "Post the summary and put the detail in a thread reply or on the task.")
+    if _has_key(blocks, "image_url"):
+        raise Refused("blocks may not carry image_url: Slack would fetch that address, and any data in it leaves "
+                      "the workspace.",
+                      "Upload the image with `connectors/slack.py upload` and use an image block with "
+                      "\"slack_file\": {\"id\": \"F...\"}.")
+    return blocks
+
+
+def read_inputs(args):
+    """--text and --blocks (each a value, or - for stdin; only one may read stdin) -> (text, blocks or None)."""
+    blocks_ref = getattr(args, "blocks", None)
+    if args.text == "-" and blocks_ref == "-":
+        raise Refused("--text and --blocks cannot both read standard input.", "Put the blocks in a file.")
+    text = check_text(sys.stdin.read() if args.text == "-" else args.text)
+    if not blocks_ref:
+        return text, None
+    try:
+        raw = sys.stdin.read() if blocks_ref == "-" else Path(blocks_ref).expanduser().read_text()
+    except OSError as e:
+        raise Failure(f"Could not read --blocks {one_line(blocks_ref)}: {e.strerror or e}")
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise Refused(f"--blocks is not JSON ({e}).", "Give a Block Kit array, or an object with a \"blocks\" array.")
+    return text, check_blocks(data)
+
+
 def load_hub_access(path=HUB_ACCESS_FILE):
     """registry/hub-access.yaml -> the set of company human emails a bot may DM."""
     data = load_yaml(path, "registry/hub-access.yaml")
@@ -778,16 +858,39 @@ def check_recipient(user, allowed_emails, ref):
     return email
 
 
-def audit(slug, channel, text, path=AUDIT_FILE, when=None, kind="post", recipients=None):
+def audit(slug, channel, text, path=AUDIT_FILE, when=None, kind="post", recipients=None, message_ts=None):
     rec = {"ts": (when or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
            "kind": kind, "slug": slug, "channel": channel, "text": (text or "")[:200]}
     if recipients is not None:
         rec["recipients"] = list(recipients)
+    if message_ts:
+        rec["message_ts"] = message_ts
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as f:
         f.write(json.dumps(rec) + "\n")
     return rec
+
+
+def check_own_post(slug, cid, message_ts, path=None):
+    """Refuse unless the audit log shows `slug` posted `message_ts` in channel `cid` from this computer."""
+    p = Path(path or AUDIT_FILE)
+    tail = b""
+    if p.exists():
+        with open(p, "rb") as f:
+            f.seek(max(0, p.stat().st_size - AUDIT_SCAN_BYTES))
+            tail = f.read()
+    for line in tail.decode("utf-8", "replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(rec, dict) and rec.get("kind") == "post" and rec.get("slug") == slug
+                and rec.get("message_ts") == message_ts and str(rec.get("channel") or "").split(" ")[0] == cid):
+            return
+    raise Refused(f"{message_ts} in {cid} is not a message {slug} posted from this computer.",
+                  "A bot edits only its own posts, as this computer's Slack audit log recorded them. "
+                  "Post a new message instead.")
 
 
 # ---------------------------------------------------------------- workspace helpers
@@ -1092,27 +1195,101 @@ def cmd_history(args):
     return 0
 
 
+def postable_channel(ref):
+    """The channel gates every post, edit and shared upload goes through -> (entry, channel id)."""
+    entry = find_registry_channel(load_channels(), ref)
+    if entry.get("post") is not False and not str(entry.get("id") or "").strip():
+        cid, _name = resolve_channel(ref)               # listed by name: Slack gives the id
+        entry = {**entry, "id": cid}
+    return entry, check_channel_postable(entry, ref)
+
+
 def cmd_post(args):
     slug = args.as_slug.strip()
     manifest = load_manifest(slug)
     check_can_post(manifest, slug)
-    entry = find_registry_channel(load_channels(), args.channel)
-    if entry.get("post") is not False and not str(entry.get("id") or "").strip():
-        cid, _name = resolve_channel(args.channel)      # listed by name: Slack gives the id
-        entry = {**entry, "id": cid}
-    cid = check_channel_postable(entry, args.channel)
-    text = check_text(sys.stdin.read() if args.text == "-" else args.text)
+    entry, cid = postable_channel(args.channel)
+    text, blocks = read_inputs(args)
     check_not_external(call("conversations.info", {"channel": cid}), args.channel)
     res = call("chat.postMessage",
-               {"channel": cid, "text": text, "thread_ts": args.thread,
+               {"channel": cid, "text": text, "blocks": blocks, "thread_ts": args.thread,
                 "unfurl_links": False, "unfurl_media": False}, post=True)
-    audit(slug, f"{cid} #{entry.get('name')}", text)
+    audit(slug, f"{cid} #{entry.get('name')}", text, message_ts=res.get("ts"))
     link = permalink(workspace().get("url", ""), cid, res.get("ts", "0"), args.thread)
     if args.json:
         print(json.dumps({"ok": True, "channel": cid, "name": entry.get("name"),
                           "ts": res.get("ts"), "permalink": link}, indent=2))
     else:
-        print(f"posted to #{entry.get('name')} ({cid}) as {slug}: {link}")
+        print(f"posted to #{entry.get('name')} ({cid}) as {slug}: {link} (ts {res.get('ts')})")
+    return 0
+
+
+def cmd_update(args):
+    """Edit a message this bot posted: a dashboard that stays current instead of a new post every hour."""
+    slug = args.as_slug.strip()
+    manifest = load_manifest(slug)
+    check_can_post(manifest, slug)
+    entry, cid = postable_channel(args.channel)
+    text, blocks = read_inputs(args)
+    check_own_post(slug, cid, args.ts.strip())
+    check_not_external(call("conversations.info", {"channel": cid}), args.channel)
+    # Without blocks the message becomes plain text again: an empty list clears the old layout.
+    res = call("chat.update", {"channel": cid, "ts": args.ts.strip(), "text": text, "blocks": blocks or []},
+               post=True)
+    audit(slug, f"{cid} #{entry.get('name')}", text, kind="update", message_ts=args.ts.strip())
+    link = permalink(workspace().get("url", ""), cid, res.get("ts") or args.ts.strip())
+    if args.json:
+        print(json.dumps({"ok": True, "channel": cid, "name": entry.get("name"),
+                          "ts": args.ts.strip(), "permalink": link}, indent=2))
+    else:
+        print(f"updated {link} in #{entry.get('name')} ({cid}) as {slug}")
+    return 0
+
+
+def cmd_upload(args):
+    """Upload an image (a chart): shared to a listed channel, or private to the app for a `slack_file` image block."""
+    slug = args.as_slug.strip()
+    manifest = load_manifest(slug)
+    check_can_post(manifest, slug)
+    path = Path(args.file).expanduser()
+    if path.suffix.lower() not in UPLOAD_TYPES:
+        raise Refused(f"{one_line(path.name)} is not a png, jpg or gif.", "Only images are uploaded: save the chart as PNG.")
+    try:
+        size = path.stat().st_size
+        if size > MAX_UPLOAD_BYTES:
+            raise Refused(f"{one_line(path.name)} is {size} bytes, over the {MAX_UPLOAD_BYTES} byte limit.")
+        raw = path.read_bytes()
+    except OSError as e:
+        raise Failure(f"Could not read {one_line(path)}: {e.strerror or e}")
+    if not raw:
+        raise Refused(f"{one_line(path.name)} is empty.")
+    entry = cid = None
+    if args.channel:
+        entry, cid = postable_channel(args.channel)
+        check_not_external(call("conversations.info", {"channel": cid}), args.channel)
+    elif args.thread or args.comment:
+        raise Refused("--thread and --comment need --channel.", "Without a channel the image is shared nowhere.")
+    comment = check_text(args.comment) if args.comment else None
+    title = trim_bytes(one_line(args.title or path.name), MAX_NAME_BYTES)
+    slot = call("files.getUploadURLExternal", {"filename": trim_bytes(one_line(path.name), MAX_NAME_BYTES),
+                                               "length": len(raw)}, post="form")
+    status = _upload(check_file_url(slot.get("upload_url")), raw, 60)
+    if status != 200:
+        raise Failure(f"Slack file upload failed: HTTP {status}")
+    done = call("files.completeUploadExternal",
+                {"files": json.dumps([{"id": slot.get("file_id"), "title": title}]), "channel_id": cid,
+                 "initial_comment": comment, "thread_ts": args.thread if cid else None}, post="form")
+    info = (done.get("files") or [{}])[0]
+    fid = info.get("id") or slot.get("file_id")
+    audit(slug, f"{cid} #{entry.get('name')}" if cid else "(not shared)", title, kind="file")
+    row = {"ok": True, "id": fid, "title": title, "channel": cid, "permalink": info.get("permalink")}
+    if args.json:
+        print(json.dumps(row, indent=2))
+    elif cid:
+        print(f"uploaded {title} to #{entry.get('name')} ({cid}) as {slug}: file {fid}")
+    else:
+        print(f"uploaded {title} as {slug}, not shared: use {{\"type\": \"image\", \"slack_file\": {{\"id\": \"{fid}\"}}, "
+              f"\"alt_text\": \"...\"}} in --blocks")
     return 0
 
 
@@ -1332,6 +1509,7 @@ def build_parser():
     o.add_argument("--channel", required=True, help="id or #name, must be in the channel registry")
     o.add_argument("--text", required=True, help="message text, or - to read stdin")
     o.add_argument("--thread", default=None, help="parent ts, to reply in a thread")
+    o.add_argument("--blocks", default=None, help="Block Kit JSON file, or - to read stdin; --text stays the fallback")
     o.set_defaults(func=cmd_post)
 
     for name in ("dm", "reply"):                        # `reply` is `dm --thread <ts>`
@@ -1366,6 +1544,23 @@ def build_parser():
                    help=f"a new file path, or a folder to save it in as <id>-<name> (default {FILES_DIR}); "
                         "an existing file is never replaced")
     f.set_defaults(func=cmd_file)
+
+    u = common(sub.add_parser("update", help="edit a message this bot posted (policy-gated)"))
+    u.add_argument("--as", dest="as_slug", required=True, help="employee slug")
+    u.add_argument("--channel", required=True, help="id or #name, must be in the channel registry")
+    u.add_argument("--ts", required=True, help="the message's ts, as `post` printed it")
+    u.add_argument("--text", required=True, help="message text, or - to read stdin")
+    u.add_argument("--blocks", default=None, help="Block Kit JSON file, or - to read stdin")
+    u.set_defaults(func=cmd_update)
+
+    up = common(sub.add_parser("upload", help="upload an image, e.g. a chart (policy-gated)"))
+    up.add_argument("--as", dest="as_slug", required=True, help="employee slug")
+    up.add_argument("--file", required=True, help="a png, jpg or gif up to 10 MB")
+    up.add_argument("--channel", default=None, help="share it here; without it the file stays private to the app")
+    up.add_argument("--thread", default=None, help="parent ts, to share it in a thread")
+    up.add_argument("--comment", default=None, help="text posted with the image")
+    up.add_argument("--title", default=None, help="the file's title; its name by default")
+    up.set_defaults(func=cmd_upload)
 
     j = common(sub.add_parser("join", help="join a public channel"))
     j.add_argument("--channel", required=True)

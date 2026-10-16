@@ -51,7 +51,8 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    there are no slash commands and nothing to configure by hand.
    **If the app was created before a scope existed** (the DM scopes `users:read.email`, `im:*`,
    `mpim:*` and the Messages tab; the gateway's `app_mentions:read` and `chat:write.customize`;
-   `files:read`, which lets bots open screenshots and other files people share),
+   `files:read`, which lets bots open screenshots and other files people share; `files:write`, which lets them
+   upload a chart),
    paste the current manifest over the old one on **App Manifest**, then reinstall - Slack shows
    a yellow "reinstall your app" banner until you do, and the missing calls fail with
    `missing_scope` until the token is replaced with the new one.
@@ -101,6 +102,11 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
     # post (only if your employee.yaml allows it and the channel does not say post: false)
     $HUB/connectors/slack.py post --as doc-updater --channel '#agents' --text 'Shipped 3 doc updates.'
     printf '%s\n' "$BODY" | $HUB/connectors/slack.py post --as mention-desk --channel '#marketing' --text -
+
+    # Block Kit, a dashboard kept current by editing it, and a chart (the app needs files:write)
+    $HUB/connectors/slack.py post --as doc-updater --channel '#agents' --text 'Docs this week' --blocks digest.json
+    $HUB/connectors/slack.py update --as doc-updater --channel '#agents' --ts <ts from post> --text 'Docs this week' --blocks digest.json
+    $HUB/connectors/slack.py upload --as doc-updater --file chart.png      # prints F... for a slack_file image block
 
 Exit codes: `0` ok, `1` failure (bad token, network, Slack error), `2` a hub policy refused the
 action. Add `--json` (or `--format json`) to get errors as `{"ok": false, "error", "hint"}`.
