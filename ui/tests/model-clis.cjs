@@ -67,7 +67,10 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.deepEqual(writes, [{harness: 'grok', enabled: true}, {harness: 'grok', enabled: false}]);
     // A refused change puts the box back and leaves it usable.
     refuse = true;
-    await box('grok').check();
+    // click, not check: the refusal can put the box back before check() reads it, which check() calls a failure.
+    const refused = page.waitForResponse(r => r.url().endsWith('/harness-choices') && r.status() === 409);
+    await box('grok').click();
+    await refused;
     await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]'); return !el.checked && !el.disabled; });
     assert.equal(writes.length, 3);
     // An older server: no bot_runtimes, so only what its bots run on (needed_runtimes) is locked.

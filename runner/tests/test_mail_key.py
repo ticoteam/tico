@@ -239,10 +239,11 @@ def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bot
     assert mail_grants_path(config) == moved and mail_credential_present(config)
 
 
-def test_a_connected_accounts_scopes_reach_the_turn_with_its_token(tmp_path):
+def test_a_connected_accounts_scopes_reach_the_turn_with_its_token():
     def mail(service, mailbox):
         return {"token": "ya29.t", "expiry": "", "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}
-    server = C.Server(str(tmp_path / "cred.sock"), lambda bot: "ghs", mail).start()
+    directory = tempfile.mkdtemp(dir="/tmp")     # short: a Unix socket path has a length limit
+    server = C.Server(os.path.join(directory, "cred.sock"), lambda bot: "ghs", mail).start()
     try:
         server.register("attempt", "inbox", ["ben@acme.example"])
         reply = C.request_mail(server.path, "attempt", "gmail", "ben@acme.example")
@@ -251,6 +252,7 @@ def test_a_connected_accounts_scopes_reach_the_turn_with_its_token(tmp_path):
             C.request_mail(server.path, "attempt", "gmail", "ana@acme.example")
     finally:
         server.stop()
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monkeypatch):
