@@ -83,6 +83,10 @@ a.code-main:hover .code-title,a.code-main:hover .code-repo{color:var(--accent);t
 .code-state{flex:none;font-size:var(--t-xs);color:var(--muted)}
 .code-error{flex-basis:100%;min-width:0;overflow-wrap:anywhere}
 .code-line.gone .code-main{color:var(--muted)}
+.code-retry-row{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.code-retry-hint{color:var(--muted);font-size:var(--t-sm)}
+button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
+@media (max-width:760px){button.ghost.code-retry{min-height:36px}}
 .code-chips{display:inline-flex;gap:3px;flex:none;margin-left:auto}
 .code-chip{font-size:var(--t-xs);line-height:15px;padding:0 5px;border-radius:8px;background:var(--idle-bg);color:var(--muted);white-space:nowrap}
 .code-chip.ok{background:var(--ok-bg);color:var(--ok)}

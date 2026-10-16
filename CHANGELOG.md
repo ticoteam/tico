@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- A task worktree whose cleanup stopped retrying has a **Retry cleanup** button in the task's Code list, for people
+  who can move tasks. Fix what the refusal names first (the bot's write access, kept files); the button then asks
+  the worktree's computer to clean it up again, with its usual save and safety checks. Before, this needed an API call.
 - Maintainers can manually validate an exact release candidate on an isolated GitHub-hosted Linux computer, with
   native prerequisites, capacity checks and retained results, without changing or publishing the candidate.
 - A person can connect their own Google account for their inbox and calendar from Settings > Inbox > Connect
