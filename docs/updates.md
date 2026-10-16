@@ -181,7 +181,7 @@ release on `/healthz`; otherwise the update counts as unhealthy and is rolled ba
 Before it switches the server image, the updater takes a consistent SQLite snapshot (`sqlite3` backup API, run in the
 server container) into `/data/snapshots/pre-update-<version>-<time>.sqlite` and keeps the last three. A new version can
 migrate the database and then fail its health check, and the old image cannot read a newer schema, so a rollback also
-stops the server (Litestream runs inside it), puts the snapshot back through a temporary file, clears Litestream's tracking directory so it does not take the restored file for a break (the migrated database stays beside it as `hub.sqlite.failed-update`) and starts
+stops the server (Litestream runs inside it), puts the snapshot back through a temporary file, clears Litestream's tracking directory so it does not take the restored file for a break (a readable copy of the migrated database stays beside it in a `hub.sqlite.failed-update-*` folder) and starts
 the old image. Changes made between the snapshot and the rollback are not in it. The update status says which snapshot
 was taken and whether it was restored (`snapshot`, `restored`, and the message). If the snapshot cannot be taken the
 update does not go ahead. The restore runs in a one-off container (`docker compose run`); if it runs over its time limit,
@@ -192,7 +192,9 @@ holds it, a restore you started by hand included. A restore normally takes secon
 `docker ps --filter label=com.docker.compose.oneoff=True` shows it, `docker logs <id>` shows where it is, and stopping
 it (`docker stop <id>`) lets the updater go on. The restore copies the migrated database into a
 `hub.sqlite.failed-update-*` folder before it removes anything and puts the snapshot in place with one rename at the
-end, so check which one `/data/hub.sqlite` is before the server is used.
+end. Stopped before that rename, `/data/hub.sqlite` is the migrated database without its newest commits (the `-wal`
+file is already removed; those commits are in the folder's `recovery.sqlite`), so check which one it is before the
+server is used.
 
 After a successful update the updater replaces itself, so updater fixes reach existing installs. It pulls the new updater
 image and starts a short-lived container (`tico-updater-swap`) from it, which recreates the `updater` service,
