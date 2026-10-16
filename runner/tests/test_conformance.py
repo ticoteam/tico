@@ -224,7 +224,10 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
     # Another person's conversation continues the bot's one thread, told only what is new.
     second = post(api, "chat/ops", {"text": "A separate question from Ben"}, token="ben-test")
     until(lambda: reply_to(api, second["conversation_id"], "ben-test"), "the second reply")
-    calls = computer.prompts() if computer.harness in ("claude", "pi", "cursor", "grok") else computer.calls()
+    # The computer's own-login usage read (`account/rateLimits/read` to the Codex CLI it also has) shares the log;
+    # only this harness's own calls are the thread.
+    calls = computer.prompts() if computer.harness in ("claude", "pi", "cursor", "grok") else \
+        [c for c in computer.calls() if c.get("harness") == computer.harness]
     if computer.harness in ("claude", "gemini"):
         session = calls[0]["argv"][calls[0]["argv"].index("--session-id") + 1]
         assert calls[-1]["argv"][calls[-1]["argv"].index("--resume") + 1] == session
