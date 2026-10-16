@@ -250,13 +250,15 @@ def heartbeat(c, who, reports, capable, default_org=""):
         now = H.now()
         changed = (detail.get('last_commit') != report.last_commit or detail.get('dirty_files') != report.dirty_files
                    or detail.get('last_activity') != report.last_activity)
+        # A push changes none of the above; only the count of commits not on the remote drops.
+        pushed = report.ahead < detail.get('ahead', 0)
+        if (changed or pushed) and detail.get('release_requested'):
+            # A released worktree kept for unsaved work is tried again once that work changes (pushed, saved).
+            for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
+                detail.pop(key, None)
         if changed or 'activity_at' not in detail:
             detail['activity_at'] = now
             detail.pop('stalled_woke', None)
-            if changed and detail.get('release_requested'):
-                # A released worktree kept for unsaved work is tried again once that work changes (pushed, saved).
-                for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
-                    detail.pop(key, None)
         if detail.get('checkout_state') == 'legacy_present' and row['state'] not in ('present', 'unknown'):
             detail['checkout_state'] = 'unverified'
         legacy_complete = (detail.get('checkout_state') == 'legacy_present'

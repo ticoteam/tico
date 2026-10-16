@@ -1,6 +1,6 @@
 # Builds the Tico images (server, runner and updater; linux/amd64 and linux/arm64) and publishes them to
 # ghcr.io/ticoteam: vX.Y.Z and latest on a v* tag. A manual run publishes edge from its branch.
-# Tests, including Docker smoke checks, run locally before release; CI only builds and publishes.
+# Tests run before release, locally or in the manual Release validation workflow; this workflow only builds and publishes.
 name: Docker
 
 on:

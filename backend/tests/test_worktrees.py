@@ -368,6 +368,36 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
 
 
+def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a_push(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    assert mark_ready(api, tid, link['link_id']).status_code == 200
+    report = {'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready', 'branch': link['branch'],
+              'last_commit': 'abc', 'ahead': 2}
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+            'worktrees': [report]}
+
+    def detail():
+        with api.app_state.store.read() as c:
+            return json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    with api.app_state.store.transaction() as c:
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['release'] is True
+    report['error'] = 'Worktree action failed; history kept. kept: unpushed commits; push them to free this worktree'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.transaction() as c:
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+                  (json.dumps({**detail(), 'cleanup_attempts': W.CLEANUP_TRIES, 'cleanup_retry_at': None}), link['link_id']))
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    assert detail()['cleanup_gave_up'] and detail()['release_requested']
+    # The bot pushes: last commit, dirty files and activity are unchanged, only the unpushed count drops.
+    report['ahead'] = 0
+    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
+    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['release'] is True
+    assert 'cleanup_gave_up' not in detail() and detail()['cleanup_attempts'] == 1
+
+
 def mark_ready(api, tid, link_id):
     return api.patch(f'/api/v2/tasks/{tid}/links/{link_id}',
                      json={'state': 'present', 'checkout_state': 'ready', 'setup_pending': False,

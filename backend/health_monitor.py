@@ -147,6 +147,14 @@ def active(c):
     return bool(row) and row["state"] == "active"
 
 
+def _holding_fix(label):
+    """A computer that only waits for its running turns to end updates by itself: nothing to update by hand, and
+    nothing to watch. A turn that watches it (or any other computer's update) holds its own computer's update."""
+    return (f"Nothing to update by hand: {label} updates by itself once its running turns end. Do not watch it from "
+            f"a turn: read its update once, record the wait on your task and end the turn. A turn that only waits on "
+            f"something elsewhere can do the same. Stopping a running turn is a person's choice (Runs), never automatic.")
+
+
 # ---------------------------------------------------------------------------------------------------- the checks
 def _runner_checks(c, settings):
     from . import health
@@ -162,14 +170,17 @@ def _runner_checks(c, settings):
     for machine in computers:
         update = machine["update"]
         rows = held.get(machine["id"], [])
-        holds = (f" {health.updating_words(rows[0])}; it holds {sum(r['queued'] for r in rows)} queued job(s) for "
-                 + ", ".join(r["name"] for r in rows) + ".") if rows else ""
+        holds = (f" {health.updating_words(rows[0], advise=False)}; it holds {sum(r['queued'] for r in rows)} queued "
+                 "job(s) for " + ", ".join(r["name"] for r in rows) + ".") if rows else ""
         if machine["online"] and (update["state"] in ("needs_update", "incompatible") or update["error"] or rows):
             out.append(_finding("runner_outdated:" + machine["id"], "runner_outdated", SETUP,
                                 f"{machine['label']} runs an older Tico release ({update['release'] or 'unknown'})",
                                 f"Computer {machine['label']} reports release {update['release'] or 'unknown'}, state "
                                 f"{update['state']}" + (f"; last update error: {update['error']}" if update["error"] else "")
                                 + "." + holds,
+                                _holding_fix(machine["label"]) if rows and rows[0]["running"]
+                                and update["state"] != "incompatible"
+                                and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
                                 "`scripts/tico install` once on that computer so it updates itself)."))
     for x in health.silent_computers(c):

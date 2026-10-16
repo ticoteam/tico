@@ -1,7 +1,8 @@
 // Offline regression for code work on tasks (docs: PLAN sections 4, 5 and 9). Fixtures only.
 //  - the task modal's right rail: Code has one line per worktree (repo · branch · ↑ahead ↓behind · N files, a missing
 //    or removed one says so) and per pull request (#212 title and its checks, conflict, review and comment chips), each
-//    a GitHub link; a mover removes one with its ✕ (DELETE .../links/{id});
+//    a GitHub link; a mover removes one with its ✕ (DELETE .../links/{id}), or asks again with Retry cleanup when a
+//    worktree's cleanup stopped retrying;
 //  - Subtasks: the roll-up line from children_summary, one level of children from GET /tasks/{id}/tree (the list's status
 //    icon, PR badge, owner), a child's own children on expand, and "Add subtask" posting a task with a parent relation;
 //  - a worktree with no repo names it from its folder, else says "unknown repo" (muted);
@@ -36,6 +37,10 @@ function fixtures() {
        detail_json: JSON.stringify({error: worktreeError})},
       {id: 'w3', kind: 'worktree', url: 'worktree:0c11de', title: 'acme/docs worktree', repo: 'acme/docs', branch: 'tico/t-check-docs', state: 'removed',
        detail_json: JSON.stringify({state: 'removed', ahead: 0, behind: 0, dirty_files: 0})},
+      // Cleanup refused until it stopped retrying (backend/worktrees.py heartbeat): still present, Retry cleanup offered.
+      {id: 'w4', kind: 'worktree', url: 'worktree:5e09aa', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-old', state: 'present',
+       detail_json: JSON.stringify({delete_requested: true, cleanup_requested: true, cleanup_attempts: 6, cleanup_gave_up: true,
+         error: 'Worktree action failed; history kept. kept: ignored files'})},
       pr('p1', 212, 'Checkout summary step', {checks: 'failing', pending_comments: 2, review_state: 'changes_requested'}),
       pr('p2', 214, 'Price rounding', {checks: 'pending', mergeable: 'conflict'}),
       pr('p3', 198, 'Cart badge', {state: 'merged'}),
@@ -166,7 +171,7 @@ async function desktop(browser) {
   await rail.locator('.task-subs .sub-row').first().waitFor();
   // Code: worktrees first, then pull requests; other links stay under Links.
   const lines = await rail.locator('.code-line').allInnerTexts();
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 7);
   assert.match(lines[0], /^web\s*·\s*tico\/t-check-checkout\s*·\s*↑2 ↓1\s*·\s*3 files/);
   assert.match(lines[1], /^payments-api\s*·\s*tico\/t-check-api\s*unknown/);
   // With neither a repo, a folder nor a branch that names one: "unknown repo", muted; never the word "worktree".
@@ -186,9 +191,10 @@ async function desktop(browser) {
   assert.equal(await page.evaluate(() => taskWorktreeRepo({kind: 'worktree', branch: 'tico/fix-web'}, [{kind: 'pr', repo: 'acme/web'}])), '');
   assert.equal(await page.evaluate(() => taskWorktreeRepo({kind: 'worktree', path: 'tasks/t1/eng__web'}, [])), 'web');
   assert.match(lines[2], /^docs\s*·\s*tico\/t-check-docs\s*removed/);
-  assert.match(lines[3], /#212\s*Checkout summary step\s*✕\s*changes requested\s*2 comments/);
-  assert.match(lines[4], /#214\s*Price rounding\s*checks running\s*conflict/, 'a chip says what it means');
-  assert.match(lines[5], /#198\s*Cart badge\s*merged/);
+  assert.match(lines[3], /^web\s*·\s*tico\/t-check-old\s*error/);
+  assert.match(lines[4], /#212\s*Checkout summary step\s*✕\s*changes requested\s*2 comments/);
+  assert.match(lines[5], /#214\s*Price rounding\s*checks running\s*conflict/, 'a chip says what it means');
+  assert.match(lines[6], /#198\s*Cart badge\s*merged/);
   assert.equal(await rail.locator('.code-line.wt a').first().getAttribute('href'), 'https://github.com/acme/web/tree/tico/t-check-checkout');
   // No repo, no GitHub link. Errors are readable inline without hovering or opening a tooltip.
   assert.equal(await rail.locator('.code-line[data-code-link="w2"] a').count(), 0);
@@ -205,6 +211,20 @@ async function desktop(browser) {
   assert.equal(await rail.locator('.code-line[data-code-link="w2"] [data-code-drop]').count(), 0);
   assert.equal(await rail.locator('.code-line[data-code-link="w3"] [data-code-drop]').getAttribute('aria-label'), 'Remove docs · tico/t-check-docs');
   assert.equal(await rail.locator('.code-line[data-code-link="p1"] [data-code-drop]').getAttribute('aria-label'), 'Remove #212');
+  // Only a worktree whose cleanup stopped retrying offers Retry cleanup: visible text, no hover needed.
+  assert.equal(await rail.locator('[data-code-retry]').count(), 1);
+  const retry = rail.locator('.code-line[data-code-link="w4"] [data-code-retry]');
+  assert.equal(await retry.isVisible(), true);
+  assert.equal(await retry.getAttribute('aria-label'), 'Retry cleanup of web · tico/t-check-old');
+  // Not offered on a removed worktree, nor on a released one of an open task (its cleanup resumes once work is saved),
+  // nor when the flag is only truthy.
+  const offered = await page.evaluate(() => [
+    {state: 'removed', detail_json: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: 'true'})},
+    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true})},
+  ].map(l => taskCodeLineHTML({id: 'w9', kind: 'worktree', url: 'worktree:9', repo: 'acme/web', branch: 'tico/x', ...l}, true).includes('data-code-retry')));
+  assert.deepEqual(offered, [false, false, false, true]);
   assert.equal(await rail.locator('.code-line[data-code-link="p1"] .code-chip[aria-label="Checks failing"]').count(), 1, 'a glyph chip has words');
   assert.equal(await rail.locator('.code-line.pr a').first().getAttribute('href'), 'https://github.com/acme/web/pull/212');
   assert.equal(await rail.locator('.code-line.pr a').first().getAttribute('target'), '_blank');
@@ -276,6 +296,11 @@ async function desktop(browser) {
   await rail.locator('.code-line[data-code-link="p2"]').waitFor({state: 'detached'});
   assert.deepEqual(writes.at(-1), {method: 'DELETE', p: '/api/v2/tasks/t-checkout/links/p2'});
 
+  // Retry cleanup sends the same removal request (the server starts a fresh bounded cleanup) and says so.
+  await rail.locator('.code-line[data-code-link="w4"] [data-code-retry]').click();
+  await page.locator('.toast', {hasText: 'Cleanup asked again'}).waitFor();
+  assert.deepEqual(writes.at(-1), {method: 'DELETE', p: '/api/v2/tasks/t-checkout/links/w4'});
+
   // A task with nothing in the rail has no rail and no empty headings.
   await page.evaluate(() => { location.hash = '#/task/t-plain'; });
   await modal.locator('.tmodal-title', {hasText: 'Book the team offsite'}).waitFor();
@@ -329,6 +354,7 @@ async function member(browser) {
   const rail = page.locator('#task-modal [data-task-rail]');
   await rail.locator('.task-subs .sub-row').first().waitFor();
   assert.equal(await rail.locator('[data-code-drop]').count(), 0);
+  assert.equal(await rail.locator('[data-code-retry]').count(), 0);
   assert.equal(await rail.locator('[data-sub-add]').count(), 0);
   assert.deepEqual(errors, []);
   console.log('task rail member: ok');

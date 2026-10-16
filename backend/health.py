@@ -396,10 +396,12 @@ def _waiting(c, online_ids):
     # once the hold is old).
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
-    busy, running = set(), {}
-    for r in c.execute("SELECT bot,runner_id FROM attempts WHERE state IN ('leased','running')"):
+    busy, running, turns = set(), {}, {}
+    for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
+                       "WHERE state IN ('leased','running') ORDER BY since"):
         busy.add(r["bot"])
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
+        turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
     full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
             if running.get(r["id"], 0) >= (r["capacity"] or 1)}
@@ -416,6 +418,12 @@ def _waiting(c, online_ids):
             documents[where[0]] = readiness_document(where[2]).get("bots") or {}
         report = documents[where[0]].get(slug)
         return report if isinstance(report, dict) else {}
+    holding = {}
+
+    def held(runner_id):     # one read per computer, however many of its bots wait on its update
+        if runner_id not in holding:
+            holding[runner_id] = holding_turns(c, turns.get(runner_id, []))
+        return holding[runner_id]
     waiting, slow, stuck = [], [], []
     for bot in c.execute("SELECT slug,display_name FROM bots WHERE state='active' ORDER BY slug"):
         slug = bot["slug"]
@@ -446,7 +454,8 @@ def _waiting(c, online_ids):
             slow.append({**row, "reason": reason if idle else "busy"})
             if idle:
                 stuck.append({**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
-                             | ({"target": updating[where[0]], "running": running.get(where[0], 0)} if reason == "updating" else {}))
+                             | ({"target": updating[where[0]], "running": running.get(where[0], 0),
+                                  "turns": held(where[0])} if reason == "updating" else {}))
     return waiting, slow, stuck
 
 
@@ -552,7 +561,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "Over its spending limit"
             fix = _fix("Raise limit", "#/usage")
         elif reason == "updating":
-            text = updating_words(row)
+            text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
@@ -560,16 +569,67 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
-                   | {"why": text[:240], "fix": fix if full else None})
+                   | {"why": text[:320], "fix": fix if full else None})
     return out
 
 
-def updating_words(row):
-    """Why work waits on a computer that is updating: the update, and the running turns it waits for."""
+def holding_turns(c, attempts):
+    """The running turns a computer due an update waits for, oldest first: which bot, since when and, unless private,
+    which task, so a person can tell a real job from a turn that only waits on something elsewhere (TK-SHNKOY4E)."""
+    from .task_privacy import attempt_tasks
+    names = {r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug,display_name FROM bots")}
+    out = []
+    for a in attempts:
+        ids = sorted(attempt_tasks(c, a["id"]))
+        task = c.execute(f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "
+                         "ORDER BY updated DESC LIMIT 1", ids).fetchone() if ids else None
+        out.append({"run": a["id"], "bot": a["bot"], "name": names.get(a["bot"], a["bot"]), "since": a["since"],
+                    "task": task["id"] if task else "", "task_title": task["title"] if task else ""})
+    return out
+
+
+def visible_turns(c, turns, who, auth):
+    """`turns` as this caller may see them: a bot whose activity they may not read is "another bot", and a task they
+    may not read (private, or hidden by a bot's activity controls: auth.task_sql) is not named. Without `auth`,
+    neither is named."""
+    hidden = auth.unreadable_bots(c, who) if auth is not None else None
+    out = []
+    for turn in turns:
+        named = hidden is not None and turn["bot"] not in hidden
+        readable = bool(named and turn["task"] and c.execute(
+            f"SELECT 1 FROM tasks WHERE id=? AND ({auth.task_sql(c, who)})", (turn["task"],)).fetchone())
+        out.append({**turn, "name": turn["name"] if named else "",
+                    **({} if readable else {"task": "", "task_title": ""})})
+    return out
+
+
+def _turn_words(turn, titled=True):
+    title = turn["task_title"] if titled else ""
+    on = f" on \u201c{title[:47] + '...' if len(title) > 50 else title}\u201d" if title else ""
+    whose = f"{turn['name']}'s turn" if turn["name"] else "another bot's turn"
+    return f"{whose}{on} (running since {(turn['since'] or '')[11:16]} UTC)"
+
+
+# A turn that only watches something elsewhere holds this computer's update for nothing. Stopping it stays a person's
+# choice (Runs): Tico never stops it for them.
+OUTSIDE_WAIT = "A turn only waiting on something elsewhere can note the wait and end, and pick it up next run."
+
+
+def updating_words(row, advise=True):
+    """Why work waits on a computer that is updating: the update, and the running turns it waits for, by bot, task
+    and start. `advise` adds what a turn that only watches something elsewhere should do."""
     to = f" to Tico {row['target']}" if row.get("target") else ""
     if row.get("running"):
-        turns = "running turn finishes" if row["running"] == 1 else f"{row['running']} running turns finish"
-        return f"{row['computer']} is holding new work to update{to}: it starts once its {turns}"
+        held = row.get("turns") or []
+        if len(held) == 1:
+            turns = _turn_words(held[0]) + " ends"
+        elif held:
+            more = f" and {len(held) - 2} more" if len(held) > 2 else ""
+            turns = f"{len(held)} running turns end: " + "; ".join(_turn_words(t, titled=False) for t in held[:2]) + more
+        else:
+            turns = "running turn finishes" if row["running"] == 1 else f"{row['running']} running turns finish"
+            turns = "its " + turns
+        return f"{row['computer']} is holding new work to update{to}: it starts once {turns}" + (f". {OUTSIDE_WAIT}" if advise else "")
     return f"{row['computer']} is updating{to}"
 
 

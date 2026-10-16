@@ -87,6 +87,11 @@ and repair the bots that do it.
    "Blocked on a Tico bug, reported as <the ticket it returned>" and stop. The report leaves the company:
    never paste credential values, tokens, customer data or message bodies. File each bug once; keep the
    ticket in your task note and name it on later runs instead of filing again.
+14. **Never watch an update from a turn.** A computer's update (any computer's, this one's too) is read once:
+   `hub computer list` or `hub health check`. If it is still waiting or updating, record that on your task
+   (`--status waiting` with the reason) and end the run; read it again on your next run. Never `sleep` and look again: a running
+   turn holds your own computer's update, and the work queued behind it. Never stop, restart or rebuild another
+   bot's turn, a build or an updater to hurry an update; stopping a turn is the person's choice.
 
 ## Defaults, not questions
 A request to build a bot is enough to build it. "Bleacher Report manager, to manage engineering projects for

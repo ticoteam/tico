@@ -65,11 +65,18 @@ function taskPRChips(l) {
 }
 function taskCodeLineHTML(l, mover, siblings = []) {
   // A live worktree is cleaned up when its task closes (its computer saves and removes it); only a removed one, or a
-  // pull request, can be taken off the task here.
+  // pull request, can be taken off the task here. One whose cleanup stopped retrying gets Retry cleanup instead: the
+  // same removal request, which starts a fresh bounded cleanup with the computer's usual save and safety checks.
   const wtRepo = l.kind === 'worktree' ? taskWorktreeRepo(l, siblings) : '';
   const what = l.kind === 'pr' ? (taskPRNumber(l) ? `#${taskPRNumber(l)}` : 'pull request') : [wtRepo || 'unknown repo', l.branch].filter(Boolean).join(' · ');
   const x = mover && l.id && (l.kind === 'pr' || l.state === 'removed')
     ? `<button type="button" class="code-x" data-code-drop="${esc(l.id)}" aria-label="Remove ${esc(what)}" title="Remove">✕</button>` : '';
+  // A released worktree (an open task whose pull requests are all finished) also stops retrying, but its cleanup resumes
+  // by itself once its work is saved; a removal request there would remove it from a task that is still open.
+  const wtDetail = l.kind === 'worktree' ? taskLinkDetail(l) : {};
+  const retry = mover && l.id && l.kind === 'worktree' && l.state !== 'removed' && wtDetail.cleanup_gave_up === true
+    && wtDetail.release_requested !== true
+    ? `<div class="code-retry-row"><span class="code-retry-hint">Cleanup stopped retrying. Fix the cause above, then retry.</span><button type="button" class="ghost code-retry" data-code-drop="${esc(l.id)}" data-code-retry aria-label="Retry cleanup of ${esc(what)}">Retry cleanup</button></div>` : '';
   if (l.kind === 'worktree') {
     const repo = taskLinkRepo(l), ahead = taskLinkNum(l, 'ahead'), behind = taskLinkNum(l, 'behind'), files = taskLinkNum(l, 'dirty_files');
     const error = String(taskLinkDetail(l).error || '');
@@ -85,7 +92,7 @@ function taskCodeLineHTML(l, mover, siblings = []) {
     const explanation = error ? `<div class="props-msg code-error">${esc(error)}</div>` : '';
     const inner = bits.join('<span class="code-dot">·</span>');
     return `<li class="code-line wt${l.state === 'removed' ? ' gone' : ''}" data-code-link="${esc(l.id || '')}">${url
-      ? `<a class="code-main" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(title)}">${inner}</a>` : `<span class="code-main" title="${esc(title)}">${inner}</span>`}${odd}${x}${explanation}</li>`;
+      ? `<a class="code-main" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(title)}">${inner}</a>` : `<span class="code-main" title="${esc(title)}">${inner}</span>`}${odd}${x}${explanation}${retry}</li>`;
   }
   const num = taskPRNumber(l), title = l.title && !/^[\w.-]+#\d+$/.test(l.title) ? l.title : '';
   return `<li class="code-line pr" data-code-link="${esc(l.id || '')}"><a class="code-main" href="${esc(l.url || '#')}" target="_blank" rel="noopener" title="${esc([taskLinkRepo(l), l.title || l.url].filter(Boolean).join(' · '))}">${num ? `<span class="code-num tnum">#${esc(num)}</span>` : ''}<span class="code-title">${esc(title || repoShort(taskLinkRepo(l)) || l.url || 'Pull request')}</span></a><span class="code-chips">${taskPRChips(l)}</span>${x}</li>`;
@@ -230,6 +237,7 @@ function taskRailBind(d, t) {
       try {
         try { await writeRequest('DELETE', `${base}/${encodeURIComponent(drop.dataset.codeDrop)}`); }
         catch (e) { if (![404, 405].includes(e.status)) throw e; await post(base, {remove: drop.dataset.codeDrop}); }   // an older server
+        if ('codeRetry' in drop.dataset) toast('Cleanup asked again. The worktree goes once its computer saves and removes it.');
         const data = await get(`/v2/tasks/${encodeURIComponent(t.id)}`);
         if (TASKS_ST) void tasksLoad(TASKS_ST);
         if (d.open && d.dataset.task === String(t.id)) { if (d.taskRail) d.taskRail.full = data.task; taskModalShow(data.task, d); }

@@ -11,7 +11,7 @@ class Fake:
 
     def __init__(self, module, monkeypatch, healthy=(True,), fail=(), container=None, config=None):
         self.calls, self.answers, self.fail, self.container, self.config = [], list(healthy), set(fail), container, config
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module, "docker_run", self.run)
         monkeypatch.setattr(module, "healthy", lambda seconds: self.answers.pop(0))
         monkeypatch.setattr(module, "running_image", lambda: ("sha256:old", "v0.1.0"))
         monkeypatch.setattr(module, "pinned_services", lambda version: [])
@@ -73,6 +73,25 @@ def test_the_restore_script_swaps_the_database_and_clears_litestreams_tracking(m
     assert value("hub.sqlite") == "before" and value(recovered) == "migrated"
     assert not (tmp_path / ".hub.sqlite-litestream").exists() and not (tmp_path / "hub.sqlite-wal").exists()
     assert not (tmp_path / "hub.sqlite.restoring").exists()
+
+
+def test_a_snapshot_restore_that_runs_over_is_not_called_a_rollback(monkeypatch, tmp_path):
+    """A killed `compose run` restore may still put the snapshot in place later: the outcome is unknown."""
+    import subprocess
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Fake(updater, monkeypatch, [False, True])
+    run = docker.run
+
+    def hang(argv, env=None, **kw):
+        if argv[:2] == ["docker", "compose"] and "run" in argv:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return run(argv, env=env, **kw)
+    monkeypatch.setattr(updater, "docker_run", hang)
+    settled = []
+    monkeypatch.setattr(updater, "settle", lambda tag, outcome: settled.append((tag, outcome)))
+    updater.update("v0.2.0")
+    assert settled and settled[0][0] == "v0.1.0" and "Could not restore the database snapshot" in settled[0][1]
+    assert updater.status["state"] not in ("rolled_back", "failed", "healthy")
 
 
 def test_a_pull_failure_or_snapshot_failure_does_not_touch_the_database(monkeypatch, tmp_path):
@@ -318,7 +337,7 @@ def test_prune_keeps_future_releases_and_removes_only_older_and_own_dangling_ima
         elif argv[:3] == ["docker", "image", "ls"]:
             out = "v0.3.46\n0.3.46\nv0.3.45\nv9.9.9\n9.9.9\nv0.3.100\n0.4.0\nv0.3.9\nlatest\n<none>\n"
         return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
-    monkeypatch.setattr(updater.subprocess, "run", run)
+    monkeypatch.setattr(updater, "docker_run", run)
     updater.prune_images(keep={"0.3.46", "v0.3.45"}, keep_ids={"sha256:old"})
     # Future staged releases and both spellings of the current release stay; only the older release and dangling IDs go.
     assert [a[2] for a in calls if a[:2] == ["docker", "rmi"]] == [
