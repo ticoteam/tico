@@ -49,6 +49,8 @@ EMPTY = (
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets",
     "usage_alerts",
+    # raw provider streams: may carry what a run read
+    "attempt_captures", "attempt_capture_drops",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
@@ -72,9 +74,11 @@ KEEP = frozenset((
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
     "market_evidence", "market_insights", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "preferences", "rate_limits", "recording_source_refs", "recording_transcripts",
+    "message_links_seen", "notes", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "recording_source_refs", "recording_transcripts",
     "refusals", "registry_metadata", "repositories", "runners", "service_health", "settings_changes",
-    "slack_channels", "slack_digests", "slack_reads", "tags", "task_assets", "task_delegations", "task_events",
+    "slack_channels", "slack_digests", "slack_reads", "tags", "task_assets", "task_check_models", "task_delegations",
+    "task_events",
     "task_file_reviews", "task_links", "task_relations", "task_roles", "task_steps", "task_tags", "task_trash",
     "task_trash_assets", "task_types", "tasks", "turn_usage_segments", "turns", "update_archive_overrides",
     "update_reads", "update_settings", "updates", "usage_limits",
