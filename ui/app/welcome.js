@@ -127,7 +127,7 @@ function onbStepHTML(state, key) {
   const r = state.record, names = r.names, a = r.answers;
   const back = state.step > 0 ? '<button class="ghost" type="button" id="onb-back">Back</button>' : '';
   const actions = label => `<div class="onb-actions">${back}<button class="primary" type="button" id="onb-next">${label}</button>
-    <span class="spacer"></span><span class="muted" id="onb-status"></span></div>`;
+    <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
   if (key === 'providers') return `${providersFormHTML(state.providers, state.models, 'onb-prov')}
     ${actions(state.providers.enabled?.length ? 'Next' : 'Skip for now')}`;
   if (key === 'names') return `
@@ -233,7 +233,7 @@ function onbDoneHTML(state) {
     <div id="onb-bots">${onbBotRowsHTML(state)}</div>
     <div id="onb-after">${frNextHTML(state)}</div>
     <div class="onb-actions"><button class="primary" type="button" id="onb-tasks">Open Tasks</button>
-      <span class="spacer"></span><span class="muted" id="onb-status"></span></div>`;
+      <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
 }
 function onbBotRowsHTML(state) {
   const botOps = onbBotOpsName(state);

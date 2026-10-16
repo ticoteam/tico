@@ -14,6 +14,7 @@ opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing 
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
 """
 import argparse
+import json
 import os
 import secrets
 import shlex
@@ -48,7 +49,7 @@ EMPTY = (
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
     "support_tickets",
-    "usage_alerts",
+    "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",
 )
@@ -207,8 +208,22 @@ def prune(c, days):
         count = c.execute(f"DELETE FROM {quote(table)}" + (" WHERE " + where if where else ""), args).rowcount
         removed[table] = removed.get(table, 0) + count
 
-    for table in emptied(c):
+    gone = emptied(c)
+    for table in gone:
         delete(table)
+    # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
+    # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
+    if "task_trash" in present:
+        for task_id, raw in c.execute("SELECT task_id,rows_json FROM task_trash").fetchall():
+            snapshot = json.loads(raw or "{}")
+            rows = snapshot.get("rows") if isinstance(snapshot, dict) else None
+            if isinstance(rows, dict) and set(rows) & set(gone):
+                snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone}
+                c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snapshot), task_id))
+    # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
+    if "registry_metadata" in present:
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
+                  (json.dumps(secrets.token_hex(32)),))
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:

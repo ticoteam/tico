@@ -94,9 +94,14 @@ def _login_target(runners, wanted):
     return None
 
 
+def built_in(settings):
+    """The four bots every install starts with."""
+    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager"}
+
+
 def own_bots(c, settings):
     """Bots the company added, as opposed to the four built in."""
-    bootstrap = {settings.assistant_bot, BOTOPS, "librarian", "goal-manager"}
+    bootstrap = built_in(settings)
     return [row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state!='archived' ORDER BY slug")
             if row["slug"] not in bootstrap]
 

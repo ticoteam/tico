@@ -16,6 +16,8 @@ from .auth import validate_identity
 from .store import Problem
 
 SETTINGS = 'repos_new_bot_default'
+# {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
+WORKFLOWS = 'repository-workflow-grants'
 
 
 def metadata(c, key):
@@ -127,6 +129,7 @@ class Reads:
                 self.chosen[r['bot']].append({'full_name': r['full_name'], 'access': r['access']})
         self.missing = unreachable(c)
         self.creation = metadata(c, 'repository-creation-grants')
+        self.workflows = metadata(c, WORKFLOWS)
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
@@ -164,6 +167,10 @@ def access(c, bot, org, reads=None):
     own_row = reads.configs.get(source)
     own = repo_of(own_row['repo'] if own_row else '', org)
     chosen = [dict(r) for r in reads.chosen[bot]]
+    flagged = {str(name).lower() for name in reads.workflows.get(bot) or ()}
+    for r in chosen:
+        if r['access'] == 'write' and r['full_name'].lower() in flagged:
+            r['run_workflows'] = True
     grants = {}
     if mode == 'all':
         repos, shared = reads.all_mode()
@@ -180,7 +187,9 @@ def access(c, bot, org, reads=None):
             'create_repositories': bot == _botops() or reads.creation.get(bot) is True}
 
 
-def set_access(c, bot, body, org, actor, legacy=False, team_list=False):
+def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True):
+    """`own_click` is False when a bot's turn makes the change for a person: it may grant with their rights, but
+    not let a bot run workflows."""
     from .github_app import repo_of, save_extra_repos
     before = access(c, bot, org)
     if body.create_repositories is not None:
@@ -190,6 +199,8 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False):
         if bot == BOTOPS and not body.create_repositories:
             raise Problem('forbidden', 'BotOps retains its built-in repository creation access', 403)
     wanted = {}
+    was = {r['full_name'].lower() for r in before['chosen'] if r.get('run_workflows')}
+    workflows = set(was)
     for grant in body.chosen or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
@@ -208,12 +219,31 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False):
         elif not c.execute('SELECT 1 FROM repositories WHERE full_name=?', (name,)).fetchone():
             raise Problem('github_repo', 'Choose a repository from the team list', 422)
         wanted[name.lower()] = (name, grant.access)
+        if grant.run_workflows and grant.access != 'write':
+            raise Problem('github_repo', 'Running workflows needs write access to ' + name, 422)
+        if grant.run_workflows is not None and grant.run_workflows != (name.lower() in was) and (
+                not team_list or not H.is_human(actor) or not own_click):
+            raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, themselves in Settings > '
+                          'Repositories', 403)
+        # Left out, a grant keeps its setting while it stays write.
+        if grant.run_workflows or grant.run_workflows is None and name.lower() in was and grant.access == 'write':
+            workflows.add(name.lower())
+        else:
+            workflows.discard(name.lower())
     config = json.loads(c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
     config.update(repo_access_mode=body.mode, repo_all_access=body.all_access or before['all_access'])
     c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(config), bot))
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
         c.executemany('INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()])
+        flags = metadata(c, WORKFLOWS)
+        names = sorted(wanted[key][0] for key in workflows if key in wanted)
+        if names:
+            flags[bot] = names
+        else:
+            flags.pop(bot, None)
+        if flags != metadata(c, WORKFLOWS):
+            save_metadata(c, WORKFLOWS, flags)
     if body.create_repositories is not None:
         grants = metadata(c, 'repository-creation-grants')
         if body.create_repositories:
@@ -222,6 +252,12 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False):
             grants.pop(bot, None)
         save_metadata(c, 'repository-creation-grants', grants)
     after = access(c, bot, org)
+    # Kept flags apply again when a grant returns to effect (Own or All back to Chosen): that is a gain too.
+    running = {r['full_name'].lower() for r in before['effective'] if r.get('run_workflows')}
+    if any(r.get('run_workflows') and r['full_name'].lower() not in running for r in after['effective']) and (
+            not team_list or not H.is_human(actor) or not own_click):
+        raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, themselves in Settings > '
+                      'Repositories', 403)
     save_extra_repos(c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else [])
     lost = stopped(before, after)
     H.event(c, actor, 'bot.repos_changed', bot, {'before': before, 'after': after, **lost})
@@ -230,11 +266,16 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False):
 
 def stopped(before, after):
     """What a change takes away, said on its reply and in its audit event: `stopped`, the grants that applied before
-    and no longer do (a repository gone, or write turned to read), and `creation_stopped` when repository creation
-    was taken away. A switch to own keeps the chosen rows, but they stop applying."""
+    and no longer do (a repository gone, or write turned to read), `workflows_stopped` for repositories it may no
+    longer run workflows in, and `creation_stopped` when repository creation was taken away. A switch to own keeps
+    the chosen rows, but they stop applying."""
     kept = {(r['full_name'].lower(), r['access']) for r in after['effective']}
     out = {'stopped': [{'full_name': r['full_name'], 'access': r['access']} for r in before['effective']
                        if (r['full_name'].lower(), r['access']) not in kept]}
+    running = {r['full_name'].lower() for r in after['effective'] if r.get('run_workflows')}
+    workflows = [r['full_name'] for r in before['effective'] if r.get('run_workflows') and r['full_name'].lower() not in running]
+    if workflows:
+        out['workflows_stopped'] = workflows
     if before['create_repositories'] and not after['create_repositories']:
         out['creation_stopped'] = True
     return out
@@ -243,6 +284,7 @@ def stopped(before, after):
 def describe_stopped(result):
     """`Acme/product (write), repository creation` for a reply or a card."""
     parts = [r['full_name'] + ' (' + r['access'] + ')' for r in result.get('stopped') or []]
+    parts += [name + ' (run workflows)' for name in result.get('workflows_stopped') or []]
     return ', '.join(parts + (['repository creation'] if result.get('creation_stopped') else []))
 
 
@@ -351,6 +393,41 @@ def repository_health(service):
                       'Refresh Settings > Repositories or check the GitHub App installation.')
 
 
+def workflow_health(service, accepted, refused=False):
+    """Remember whether the installation lets flagged repositories run workflows (Actions: write), and whether GitHub
+    refused that token although it does, for Health; written only when it changes. `refused=None` keeps what was
+    learned about the refusal while the installation still reports Actions: write."""
+    with service.store.read() as c:
+        saved = metadata(c, WORKFLOWS + ':accepted')
+        if refused is None:
+            refused = bool(accepted and saved.get('accepted') is True and saved.get('refused'))
+        state = {'accepted': accepted, 'refused': refused}
+        if {'accepted': saved.get('accepted'), 'refused': bool(saved.get('refused'))} == state:
+            return
+    with service.store.transaction() as c:
+        save_metadata(c, WORKFLOWS + ':accepted', {**state, 'at': H.now()})
+
+
+def _workflow_grants(c):
+    return [bot + ': ' + name for bot, names in sorted(metadata(c, WORKFLOWS).items()) for name in names or ()]
+
+
+def workflows_waiting(c):
+    """The `bot: owner/name` grants allowed to run workflows that cannot yet, because the installation last said it
+    lacks Actions: write; empty when it has it, nothing is flagged, or no token was asked for since."""
+    if metadata(c, WORKFLOWS + ':accepted').get('accepted') is not False:
+        return []
+    return _workflow_grants(c)
+
+
+def workflows_refused(c):
+    """The grants whose last token GitHub refused Actions: write although the installation reports it."""
+    saved = metadata(c, WORKFLOWS + ':accepted')
+    if saved.get('accepted') is not True or not saved.get('refused'):
+        return []
+    return _workflow_grants(c)
+
+
 def queue_sync(service, refresh=False):
     """One worker per connection; a burst requests at most one follow-up sync."""
     with service.repository_queue_lock:
@@ -440,6 +517,8 @@ class Contract(BaseModel):
 class Grant(Contract):
     full_name: str
     access: Literal['read', 'write'] = 'write'
+    # Start, rerun and cancel workflow runs (GitHub Actions: write) on a write grant; None keeps the current setting.
+    run_workflows: bool | None = None
 
 
 class RepoAccessUpdate(Contract):
@@ -547,13 +626,13 @@ def install(app, store, service):
             row = service.row(c)
             org = row['org'] if row else store.settings.github_owner
             if not who.task_actor or who.task_actor == 'bot:' + bot:
-                return set_access(c, bot, body, org, who.actor, team_list=True)
+                return set_access(c, bot, body, org, who.actor, team_list=True, own_click=not who.task_actor)
             # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked.
             c.execute('SAVEPOINT repo_narrowing')
-            result = set_access(c, bot, body, org, who.actor, team_list=True)
-            if not result['stopped'] and not result.get('creation_stopped'):
+            result = set_access(c, bot, body, org, who.actor, team_list=True, own_click=False)
+            if not result['stopped'] and not result.get('creation_stopped') and not result.get('workflows_stopped'):
                 c.execute('RELEASE repo_narrowing')
                 return result
             c.execute('ROLLBACK TO repo_narrowing')

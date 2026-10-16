@@ -481,7 +481,8 @@ def test_type_and_step_management_permissions_and_references(api):
 
 
 def test_step_moves_enforce_existing_bot_status_permissions(api):
-    typ = post(api, 'task-types', {'name': 'Engineering', 'steps': [
+    # Not 'Engineering': roadmaps seed a type of that name.
+    typ = post(api, 'task-types', {'name': 'Release train', 'steps': [
         {'name': 'Merged', 'status': 'ready'}, {'name': 'Archive', 'status': 'closed'}]})['type']
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the screen', 'body': 'Please.', 'type': typ['id']})
     token = bot_token(api)

@@ -264,7 +264,8 @@ fn build_window(app: &App) -> tauri::Result<()> {
         // Anything that is not the hub opens in the default browser. Cloudflare's provider
         // choice is itself a clicked link: the whole authentication redirect chain stays in this
         // web view so the resulting CF_Authorization cookie belongs to the app, not the browser.
-        .on_navigation(move |url| stays_in_app(&opener, url));
+        .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_new_window(new_window_handler(app));
     #[cfg(target_os = "macos")]
     {
         // The native title bar drags the window on every page, including sign-in pages that are
@@ -280,15 +281,168 @@ fn build_window(app: &App) -> tauri::Result<()> {
 /// resulting CF_Authorization cookie belongs to the app, not the browser.
 fn stays_in_app(opener: &App, url: &url::Url) -> bool {
     let host = connection(opener).map(|c| c.host()).unwrap_or_default();
-    let target = url.host_str().unwrap_or("");
-    if target.is_empty() || target == host || url.scheme() == "tauri" {
-        return true;
-    }
-    if target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com" {
+    if navigation_stays(&host, url) {
         return true;
     }
     let _ = opener.opener().open_url(url.as_str(), None::<&str>);
     false
+}
+
+fn navigation_stays(host: &str, url: &url::Url) -> bool {
+    // A Markdown mailto (or tel, sms) link has no target, so it arrives here rather than as a new window.
+    if matches!(url.scheme(), "mailto" | "tel" | "sms") {
+        return false;
+    }
+    let target = url.host_str().unwrap_or("");
+    target.is_empty() || target == host || url.scheme() == "tauri"
+        || target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com"
+}
+
+/// Where a request for a new window (a `target="_blank"` link, `window.open`) goes. The web view has
+/// no tabs, and without a handler it drops the request, so the click does nothing. The page opens no
+/// sign-in pop-ups (sign-in redirects within the window, see `stays_in_app`), so no pop-up is let in.
+#[derive(Debug, PartialEq)]
+enum NewWindow {
+    /// The hub's own files and logs under `/api/`: the default browser has none of the app's sign-in,
+    /// so they open in an app window of their own.
+    Hub,
+    /// A new tab in the default browser, as a browser would open it.
+    Browser,
+    /// Nothing the browser could open (`about:blank`, `javascript:`, `data:`, `blob:`, `file:`).
+    Ignore,
+}
+
+fn new_window_target(hub: Option<&url::Url>, url: &url::Url) -> NewWindow {
+    match url.scheme() {
+        "http" | "https" if hub.is_some_and(|hub| url.origin() == hub.origin()) && url.path().starts_with("/api/") => NewWindow::Hub,
+        "http" | "https" | "mailto" | "tel" | "sms" => NewWindow::Browser,
+        _ => NewWindow::Ignore,
+    }
+}
+
+fn new_window_handler(app: &App) -> impl Fn(url::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<tauri::Wry> + Send + 'static {
+    let opener = app.clone();
+    move |url, _| {
+        match new_window_target(connection(&opener).map(|c| c.hub).as_ref(), &url) {
+            NewWindow::Hub => {
+                // Built off the web view's own callback, which may not block on a new window.
+                let app = opener.clone();
+                tauri::async_runtime::spawn(async move { open_hub_window(&app, url) });
+            }
+            NewWindow::Browser => { let _ = opener.opener().open_url(url.as_str(), None::<&str>); }
+            NewWindow::Ignore => {}
+        }
+        tauri::webview::NewWindowResponse::Deny
+    }
+}
+
+/// An ordinary window on one of the hub's files or logs. It shares the app's sign-in, but like a
+/// meeting window it is not `main`, so the page gets no native permissions.
+fn open_hub_window(app: &App, url: url::Url) {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!("hub-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let opener = app.clone();
+    #[cfg(not(target_os = "linux"))]
+    let opened = url.clone();
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+        .title(config::app_name())
+        .inner_size(1000.0, 800.0)
+        .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
+        .user_agent(USER_AGENT)
+        .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_new_window(new_window_handler(app));
+    // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
+    // it to Downloads, show it there and close the window. Only the file this window opened on
+    // counts, so a window that showed its file stays open for later downloads from it. Not on
+    // Linux: there each window's handler sits on the shared web context and outlives its window,
+    // then refuses every later download in the app; WebKit saves to Downloads by itself and the
+    // window stays empty.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let saved = Mutex::new(None);
+        builder = builder.on_download(move |webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } if same_file(&url, &opened) => {
+                    *saved.lock().unwrap() = Some(destination.clone());
+                }
+                tauri::webview::DownloadEvent::Finished { url, success, .. } if same_file(&url, &opened) => {
+                    match (success, saved.lock().unwrap().take()) {
+                        (true, Some(path)) => { let _ = webview.app_handle().opener().reveal_item_in_dir(path); }
+                        _ => log::warn!("a file window's download failed"),
+                    }
+                    let _ = webview.window().close();
+                }
+                _ => {}
+            }
+            true
+        });
+    }
+    let _ = builder.build();
+}
+
+/// The same file, whatever its fragment.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn same_file(a: &url::Url, b: &url::Url) -> bool {
+    a.as_str().split('#').next() == b.as_str().split('#').next()
+}
+
+#[cfg(test)]
+mod new_window_tests {
+    use super::*;
+
+    #[test]
+    fn new_windows_open_in_the_browser_except_hub_files() {
+        for hub in ["https://team.example.com/", "https://team.example.com/tico/"] {
+            let hub = url::Url::parse(hub).unwrap();
+            for (address, expected) in [
+                ("https://github.com/ticoteam/tico/pull/1", NewWindow::Browser),
+                ("http://example.com/", NewWindow::Browser),
+                ("https://team.example.com/#/tasks", NewWindow::Browser),
+                ("https://team.example.com/api/v2/files/f1", NewWindow::Hub),
+                ("https://team.example.com:8443/api/v2/files/f1", NewWindow::Browser),
+                ("http://team.example.com/api/v2/files/f1", NewWindow::Browser),
+                ("https://other.example.com/api/v2/files/f1", NewWindow::Browser),
+                ("https://team.example.com@evil.example/api/v2/files/f1", NewWindow::Browser),
+                ("mailto:support@example.com", NewWindow::Browser),
+                ("tel:+15550100", NewWindow::Browser),
+                ("sms:+15550100", NewWindow::Browser),
+                ("https://team.cloudflareaccess.com/cdn-cgi/access/login", NewWindow::Browser),
+                ("https://accounts.google.com/o/oauth2/auth", NewWindow::Browser),
+                ("about:blank", NewWindow::Ignore),
+                ("javascript:alert(1)", NewWindow::Ignore),
+                ("data:text/html,hi", NewWindow::Ignore),
+                ("blob:https://team.example.com/0b1c", NewWindow::Ignore),
+                ("file:///etc/passwd", NewWindow::Ignore),
+            ] {
+                assert_eq!(new_window_target(Some(&hub), &url::Url::parse(address).unwrap()), expected, "{hub} {address}");
+            }
+        }
+        assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap()), NewWindow::Browser);
+    }
+
+    #[test]
+    fn mailto_navigation_leaves_the_app() {
+        let stays = |address: &str| navigation_stays("team.example.com", &url::Url::parse(address).unwrap());
+        assert!(!stays("mailto:support@example.com"));
+        assert!(!stays("tel:+15550100"));
+        assert!(!stays("sms:+15550100"));
+        assert!(!stays("https://example.com/"));
+        assert!(stays("https://team.example.com/#/tasks"));
+        assert!(stays("https://team.cloudflareaccess.com/cdn-cgi/access/login"));
+        assert!(stays("about:blank"));
+    }
+
+    #[test]
+    fn a_file_window_acts_only_on_its_own_download() {
+        let opened = url::Url::parse("https://team.example.com/api/v2/files/f1?v=2").unwrap();
+        let same = |address: &str| same_file(&url::Url::parse(address).unwrap(), &opened);
+        assert!(same("https://team.example.com/api/v2/files/f1?v=2"));
+        assert!(same("https://team.example.com/api/v2/files/f1?v=2#page=1"));
+        assert!(!same("https://team.example.com/api/v2/files/f1"));
+        assert!(!same("https://team.example.com/api/v2/files/f2?v=2"));
+        assert!(!same("blob:https://team.example.com/0b1c"));
+    }
 }
 
 /// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking
@@ -315,6 +469,7 @@ fn open_meeting_window(app: &App, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_new_window(new_window_handler(app))
         .build();
 }
 

@@ -169,8 +169,19 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
         raise Unsettled(message) if args[0] in MUTATING else RuntimeError(message)
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
-        raise RuntimeError(lines[-1] if lines else "docker compose failed")
+        raise RuntimeError((lines[-1] if lines else "docker compose failed") + overlap_hint(result.stderr or result.stdout))
     return result.stdout
+
+
+EDGE_HINT = (" The front doors' edge network (172.30.254.0/28 unless .env moves it) clashes with a network on this "
+             "computer: set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS "
+             "in .env to a free range, then run docker compose up -d (run docker compose down first only to move an edge "
+             "network that already exists). See docs/install.md.")
+
+
+def overlap_hint(output):
+    """Docker's own words for a subnet clash name no setting; say which ones move it."""
+    return EDGE_HINT if "Pool overlaps" in (output or "") else ""
 
 
 def running_image():

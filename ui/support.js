@@ -58,7 +58,7 @@
   const last = t => (t.messages || []).at(-1)?.created || t.created;
   const inThread = () => viewing || !state.tickets.length;
   const draft = () => {
-    if (!drafts.has(selected)) drafts.set(selected, {message: '', email: compose?.email || '', ids: true, diag: !selected, perf: 24, bundle: null, key: uid()});
+    if (!drafts.has(selected)) drafts.set(selected, {message: '', email: compose?.email || '', ids: true, diag: !selected, perf: 24, bundle: null, key: uid(), kind: 'support'});
     return drafts.get(selected);
   };
   const current = () => state.tickets.find(t => t.id === selected);
@@ -200,7 +200,8 @@
       try {
         if (d.diag && !d.bundle) { d.bundle = await capture(d.perf); updateSent(); }
         const body = {message: d.message, diagnostics: d.diag ? d.bundle.id : ''};
-        if (!thread) Object.assign(body, {email: d.email.trim(), include_ids: d.ids}, d.ids && appVersion() ? {app_version: appVersion()} : {});
+        if (!thread) Object.assign(body, {email: d.email.trim(), include_ids: d.ids}, d.ids && appVersion() ? {app_version: appVersion()} : {},
+          d.kind !== 'support' ? {kind: d.kind} : {});
         const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, d.key);
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
         drafts.delete(thread); selected = next.id; viewing = true;
@@ -219,7 +220,7 @@
   }
   function updateSent() {
     if (!rail?.isConnected) return;
-    const d = draft(), parts = ['message'];
+    const d = draft(), parts = [!selected && d.kind !== 'support' ? 'message marked ' + d.kind : 'message'];
     if (!selected && d.email.trim()) parts.push('email ' + d.email.trim());
     if (!selected && d.ids) parts.push('version ' + (compose?.version || 'unknown'), ...(appVersion() ? ['app version ' + appVersion()] : []), 'install ID ' + compose?.install_id);
     if (d.diag) parts.push('redacted diagnostics' + (d.bundle ? ' (' + Math.max(1, Math.ceil(d.bundle.bytes / 1024)) + ' KB)' : ''));
@@ -286,6 +287,34 @@
     dialog.onclose = () => { editor = null; dialog.remove(); };
     if (base) show(base); else await load();
   }
+  // "Want help setting up?" starts a new request from text the person reads, edits and sends themselves.
+  let pending = null;
+  function startPending() {
+    if (!pending || !rail?.isConnected) return;
+    const {kind} = pending, draft = drafts.get(''), unsent = draft?.message.trim() || '';
+    // A new request the person had started keeps their words and choices, with the snapshot after them, once.
+    const message = unsent.includes(pending.message.trim()) ? unsent
+      : unsent ? unsent + '\n\n' + pending.message : pending.message;
+    pending = null; selected = ''; viewing = true;
+    drafts.set('', draft ? {...draft, message, kind} :
+      {message, email: compose?.email || '', ids: true, diag: true, perf: 24, bundle: null, key: uid(), kind});
+    renderTickets(); renderThread(true); renderComposer();
+    rail.querySelector('[name=message]')?.focus();
+  }
+  window.supportStart = (message, kind = 'support') => {
+    pending = {message, kind};
+    if (rail?.isConnected) startPending(); else location.hash = '#/help';
+  };
+  document.addEventListener('click', async e => {
+    const button = e.target.closest('[data-setup-help]');
+    if (!button || button.disabled) return;
+    e.preventDefault(); button.disabled = true;
+    try {
+      const snapshot = await call('GET', '/support/setup-snapshot?asked_from=' + encodeURIComponent(button.dataset.setupHelp));
+      window.supportStart(snapshot.message, snapshot.kind);
+    } catch (error) { say(error.message, true); }
+    finally { button.disabled = false; }
+  });
   window.supportLeave = () => { editor?.close(); rail = null; schedule(); };
   window.supportHelp = async page => {
     const actor = typeof S === 'undefined' ? '' : S.me?.id;
@@ -294,7 +323,7 @@
       accept(await call('GET', '/support/tickets'));
       if (!page.isConnected) return;
       if (!state.enabled) {
-        page.querySelector('.help-support-link')?.remove();
+        page.querySelector('[data-help-support]')?.remove();
         const off = document.createElement('p'); off.className = 'support-off'; off.setAttribute('data-support-off', '');
         off.textContent = 'Contact support is turned off on this Tico server, so requests cannot be sent from here.';
         const actions = page.querySelector('.help-actions');
@@ -332,7 +361,7 @@
         } catch (e) { say(e.message, true); }
       };
       if (selected && !current()) { selected = ''; viewing = false; }
-      renderTickets(); renderThread(true); renderComposer(); void readVisible();
+      renderTickets(); renderThread(true); renderComposer(); void readVisible(); startPending();
       await refresh(); schedule();
     } catch (e) { if (page.isConnected) { const p = document.createElement('p'); p.className = 'err'; p.textContent = e.message; page.appendChild(p); } }
   };

@@ -1,0 +1,52 @@
+/* Roadmap controls share the task rails, chips and company inputs. */
+.roadmap-form{display:flex;flex-direction:column;gap:12px;min-width:0}
+.roadmap-form label:not(.roadmap-check),.roadmap-publication>label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.roadmap-form input:not([type=checkbox]),.roadmap-form textarea,.roadmap-form select,.roadmap-publication input,.roadmap-publication textarea{width:100%;min-width:0;box-sizing:border-box}
+.roadmap-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.roadmap-check{display:flex;align-items:center;gap:6px;min-height:32px}
+.roadmap-labels{display:flex;gap:8px 20px;flex-wrap:wrap}
+.roadmap-form input.roadmap-limit{width:120px}
+.roadmap-size{width:90px;min-width:0}
+.roadmap-requesters>h3{display:flex;align-items:center;gap:8px}
+.roadmap-requesters>h3>.prop-add{margin-left:auto}
+.requester-chip{border:1px solid var(--line);border-radius:var(--r-ctl);padding:3px 7px;background:transparent;color:var(--muted);font-size:var(--t-xs);font-weight:400;text-transform:none;letter-spacing:normal}
+.requester-chip[aria-pressed=true]{background:var(--ok-bg);color:var(--accent)}
+.requester-group h4{margin:12px 0 4px}
+.requester-row{display:flex;flex-direction:column;gap:3px;width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;color:var(--ink);text-align:left;padding:8px 0;overflow-wrap:anywhere}
+button.requester-row:hover,button.requester-row:focus-visible{background:var(--hover)}
+.requester-name{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.requester-name strong{font-weight:500}
+.requester-contacts{color:var(--muted);font-size:var(--t-sm)}
+.requester-note{white-space:pre-wrap;font-size:var(--t-sm)}
+.requester-editor{max-width:560px}
+.roadmap-publication>small{display:block;color:var(--muted);font-size:var(--t-xs)}
+.roadmap-create-public{display:flex;flex-direction:column;gap:8px}
+.roadmap-publication>label{margin-top:10px;font-size:var(--t-sm);color:var(--muted)}
+.roadmap-publication input,.roadmap-publication textarea{color:var(--ink)}
+.roadmap-moderation{display:inline-flex;gap:8px;opacity:0}
+.roadmap-moderation button{border:0;padding:0;background:transparent;color:var(--muted);font-size:var(--t-xs)}
+.tcomment:hover .roadmap-moderation,.tcomment:focus-within .roadmap-moderation,.roadmap-moderation:focus-within{opacity:1}
+.tcomment-head:has([data-public-moderate]){flex-wrap:wrap}
+.tl-tabs .tl-ranked{color:var(--muted);text-decoration:none;align-self:center;padding:6px 10px;font-size:var(--t-sm)}
+.roadmap-page{max-width:1200px;margin:auto}
+.roadmap-sort{display:flex;align-items:center;gap:8px;margin:18px 0}
+.roadmap-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.roadmap-table th,.roadmap-table td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;overflow-wrap:anywhere}
+.roadmap-table th{color:var(--muted);font-size:var(--t-sm);font-weight:500}
+.roadmap-table th:first-child{width:40%}
+.roadmap-table th button{border:0;padding:0;background:transparent;color:inherit;font:inherit}
+.roadmap-table tr[data-roadmap-task]{cursor:pointer}
+.roadmap-table tr[data-roadmap-task]:hover{background:var(--hover)}
+.roadmap-table td strong{font-weight:500}
+.roadmap-phone-summary{display:none}
+.roadmap-pager{margin-top:16px}
+@media(hover:none){.roadmap-moderation{opacity:1}}
+@media(max-width:760px){
+  .roadmap-fields{grid-template-columns:1fr}
+  .roadmap-check{min-height:40px}
+  .roadmap-table,.roadmap-table tbody{display:block}
+  .roadmap-table thead,.roadmap-table td:not(:first-child){display:none}
+  .roadmap-table tr,.roadmap-table td:first-child{display:block}
+  .roadmap-table td:first-child{padding:12px 0}
+  .roadmap-phone-summary{display:block;margin-top:4px;font-size:var(--t-sm)}
+}

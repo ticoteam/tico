@@ -13,6 +13,22 @@ All notable changes to Tico are recorded here. The format follows
   or collected. An install too old to show a message gets its link as the **View changelog** link instead: on 0.2,
   "You're on 0.2: update to get one-tap support". A request linked to the issue or pull request that fixes it
   (`hq-tickets link`) gets "Fixed in vX, update here" by itself when the release ships.
+- **Run workflows** on a bot's chosen write repository (Settings, `hub bot repos ... owner/repo:write+actions`, the
+  repositories API): an Owner or admin lets the bot start, rerun and cancel GitHub Actions runs there. Those
+  repositories get their own token with Actions: write once the GitHub App has Actions set to Read and write and the
+  installation accepted it; until then the token answer and Health say why. If GitHub still refuses that token, the
+  repository gets the ordinary write token, the token answer and Health (**GitHub refused workflow tokens**) say so,
+  and GitHub is asked again after a minute rather than on every git call. Workflows: write is never asked for.
+- **Want help setting up?** in the setup wizard, on Health and on a bot in Needs setup opens Support with a setup
+  snapshot (steps done, computer online, model signed in, first bot ready, bots in Needs setup) that the person reads and
+  edits before sending; the request goes marked `setup`. After the install's first bot result, and 7 and 30 days later,
+  each person is asked once, skippably, "How is Tico working for you?"; an answer goes as a `feedback` request. HQ keeps
+  each ticket's `kind`, and the Support Agent's tasks are titled `Support (setup):` or `Support (feedback):`. An HQ
+  from before `kind` still gets the ticket, with the kind named in the message.
+- The anonymous usage count carries a third yes/no flag, `first_result` (a bot turn has ever finished here), and HQ's
+  public `/v1/stats` adds `first_result` (installs that reached a first result) and `first_result_median_days` (the
+  median days from first seen to it, over installs that sent the flag from the start; shown from 5 such installs).
+  PRIVACY.md lists the field.
 - A bot waiting on a linked pull request can end its turn instead of polling: `hub task link <task> <pr url>
   --wake-once` (or `wake_once` on `hub_task_link`) wakes the task once, in its conversation, when the PR's checks
   finish (pass or fail), it is approved or gets changes requested, or a release ships it (or it merges in a
@@ -83,8 +99,31 @@ All notable changes to Tico are recorded here. The format follows
   to the provider's requests) as well as its events. Eight captures to start: a plain Claude turn, a subagent, a
   steer while a tool runs, an interrupt mid-tool, compaction, an expired Claude login, Codex out of quota, and a
   rejected Codex key.
+- **Public roadmaps** (docs/roadmaps.md): owners and admins pick labels in Settings > Public roadmap, and anonymous
+  `/public/roadmaps/<label>` endpoints let the company's own website list and show the published tasks under each,
+  with their public step names, request counts and progress, for exact allowlisted origins only. A task is public
+  only when someone publishes it with a public title (and summary) written for it; every type starts private and the
+  internal title, body, contacts, discussion and children are never shown. Bots publish, edit public text and reply
+  publicly only through an exact approved payload; a bot creating a task with public text is refused, not
+  silently made private. Visitors follow a task with optional contact details and get a
+  token that withdraws their request later, even once the task is unpublished, unlabelled or deleted; they can also
+  comment publicly (team can hide or delete) and suggest new tasks, which arrive private at Suggested for the
+  Product Manager. Visitor writes share a daily limit per address (default 10), and at most 20 visitor suggestions
+  wait at once (`suggestion_limit`); while the form refuses, the Product Manager is told once a day. The server and relay believe forwarded addresses only from
+  `TICO_TRUSTED_PROXIES`; the Compose file gives Caddy and cloudflared fixed addresses on their own network and
+  trusts exactly those, so each visitor keeps their own limit; an update that hits a clash with that network names
+  the `TICO_EDGE_*` settings that move it. A database that ran an unreleased build of roadmaps from main has the
+  internal text it copied into public text cleared once (each clearing leaves a task event), and tasks it published
+  that way unpublished. Adds Product roadmap and Engineering task types, a
+  ranked roadmap view, and requesters (Requested by) on tasks.
 
 ### Changed
+- Help is about a quarter of its old length on every screen: what Tico is, where to start (your first result, the tour,
+  the Assistant) and how to get help, with links to the docs. The map, Who does what, the agent platforms and the
+  glossary moved to [How Tico works](docs/how-it-works.md) and the [Glossary](docs/glossary.md).
+- Help on a phone (or any screen too narrow for the right rail) opens with Support: your requests, **New request**
+  and the composer come first, with a link to the docs right under them and the short overview below. The Support
+  jump link is gone. Wide screens keep Support in the right rail.
 - A bot that hits a Claude or Codex usage limit now resumes at the provider's own reset time instead of after a fixed
   30 minutes (2 hours after three in a row). The bot's status and Health say when it resumes ("resumes at 12:40 UTC"),
   and its computer picks the queued work up as soon as the reset passes. Providers that report no reset time keep the
@@ -94,6 +133,11 @@ All notable changes to Tico are recorded here. The format follows
   stores and logs no token. The grant on the computer keeps no secret.
 
 ### Fixed
+- Desktop app: a link that opens a new tab (every link in chat and Markdown) did nothing; it now opens in the default
+  browser, and a Markdown email link opens the mail app. The team's own files and run logs open in an app window,
+  which keeps the app's sign-in; a file the app cannot show (Word, Excel, zip) downloads to Downloads instead
+  (on macOS and Windows the empty window then closes; on Linux it stays open).
+  A PDF's **Open** is hidden in the app; the PDF shows in the viewer and downloads.
 - Linking a pull request whose URL differs only in owner or repository case (or a trailing slash) reuses
   the task's existing link for it, so arming or disarming `--wake-once` acts on that one link instead of adding a second.
 - A company's desktop app installs its updates again. The server signed the update download for S3 in an older

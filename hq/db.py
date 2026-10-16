@@ -1,10 +1,13 @@
 """HQ's whole database: one row per install id, and nothing that is not in the columns below.
 
-    installs(install_id, first_seen, last_seen, last_version, last_people, last_bots)
+    installs(install_id, first_seen, last_seen, last_version, last_people, last_bots, first_result, result_from_start)
 
 Dates are UTC days (YYYY-MM-DD), not times. `last_people` and `last_bots` are the last day the install said
-"a person used it" and "a bot turn completed"; they stay NULL until it does. There is no ping log, no address, no
-user agent and no other field, so a row cannot say more than that. Support tickets, which a person files on purpose,
+"a person used it" and "a bot turn completed"; they stay NULL until it does. `first_result` is the first day it said
+"a bot has finished a turn here, ever"; `result_from_start` is 1 when the install's first ping already carried that flag,
+so the days from `first_seen` to `first_result` are its real wait for a first working bot (an install that counted
+before the flag existed has 0, and is left out of that number). There is no ping log, no address, no user agent and no
+other field, so a row cannot say more than that. Support tickets, which a person files on purpose,
 are in support.py's own two tables.
 """
 import re
@@ -24,7 +27,9 @@ CREATE TABLE IF NOT EXISTS installs(
  last_seen TEXT NOT NULL,
  last_version TEXT NOT NULL,
  last_people TEXT,
- last_bots TEXT);
+ last_bots TEXT,
+ first_result TEXT,
+ result_from_start INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS installs_last_seen ON installs(last_seen);
 """
 
@@ -47,16 +52,23 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        have = {row[1] for row in self.conn.execute("PRAGMA table_info(installs)")}
+        for column, spec in (("first_result", "TEXT"), ("result_from_start", "INTEGER NOT NULL DEFAULT 0")):
+            if column not in have:
+                self.conn.execute(f"ALTER TABLE installs ADD COLUMN {column} {spec}")
 
-    def record(self, install_id, version, people, bots):
+    def record(self, install_id, version, people, bots, first_result=None):
+        """`first_result` is None when the install did not send the flag (a release from before it)."""
         day = self.clock().isoformat()
         with self.lock:
             self.conn.execute(
-                "INSERT INTO installs(install_id,first_seen,last_seen,last_version,last_people,last_bots) "
-                "VALUES(?,?,?,?,?,?) ON CONFLICT(install_id) DO UPDATE SET last_seen=excluded.last_seen, "
-                "last_version=excluded.last_version, last_people=coalesce(excluded.last_people,last_people), "
-                "last_bots=coalesce(excluded.last_bots,last_bots)",
-                (install_id, day, day, version, day if people else None, day if bots else None))
+                "INSERT INTO installs(install_id,first_seen,last_seen,last_version,last_people,last_bots,first_result,"
+                "result_from_start) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(install_id) DO UPDATE SET "
+                "last_seen=excluded.last_seen, last_version=excluded.last_version, "
+                "last_people=coalesce(excluded.last_people,last_people), last_bots=coalesce(excluded.last_bots,last_bots), "
+                "first_result=coalesce(first_result,excluded.first_result)",
+                (install_id, day, day, version, day if people else None, day if bots else None,
+                 day if first_result else None, 0 if first_result is None else 1))
 
     def purge(self):
         """Forget installs not heard from in 13 months. Returns how many."""
@@ -75,6 +87,10 @@ class Database:
             tried = one("SELECT count(*) FROM installs WHERE last_people IS NOT NULL AND last_bots IS NOT NULL")
             active = one("SELECT count(*) FROM installs WHERE last_seen>=?", week)
             retained = one("SELECT count(*) FROM installs WHERE first_seen<=? AND last_bots>=?", month, week)
+            reached = one("SELECT count(*) FROM installs WHERE first_result IS NOT NULL")
+            waits = sorted(r[0] for r in self.conn.execute(
+                "SELECT julianday(first_result)-julianday(first_seen) FROM installs "
+                "WHERE result_from_start=1 AND first_result IS NOT NULL"))
             versions = [r[0] for r in self.conn.execute("SELECT last_version FROM installs WHERE last_seen>=?", (week,))]
         counts = {}
         for version in versions:
@@ -83,8 +99,13 @@ class Database:
         other = sum(v for v in counts.values() if v < SUPPRESS_BELOW)
         if other >= SUPPRESS_BELOW:
             shown["other"] = other
-        return {"tried": tried, "active_7d": active, "retained_30d": retained, "by_version": shown,
-                "as_of": now.isoformat()}
+        # The median wait is shown only once five installs have one, like the version counts.
+        median = None
+        if len(waits) >= SUPPRESS_BELOW:
+            middle = len(waits) // 2
+            median = waits[middle] if len(waits) % 2 else (waits[middle - 1] + waits[middle]) / 2
+        return {"tried": tried, "active_7d": active, "retained_30d": retained, "first_result": reached,
+                "first_result_median_days": median, "by_version": shown, "as_of": now.isoformat()}
 
     def release_counts(self):
         """Staff only: installs heard from in the last 7 days on each exact release (0.2.24, not 0.2), with no

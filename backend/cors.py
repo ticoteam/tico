@@ -49,7 +49,7 @@ class Cors:
         self.headers = {h.lower() for h in HEADERS}
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope.get("path", "").startswith("/public/roadmaps/"):
             return await self.app(scope, receive, send)
         request = Headers(scope=scope)
         origin = request.get("origin")

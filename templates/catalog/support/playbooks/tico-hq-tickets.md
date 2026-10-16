@@ -47,6 +47,11 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `hub doc ask`. Also:
   "update to ..."), then run `software/hq-tickets close-signature hm-... reports/hq-hm-....md` (it posts the reply on
   every open ticket with that signature and closes each; a second run closes nothing new). If a ticket gave an email,
   add the email-ready copy to the engineering task. Then finish that task.
+- **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup
+  snapshot they could edit: steps done, computer online, model signed in, first bot ready, bots in Needs setup. Answer the
+  first "no" in it with the one next step from the docs; ask for **Setup check** only when the snapshot does not say enough.
+- **Feedback:** the title says `(feedback)`: an answer to "How is Tico working for you?". Thank them in a line; a problem
+  in it is sorted like any other ticket, and a wish is a line for the product owner.
 - **Question:** answer from the docs; a `covered: false` is a task to the Librarian.
 - **Feature request:** a line for the product owner, no promise.
 - **Security report:** a human at once, as a task; never quote the detail anywhere public and never in a reply.

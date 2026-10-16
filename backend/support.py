@@ -28,7 +28,7 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics
+from . import diagnostics, support_asks
 from .census import hq_url
 from .auth import Identity
 from .models import Contract
@@ -65,6 +65,13 @@ class SupportTicket(Contract):
     # The desktop app's own version (window.ticoNativeVersion) when the page runs in it; goes with the IDs.
     app_version: str = Field(default="", max_length=40)
     diagnostics: str = Field(default="", max_length=64)     # the digest of the bundle the person previewed (backend/diagnostics.py)
+    # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
+    kind: Literal["support", "setup", "feedback"] = "support"
+
+
+class FeedbackAnswer(Contract):
+    moment: Literal["first_result", "day_7", "day_30"]
+    answer: str = Field(default="", max_length=MAX_MESSAGE - 200)     # empty: the person skipped the question
 
 
 class SupportFromApproval(Contract):
@@ -331,10 +338,18 @@ class Support:
             payload.update(sent)
         if body.diagnostics:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
+        if body.kind != "support":
+            payload["kind"] = sent["kind"] = body.kind
         answer = _ask_hq("POST", "/v1/support", body=payload)
-        if answer.status_code == 422 and "app_version" in payload and _refused_field(answer) == "fields":
-            # An HQ from before app_version refuses unknown fields; the ticket still goes, without it.
-            del payload["app_version"], sent["app_version"]
+        if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
+            # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
+            # names its kind in the message instead.
+            for name in ("app_version", "kind"):
+                payload.pop(name, None)
+                sent.pop(name, None)
+            named = f"[{body.kind.capitalize()}] {message}"
+            if body.kind != "support" and len(named) <= MAX_MESSAGE:
+                payload["message"] = named
             answer = _ask_hq("POST", "/v1/support", body=payload)
         if answer.status_code == 422 and "diagnostics" in payload:
             raise Problem("diagnostics_rejected", "Support could not accept this attachment. Review it or remove diagnostics to send just the message.", 422)
@@ -547,6 +562,23 @@ def install(app, store, settings, census):
         who = person(request)
         require_on(settings)
         return support.file(who, body, (request.headers.get("idempotency-key") or "")[:200])
+
+    @app.get("/api/v2/support/setup-snapshot")
+    def support_setup_snapshot(request: Request, asked_from: Literal["wizard", "health", "bot"] = "health"):
+        """The text a "Want help setting up?" request starts with; the person reads and edits it before sending."""
+        who = person(request)
+        require_on(settings)
+        github = getattr(request.app.state, "github_app", None)
+        with store.read() as c:
+            return support_asks.setup_snapshot(c, who, settings, request.app.state.auth,
+                                               github.row(c) if github else None, asked_from)
+
+    @app.post("/api/v2/support/feedback")
+    def support_feedback(request: Request, body: FeedbackAnswer):
+        """The answer to "How is Tico working for you?", sent as a feedback request, or the person skipping it."""
+        who = person(request)
+        require_on(settings)
+        return support_asks.answer_feedback(store, support, who, body)
 
     @app.post("/api/v2/support/tickets/from-approval")
     def support_file_approved(request: Request, body: SupportFromApproval):

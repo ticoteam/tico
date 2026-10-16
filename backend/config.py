@@ -156,6 +156,8 @@ class Settings:
     # Origins of browser apps allowed to call the API from another address (TICO_CORS_ORIGINS,
     # backend/cors.py): exact origins only, checked in __post_init__.
     cors_origins: tuple[str, ...] = ()
+    client_ip_header: str = "x-forwarded-for"
+    trusted_proxies: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
     lease_seconds: int = 90
     scheduler_enabled: bool = False
     # The flight recorder (backend/flight.py): request, process and database history in this database. On unless
@@ -245,6 +247,11 @@ class Settings:
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)
+        from .client_ip import trusted_proxies
+        self.trusted_proxies = trusted_proxies(self.trusted_proxies)
+        self.client_ip_header = self.client_ip_header.strip().lower()
+        if self.client_ip_header not in ('x-forwarded-for', 'cf-connecting-ip'):
+            raise ValueError('TICO_CLIENT_IP_HEADER is x-forwarded-for or cf-connecting-ip')
         from . import identity_proxy        # imports the store, which imports this module
         identity_proxy.check(self)
         self.runner_url = (self.runner_url or self.public_url).rstrip("/")
@@ -370,6 +377,8 @@ class Settings:
             stream_keepalive_seconds=(min(50, max(5, int(os.environ["TICO_STREAM_KEEPALIVE_SECONDS"])))
                                       if os.environ.get("TICO_STREAM_KEEPALIVE_SECONDS", "").strip() else None),
             cors_origins=os.environ.get("TICO_CORS_ORIGINS", ""),
+            client_ip_header=os.environ.get("TICO_CLIENT_IP_HEADER") or "x-forwarded-for",
+            trusted_proxies=os.environ.get("TICO_TRUSTED_PROXIES") or "127.0.0.1/32,::1/128",
             scheduler_enabled=not rehearsal and os.environ.get("TICO_SCHEDULER", "1") == "1",
             flight_recorder=os.environ.get("TICO_FLIGHT_RECORDER", "1") != "0",
             rehearsal=rehearsal,

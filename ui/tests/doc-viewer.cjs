@@ -99,6 +99,13 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
     await page.keyboard.press('ArrowRight');
     await page.locator('#doc-viewer .viewer-pdf iframe').waitFor();
     assert.equal(await page.locator('#doc-viewer h2').innerText(),'lease.pdf');
+    // Its blob: Open works in a browser tab; the desktop app cannot hand a blob: URL to the browser.
+    assert.equal(await page.locator('#doc-viewer a[href^="blob:"]').count(),1,'Open in a browser');
+    await page.evaluate(()=>document.body.classList.add('native'));
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowRight');
+    await page.locator('#doc-viewer .viewer-pdf iframe').waitFor();
+    assert.equal(await page.locator('#doc-viewer a[href^="blob:"]').count(),0,'no Open in the desktop app');
+    await page.evaluate(()=>document.body.classList.remove('native'));
     await page.keyboard.press('Escape');
     assert.equal(await page.evaluate(()=>document.querySelector('#doc-viewer').open),false);
     // Clicking the cover photo's thumbnail opens it at its place.

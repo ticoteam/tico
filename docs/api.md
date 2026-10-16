@@ -194,3 +194,5 @@ MCP uses `hub_bot_branch(bot, runner_id?)` and `hub_bot_update(slug, shared=)`; 
 `hub bot branch <bot> [--computer C]` and `hub bot update <bot> --shared|--no-shared`.
 New tasks and canonical chats to an original route to the caller's active branch when branches are allowed.
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
+
+Public roadmap publication, requesters and anonymous endpoints are described in [Public roadmaps](roadmaps.md).

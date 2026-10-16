@@ -632,6 +632,16 @@ use that entry point. The server creates a fresh private control secret and allo
 on every start; no relay option or manually managed secret is required. The public listener refuses
 `/control/*` and `/_tico/*`. If either server process exits, its supervisor restarts the pair.
 
+The standard Compose file's front doors (Caddy, cloudflared) reach the server over their own `edge` network from
+fixed addresses, and the server trusts forwarded client addresses only from those two and loopback, so each visitor
+keeps their own rate limit with no change to `compose.yaml`. If `172.30.254.0/28` clashes with a network on your
+computer, move it with `TICO_EDGE_SUBNET`, `TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and
+`TICO_CLOUDFLARED_ADDRESS` in `.env`; an update that hits the clash rolls back and its message names these
+settings. After setting them, run `docker compose up -d` (or update again). Docker keeps an existing network's
+subnet, so to move an edge network that was already created, run `docker compose down` once first. With your own reverse proxy, set `TICO_TRUSTED_PROXIES` to its addresses plus
+loopback. `TICO_CLIENT_IP_HEADER` defaults to `x-forwarded-for`; use `cf-connecting-ip` only when cloudflared is
+the only trusted ingress. See [public roadmaps](roadmaps.md#client-addresses-behind-a-proxy).
+
 Former pilot installations should stop their own `screen-proxy` and `screen-relay` services and
 return to the standard Compose file. The old overlay is an empty compatibility file. For a manually
 configured native pilot, stop its old sidecar/proxy and use the standard server command. Obsolete

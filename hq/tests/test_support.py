@@ -397,3 +397,14 @@ def test_an_older_database_backfills_signatures_once(tmp_path):
     for _ in range(2):
         Tickets(old)
         assert old.conn.execute("SELECT signature FROM tickets").fetchone()[0] == SIG
+
+
+def test_a_setup_or_feedback_request_keeps_its_kind_and_an_unknown_kind_is_refused(client, db):
+    setup = file(client, "Want help setting up", kind="setup").json()["ticket_id"]
+    feedback = file(client, "Working well", kind="feedback").json()["ticket_id"]
+    plain = file(client).json()["ticket_id"]
+    listed = {t["ticket_id"]: t["kind"] for t in client.get("/v1/staff/tickets?status=all", headers=staff()).json()["tickets"]}
+    assert listed == {setup: "setup", feedback: "feedback", plain: "support"}
+    count = db.conn.execute("SELECT count(*) FROM tickets").fetchone()[0]
+    assert file(client, kind="billing").json() == {"error": "invalid", "field": "kind"}
+    assert db.conn.execute("SELECT count(*) FROM tickets").fetchone()[0] == count

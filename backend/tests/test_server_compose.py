@@ -71,3 +71,23 @@ def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_ot
     for name in ("server", "slack"):
         env = set(services[name]["environment"])
         assert keys <= env and "CLOUDFLARE_TUNNEL_TOKEN" not in env
+
+
+def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wider():
+    import re
+    import yaml
+    from ipaddress import ip_address, ip_network
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
+    services = compose["services"]
+    default = lambda value: re.fullmatch(r"\$\{\w+:-(.*)\}", value).group(1)
+    ipam = compose["networks"]["edge"]["ipam"]["config"][0]
+    subnet, dynamic = ip_network(default(ipam["subnet"])), ip_network(default(ipam["ip_range"]))
+    doors = {}
+    for name in ("caddy", "cloudflared"):
+        assert list(services[name]["networks"]) == ["edge"]       # reached only over the edge network
+        doors[name] = ip_address(default(services[name]["networks"]["edge"]["ipv4_address"]))
+        assert doors[name] in subnet and doors[name] not in dynamic
+    assert "edge" in services["server"]["networks"] and "default" in services["server"]["networks"]
+    trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
+    resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
+    assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32"]

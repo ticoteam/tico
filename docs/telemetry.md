@@ -21,13 +21,13 @@ and Tico does all of them.
 The common practice: **opt-out and anonymous; a notice on first run; several ways to switch it off, including an
 environment variable and a standard one; a debug mode that shows the payload; a public statement of the fields; public or
 aggregate results; no IP address kept.** Tico follows each. Where it differs it is stricter: a random ID rather than a
-computer hash, four fields, two of them booleans, and the count is invisible to a team that turns it off (the update
+computer hash, five fields, three of them booleans, and the count is invisible to a team that turns it off (the update
 check goes straight to GitHub).
 
 ## How it works
 
 ```
-Tico server ── GET /v1/latest?install_id&version&active_people&active_bots ──> HQ ──> installs table (6 columns)
+Tico server ── GET /v1/latest?install_id&version&active_people&active_bots&first_result ──> HQ ──> installs table (8 columns)
      │                                                                      └──> GitHub release, cached 15 minutes
      └── counting off, HQ down, or TICO_RELEASES_URL set ──> GitHub, no ID
 ```
@@ -57,12 +57,14 @@ a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`; 
 
 **Endpoints**
 
-- `GET /v1/latest?install_id=&version=&active_people=&active_bots=` records the ping and returns the latest release,
-  cached from GitHub for 15 minutes. Any of the four fields present but invalid, missing or repeated: `422`, nothing
-  stored. No fields: the release only, nothing recorded. Over 60 requests an hour from one address: `429`. The answer also carries Tico's per-version messages and known issues, the same for every install
+- `GET /v1/latest?install_id=&version=&active_people=&active_bots=&first_result=` records the ping and returns the latest
+  release, cached from GitHub for 15 minutes. Any of the four required fields present but invalid, missing or repeated, or
+  `first_result` invalid or repeated: `422`, nothing stored. `first_result` may be left out (a release from before it). No fields: the release only, nothing recorded. Over 60 requests an hour from one address: `429`. The answer also carries Tico's per-version messages and known issues, the same for every install
   ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)); nothing more is sent or stored for them.
 - `GET /v1/stats`, public: `tried` (IDs whose two flags have both been true at some time), `active_7d` (heard from in the
-  last 7 days), `retained_30d` (first seen at least 30 days ago and a bot active in the last 7 days) and `by_version`
+  last 7 days), `retained_30d` (first seen at least 30 days ago and a bot active in the last 7 days), `first_result` (IDs that
+  have reached a first bot result), `first_result_median_days` (the median days from first seen to first result, over IDs
+  that sent the flag from their first request; `null` under 5 such IDs) and `by_version`
   (active installs by major version; before 1.0 by `0.minor`). The totals are exact. A version count under 5 is folded into
   `other`, and `other` is left out if it is still under 5.
 - `GET /healthz`.
@@ -137,7 +139,7 @@ the backup service runs as the HQ image's user (`10005:10005`) so it can read `h
 
 ## Testing
 
-`backend/tests/test_usage_count.py` (the payload has exactly the four fields; nothing is sent when off by
+`backend/tests/test_usage_count.py` (the payload has exactly the five fields; nothing is sent when off by
 `TICO_TELEMETRY`, `DO_NOT_TRACK`, the toggle, demo mode or before the notice; HQ down falls back to GitHub; debug sends
 nothing; owner-only controls), `hq/tests/test_hq.py` (no address stored or logged; bad input refused; the stats math,
 suppression and retention; no start without the key), `hq/tests/test_support.py` (tickets: strict input, per-ticket secrets, staff

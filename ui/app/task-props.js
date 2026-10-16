@@ -60,6 +60,10 @@ function taskPropsHTML(t, opts = {}) {
   if (t.roles && (typed || Object.keys(t.roles).length)) rows.push(taskPeopleRowHTML(t, r));
   // Private: the label never changes; the line under it says what the current setting means
   rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester) ? '' : 'disabled'}></label><small>${t.private ? 'Only the requester and assignee can see a private task' : 'Visible to everyone in the company'}</small></span></div>`);
+  if (roadmapTask(t)) {
+    rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}></label><small>${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</small></span></div>`);
+    rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
+  }
   // Due: a person's deadline (red once passed), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due);
   const info = taskDueInfo(t);
@@ -94,7 +98,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People'};
+const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -298,6 +302,9 @@ function taskPropsBind(d, task, change) {
         }});
     }
   };
+  const publication = $('[data-task-public]', box), size = $('[data-task-size]', box);
+  if (publication) publication.onchange = () => save('publication', {visibility: publication.checked ? 'public' : 'private'});
+  if (size) size.onchange = () => { if (size.checkValidity()) void save('size', {size: size.value === '' ? null : Number(size.value)}); };
   // A date saves only when it is whole and sensible. With the native picker that is its change; typed by hand (the
   // fallback field), only on Enter or leaving the field, so a half-typed year like 0002 never saves.
   const date = $('[data-prop-date]', d);

@@ -52,7 +52,7 @@ const PAGES = [
   }},
   {name: 'settings-health', route: '#/settings', tab: 'health', ready: 'Failed runs'},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook"},
-  {name: 'help', route: '#/help', ready: 'Who does what'},
+  {name: 'help', route: '#/help', ready: 'Learn more'},
   {name: 'tour', route: '#/help', ready: 'Take the tour', steps: async page => {
     await page.click('[data-gs-tour]');
     await page.locator('.gs-tour-card').waitFor();

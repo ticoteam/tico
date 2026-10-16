@@ -54,6 +54,13 @@ READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 # and commit statuses (a pull request's checks; `gh pr checks` needs both). GitHub refuses a token naming a
 # permission the installation has not accepted, so turns narrow to the ones it has accepted (mint_turn).
 TURN_READS = {"actions": "read", "checks": "read", "statuses": "read"}
+# A write grant an Owner or admin lets run workflows (start, rerun, cancel) gets its own token: GitHub permissions are
+# token-wide, so the bot's other repositories never carry it. Never Workflows: write, so workflow files stay unedited.
+WORKFLOW_PERMISSIONS = {**TURN_PERMISSIONS, "actions": "write"}
+WORKFLOWS_WITHHELD = ("Running workflows needs the GitHub App's Actions permission set to Read and write, accepted on "
+                      "the installation; until then these repositories get the ordinary write token.")
+WORKFLOWS_REFUSED = ("GitHub refused a token with Actions: write although the installation reports it, so these "
+                     "repositories get the ordinary write token; it is asked again after a minute.")
 READS_RETRY = 6 * 3600     # until the installation webhook or Check permissions says it changed
 CREATE_PERMISSIONS = {"administration": "write", "contents": "read"}
 PRODUCT_CREATE_PERMISSIONS = {"administration": "write", "metadata": "read"}
@@ -371,6 +378,13 @@ class GitHubApp:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
         return permissions
 
+    def workflows_refused(self):
+        """Whether GitHub refused an Actions: write token the installation reports within LIVE_TTL: until then a token
+        request falls back at once instead of repeating the refused mints."""
+        with self.lock:
+            until = self.live.get("workflows-refused")
+        return bool(until and until > time.time())
+
     def can_create_repos(self, refresh=False):
         """Whether the app may create repositories: the installation's live Administration permission
         (write), falling back to the stored choice when GitHub cannot be asked. The stored flag follows
@@ -387,18 +401,20 @@ class GitHubApp:
                 c.execute("UPDATE github_app SET administration=? WHERE id='app'", (int(allowed),))
         return allowed
 
-    def mint_turn(self, repos, base, **kw):
-        """`mint_reachable` for a bot's turn: `base` plus the TURN_READS the installation has accepted. A refusal
-        narrows the ask to what the installation reports it has, then to `base` alone, and is remembered, so an
-        older installation costs one or two extra requests every few hours and a token served from the cache none."""
+    def mint_turn(self, repos, base, narrow=True, **kw):
+        """`mint_reachable` for a bot's turn: `base` plus the TURN_READS the installation has accepted (`base` wins, so it
+        may raise Actions to write). A refusal narrows the ask to what the installation reports it has, then to `base`
+        alone, and is remembered, so an older installation costs one or two extra requests every few hours and a token
+        served from the cache none. `narrow=False` raises the refusal instead: a refused raise in `base` says nothing
+        about the reads."""
         with self.lock:
             narrowed = self.live.get("turn-reads")
         reads = narrowed[1] if narrowed and narrowed[0] > time.time() else TURN_READS
         while True:
             try:
-                return self.mint_reachable(repos, {**base, **reads}, **kw)
+                return self.mint_reachable(repos, {**reads, **base}, **kw)
             except Problem as problem:
-                if problem.code != "github_app_permissions" or not reads:
+                if problem.code != "github_app_permissions" or not reads or not narrow:
                     raise
             granted = self.live_permissions(refresh=True) or {}
             accepted = {name: level for name, level in reads.items() if granted.get(name) in ("read", "write")}
@@ -945,6 +961,7 @@ def install_github_app(app, settings, store):
         owner(request)
         from .repo_waits import resume
         service.live.pop("turn-reads", None)
+        service.live.pop("workflows-refused", None)
         view = status_view(refresh=True)
         if view.get("connected"):
             view["resumed"] = resume(service)
@@ -1077,6 +1094,22 @@ def install_github_app(app, settings, store):
             write_repos = [grant['full_name']] if grant['access'] == 'write' else []
             read_repos = [grant['full_name']] if grant['access'] == 'read' else []
             repos = [grant['full_name']]
+        flagged = {g['full_name'].lower() for g in grants if g['access'] == 'write' and g.get('run_workflows')}
+        workflow_repos = [name for name in write_repos if name.lower() in flagged]
+        withheld = None
+        if workflow_repos:
+            live = service.live_permissions()
+            if live is not None:
+                # Accepted clears the setting warning at once, whatever the mint below does; whether GitHub refuses
+                # the token is learned there.
+                R.workflow_health(service, live.get("actions") == "write", refused=None)
+            if (live or {}).get("actions") == "write":
+                write_repos = [name for name in write_repos if name.lower() not in flagged]
+            else:
+                withheld = {"repositories": workflow_repos, "reason": WORKFLOWS_WITHHELD if live is not None else
+                            "GitHub did not say whether the App may run workflows, so these repositories get the "
+                            "ordinary write token; it is asked again on the next token."}
+                workflow_repos = []
         tokens = []
         refresh_margin = GIT_CALL_REFRESH_MARGIN if body.purpose == "git" else TURN_START_REFRESH_MARGIN
         try:
@@ -1089,6 +1122,58 @@ def install_github_app(app, settings, store):
                     tokens.append({'token': value, 'expires_at': expires, 'repositories': write_repos,
                                    'access': 'write', 'cached': cached,
                                    'reachability_changed': reachability_changed})
+            if workflow_repos:
+                run_actions = {}
+                # A refusal seen within LIVE_TTL falls back at once: each git call asks for a token, and would
+                # otherwise repeat three refused mints and two permission reads.
+                reason = WORKFLOWS_REFUSED if service.workflows_refused() else None
+                if not reason:
+                    try:
+                        run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                            workflow_repos, WORKFLOW_PERMISSIONS, narrow=False, own=repo,
+                            refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
+                        run_actions = {'actions': 'write'}
+                    except Problem as problem:
+                        if problem.code != "github_app_permissions":
+                            raise
+                        # Either Actions: write went away within LIVE_TTL, or a read (Checks, Commit statuses) the
+                        # installation lacks: GitHub says which now.
+                        reason = WORKFLOWS_WITHHELD
+                        if (service.live_permissions(refresh=True) or {}).get("actions") == "write":
+                            with service.lock:
+                                narrowed = service.live.get("turn-reads")
+                            try:
+                                run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                                    workflow_repos, WORKFLOW_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
+                                    include_cache_status=True, missing=missing)
+                                run_actions = {'actions': 'write'}
+                            except Problem as again:
+                                if again.code != "github_app_permissions":
+                                    raise
+                                # The installation reports Actions: write yet refuses it: not the setting Health
+                                # names. The reads the retry narrowed away on the way come back for the other
+                                # tokens, unless the webhook or Check permissions reset them meanwhile.
+                                with service.lock:
+                                    current = service.live.get("turn-reads")
+                                    if current is not narrowed and current and current[1] == {}:
+                                        if narrowed:
+                                            service.live["turn-reads"] = narrowed
+                                        else:
+                                            service.live.pop("turn-reads", None)
+                                    service.live["workflows-refused"] = time.time() + LIVE_TTL
+                                reason = WORKFLOWS_REFUSED
+                if run_actions:
+                    R.workflow_health(service, True)
+                else:
+                    R.workflow_health(service, reason != WORKFLOWS_WITHHELD, refused=reason == WORKFLOWS_REFUSED)
+                    withheld = {"repositories": workflow_repos, "reason": reason}
+                    run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                        workflow_repos, TURN_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
+                        include_cache_status=True, missing=missing)
+                if run_value:
+                    tokens.append({'token': run_value, 'expires_at': run_expires, 'repositories': workflow_repos,
+                                   'access': 'write', **run_actions, 'cached': cached,
+                                   'reachability_changed': reachability_changed})
             if read_repos:
                 read_value, read_expires, read_repos, cached, reachability_changed = service.mint_turn(
                     read_repos, READ_PERMISSIONS, refresh_margin=refresh_margin,
@@ -1099,7 +1184,7 @@ def install_github_app(app, settings, store):
                                    'reachability_changed': reachability_changed})
             if not tokens:
                 raise Problem('github_repo_not_accessible', f'{repo} is not reachable; check the GitHub App installation', 409)
-            repos = write_repos + read_repos
+            repos = write_repos + workflow_repos + read_repos
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
             if problem.code not in BOT_SCOPED:
@@ -1120,7 +1205,8 @@ def install_github_app(app, settings, store):
         # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
         # to a later run, which may be allowed less.
         return {"configured": True, "token": value, "expires_at": expires, "repository": repo,
-                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS}
+                "repositories": repos, "tokens": response_tokens, "hold": body.bot != BOTOPS,
+                **({"workflows_withheld": withheld} if withheld else {})}
 
     def bot_repos(c, bot):
         if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (bot,)).fetchone():

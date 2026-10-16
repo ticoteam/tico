@@ -8,7 +8,7 @@ has its own image, database and compose file. An install reaches it only through
 
 | Endpoint | What it is for | Stores |
 |---|---|---|
-| `GET /v1/latest` | The release check. With the anonymous usage count on, it carries four fields (a random install id, the version and two yes/no activity flags) and answers the latest release, as GitHub would | One row per install id: first and last day seen, last version, last active days |
+| `GET /v1/latest` | The release check. With the anonymous usage count on, it carries five fields (a random install id, the version and three yes/no activity flags) and answers the latest release, as GitHub would | One row per install id: first and last day seen, last version, last active days, the first day a bot finished a turn |
 | `GET /v1/stats` | The public aggregate of that count | Nothing |
 | (in `GET /v1/latest`) | Tico's short messages for given versions and its known issues by version, the same lists for every install ([Messages, known issues and fixed-in notices](#messages-known-issues-and-fixed-in-notices)) | Nothing from installs |
 | `POST /v1/recruit` | Bot suggestions for one group while a team builds its team chart ([Finish setup](onboarding.md#the-team-builder)) | Nothing |
@@ -61,7 +61,7 @@ as `0.3.50` or a whole line such as `0.2`) and `known_issues` (`{id, title, sinc
 shows its version's newest message once to each person, and Help lists **Known issues in your version** (or says it could not
 check, when its update check goes to GitHub instead: usage counting off, or a release mirror).
 
-A release before v0.3.52 keeps only the release fields. When one of those names its version (usage counting on), HQ puts its
+A release before v0.3.53 keeps only the release fields. When one of those names its version (usage counting on), HQ puts its
 message's `url` in place of the release link, which is what its **New version · View changelog** opens. A v0.2 install with
 counting off asks GitHub and cannot be reached this way.
 

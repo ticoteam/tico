@@ -63,6 +63,8 @@ function applyConfig(config) {
   renderUsageNotice();
   betaMark();
   renderVersionMessage();
+  renderFeedbackAsk();
+  document.documentElement.classList.toggle('no-support', S.config.support_on === false);
   return S.config;
 }
 // Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill

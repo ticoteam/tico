@@ -25,7 +25,7 @@ HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "service-key"]
+               "credential", "slack", "support", "health-monitor", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -141,6 +141,8 @@ class Stub(BaseHTTPRequestHandler):
         self.seen.append(("GET", self.path, self.headers.get("Authorization"), None))
         if self.path == "/api/v2/me":
             return self.reply(200, {"actor": "bot:coo", "kind": "bot", "id": "coo"})
+        if self.path.startswith("/api/v2/roadmap"):
+            return self.reply(200, {"ok": True})
         if self.path.startswith("/api/v2/tasks/T1"):
             return self.reply(200, {"task": {"id": "T1", "version": 3}})
         self.reply(404, {"error": {"code": "not_found", "detail": "no"}})
@@ -158,6 +160,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
+        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings")):
+            return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
 
 
@@ -230,6 +234,35 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
         self.assertEqual(posted, {"approval": "ap-1"})
+
+    def test_roadmap_commands_send_what_their_tools_send(self):
+        def last(method, path):
+            return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+        for argv in (["task", "requesters", "T1", "--limit", "5"],
+                     ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
+                     ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
+                     ["task", "requester-remove", "T1", "R1"],
+                     ["task", "publication-preview", "T1", "--visibility", "public", "--public-title", "Exports", "--label", "roadmap"],
+                     ["task", "comment-moderate", "T1", "C1", "hide"],
+                     ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
+                     ["roadmap", "settings"],
+                     ["roadmap", "settings", "--label", "roadmap", "--suggestion-limit", "5", "--no-bot-public-approval"],
+                     ["roadmap", "settings", "--label", ""]):
+            code, out = run_hub(*argv, env=self.env)
+            self.assertEqual(code, 0, (argv, out))
+        self.assertIn("limit=5", last("GET", "/api/v2/tasks/T1/requesters")[0])
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters")[1],
+                         {"email": "jane@acme.example", "organization": "Acme", "important": True})
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1")[1], {"important": False})
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1/delete")[1], {})
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/publication-preview")[1],
+                         {"visibility": "public", "public_title": "Exports", "labels": ["roadmap"]})
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/comments/C1/moderate")[1], {"action": "hide"})
+        self.assertTrue({"sort=size", "direction=asc"} <= set(last("GET", "/api/v2/roadmap-tasks")[0].split("?")[1].split("&")))
+        self.assertTrue(any(m == "GET" and p == "/api/v2/roadmaps/settings" for m, p, _, _ in Stub.seen))
+        settings = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/roadmaps/settings"]
+        self.assertEqual(settings, [{"labels": ["roadmap"], "suggestion_limit": 5, "bot_public_approval": False},
+                                    {"labels": []}])
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)

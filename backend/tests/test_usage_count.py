@@ -12,7 +12,7 @@ from backend.tests.test_onboarding import as_person, environment, signed_in  # n
 
 RELEASE = {"tag_name": "v0.2.0", "html_url": "https://github.com/ticoteam/tico/releases/tag/v0.2.0",
            "published_at": "2026-10-20T10:00:00Z", "name": "Tico 0.2.0"}
-ALLOWED = {"install_id", "version", "active_people", "active_bots"}
+ALLOWED = {"install_id", "version", "active_people", "active_bots", "first_result"}
 
 
 @pytest.fixture(autouse=True)
@@ -29,10 +29,10 @@ def counting(api):
     return api.app.state.census
 
 
-def complete_a_bot_turn(api, when):
+def complete_a_bot_turn(api, when, bot="coo"):
     with sqlite3.connect(str(api.app.state.store.settings.db_path)) as c:
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished) "
-                  "VALUES('a1','j1','coo','r1',1,'h','completed',?,?,?)", (when, when, when))
+                  "VALUES(?,'j1',?,'r1',1,?,'completed',?,?,?)", ("a-" + bot, bot, "h-" + bot, when, when, when))
 
 
 def wire(monkeypatch, api, hq=True):
@@ -57,12 +57,17 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
         first = c.payload(read, "0.2.13")
     assert set(first) == ALLOWED
     # The owner's own request just now is a person using the app; no bot has finished a turn.
-    assert first["active_people"] is True and first["active_bots"] is False
+    assert first["active_people"] is True and first["active_bots"] is False and first["first_result"] is False
     assert len(first["install_id"]) == 36 and first["version"] == "0.2.13"
-    complete_a_bot_turn(api, H.now())
+    for bot in ("coo", "botops", "librarian", "goal-manager"):   # every built-in bot answering
+        complete_a_bot_turn(api, H.now(), bot=bot)
     with api.app.state.store.read() as read:
         second = c.payload(read, "0.2.13")
     assert set(second) == ALLOWED and second["active_people"] and second["active_bots"]
+    assert not second["first_result"]                        # the Assistant answering is not a working team yet
+    complete_a_bot_turn(api, H.now(), bot="payroll")
+    with api.app.state.store.read() as read:
+        assert c.payload(read, "0.2.13")["first_result"]
     assert second["install_id"] == first["install_id"]
     # Older than a week is not "active", and a token or an Assistant acting for a person is not a sign-in.
     old = H.shift(H.now(), days=-8)
@@ -72,6 +77,7 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
                     (old, census.KEY))
     with api.app.state.store.read() as read:
         assert not c.payload(read, "0.2.13")["active_bots"] and not c.payload(read, "0.2.13")["active_people"]
+        assert c.payload(read, "0.2.13")["first_result"]        # a first result, once reached, stays reached
     assert not c.person_due(SimpleNamespace(role="human", via="assistant", via_token=False))
     assert not c.person_due(SimpleNamespace(role="human", via="", via_token=True))
 
@@ -91,7 +97,7 @@ def test_when_off_the_check_goes_to_github_with_no_id(environment, monkeypatch, 
     assert checker.view("0.2.13")["latest"] == "0.2.0"     # the update check itself still works
 
 
-def test_when_on_hq_gets_the_four_fields_and_a_dead_hq_falls_back_silently(environment, monkeypatch):
+def test_when_on_hq_gets_the_five_fields_and_a_dead_hq_falls_back_silently(environment, monkeypatch):
     api = environment()
     counting(api)
     checker, seen = wire(monkeypatch, api)
@@ -99,6 +105,7 @@ def test_when_on_hq_gets_the_four_fields_and_a_dead_hq_falls_back_silently(envir
     assert [r.url.host for r in seen] == ["updates.tico.team"] and seen[0].url.path == "/v1/latest"
     assert set(seen[0].url.params) == ALLOWED
     assert seen[0].url.params["active_people"] == "true" and seen[0].url.params["active_bots"] == "false"
+    assert seen[0].url.params["first_result"] == "false"
     assert checker.view("0.2.13")["latest"] == "0.2.0"
     checker, seen = wire(monkeypatch, api, hq=False)
     checker.refresh()

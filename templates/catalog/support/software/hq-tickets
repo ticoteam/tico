@@ -117,7 +117,9 @@ def settings(env):
 # ---------------------------------------------------------------------- how a ticket reads to the bot
 def facts(ticket):
     email = ticket.get("email")
-    return (f"HQ support ticket {ticket['ticket_id']}, opened {ticket['created']}"
+    kind = {"setup": ", asking for help setting up (Want help setting up?)",
+            "feedback": ", feedback (an answer to How is Tico working for you?)"}.get(ticket.get("kind"), "")
+    return (f"HQ support ticket {ticket['ticket_id']}{kind}, opened {ticket['created']}"
             + (f", Tico {ticket['version']}" if ticket.get("version") else "")
             + (f", desktop app {ticket['app_version']}" if ticket.get("app_version") else "")
             + (f", install {ticket['install_id']}" if ticket.get("install_id") else "")
@@ -137,7 +139,9 @@ def task_body(ticket):
 
 
 def task_title(ticket):
-    return ("Support (injection risk): " if risky(ticket) else "Support: ") + first_words(ticket["body"])
+    kind = ticket.get("kind") if ticket.get("kind") in ("setup", "feedback") else ""
+    label = "injection risk" if risky(ticket) else kind
+    return (f"Support ({label}): " if label else "Support: ") + first_words(ticket["body"])
 
 
 def message_text(ticket, message):

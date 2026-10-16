@@ -103,6 +103,7 @@ function pageSettings() {
     </section></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-roadmaps"></section>' : ''}
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
@@ -168,6 +169,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
+  if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) bots.hidden = SETTINGS_TAB !== 'bots';
   // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
@@ -273,7 +275,7 @@ async function renderSettingsPrivacy() {
   try { v = await get('/v2/system/usage-count'); } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
-    <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and two yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
+    <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
   $('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast(ev.target.checked ? 'Counting is on' : 'Counting is off'); }

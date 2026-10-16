@@ -86,13 +86,19 @@ def test_a_pairing_expires_and_can_be_declined(api):
 
 
 def test_pairing_requests_are_rate_limited_per_address_and_capped_overall(api):
-    for _ in range(10):
-        assert pair(api, ip="10.0.0.1").status_code == 201
-    limited = pair(api, ip="10.0.0.1")
-    assert limited.status_code == 429 and limited.json()["error"]["code"] == "rate_limited"
-    for _ in range(10):
-        assert pair(api, ip="10.0.0.2").status_code == 201
-    assert pair(api, ip="10.0.0.3").status_code == 429          # 20 are waiting: no more until some are answered
+    from fastapi.testclient import TestClient
+    api.app.state.store.settings.client_ip_header = 'cf-connecting-ip'
+    proxy = TestClient(api.app, client=('127.0.0.1', 1234))
+    try:
+        for _ in range(10):
+            assert pair(proxy, ip="10.0.0.1").status_code == 201
+        limited = pair(proxy, ip="10.0.0.1")
+        assert limited.status_code == 429 and limited.json()["error"]["code"] == "rate_limited"
+        for _ in range(10):
+            assert pair(proxy, ip="10.0.0.2").status_code == 201
+        assert pair(proxy, ip="10.0.0.3").status_code == 429
+    finally:
+        proxy.close()
 
 
 def test_who_may_approve_and_what_may_be_approved(api):

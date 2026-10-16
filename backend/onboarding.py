@@ -22,7 +22,7 @@ from clients.manifest import group_of, manifest_path, routines_of
 from . import goals as G
 from . import models as M
 from . import providers
-from . import beta, census, changelog, releases, replication, runner_versions, ui_bundle
+from . import beta, census, changelog, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
 from . import rooms, routines, statuses
 from . import access as Access
@@ -308,6 +308,9 @@ def config_view(c, settings, who=None):
     if who is not None and who.role in ("owner", "human"):
         value["changelog"] = changelog.summary(c, settings, who.actor)
     value["usage_count_notice"] = census.notice_due(c, settings, who)
+    # "How is Tico working for you?", when this person is due to be asked (backend/support_asks.py).
+    value["feedback_question"] = support_asks.feedback_due(c, settings, who)
+    value["support_on"] = support_asks.support_on(settings)      # the page hides "Want help setting up?" without it
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
     value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)

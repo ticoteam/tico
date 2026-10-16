@@ -1,98 +1,26 @@
 /* ui/styles/help.css — Help page.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* Help: how the pieces fit, who does what, and the function index. Not a product manual. */
+/* Help: what Tico is, where to start and how to get help, with Support beside it (first on a narrow screen). */
 .help-page{max-width:980px;margin:0 auto;padding:12px 0 40px;container-type:inline-size}
 .help-hero{padding:28px 32px;border:1px solid var(--line);border-radius:14px;background:var(--surface);position:relative;overflow:hidden}
 .help-hero::after{content:"";position:absolute;width:260px;height:260px;right:-120px;top:-150px;border-radius:50%;background:color-mix(in srgb,var(--accent) 10%,transparent);pointer-events:none}
 .help-hero h1{font-size:var(--t-lg);line-height:1.3}
 .help-lede{max-width:740px;margin:10px 0 0;color:var(--muted);font-size:var(--t-base);line-height:1.55}
-/* The map: two drawings, wide and tall; the page's own width picks one. Colours come from the theme tokens. */
-.help-map{margin:16px 0 0;padding:24px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
-.help-map-svg{display:block;width:100%;height:auto;overflow:visible;font-family:var(--sans)}
-.help-map-svg.tall{display:none;max-width:420px;margin:0 auto}
-.hm-box{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
-.hm-server{fill:color-mix(in srgb,var(--accent) 7%,var(--surface));stroke:color-mix(in srgb,var(--accent) 60%,var(--line));stroke-width:1.5}
-.hm-band{fill:none;stroke:color-mix(in srgb,var(--accent) 45%,var(--line));stroke-width:1.2;stroke-dasharray:5 4}
-.hm-chip{fill:var(--surface2);stroke:none}
-.hm-cred{fill:color-mix(in srgb,var(--accent) 16%,var(--surface))}
-.hm-card{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
-.hm-builtin{stroke:color-mix(in srgb,var(--accent) 55%,var(--line))}
-.hm-t{fill:var(--ink);font-size:var(--t-lg);font-weight:600}
-.hm-card-t{fill:var(--ink);font-size:var(--t-md);font-weight:600}
-.hm-chip-t{fill:var(--ink);font-size:var(--t-base)}
-.hm-s{fill:var(--muted);font-size:var(--t-sm)}
-.hm-k{fill:var(--muted);font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.hm-l{fill:var(--muted);font-size:var(--t-sm)}
-.hm-k.accent,.hm-l.accent{fill:var(--accent)}
-.hm-line{fill:none;stroke:var(--muted);stroke-width:1.5}
-.hm-line.granted{stroke:var(--accent);stroke-dasharray:4 3}
-.hm-head{fill:var(--muted)}.hm-head.granted{fill:var(--accent)}
-.hm-tie{stroke:color-mix(in srgb,var(--accent) 45%,var(--line));stroke-width:1.2;stroke-dasharray:3 3}
-/* Who does what */
-.help-page h2{margin:30px 2px 12px;font-size:var(--t-md)}
-.help-who table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden;font-size:var(--t-base);line-height:1.45}
-.help-who th,.help-who td{padding:11px 14px;border:0;border-top:1px solid var(--line);text-align:left;vertical-align:top}
-.help-who thead th{border-top:0;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;background:var(--surface2)}
-.help-who tbody th{width:150px;color:var(--ink);font-size:var(--t-md);font-weight:600;letter-spacing:0;text-transform:none;white-space:nowrap}
-.help-who tbody tr.built-in+tr:not(.built-in) > *{border-top:2px solid var(--line)}
-.help-who td{color:var(--muted)}
-.help-who td.help-ask{color:var(--ink);font-style:italic}
-.help-tag{display:block;width:max-content;margin-top:4px;padding:1px 6px;border-radius:8px;background:color-mix(in srgb,var(--accent) 13%,var(--surface));color:var(--accent);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-/* The pieces */
-.help-piece-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-.help-piece{padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
-.help-piece h3{margin-bottom:6px;font-size:var(--t-md)}
-.help-piece p{margin:0;color:var(--muted);font-size:var(--t-base);line-height:1.55}
-@container (max-width:780px){
-  .help-map{padding:16px}
-  .help-map-svg.wide{display:none}.help-map-svg.tall{display:block}
-  .help-piece-grid{grid-template-columns:1fr 1fr}
-  .help-who table,.help-who tbody,.help-who tr,.help-who th,.help-who td{display:block}
-  .help-who thead{display:none}
-  .help-who tbody tr{padding:12px 14px;border-top:1px solid var(--line)}.help-who tbody tr:first-child{border-top:0}
-  .help-who tbody tr.built-in+tr:not(.built-in){border-top:2px solid var(--line)}
-  .help-who tbody th,.help-who td{width:auto;padding:0;border:0 !important}
-  .help-who tbody th{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:var(--t-md)}.help-tag{margin:0}
-  .help-who td{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;padding:2px 0}
-  .help-who td::before{content:attr(data-label);font-style:normal;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;line-height:1.9}
-}
-@container (max-width:520px){.help-piece-grid{grid-template-columns:1fr}}
+/* What Tico is, where to start and how to get help; the rest is in the docs. */
+.help-essentials{margin:16px 2px 0;padding:0 0 0 18px;color:var(--muted);font-size:var(--t-base);line-height:1.55}
+.help-essentials li{margin:6px 0}.help-essentials strong{color:var(--ink)}
 .help-foot{margin:16px 2px 0;color:var(--muted);font-size:var(--t-sm);text-align:center}
 .help-log{background:none;border:0;padding:0;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
+@media(max-width:720px){.help-page{padding-top:0}.help-hero{padding:22px 20px}}
+
+/* The overview and Support follow the Goals page: shared rail width, borders and independent scrolling. */
+.help-actions{display:flex;align-items:center;gap:16px;margin-top:14px;flex-wrap:wrap}
 .help-tools{margin-top:18px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .help-tools>summary{display:flex;align-items:baseline;gap:10px;padding:16px 18px;cursor:pointer;list-style:none}
 .help-tools>summary::-webkit-details-marker{display:none}
 .help-tools>summary::before{content:'›';color:var(--accent);font-size:20px;line-height:1;transition:transform var(--dur-fast) var(--ease)}
 .help-tools[open]>summary::before{transform:rotate(90deg)}
-.help-tools>summary strong{font-size:var(--t-lg)}.help-tools>summary small{margin-left:auto;color:var(--muted);font-size:var(--t-sm);font-weight:400}
-.help-tools-body{padding:0 18px 20px;border-top:1px solid var(--line)}
-.help-tools-intro{max-width:78ch;margin:16px 0;color:var(--muted);font-size:var(--t-base);line-height:1.6}
-.help-tools-intro strong{color:var(--ink)}
-.help-tool-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.help-tool-group{min-width:0;padding:14px;border:1px solid var(--line);border-radius:8px}
-.help-tool-group h3{margin-bottom:10px;font-size:var(--t-base)}
-.help-tool-head,.help-tool-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:10px;align-items:baseline}
-.help-tool-head{padding:0 4px 5px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-.help-tool-list{margin:0;padding:0;list-style:none}
-.help-tool-row{padding:5px 4px;border-top:1px solid var(--line);font-size:var(--t-sm)}
-.help-tool-row code{overflow-wrap:anywhere;font:var(--t-sm)/1.35 var(--mono)}
-.help-tool-row code:last-child{color:var(--muted)}
-.help-cli-only{display:inline-block;margin-left:5px;padding:1px 5px;border-radius:8px;background:var(--idle-bg);color:var(--muted);font-size:var(--t-2xs);letter-spacing:var(--track-caps);text-transform:uppercase;vertical-align:1px}
-@media(max-width:720px){
-  .help-page{padding-top:0}.help-hero{padding:22px 20px}.help-hero h1{font-size:var(--t-lg)}.help-lede{font-size:var(--t-base)}
-  .help-tools>summary{align-items:flex-start;flex-wrap:wrap}.help-tools>summary small{width:100%;margin-left:30px}
-  .help-tool-groups{grid-template-columns:1fr}.help-tool-head,.help-tool-row{grid-template-columns:minmax(0,1fr)}.help-tool-head span:last-child{display:none}
-  .help-tool-row code:last-child{padding-left:10px;font-size:var(--t-xs)}
-}
-
-/* The overview and Support follow the Goals page: shared rail width, borders and independent scrolling. */
-.help-actions{display:flex;align-items:center;gap:16px;margin-top:14px;flex-wrap:wrap}
-.help-team-description{color:var(--muted);font-size:var(--t-base);line-height:1.55}
-.help-team-description strong,.help-platforms strong{color:var(--ink)}
-.help-platforms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px;border-block:1px solid var(--line);margin-top:18px}
-.help-platforms p{display:grid;gap:4px;font-size:var(--t-base);color:var(--muted)}
-.help-glossary dl{padding:0 18px}.help-glossary dt{font-weight:600;margin-top:12px}.help-glossary dd{margin:4px 0;color:var(--muted);font-size:var(--t-base)}
-.help-glossary>p{padding:0 18px 12px;font-size:var(--t-base)}
+.help-tools>summary strong{font-size:var(--t-lg)}
 .help-beta>p{padding:0 18px;font-size:var(--t-base);color:var(--muted)}.help-beta ul{margin:8px 0 0;padding:0 18px 16px 36px}.help-beta li{margin:6px 0;font-size:var(--t-base)}
 #help-open[data-support-unread]{position:relative}
 /* The number of unread support replies, on the ? itself (support.js sets it; absent at zero). */
@@ -152,7 +80,14 @@
   .support-thread{flex:1;max-height:none}.support-write{flex:none}.support-listview{flex:1}
   #main.help-layout>.rail-edge[data-rail="right"]{display:block;position:absolute;left:auto;right:calc(var(--rail-right) - 4px)}
   body:has(#main.help-layout) #topbar:not(:has(#app-nudge:not([hidden]))){display:none}
-  .help-actions .help-support-link{display:none}
 }
-@media(max-width:760px){.support-write textarea,.support-json{font-size:16px}.help-platforms{grid-template-columns:1fr}}
+/* Narrower than the rail layout, Support comes first and a link to the docs sits under it; the overview follows. */
+.help-docs-first{display:none}
+@media(max-width:1099.98px){
+  #main.help-layout{display:flex;flex-direction:column}
+  #main.help-layout>.support-rail{order:-1;width:100%;max-width:980px;box-sizing:border-box;margin:0 auto}
+  #main.help-layout>.help-page{width:100%}
+  #main.help-layout .help-docs-first{display:block;margin:10px 2px 16px;font-size:var(--t-base)}
+}
+@media(max-width:760px){.support-write textarea,.support-json{font-size:16px}}
 .help-known-issues ul{margin:0;padding-left:20px;line-height:1.5}.help-ki-none{margin:0 2px;color:var(--muted)}.help-ki-fixed{color:var(--muted);font-size:var(--t-sm)}

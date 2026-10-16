@@ -38,6 +38,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
     hub task delete <id>                               delete a task made by mistake, to the trash (a person only)
+    hub task requesters <id>                           who asked for it (internal contacts, counts; never tokens)
+    hub task requester-save <id> [--requester-id R] [--email E] [--organization O] [--important]
+                                                       add a requester, or update one with --requester-id
+    hub task requester-remove <id> <requester-id>      take a requester off a task
+    hub task publication-preview <id> [--public-title T] [--public-summary S] [--visibility public|private]
+                                 [--label L] [--comment "..."]   the exact payload a publish approval needs
+    hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
+    hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
+    hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
+                         [--bot-public-approval|--no-bot-public-approval]   read, or change (owners and admins)
     hub task deleted                                   deleted tasks you may restore
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
@@ -743,6 +753,9 @@ def parser():
         s.add_argument("--task", help="task id; defaults to this run's task")
         s.set_defaults(fn="task worktree " + operation)
     s = task.add_parser("create")
+    s.add_argument("--visibility", choices=["public", "private"])
+    s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
+    s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
     s.add_argument("--private", action="store_true", default=None, help="only requester and assignee may read")
     s.add_argument("--owner", required=True)
     s.add_argument("--title", required=True)
@@ -770,6 +783,7 @@ def parser():
                  "read (read and comment on all of them) or work (also change them)")
     steps_only_help = "its tasks change status only by moving to a step, never by closing, declining, reopening or finishing"
     s = types.add_parser("create")
+    s.add_argument("--default-visibility", dest="default_visibility", choices=["public", "private"])
     s.add_argument("--name", required=True)
     s.add_argument("--steps-file", dest="steps_file")
     s.add_argument("--bots", choices=["parties", "read", "work"], help=bots_help)
@@ -777,6 +791,7 @@ def parser():
     s.add_argument("--steps-only", dest="steps_only", action="store_true", default=None, help=steps_only_help)
     s.set_defaults(fn="task type create")
     s = types.add_parser("update")
+    s.add_argument("--default-visibility", dest="default_visibility", choices=["public", "private"])
     s.add_argument("id")
     s.add_argument("--name")
     s.add_argument("--steps-file", dest="steps_file")
@@ -815,6 +830,11 @@ def parser():
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.set_defaults(fn="task question")
     s = task.add_parser("update")
+    s.add_argument("--visibility", choices=['public', 'private'])
+    s.add_argument("--public-title", dest="public_title")
+    s.add_argument("--public-summary", dest="public_summary")
+    s.add_argument("--approval-id", dest="approval_id")
+    s.add_argument("--size", type=float)
     visibility = s.add_mutually_exclusive_group()
     visibility.add_argument("--private", dest="private", action="store_true", default=None)
     visibility.add_argument("--company", dest="private", action="store_false", help="human requester publishes the task")
@@ -838,6 +858,8 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
+    s.add_argument("--public", action="store_true", default=None)
+    s.add_argument("--approval-id", dest="approval_id")
     s.add_argument("id")
     s.add_argument("text")
     s.add_argument("--attach", action="append", help="file to attach; repeat for more files")
@@ -848,7 +870,40 @@ def parser():
     choices.add_argument("--choices", help="comma-separated option labels")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task comment")
+    s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
+    s.add_argument("id")
+    s.add_argument("comment_id")
+    s.add_argument("action", choices=["hide", "show", "delete"])
+    s.set_defaults(fn="task comment-moderate")
+    s = task.add_parser("requesters", help="a task's requesters: internal contacts and counts, never tokens")
+    s.add_argument("id")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="task requesters")
+    s = task.add_parser("requester-save", help="add a requester to a task, or update one with --requester-id; nothing is sent")
+    s.add_argument("id")
+    s.add_argument("--requester-id", dest="requester_id", help="the requester to update; omit to add one")
+    s.add_argument("--actor", help="a teammate (verified identity); omit for someone outside")
+    for field in ("name", "email", "phone", "other", "organization", "note"):
+        s.add_argument("--" + field)
+    s.add_argument("--source", choices=["public_form", "inbox", "meeting", "manual"])
+    s.add_argument("--important", action=argparse.BooleanOptionalAction, default=None)
+    s.set_defaults(fn="task requester-save")
+    s = task.add_parser("requester-remove", help="take a requester off a task")
+    s.add_argument("id")
+    s.add_argument("requester_id")
+    s.set_defaults(fn="task requester-remove")
+    s = task.add_parser("publication-preview", help="the exact payload a publish approval needs for public text, "
+                                                    "a label change or a public reply")
+    s.add_argument("id")
+    s.add_argument("--visibility", choices=["public", "private"])
+    s.add_argument("--public-title", dest="public_title")
+    s.add_argument("--public-summary", dest="public_summary")
+    s.add_argument("--label", dest="labels", action="append", help="the task's labels after the change; repeat for more")
+    s.add_argument("--comment", help="the public reply's text")
+    s.set_defaults(fn="task publication-preview")
     s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
+    s.add_argument("--approval-id", dest="approval_id")
     s.add_argument("id")
     s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
     s.add_argument("text")
@@ -1615,7 +1670,8 @@ def parser():
     modes = s.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true")
     modes.add_argument("--own", action="store_true")
-    modes.add_argument("--chosen", nargs="*")
+    modes.add_argument("--chosen", nargs="*", metavar="OWNER/REPO[:read|:write|:write+actions|:write-actions]",
+                       help="+actions lets the bot run workflows there (Owner or admin)")
     s.set_defaults(fn="bot repos")
     repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
     s = repos.add_parser("list")
@@ -1775,6 +1831,21 @@ def parser():
     s.add_argument("--cpu", type=float, default=0, help="with --process: its CPU percent")
     s.add_argument("--mb", type=float, default=0, help="with --process: its memory in MB")
     s.set_defaults(fn="health-monitor report")
+    roadmap = sub.add_parser("roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)").add_subparsers(dest="sub")
+    s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")
+    s.add_argument("--sort", choices=["requester_count", "external_requesters", "important", "organization", "size"])
+    s.add_argument("--direction", choices=["asc", "desc"])
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="roadmap tasks")
+    s = roadmap.add_parser("settings", help="read the company's roadmap settings; any flag changes those named (owners and admins)")
+    s.add_argument("--label", dest="labels", action="append", help="a label shown publicly; repeat for more, '' for none")
+    s.add_argument("--cors-origin", dest="cors_origins", action="append", help="an exact website origin; repeat for more, '' for none")
+    s.add_argument("--action-limit", dest="action_limit", type=int, help="visitor writes per address per day")
+    s.add_argument("--suggestion-limit", dest="suggestion_limit", type=int, help="visitor suggestions waiting at once")
+    s.add_argument("--bot-public-approval", dest="bot_public_approval", action=argparse.BooleanOptionalAction, default=None,
+                   help="bots need an approval to publish")
+    s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")

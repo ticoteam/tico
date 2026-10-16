@@ -25,6 +25,8 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     bind = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
     process = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, text=True,
         env={**os.environ, "TICO_SCREEN_RELAY_KEY": key, "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0",
+             "TICO_TRUSTED_PROXIES": ','.join(settings.trusted_proxies) if settings else
+                 os.environ.get('TICO_TRUSTED_PROXIES') or '127.0.0.1/32,::1/128',
              "TICO_SCREEN_PUBLIC_BIND": bind, "TICO_SCREEN_PYTHON_URL": origin})
     lines = queue.Queue()
     def output():
@@ -61,7 +63,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         else:
             settings = replace(settings, screen_relay_url=url, screen_relay_key=key)
         server = uvicorn.Server(uvicorn.Config(create_app(settings), log_level=log_level, access_log=False,
-            proxy_headers=True, forwarded_allow_ips="127.0.0.1", timeout_graceful_shutdown=2))
+            proxy_headers=False, timeout_graceful_shutdown=2))
         def watch():
             process.wait()
             server.should_exit = True

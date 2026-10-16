@@ -351,7 +351,7 @@ and accounts out of the repository: examples use the fictional team Acme (`acme.
 
 ## Privacy
 
-Tico counts active installs anonymously: a random ID, the version and two yes/no activity flags, sent with the update check. Turn it off in Settings > Privacy, with `TICO_TELEMETRY=off` or with `DO_NOT_TRACK=1`. Exactly what is sent, and what is kept: [PRIVACY.md](PRIVACY.md).
+Tico counts active installs anonymously: a random ID, the version and three yes/no activity flags, sent with the update check. Turn it off in Settings > Privacy, with `TICO_TELEMETRY=off` or with `DO_NOT_TRACK=1`. Exactly what is sent, and what is kept: [PRIVACY.md](PRIVACY.md).
 
 ## Your own deployment
 

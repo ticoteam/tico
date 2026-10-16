@@ -15,8 +15,8 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({enabled = true, seed = [], native = false} = {}) => {
-      const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}} = {}) => {
+      const ctx = await browser.newContext({viewport, serviceWorkers: 'block'});
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
         window.__posted = [];
@@ -40,12 +40,15 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
         if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta};
+        const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta, feedback_question: feedback};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json(config);
         if (p.startsWith('/api/v2/support/')) {
           const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
+          if (rest === 'setup-snapshot') calls.push('asked from ' + new URL(req.url()).searchParams.get('asked_from'));
+          if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\n- Computer online: no", kind: 'setup'});
+          if (rest === 'feedback') return json({moment: body.moment, answered: !!body.answer, ticket: null});
           if (rest === 'compose') return json({enabled: true, email: 'ana@acme.example', version: '0.2.17', install_id: INSTALL, to: 'updates.tico.team', max: 4000});
           if (rest === 'diagnostics/capture') return json({id: 'c'.repeat(64), bytes: 2048, text: DIAGNOSTICS_TEXT});
           if (rest === 'diagnostics') return json({id: (req.method() === 'POST' ? 'e' : 'd').repeat(64), bytes: 2048, text: body?.text || DIAGNOSTICS_TEXT});
@@ -82,13 +85,24 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     let v = await visit();
     const {page} = v;
     await page.locator('#support-rail').waitFor();
+    // Wide: the overview on the left, Support in the right rail, no docs line above the overview.
+    const order = p => p.evaluate(() => {
+      const top = sel => document.querySelector(sel).getBoundingClientRect();
+      return {rail: top('#support-rail'), docs: top('.help-docs-first'), hero: top('.help-hero'), page: top('#help-page'),
+              box: top('[data-compose] [name=message]'), docsShown: getComputedStyle(document.querySelector('.help-docs-first')).display !== 'none',
+              jump: document.querySelectorAll('a[href="#support-rail"]').length, height: innerHeight};
+    });
+    let laid = await order(page);
+    assert.ok(laid.rail.left >= laid.page.right - 1, 'Support is the right rail on a wide screen');
+    assert.equal(laid.docsShown, false);
+    assert.equal(laid.jump, 0);
+    // The overview stays short (about a quarter of the 2,180 characters it once was); the rest is in the docs.
+    assert.ok((await page.locator('#help-page').innerText()).replace(/\s+/g, ' ').length < 650, 'Help overview stays short');
     // Help lists the server's Beta features, each with its pill, and the sidebar's static spots draw theirs.
     assert.deepEqual(await page.locator('#help-beta li').evaluateAll(rows => rows.map(li => li.firstChild.textContent)), beta.map(f => f.name));
     assert.equal(await page.locator('#help-beta li .pill.beta').count(), beta.length);
     assert.equal(await page.locator('[data-nav=market] .pill.beta').count(), 1);
     assert.equal(await page.locator('#nav-inboxes-section .pill.beta').count(), 1);
-    assert.equal(await page.locator('.help-platforms .pill.beta').count(), 2);
-    assert.equal(await page.locator('.help-who .pill.beta').count(), 1);
     // A bot is Beta by its template or harness; a bot off the list gets no pill.
     assert.deepEqual(await page.evaluate(() => [{template: 'listening'}, {template: 'inbox'}, {harness: 'hermes'},
       {agent: {harness: 'openclaw'}}, {template: 'support'}, {harness: 'claude'}].map(e => !!botBetaPill(e))),
@@ -256,9 +270,79 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
+    // A phone: Support first, the composer in view without scrolling, the docs link right under it, then the overview.
+    // Reviewing and editing the diagnostics still works there.
+    v = await visit({viewport: {width: 390, height: 844}});
+    await v.page.locator('#support-rail').waitFor();
+    laid = await order(v.page);
+    assert.equal(await v.page.evaluate(() => document.querySelector('#main').scrollTop), 0);
+    assert.ok(laid.rail.top < laid.docs.top && laid.docs.top < laid.hero.top, 'Support, then the docs link, then the overview');
+    assert.ok(laid.docsShown && laid.docs.top - laid.rail.bottom < 30, 'the docs link sits directly under Support');
+    assert.ok(laid.box.top >= 0 && laid.box.bottom <= laid.height, 'the composer is in view without scrolling');
+    assert.equal(laid.jump, 0);
+    assert.equal(await v.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'phone has no horizontal overflow');
+    await v.page.locator('[data-compose] [data-preview]').click();
+    const phoneDialog = v.page.locator('dialog.support-modal');
+    await phoneDialog.locator('[data-use]:not([disabled])').waitFor();
+    assert.equal(await phoneDialog.locator('textarea').inputValue(), DIAGNOSTICS_TEXT);
+    await phoneDialog.locator('textarea').fill('{"format":1,"note":"phone"}');
+    await phoneDialog.locator('[data-save]').click();
+    await phoneDialog.locator('[data-use]:not([disabled])').waitFor();
+    await phoneDialog.locator('[data-use]').click();
+    await phoneDialog.waitFor({state: 'detached'});
+    assert.equal(await v.page.locator('[data-compose] [name=diag]').isChecked(), true);
+    await v.page.screenshot({path: '/tmp/tico-support-phone-first.png'});
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // A tablet, between the phone and the rail layout: Support still comes first, full width, nothing sideways.
+    v = await visit({viewport: {width: 900, height: 1000}});
+    await v.page.locator('#support-rail').waitFor();
+    laid = await order(v.page);
+    assert.ok(laid.rail.top < laid.docs.top && laid.docs.top < laid.hero.top, 'Support first on a tablet');
+    assert.ok(Math.abs(laid.rail.width - laid.page.width) < 2, 'Support spans the overview\'s width');
+    assert.equal(await v.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // "Want help setting up?" opens a new request that starts from the snapshot, which the person reads and sends as setup.
+    v = await visit({seed: [{id: 'sup_0', created: new Date().toISOString(), status: 'open', message: 'Earlier', sent: {}, messages: []}]});
+    await v.page.locator('#support-rail').waitFor();
+    await v.page.evaluate(() => {
+      document.body.insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>');
+      document.querySelector('[data-setup-help]').click();
+    });
+    await v.page.waitForFunction(() => document.querySelector('#support-message')?.value.startsWith("I'd like help setting up Tico."));
+    assert.ok(v.calls.includes('asked from health'));
+    assert.match(await v.page.locator('[data-sent]').innerText(), /message marked setup/);
+    assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent before the person presses Send');
+    // A second press keeps the draft as it is: one snapshot, not two.
+    await v.page.evaluate(() => document.querySelector('[data-setup-help]').click());
+    await v.page.waitForFunction(() => document.querySelector('[data-setup-help]') && !document.querySelector('[data-setup-help]').disabled);
+    await v.page.waitForTimeout(100);
+    assert.equal(v.calls.filter(c => c === 'asked from health').length, 2);
+    assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2);
+    await v.page.locator('[data-compose] [name=message]').press('Enter');
+    await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // "How is Tico working for you?": Send files the answer as feedback, and the question goes.
+    v = await visit({feedback: {moment: 'day_7', question: 'How is Tico working for you?'}});
+    const ask = v.page.locator('#feedback-ask');
+    await ask.waitFor();
+    await ask.locator('[name=answer]').fill('Faster than I expected');
+    await ask.locator('[type=submit]').click();
+    await ask.waitFor({state: 'hidden'});
+    assert.ok(v.calls.includes('POST feedback {"moment":"day_7","answer":"Faster than I expected"}'));
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
     v = await visit({enabled: false});
     await v.page.waitForSelector('#help-page [data-support-off]');
     assert.match(await v.page.locator('[data-support-off]').innerText(), /turned off/);
+    assert.equal(await v.page.locator('[data-help-support]').count(), 0, 'no pointer to a Support that is off');
     assert.equal(await v.page.locator('#support-rail').count(), 0);
     assert.ok(!v.calls.some(c => c.startsWith('POST')));
     assert.deepEqual(v.errors, []);

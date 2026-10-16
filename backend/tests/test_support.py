@@ -484,3 +484,77 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
         assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
     assert send(api, as_bot(api), approval["id"]).status_code != 200
     assert hq.seen == [] and not consumed(api, approval["id"])
+
+
+def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_older_hq(environment, hq):  # noqa: F811
+    from backend.store import H
+    api = environment()
+    with api.app.state.store.transaction() as c:                   # a parked bot whose name must not go
+        H.sync_registry(c, {"payroll": {"name": "Payroll for Acme Corp", "status": "active"}}, None)
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator,onboarding_state) "
+                  "VALUES('payroll','{}','human:test','needs_setup')")
+        c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
+    owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
+    assert any("Payroll for Acme Corp" in item["label"] for item in owner_items)
+    snapshot = api.get("/api/v2/support/setup-snapshot?asked_from=bot", headers=signed_in()).json()
+    assert "Payroll" not in snapshot["message"] and "- Bots in Needs setup: 1" in snapshot["message"]
+    plain = api.get("/api/v2/support/setup-snapshot?asked_from=health", headers=as_person(api, "quinn")).json()
+    assert "Needs setup" not in plain["message"] and "Payroll" not in plain["message"]
+    assert hq.seen == [] and snapshot["kind"] == "setup"           # building the snapshot sends nothing
+    lines = snapshot["message"].splitlines()
+    assert "Setup snapshot (asked from a bot in Needs setup):" in lines and "- Computer online: no" in lines
+    assert any(line.startswith("- Steps done: ") for line in lines) and "- First bot ready: no" in lines
+    assert file(api, message=snapshot["message"], kind="setup").json()["sent"]["kind"] == "setup"
+    assert json.loads(hq.seen[-1].content)["kind"] == "setup"
+    hq.fields = {"message", "email", "install_id", "version"}
+    assert "kind" not in file(api, message="Stuck on the computer step", kind="setup").json()["sent"]
+    assert json.loads(hq.seen[-1].content)["message"] == "[Setup] Stuck on the computer step"
+    assert file(api, kind="billing").status_code == 422
+
+
+def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as_a_feedback_request(environment, hq, monkeypatch):  # noqa: F811
+    from backend.store import H
+    from backend.tests.test_usage_count import complete_a_bot_turn
+    api = environment()
+    store = api.app.state.store
+    question = lambda h=None: api.get("/api/v2/config", headers=h or signed_in()).json()["feedback_question"]
+    with store.transaction() as c:                                 # everyone so far acted before any result
+        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-3),))
+    complete_a_bot_turn(api, H.shift(H.now(), days=-1))
+    assert question() is None                                      # only the Assistant has answered
+    complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
+    assert question() is None                                      # a result stamped ahead of this clock waits
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-1),))
+    assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
+    assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
+    r = api.post("/api/v2/support/feedback", json={"moment": "first_result", "answer": "Good so far"}, headers=signed_in())
+    assert r.status_code == 200 and r.json()["answered"]
+    sent = json.loads(hq.seen[-1].content)                         # only their words: no IDs, no diagnostics
+    assert sent == {"message": sent["message"], "kind": "feedback"} and sent["message"].endswith("\n\nGood so far")
+    assert question() is None
+    # A week on, the person is asked once more, but not within 3 days of their last answer.
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
+        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-9),))
+        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+                  (H.shift(H.now(), days=-1), "support.feedback"))
+    assert question() is None
+    with store.transaction() as c:
+        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+                  (H.shift(H.now(), days=-7), "support.feedback"))
+    assert question()["moment"] == "day_7"
+    before = len(hq.seen)
+    assert not api.post("/api/v2/support/feedback", json={"moment": "day_7"}, headers=signed_in()).json()["answered"]
+    assert len(hq.seen) == before and question() is None
+    # Someone who joined after the first result is asked from their own first action, never about that first result.
+    riley = as_person(api, "riley")
+    assert question(riley) is None                                 # has not done anything yet
+    with store.transaction() as c:
+        H.event(c, "human:riley", "test.acted", "x", {})
+    assert question(riley) is None
+    with store.transaction() as c:
+        c.execute("UPDATE events SET ts=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
+    assert question(riley)["moment"] == "day_7"
+    monkeypatch.setenv("TICO_SUPPORT", "off")
+    assert question(riley) is None and api.get("/api/v2/config", headers=riley).json()["support_on"] is False

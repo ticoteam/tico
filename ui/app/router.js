@@ -48,6 +48,7 @@ function route() {
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
   else if (S.route === OVERVIEW) pageOverview();
   else if (S.route === WELCOME) pageWelcome();
+  else if (S.route === '#/roadmap') pageRoadmap();
   else if (S.route === '#/tags') pageTags();
   else if (S.route.startsWith('#/tag/')) pageTag(decodeURIComponent(S.route.slice(6)));
   else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));

@@ -42,7 +42,7 @@ SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, idempotency, runners, enrollments, session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
-HIDDEN = {"bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
+HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
 DENIED_FUNCTIONS = {"load_extension"}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
@@ -217,7 +217,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
-        "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
+        "task_requesters": by_task, "task_reminders": by_task, "task_assets": by_task, "task_links": by_task, "task_roles": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
@@ -257,8 +257,9 @@ def guarded(c, auth, who, inner, function, columns=None):
                          if mine_inboxes else "id IS NULL"),
         "listen_items": "id IS NOT NULL" if listener else "id IN (SELECT item_id FROM intake_items)",
         "listen_judgments": "id IS NOT NULL" if listener else "item_id IN (SELECT id FROM listen_items)",
-        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins.
-        "registry_metadata": "1" if admin and not bot else "0",
+        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
+        # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
+        "registry_metadata": "key!='roadmap_ip_secret'" if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
                     function("event") + "('',actor,ts,detail_json)",

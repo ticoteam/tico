@@ -53,7 +53,8 @@ def test_a_ping_returns_the_release_and_stores_only_the_allowed_columns(client, 
     assert r.status_code == 200 and r.json()["tag_name"] == "v0.2.15" and "author" not in r.json()
     rows = [dict(x) for x in db.conn.execute("SELECT * FROM installs")]
     assert rows == [{"install_id": install, "first_seen": "2026-11-01", "last_seen": "2026-11-01",
-                     "last_version": "0.2.15", "last_people": "2026-11-01", "last_bots": None}]
+                     "last_version": "0.2.15", "last_people": "2026-11-01", "last_bots": None,
+                     "first_result": None, "result_from_start": 0}]
     # No address anywhere: not in the file, not in the log, not in a table beyond `installs`.
     dump = "".join(db.conn.iterdump())
     assert db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()[0][0] == "installs"
@@ -86,7 +87,41 @@ def test_the_flags_remember_the_last_day_they_were_true_and_first_seen_never_mov
     ping(client, install, version="0.2.16", people="false", bots="false")
     row = dict(db.conn.execute("SELECT * FROM installs").fetchone())
     assert row == {"install_id": install, "first_seen": "2026-11-01", "last_seen": "2026-11-04",
-                   "last_version": "0.2.16", "last_people": "2026-11-01", "last_bots": "2026-11-01"}
+                   "last_version": "0.2.16", "last_people": "2026-11-01", "last_bots": "2026-11-01",
+                   "first_result": None, "result_from_start": 0}
+
+
+def test_the_first_result_day_is_kept_once_and_only_installs_counted_from_the_start_give_a_wait(client, db, day):
+    old = ident()
+    ping(client, old)                                         # a release from before the flag
+    for wait, install in enumerate([ident() for _ in range(5)]):
+        day[0] = TODAY
+        ping(client, install, first_result="false")
+        day[0] = TODAY + timedelta(days=wait)
+        ping(client, install, first_result="true")
+        day[0] = TODAY + timedelta(days=wait + 3)
+        ping(client, install, first_result="true")            # a later true does not move the day
+    ping(client, old, first_result="true")                     # it updated: reached a result, but its wait is unknown
+    assert ping(client, ident(), first_result="maybe").status_code == 422
+    assert client.get("/v1/latest", params={"first_result": "true"}).status_code == 422
+    got = db.stats()
+    assert got["first_result"] == 6 and got["first_result_median_days"] == 2
+    row = dict(db.conn.execute("SELECT first_result, result_from_start FROM installs WHERE install_id=?", (old,)).fetchone())
+    assert row == {"first_result": (TODAY + timedelta(days=7)).isoformat(), "result_from_start": 0}
+
+
+def test_a_database_from_before_the_flag_gains_its_columns(tmp_path, day):
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE installs(install_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, "
+                 "last_version TEXT NOT NULL, last_people TEXT, last_bots TEXT)")
+    conn.execute("INSERT INTO installs VALUES('a','2026-10-01','2026-10-02','0.2.15','2026-10-02',NULL)")
+    conn.commit()
+    conn.close()
+    db = Database(path, clock=lambda: day[0])
+    assert db.stats()["first_result"] == 0
+    db.record("a", "0.3.52", True, True, True)
+    assert db.stats()["first_result"] == 1 and db.stats()["first_result_median_days"] is None
 
 
 def test_the_rate_limit_is_per_address_and_kept_in_memory(db):
@@ -115,7 +150,8 @@ def test_stats_math_tried_active_and_retained(db, day):
     seen(5, 1, True, True)       # tried and active, too new to be retained
     seen(100, 2, False, True)    # a bot ran, nobody signed in: not tried; retained
     day[0] = TODAY
-    assert db.stats() == {"tried": 3, "active_7d": 4, "retained_30d": 2, "by_version": {}, "as_of": "2026-11-01"}
+    assert db.stats() == {"tried": 3, "active_7d": 4, "retained_30d": 2, "first_result": 0,
+                          "first_result_median_days": None, "by_version": {}, "as_of": "2026-11-01"}
 
 
 def test_small_version_counts_are_suppressed_and_the_rest_rounded_into_other(db, day):

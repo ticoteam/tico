@@ -353,15 +353,20 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         H._task_event(conn, new, actor, "subtask", None, child_id, note)
     H._task_event(conn, child_id, actor, "parent_id", old, new, note)
     made_private = bool(target and H.task_private(conn, target) and not H.task_private(conn, row))
-    conn.execute("UPDATE tasks SET updated=?" + (", private=1" if made_private else "") + " WHERE id IN (?,?,?)",
+    conn.execute("UPDATE tasks SET updated=? WHERE id IN (?,?,?)",
                  (at, child_id, old or child_id, new or child_id))
     if made_private:
+        conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (child_id,))
         H._task_event(conn, child_id, actor, "private", 0, 1, "")
         H._private_followups(conn, child_id)
     H.event(conn, actor, "task.relate", child_id, {"task": new or old, "kind": "parent", "removed": not new})
     if old and row["status"] not in ("done", "closed", "declined"):
         # The old parent may have nothing left open now.
         H._parent_finished(conn, {**row, "status": "closed"}, row["status"], actor, parent=old)
+    from .roadmap_flow import changed, sync
+    changed(conn, child_id)
+    if old:
+        sync(conn, old)
     return True
 
 

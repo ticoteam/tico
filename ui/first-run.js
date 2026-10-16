@@ -201,6 +201,7 @@ function frBotBannerHTML(e) {
       ${can ? '<button class="primary" type="button" id="bot-start-setup">Set up</button>'
         : `<span class="muted">${planned ? 'Setting up.' : 'Ask someone who can write to it to start.'}</span>`}
       ${manager ? '<button type="button" id="bot-finish-setup">Mark setup done</button>' : ''}
+      <button class="ghost" type="button" data-setup-help="bot">Want help setting up?</button>
     </section>`;
 }
 function frBotWire(slug) {

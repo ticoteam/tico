@@ -24,14 +24,17 @@ from .support import Tickets, install as install_support
 INSTALL_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
 VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")
 FIELDS = ("install_id", "version", "active_people", "active_bots")
+# Sent by releases that know it; an older install leaves it out and is counted as before.
+OPTIONAL = ("first_result",)
 BOOLEANS = {"true": True, "false": False}
 PURGE_EVERY = 24 * 3600
 WATCH_EVERY = 15 * 60          # how often HQ looks for a new release to post its fixed-in notices
 
 
 def parse(params):
-    """The four fields, strictly: each exactly once, a v4 UUID, a version, and the words true or false. Anything else,
-    or a field left out, is refused (returns None); fields beyond these four are ignored, not read."""
+    """The four fields, strictly: each exactly once, a v4 UUID, a version, and the words true or false; and the optional
+    `first_result` flag, at most once and true or false. Anything else, or a required field left out, is refused (returns
+    None); other fields are ignored, not read. `first_result` is None when the install did not send it."""
     values = {}
     for name in FIELDS:
         found = params.getlist(name)
@@ -42,8 +45,11 @@ def parse(params):
         return None
     if values["active_people"] not in BOOLEANS or values["active_bots"] not in BOOLEANS:
         return None
+    first = params.getlist("first_result")
+    if len(first) > 1 or (first and first[0] not in BOOLEANS):
+        return None
     return (values["install_id"], values["version"], BOOLEANS[values["active_people"]],
-            BOOLEANS[values["active_bots"]])
+            BOOLEANS[values["active_bots"]], BOOLEANS[first[0]] if first else None)
 
 
 def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tickets=None, judge=None, watch=None,
@@ -105,7 +111,7 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
     def latest_release(request: Request):
         params = request.query_params
         ping = None
-        if any(name in params for name in FIELDS):
+        if any(name in params for name in FIELDS + OPTIONAL):
             ping = parse(params)
             if ping is None:
                 return JSONResponse({"error": "invalid"}, status_code=422, headers={"Cache-Control": "no-store"})

@@ -701,6 +701,7 @@ function recruitFor({department, briefing, share}) {
     assert.match(await page.locator('#bot-onboard').textContent(), /Needs setup/);
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Set up');
+    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help setting up?');
     // The Chat tab shows the setup conversation: the person's line, in the chat Set up wrote to.
     await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.

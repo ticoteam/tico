@@ -391,3 +391,17 @@ def test_prune_keeps_future_releases_and_removes_only_older_and_own_dangling_ima
     assert [a[2] for a in calls if a[:2] == ["docker", "rmi"]] == [
         "ghcr.io/ticoteam/tico:v0.3.9", "sha256:aaa", "ghcr.io/ticoteam/tico-updater:v0.3.9", "sha256:bbb"]
     assert all(a[3].startswith("ghcr.io/ticoteam/tico") for a in calls if a[:3] == ["docker", "image", "ls"])
+
+
+@pytest.mark.parametrize("stderr, hinted", [
+    ("Error response from daemon: invalid pool request: Pool overlaps with other one on this address space", True),
+    ("Error response from daemon: no space left on device", False)])
+def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatch, tmp_path, stderr, hinted):
+    import subprocess
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "docker_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "", stderr))
+    with pytest.raises(RuntimeError) as failed:
+        updater.compose("up", "-d")
+    message = str(failed.value)
+    assert message.startswith(stderr)
+    assert ("TICO_EDGE_SUBNET" in message and "docker compose up -d" in message) is hinted

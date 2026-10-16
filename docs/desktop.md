@@ -22,6 +22,10 @@ The app saves the address and restarts automatically to replace its native permi
 Only the selected server's origin can use native IPC; Access and external sign-in pages that
 remain in the window receive no native permissions.
 
+Links to other sites, and any link that would open a new tab (links in chat and Markdown), open in your
+default browser, and email links in your mail app. Cloudflare Access and Google sign-in stay in the app
+window. Your team's own files and run logs open in a separate app window, so they keep the app's sign-in.
+
 Tico is one ordinary window with the Mac's own title bar: drag it by its title on any page and
 resize it from any edge, down to 360 by 400 pixels. At 760 pixels wide or less the page switches to its
 compact layout (the same one a phone uses). The app remembers where you left the window and how big

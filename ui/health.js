@@ -179,7 +179,8 @@ function hlPageDraw() {
     ${hlMetricsHtml(HL_METRICS)}
     ${HL.computers.length ? `<h2>Computers</h2><ul class="hl-computers">${HL.computers.map(hlComputerHtml).join('')}</ul>` : ''}
     ${idle.length ? `<h2>Bots waiting</h2><ul class="hl-bots">${bots(idle)}</ul>` : ''}
-    ${HL.failures.length ? `<h2>Failed in the last day</h2><ul class="hl-bots">${HL.failures.map(row => `<li>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span></li>`).join('')}</ul>` : ''}`;
+    ${HL.failures.length ? `<h2>Failed in the last day</h2><ul class="hl-bots">${HL.failures.map(row => `<li>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span></li>`).join('')}</ul>` : ''}
+    <p class="hl-help"><button class="ghost" type="button" data-setup-help="health">Want help setting up?</button></p>`;
 }
 
 const hlMs = ms => ms == null ? '–' : ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;

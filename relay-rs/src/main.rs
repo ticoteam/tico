@@ -159,6 +159,7 @@ struct App {
     python: Arc<String>,
     http: reqwest::Client,
     proxy: reqwest::Client,
+    trusted_proxies: Arc<Vec<gateway::Network>>,
 }
 impl App {
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -711,6 +712,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         hub: Arc::new(Mutex::new(Hub::new())),
         key: Arc::new(key),
         python: Arc::new(python.trim_end_matches('/').into()),
+        trusted_proxies: Arc::new(gateway::trusted_proxies(
+            &std::env::var("TICO_TRUSTED_PROXIES").unwrap_or_else(|_| "127.0.0.1/32,::1/128".into()),
+        )?),
         proxy: reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .redirect(reqwest::redirect::Policy::none())

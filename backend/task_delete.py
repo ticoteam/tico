@@ -36,7 +36,7 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
-             "service_key_tasks", "task_roles", "task_assets")
+             "service_key_tasks", "task_roles", "task_assets", "task_requesters")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
@@ -244,6 +244,9 @@ def delete_tasks(c, ids, apply=False, actor=None):
         H.event(c, actor, "task.deleted", tid, {"title": t[0], "requester": t[1], "owner": t[2], "status": t[3],
                                                 "restorable": True})
     H.recount(c, parties)       # what a bot waited on a person for leaves with the task
+    from .roadmap_flow import sync
+    for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] == "parent"}:
+        sync(c, parent)
     report["applied"] = True
     return report
 
@@ -374,6 +377,9 @@ def restore_tasks(c, ids, actor=None):
         c.execute("DELETE FROM task_trash_assets WHERE task_id=?", (e["task_id"],))
         H.event(c, actor, "task.restored", e["task_id"], {"title": e["title"], "deleted_by": e["deleted_by"],
                                                           "unlinked": unlinked.get(e["task_id"], [])})
+    from .roadmap_flow import changed
+    for e in entries:
+        changed(c, e["task_id"])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
 

@@ -2,9 +2,9 @@
 
 One Tico server holds the team's shared work, and your computers run the bots. Humans reach the server from the web
 app, Slack (DM Tico) or MCP and the CLI; each computer's runner asks it for work, runs the bot on that computer's own
-model subscriptions and sends the results back. The same picture is the in-app Help page (**?** in the sidebar).
+model subscriptions and sends the results back. The in-app Help page (**?** in the sidebar) is kept short and links here.
 
-![How Tico works](images/help-desktop-light.png)
+![How Tico works](images/how-it-works-map.png)
 
 - **Tico server**: tasks, goals and KPIs, docs, updates, messages and Credentials. It runs no bots
   ([Architecture](architecture.md)).
@@ -18,6 +18,20 @@ model subscriptions and sends the results back. The same picture is the in-app H
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
 - **Tools and Credentials**: a bot gets only the Credentials granted to it, and drafts to outsiders until its send switch
   is on.
+
+### Who does what
+
+| Teammate | For | Find it | Ask |
+|---|---|---|---|
+| Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
+| BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
+| Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and Market | “What is our refund limit?” |
+| Goal Manager (built-in) | Keeps KPIs and goal colours current | Top of Goals | “Why is this goal yellow?” |
+| Your bots | Do the team's work from their Instructions | Team in the sidebar: chat or a task | “Draft replies to the open tickets” |
+| Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
+
+Claude Code, Codex, Hermes and OpenClaw (Hermes and OpenClaw are Beta) agents can join the same shared work from their own apps
+([Connect an external agent](connect-an-agent.md)).
 
 The rest of this page is the current system in detail. For a teammate's questions read [Using Tico](using-tico.md).
 Words are defined in the [Glossary](glossary.md).

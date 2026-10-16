@@ -199,6 +199,7 @@ function taskModalBind(d, task, full = false) {
   const unsnooze = $('[data-task-unsnooze]', d);
   if (unsnooze) unsnooze.onclick = () => change({unsnooze: true}, undefined, 'snooze');
   taskPropsBind(d, task, change);
+  roadmapTaskBind(d, task, change);
   const privacy = $('[data-task-private]', d);
   if (privacy) privacy.onchange = () => change({private: privacy.checked}, undefined, 'private');
   d.querySelectorAll('[data-drop-label]').forEach(b => b.onclick = () => change(cur => ({labels: (cur.labels || []).filter(l => l !== b.dataset.dropLabel)}), undefined, 'tags'));
@@ -355,6 +356,7 @@ async function taskSave(d, id, body, then, field) {
     // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one).
     if (state) state.pendingFinish = {key, at, after: state.loadSeq};
     if (TASKS_ST) void tasksLoad(TASKS_ST);
+    roadmapRankingRefresh();
     return true;
   } catch (e) {
     if (!here()) { toast(e.message, true); return false; }
@@ -388,6 +390,7 @@ function taskChatLive(state) {
 }
 function taskChatCurrent(state) { return TASK_CHAT === state && state.dialog.open; }
 const commentAuthor = (a, via) => {
+  if (a === 'external:roadmap') return '<span class="who">Visitor</span>';
   const pid = actorPerson(a);
   // The Assistant acted for this person (docs/assistant.md): "<name> (via Assistant)".
   const by = via === 'assistant' ? ' (via Assistant)' : '';
@@ -430,7 +433,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   // a question's text is in its block; a body that only repeats it is left out
   const body = ask && ask.questions.some(q => String(q.question || '').trim() === String(m.body || '').trim()) ? '' : m.body || '';
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
-  return `<div class="tcomment${String(m.from_actor || '').startsWith('bot:') ? ' bot' : ''}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor, m.refs?.via)}</span>${kind}
+  return `<div class="tcomment${String(m.from_actor || '').startsWith('bot:') ? ' bot' : ''}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>
     ${body ? `<div class="md">${safeMd(body)}</div>` : ''}
@@ -487,6 +490,7 @@ function taskCommentsRender(state, data) {
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
     stick.update(() => { thread.innerHTML = html; askDraftRestore(thread, d); }, {fresh: !!state.rendered});
+    roadmapCommentsBind(state);
     state.rendered = html;
   }
 }
@@ -541,7 +545,7 @@ async function taskCommentSend(state) {
   const icon = button.classList.contains('p-send-icon');
   button.disabled = box.disabled = true; if (!icon) button.textContent = 'Sending…'; status.textContent = '';
   try {
-    const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text});
+    const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text, public: !!$('[data-comment-public]', form)?.checked});
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
@@ -626,6 +630,7 @@ function hubModalHTML(t, it, opts = {}) {
       <section class="tsec task-links"><h3 class="rail-h">Links<button type="button" class="prop-add" data-link-add aria-label="Add a link" title="Add a link">${TL_ICON.plus}</button></h3>
         ${links.length ? `<div class="tlinks">${links.map(l => `<span class="tlink ${esc(l.kind)} ${esc(l.state || '')}"><a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>${l.state && l.state !== 'open' ? ` · ${esc(l.state)}` : ''}${mover ? `<button type="button" class="x" data-drop-link="${esc(l.id)}" aria-label="Remove link">×</button>` : ''}</span>`).join('')}</div>` : ''}
         <form class="inline task-link-add" data-modal-link hidden><input type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…" aria-label="Add a link"></form></section>
+      ${roadmapTaskHTML(t)}
       ${taskSessionsHTML(t)}
       <section class="tsec task-runs" data-task-runs aria-label="Runs" hidden></section>
       ${t.relations ? taskRelHTML(t) : ''}

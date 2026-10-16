@@ -55,6 +55,18 @@ def product_repo_create(client, name, *, stdin=None, stderr=None):
     }, key=key)
 
 
+def chosen_grant(value):
+    """`owner/repo`, `owner/repo:read`, `owner/repo:write` or `owner/repo:write+actions` (write, and may run workflows).
+    Without `+actions` a write grant keeps whatever workflow setting it has; `:write-actions` turns it off."""
+    name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
+    grants = {"read": ("read", None), "write": ("write", None), "write+actions": ("write", True),
+              "write-actions": ("write", False)}
+    if level not in grants:
+        raise APIError("validation", f"'{value}': use owner/repo, :read, :write, :write+actions or :write-actions")
+    access, workflows = grants[level]
+    return {"full_name": name, "access": access, **({"run_workflows": workflows} if workflows is not None else {})}
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
@@ -80,11 +92,11 @@ def run(args, who=None):
             return hubtools.bot_repos_get(client, {"bot": args.bot})
         body = {"bot": args.bot, "mode": "all" if args.all else "own" if args.own else "chosen"}
         if args.chosen is not None:
-            body["chosen"] = [{"full_name": r.removesuffix(":read").removesuffix(":write"),
-                               "access": "read" if r.endswith(":read") else "write"} for r in args.chosen]
+            body["chosen"] = [chosen_grant(r) for r in args.chosen]
         result = hubtools.bot_repos_set(client, body)
         # Say what the change took away: a switch to own keeps the chosen rows, but they stop applying.
         lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
+        lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
         lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
         if lost:
             print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
@@ -131,6 +143,19 @@ def run(args, who=None):
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn in ("task child create", "task tree"):
         return via_tool(client, args)
+    if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
+              "task comment-moderate", "roadmap tasks"):
+        return via_tool(client, args)
+    if fn == "roadmap settings":
+        # Any flag is a partial update of those settings; none reads them. An empty value clears a list.
+        names = ("labels", "cors_origins", "action_limit", "suggestion_limit", "bot_public_approval")
+        changes = {k: getattr(args, k) for k in names if getattr(args, k) is not None}
+        for k in ("labels", "cors_origins"):
+            if k in changes:
+                changes[k] = [v for v in changes[k] if v]
+        from clients import hubtools
+        return hubtools.roadmap_settings(client, {"settings": changes or None,
+                                                  "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
     if fn in ("health-monitor findings", "health-monitor report"):

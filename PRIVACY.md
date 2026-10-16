@@ -14,10 +14,10 @@ Homebrew, Next.js and Astro do: anonymously, in the open, and with a switch you 
 ### What is sent
 
 Your Tico looks for a new release about every six hours. With counting on, it asks Tico HQ instead of GitHub, and the
-request carries exactly these four fields and nothing else:
+request carries exactly these five fields and nothing else:
 
 ```
-GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63&version=0.2.15&active_people=true&active_bots=false
+GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63&version=0.2.15&active_people=true&active_bots=false&first_result=true
 ```
 
 | Field | What it is |
@@ -26,6 +26,7 @@ GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8
 | `version` | The Tico release you run, for example `0.2.15`. |
 | `active_people` | `true` if at least one human used Tico in the last 7 days, otherwise `false`. |
 | `active_bots` | `true` if at least one bot run finished in the last 7 days, otherwise `false`. |
+| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and Goal Manager do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
 
 That is all. No team name, domain, email address, humans, bot names, counts, content, hostnames or file names. Your
 IP address is unavoidably seen by any server you connect to (GitHub sees it today), and HQ handles it as described below.
@@ -49,6 +50,8 @@ For the usage count, one row per install ID, and nothing else:
 | `last_version` | the version in the last request |
 | `last_people` | the last UTC day `active_people` was true |
 | `last_bots` | the last UTC day `active_bots` was true |
+| `first_result` | the first UTC day `first_result` was true |
+| `result_from_start` | whether the ID's first request already carried `first_result`, so its wait for a first result is known |
 
 - **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash forgotten when the
   process restarts, to limit each address to 60 requests an hour. Its access log is switched off, so no address and no
@@ -87,9 +90,9 @@ At each start of a release image, the server also asks GitHub which commit that 
 ### Check it yourself
 
 - `TICO_TELEMETRY_DEBUG=1` prints the exact request Tico would send to the server log and sends nothing.
-- `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite payload` prints the same four fields.
+- `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite payload` prints the same five fields.
 - The sending code is `backend/census.py` and `backend/releases.py`; the collector is `hq/`. A test
-  (`backend/tests/test_usage_count.py`) fails if the request carries any field beyond these four.
+  (`backend/tests/test_usage_count.py`) fails if the request carries any field beyond these five.
 
 More on why it is built this way, and how to run HQ yourself: [docs/telemetry.md](docs/telemetry.md).
 
@@ -213,6 +216,7 @@ with the message and, unless the draft says otherwise, the version and install I
 | `message` | What you wrote, up to 4000 characters. Required. |
 | `email` | Only if you leave one in the field, so the team can reply by email. It is prefilled from your account and you can clear it. |
 | `version`, `install_id` | Only while "Include version and install ID" is ticked, which it is by default. The install ID is the same random ID as the count's; it is made for a ticket if the count never made one. |
+| `kind` | `setup` when you started from **Want help setting up?**, `feedback` when you answered **How is Tico working for you?**; left out for an ordinary request. |
 | `diagnostics` | Only while "@diagnostics" is ticked: on by default for new requests, off for replies. **Review and edit** shows the exact attachment; edits are validated and redacted again before use. |
 
 **What HQ keeps**, per ticket: those fields (the diagnostics with the ticket, to a limit of 256 KB, shown to the Tico team only), a hash of a secret that only your Tico holds (it lets your Tico read this ticket's replies

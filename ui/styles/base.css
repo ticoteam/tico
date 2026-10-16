@@ -16,6 +16,11 @@
 /* Fixed over the bottom-left of every page, which is where a bot's composer sits: a click on the box must reach the box, so only the bar's own link and button take clicks. */
 #usage-notice{pointer-events:none}
 #usage-notice a,#usage-notice button{pointer-events:auto}
+#feedback-ask{position:fixed;right:16px;bottom:16px;z-index:3000;display:flex;flex-direction:column;gap:8px;width:min(360px,calc(100vw - 32px));padding:12px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
+#feedback-ask[hidden]{display:none}
+html.no-support [data-setup-help]{display:none}
+#feedback-ask label{font-weight:600}
+.feedback-row{display:flex;align-items:center;gap:8px}
 .privacy-row{display:flex;align-items:center;gap:8px;font-size:var(--t-md)}.privacy-row input{width:auto;flex:none}
 html.demo{--demo-h:30px;padding-top:var(--demo-h)}
 html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap;overflow:hidden}

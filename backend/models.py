@@ -131,6 +131,10 @@ class TaskRelationRef(Contract):
 
 
 class TaskCreate(Contract):
+    visibility: Literal['public', 'private'] | None = None
+    # Publishing at creation needs explicit public text; the internal title and body are never copied.
+    public_title: str | None = Field(default=None, max_length=300)
+    public_summary: str | None = Field(default=None, max_length=8000)
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text
@@ -164,6 +168,11 @@ class NoteCreate(Contract):
 
 
 class TaskUpdate(Contract):
+    visibility: Literal['public', 'private'] | None = None
+    public_title: str | None = Field(default=None, min_length=1, max_length=300)
+    public_summary: str | None = Field(default=None, max_length=8000)
+    approval_id: ID | None = None
+    size: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     private: StrictBool | None = None
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
@@ -191,6 +200,7 @@ class TaskUpdate(Contract):
 
 
 class TaskStepInput(Contract):
+    public_name: str | None = Field(default=None, min_length=1, max_length=200)
     id: ID | None = None
     name: ID
     position: int | None = None
@@ -203,6 +213,7 @@ TypeBots = Literal["parties", "read", "work"]
 
 
 class TaskTypeCreate(Contract):
+    default_visibility: Literal['public', 'private'] = 'private'
     name: ID
     steps: list[TaskStepInput] = Field(default_factory=list)
     bots: TypeBots | None = None
@@ -211,6 +222,7 @@ class TaskTypeCreate(Contract):
 
 
 class TaskTypeUpdate(Contract):
+    default_visibility: Literal['public', 'private'] | None = None
     name: ID | None = None
     steps: list[TaskStepInput] | None = None
     bots: TypeBots | None = None
@@ -320,6 +332,8 @@ class FileVersionEdit(Contract):
 
 
 class TaskComment(Contract):
+    public: bool = False
+    approval_id: ID | None = None
     text: Text
     ask: ReviewAsk | None = None
     attachments: list[Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")]] = Field(default_factory=list, max_length=10)

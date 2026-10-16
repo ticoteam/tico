@@ -50,7 +50,7 @@ VERSIONS = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?")
 TAG = re.compile(r"v?" + VERSION.pattern)
 # The first release that shows a notice in the app. An install that says it runs something older is given the
 # message's link in place of the release link.
-SHOWS_NOTICES = (0, 3, 52)
+SHOWS_NOTICES = (0, 3, 53)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS version_notices(

@@ -484,6 +484,10 @@ def tag_update(api, args):
       {"owner": _s("Who does it: a bot slug, a person id, or `me`"),
        "title": _s("Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"),
        "body": _s("The details", default=""),
+       "visibility": _s("People only: roadmap visibility at creation; public needs public_title. A bot is refused; "
+                        "it creates the task, then requests a publication", enum=["public", "private"]),
+       "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
+       "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "parent": _s("Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
@@ -515,7 +519,8 @@ def task_create(api, args):
             "due": args.get("due"), "goal_id": args.get("goal_id") or None}
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
-    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role"):
+    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
+                  "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     if args.get("private") is not None:
@@ -716,6 +721,10 @@ def task_question(api, args):
       "Done stays Done, including tasks you requested for yourself; closing is a separate decision.",
       {"id": TASK_ID,
        "private": {"type": "boolean", "description": "Tighten visibility; only the direct human requester can publish"},
+       "visibility": _s("Roadmap publication", enum=["public", "private"]),
+       "public_title": _s("Public title, separate from internal title"),
+       "public_summary": _s("Public summary, separate from internal body"),
+       "approval_id": _s("Exact publish approval for bot public edits"), "size": {"type": "number", "minimum": 0},
        "title": _s("A new title; it is checked as a new task's title would be"),
        "status": {"type": "string", "enum": ["open", "doing", "waiting", "review", "done", "declined"]},
        "type": _s("Task type id or name"),
@@ -745,7 +754,7 @@ def task_update(api, args):
         body["quiet"] = True
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
-    for field in ("title", "type", "step", "step_rank", "number"):
+    for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -775,7 +784,7 @@ def _roles(api, args):
 
 # Task types sit above the stable status contract; old bots can keep setting status.
 TASK_STEPS = {"type": "array", "items": {"type": "object", "properties": {
-    "id": _s("Keep this id when editing an existing step"), "name": _s("Step name"),
+    "id": _s("Keep this id when editing an existing step"), "name": _s("Step name"), "public_name": _s("Public step name"),
     "position": {"type": "integer"}, "status": {"type": "string", "enum": list(TASK_STATUSES)}},
     "required": ["name", "status"], "additionalProperties": False}}
 NUMBERED = {"type": "boolean", "description": "Give each task created on or moved onto the type the team's next number"}
@@ -796,20 +805,22 @@ TYPE_BOTS = {"type": "string", "enum": ["parties", "read", "work"],
 
 @tool("hub_task_type_create", "Create a task type and its steps (movers only).",
       {"name": _s("Type name"), "steps": TASK_STEPS, "bots": TYPE_BOTS, "numbered": NUMBERED,
-       "steps_only": STEPS_ONLY}, required=("name",), writes=True)
+       "steps_only": STEPS_ONLY, "default_visibility": _s("New tasks only", enum=["public", "private"])}, required=("name",), writes=True)
 def task_type_create(api, args):
     body = {"name": args["name"], "steps": args.get("steps") or [], "numbered": bool(args.get("numbered")),
             "steps_only": bool(args.get("steps_only"))}
     if args.get("bots"):
         body["bots"] = args["bots"]
+    if args.get("default_visibility"):
+        body["default_visibility"] = args["default_visibility"]
     return api.post("task-types", body, key=_key(args))
 
 
 @tool("hub_task_type_update", "Edit a task type (movers only). Steps replace the full list; keep retained ids. "
       "A step with tasks cannot be removed.", {"id": _s("Type id or name"), "name": _s("Type name"),
-      "steps": TASK_STEPS, "bots": TYPE_BOTS, "numbered": NUMBERED, "steps_only": STEPS_ONLY}, required=("id",), writes=True)
+      "steps": TASK_STEPS, "bots": TYPE_BOTS, "numbered": NUMBERED, "steps_only": STEPS_ONLY, "default_visibility": _s("New tasks only", enum=["public", "private"])}, required=("id",), writes=True)
 def task_type_update(api, args):
-    return api.post("task-types/" + args["id"], {k: args[k] for k in ("name", "steps", "bots", "numbered", "steps_only") if k in args},
+    return api.post("task-types/" + args["id"], {k: args[k] for k in ("name", "steps", "bots", "numbered", "steps_only", "default_visibility") if k in args},
                     key=_key(args))
 
 
@@ -823,12 +834,13 @@ def task_type_delete(api, args):
 @tool("hub_task_comment", "Leave a comment on a task: progress, a question for the people on it, "
       "a link to what you found. It is on the record with your name; it is not a chat.",
       {"id": TASK_ID, "text": _s("The comment"), "ask": ASK_SCHEMA,
+       "public": {"type": "boolean"}, "approval_id": _s("Exact publish approval for a bot public reply"),
        "attachments": {"type": "array", "items": {"type": "string"}, "description": "File versions as file_id@version: on this task, or (a person) a chat file "
                        "you can open as its id@1, which the comment shares to the task"},
        "on_behalf_of": ASKED},
       required=("id", "text"), writes=True)
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "ask", "attachments") if k in args}
+    body = {k: args[k] for k in ("text", "ask", "attachments", "public", "approval_id") if k in args}
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/comments", body, key=_key(args)), links)
 
@@ -844,10 +856,12 @@ COMMENT_ID = _s("The comment's id (`id` in the task's `comments`)")
 
 @tool("hub_task_comment_edit", "Change the text of a comment you wrote on a task. It wakes nobody and is not "
       "sent again; it shows as edited.",
-      {"id": TASK_ID, "comment_id": COMMENT_ID, "text": _s("The new text")},
+      {"id": TASK_ID, "comment_id": COMMENT_ID, "text": _s("The new text"), "approval_id": _s("Exact publish approval")},
       required=("id", "comment_id", "text"), writes=True)
 def task_comment_edit(api, args):
     body = {"text": args["text"]}
+    if args.get("approval_id"):
+        body["approval_id"] = args["approval_id"]
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(api.post(f"tasks/{args['id']}/comments/{args['comment_id']}", body, key=_key(args)), links)
 
@@ -2997,7 +3011,9 @@ def bot_repos_get(api, args):
       {"bot": _s("Bot slug"), "mode": _s("Access mode", enum=["own", "all", "chosen"]),
        "all_access": _s("Default access for all repos", enum=["read", "write"]),
        "chosen": {"type": "array", "items": {"type": "object", "properties": {
-           "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"])},
+           "full_name": _s("owner/repo"), "access": _s("Access", enum=["read", "write"]),
+           "run_workflows": {"type": "boolean", "description": "Write grants only, Owner or admin: may start, rerun "
+                             "and cancel workflow runs (GitHub Actions: write). Leave out to keep the current setting"}},
            "required": ["full_name", "access"], "additionalProperties": False}}},
       required=("bot", "mode"), writes=True)
 def bot_repos_set(api, args):
@@ -3339,6 +3355,70 @@ def replay_show(api, args):
 # `hub_team_icon` streams a local image file; the JSON tool transport cannot open that path.
 SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_db", "hub_service_key_create",
               "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon"}
+
+@tool("hub_task_requesters", "Internal requester contacts and counts, paged. Tokens are never listed.",
+      {"id": TASK_ID, "limit": {"type": "integer"}, "offset": {"type": "integer"}}, required=("id",))
+def task_requesters(api, args):
+    return api.get(f"tasks/{args['id']}/requesters", **{k: args[k] for k in ('limit', 'offset') if k in args})
+
+
+@tool("hub_task_requester_save", "Record or partially update a requester on a task. Contact details are unverified and internal only. "
+      "Omit actor for an external requester; a verified teammate identity determines teammate status. Nothing sends.",
+      {"id": TASK_ID, "requester_id": _s("Existing requester id to update; omit to add"),
+       "actor": _s("Verified teammate actor; omit for external"), "name": _s("Name"), "email": _s("Email"),
+       "phone": _s("Phone"), "other": _s("Other contact"), "organization": _s("Organization"), "note": _s("Quote or note"),
+       "source": _s("Source", enum=['public_form', 'inbox', 'meeting', 'manual']), "important": {"type": "boolean"}},
+      required=("id",), writes=True)
+def task_requester_save(api, args):
+    path = f"tasks/{args['id']}/requesters" + ('/' + args['requester_id'] if args.get('requester_id') else '')
+    return api.post(path, {k: v for k, v in args.items() if k in
+                    ('actor', 'name', 'email', 'phone', 'other', 'organization', 'note', 'source', 'important')}, key=_key(args))
+
+
+@tool("hub_task_requester_remove", "Remove a requester from a task (task managers).",
+      {"id": TASK_ID, "requester_id": _s("Requester id")}, required=("id", "requester_id"), writes=True)
+def task_requester_remove(api, args):
+    return api.post(f"tasks/{args['id']}/requesters/{args['requester_id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_task_publication_preview", "Build the exact publish approval payload for public task edits or a public comment. "
+      "Request a publish approval with this payload, then pass its approved id to the task edit or comment.",
+      {"id": TASK_ID, "visibility": _s("Publication", enum=['public', 'private']), "public_title": _s("Title"),
+       "public_summary": _s("Summary"), "labels": {"type": "array", "items": {"type": "string"}}, "comment": _s("Public reply text")}, required=("id",))
+def task_publication_preview(api, args):
+    return api.post(f"tasks/{args['id']}/publication-preview", {k: args[k] for k in
+                    ('visibility', 'public_title', 'public_summary', 'labels', 'comment') if k in args}, key=_key(args))
+
+
+@tool("hub_task_comment_moderate", "Hide, restore or delete a public comment on a task you manage.",
+      {"id": TASK_ID, "comment_id": _s("Public comment id"), "action": _s("Action", enum=['hide', 'show', 'delete'])},
+      required=("id", "comment_id", "action"), writes=True)
+def task_comment_moderate(api, args):
+    return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}/moderate", {'action': args['action']}, key=_key(args))
+
+
+
+@tool("hub_roadmap_tasks", "Rank roadmap tasks by requester count, external requests, important requests, organization or size.",
+      {"sort": _s("Sort", enum=['requester_count', 'external_requesters', 'important', 'organization', 'size']),
+       "direction": _s("Direction", enum=['asc', 'desc']), "limit": {"type": "integer"}, "offset": {"type": "integer"}})
+def roadmap_tasks(api, args):
+    return api.get('roadmap-tasks', **{k: args[k] for k in ('sort', 'direction', 'limit', 'offset') if k in args})
+
+
+@tool("hub_roadmap_settings", "Read or partially update company public roadmap settings. Only owners and admins change them. "
+      "Labels must already exist. Empty labels disables public roadmaps. Bot public edits need approval by default.",
+      {"settings": {"type": "object", "properties": {
+           "labels": {"type": "array", "items": {"type": "string"}},
+           "cors_origins": {"type": "array", "items": {"type": "string"}},
+           "action_limit": {"type": "integer", "minimum": 1},
+           "suggestion_limit": {"type": "integer", "minimum": 1, "description": "Visitor suggestions waiting at Suggested, overall"},
+           "bot_public_approval": {"type": "boolean"}},
+           "additionalProperties": False}}, writes=True)
+def roadmap_settings(api, args):
+    if args.get('settings') is not None:
+        return _as_person(api).post('roadmaps/settings', args['settings'], key=_key(args))
+    return api.get('roadmaps/settings')
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 

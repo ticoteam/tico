@@ -291,7 +291,7 @@ function openTaskCreate(owner = '', opts = {}) {
       `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner).name)}</option>`).join('');
   });
   taskFormFiles(creation);
-  void taskPipelineCreate($('#task-create-form'), TASKS_ST?.type);
+  void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
   $('#task-create-form').onsubmit = async ev => {
     ev.preventDefault();
     const form = ev.target, btn = form.querySelector('[type=submit]'), msg = $('#task-create-msg');

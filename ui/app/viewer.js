@@ -223,8 +223,10 @@ async function viewerShow() {
     const text = await file.blob.text();
     paint(file.name, file.kind, file.kind === 'markdown' ? `<div class="md">${safeMd(text)}</div>` : `<pre class="plain">${esc(text)}</pre>`, extra);
   } else {
+    // A blob: URL lives only in this page, so the desktop app cannot hand it to the default browser.
+    const open = file.kind === 'pdf' && !document.body.classList.contains('native');
     paint(file.name, file.kind, media(file.kind, file.url, file.name),
-          (file.kind === 'pdf' ? `<a class="ghost btnlike" href="${esc(file.url)}" target="_blank" rel="noopener">Open</a>` : '') + extra);
+          (open ? `<a class="ghost btnlike" href="${esc(file.url)}" target="_blank" rel="noopener">Open</a>` : '') + extra);
   }
   const dl = d.querySelector('[data-doc-download]');
   if (dl) dl.onclick = () => saveBlob(file.blob, file.name);

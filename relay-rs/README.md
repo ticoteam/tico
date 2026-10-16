@@ -11,7 +11,11 @@ writes. No persistent session table or engine selection exists.
 
 The parent creates a fresh private key and allocates loopback API/control ports on every start.
 Public ingress blocks `/control/*` and `/_tico/*`; policy callbacks and versioned control requests
-never leave loopback. Direct remote clients cannot spoof trusted proxy identity headers. Existing
+never leave loopback. `TICO_TRUSTED_PROXIES` selects the ingress IPs/CIDRs whose forwarding headers
+the relay preserves; the binary's default is loopback only, and the standard Compose file adds its two
+front doors' fixed addresses. IPv4-mapped IPv6 peers are compared as IPv4. Other peers get a fresh
+X-Forwarded-For chain.
+Direct remote clients cannot spoof trusted proxy identity headers. Existing
 TLS termination, cookies, Cloudflare origins and public hostnames remain unchanged. See the
 installation matrix and native job migration in `docs/install.md`.
 

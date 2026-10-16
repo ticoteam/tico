@@ -582,6 +582,7 @@ def install_github(app, settings, store):
             from .repositories import queue_sync
             # Accepting new permissions arrives here: a turn asks for all its reads again at once.
             app.state.github_app.live.pop("turn-reads", None)
+            app.state.github_app.live.pop("workflows-refused", None)
             queue_sync(app.state.github_app, refresh=True)
             return {"ok": True}
         with store.transaction() as c:
