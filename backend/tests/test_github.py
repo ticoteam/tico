@@ -484,9 +484,18 @@ def test_a_pr_linked_again_in_another_case_is_the_same_link(api):
         assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
         links = _arm(api, task['id'], armed=False, url=url)
         assert len(links) == 1 and 'wake_once' not in json.loads(links[0]['detail_json'])
-    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Another task on it', 'body': 'x',
-                                'links': ['https://github.com/TICOTEAM/TICO/pull/412']})
-    assert len(get(api, 'tasks/' + other['id'] + '/links')['links']) == 1
+    mixed = 'https://github.com/TICOTEAM/TICO/pull/412'
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Another task on it', 'body': 'x', 'links': [mixed]})
+    assert [link['url'] for link in _arm(api, other['id'])] == [mixed]     # stored mixed case, linked lowercase
+    # A duplicate left by an older install is still disarmed through its own URL.
+    with api.app.state.store.transaction() as c:
+        H.task_link(c, 'human:ana', task['id'], PR, wake_once=True)
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,number,detail_json) "
+                  "VALUES('dup',?,'pr',?,'tico#412','open','human:ana',?,'TicoTeam/Tico',412,?)",
+                  (task['id'], 'https://github.com/TicoTeam/Tico/pull/412', H.now(), json.dumps({'wake_once': {'by': 'human:ana'}})))
+    links = {link['id']: link for link in _arm(api, task['id'], armed=False, url='https://github.com/TicoTeam/Tico/pull/412')}
+    assert 'wake_once' not in json.loads(links['dup']['detail_json'])
+    assert 'wake_once' in json.loads(next(v for k, v in links.items() if k != 'dup')['detail_json'])
 
 
 def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):

@@ -2982,9 +2982,10 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
         refuse(conn, actor, "kind", "a one-shot wake needs a pull request link in the connected GitHub App's organization")
     if kind == "pr" and match:
         # GitHub treats owner and repository names case-insensitively, so one pull request is one link.
+        # A duplicate made before this matched by exact URL stays reachable through its own URL.
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=? "
-                          "ORDER BY created LIMIT 1",
-                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3))))
+                          "ORDER BY url=? DESC, created LIMIT 1",
+                    (task_id, f"{match.group(1)}/{match.group(2)}".lower(), int(match.group(3)), url))
     else:
         have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
