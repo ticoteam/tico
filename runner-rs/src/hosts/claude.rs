@@ -1132,6 +1132,18 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_server_call_carries_no_summary() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let input = json!({"command": "curl -H 'Authorization: Bearer sk-live-1' x", "path": "/work/a.txt"});
+        host.tool_started(&json!({"id": "t1", "name": "mcp__repo__run", "input": input}), None, "th", "tu");
+        host.tool_started(&json!({"id": "t2", "name": "Bash", "input": input}), None, "th", "tu");
+        let (server, bash) = (rx.try_recv().unwrap(), rx.try_recv().unwrap());
+        assert_eq!((server["tool"].as_str(), server["summary"].as_str()), (Some("mcp__repo__run"), Some("")));
+        assert_eq!(bash["summary"], "/work/a.txt");
+    }
+
+    #[test]
     fn only_claudes_own_notice_is_a_limit() {
         let text = "You've hit your session limit · resets 12:40am (UTC)";
         assert!(limit_notice(&json!({"error": "rate_limit", "message": {"model": "claude-opus-5-5"}}), text));
