@@ -38,6 +38,8 @@ account = "app-server"
 mcp_transports = ["http"]
 # The app-server aborts the next turn on an interrupted thread at once, so a retry starts a fresh one.
 resume_after_interrupt = false
+# A message for the running turn goes in with turn/steer.
+steer = true
 goal_runs_across_turns = true
 compaction = true
 resume_command = "codex resume"

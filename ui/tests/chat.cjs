@@ -96,7 +96,9 @@ async function liveReply(browser) {
   page.on('pageerror',e=>errors.push(e.message));
   const now=new Date().toISOString();
   const snapshot={messages:[{id:'m1',from_actor:'human:ana',body:'Plan the build',created:now,
-                             run:{job_id:'j1',attempt_id:'a1',state:'started_run'}}],
+                             run:{job_id:'j1',attempt_id:'a1',state:'started_run'}},
+                            {id:'m2',from_actor:'human:ana',to_actor:'bot:ops',body:'Do April instead',created:now,
+                             delivery:{attempt_id:'a1',mode:'next_turn'}}],
     execution:{job_id:'j1',message_id:'m1',bot:'ops',attempt_id:'a1',state:'running',label:'Working',
       text:'Keep the bot planned.\n\nI filed the build.',
       parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran hub task create',at:now},
@@ -131,6 +133,12 @@ async function liveReply(browser) {
   await stop.click();
   await page.waitForFunction(()=>BOT_PILL.stopping);
   assert.deepEqual(stops,[{attempt_id:'a1'}],'stops the run this chat shows');
+  // A message this host holds for the next turn says so, and its sender can have it replace the turn.
+  const held=page.locator('[data-message="m2"] .chat-delivery');
+  assert.match(await held.innerText(),/Queued for the next turn/);
+  await held.getByRole('button',{name:'Stop and redirect'}).click();
+  await page.waitForFunction(()=>document.querySelector('[data-message="m2"] .chat-delivery')?.textContent.startsWith('Stopping'));
+  assert.deepEqual(stops[1],{attempt_id:'a1',redirect:'m2'},'stops that run and names the message to start with');
   const paragraphs=await page.locator('#v2-live p').allInnerTexts();
   assert.deepEqual(paragraphs,['Keep the bot planned.','I filed the build.'],'each message is its own paragraph');
   // Avatars: a bot is an SVG blob that morphs while it answers; a person stays a circle; motion stops under reduced motion.

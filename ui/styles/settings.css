@@ -503,4 +503,7 @@ fieldset.brepo[hidden]{display:none}
 .trigger-list li:last-child{border-bottom:0}
 .trigger-main{display:flex;flex-direction:column;gap:2px;min-width:0}.trigger-main code{overflow-wrap:anywhere}
 .trigger-actions{display:flex;gap:6px;white-space:nowrap}
+.trigger-log summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}.trigger-log>div{margin-top:6px}
+.trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
+.trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}

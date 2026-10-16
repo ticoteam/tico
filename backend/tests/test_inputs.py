@@ -239,8 +239,59 @@ def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_r
 def test_a_persons_follow_up_in_their_botops_chat_joins_the_running_reply(api, botops):
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot")
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, botops["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.harness','claude') WHERE bot='botops'")
     follow = post(api, "chat/botops", {"text": "Use Claude Opus 5.5, medium effort"}, token="ana-test")
     snapshot = get(api, f"conversations/{follow['conversation_id']}/snapshot", "ana-test")
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]] == [follow["id"]]
     # Until the run takes it, it says so, never "waiting for a free turn" on a computer with turns free.
-    assert snapshot["execution"]["label"] == "Saved — read when the current reply finishes"
+    assert snapshot["execution"]["label"] == "Saved — steering this turn"
+
+
+def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect_starts_the_next_with_it(api):
+    from backend.store import H
+    r, origin, active = setup_attempt(api)
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.harness','gemini','$.runtime','gemini') WHERE bot='ops'")
+    earlier = post(api, "chat/ops", {"text": "And the March numbers"})
+    redirect = post(api, "chat/ops", {"text": "Stop that; do the April numbers instead"})
+    page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
+    delivery = {m["id"]: m.get("delivery") for m in page["messages"]}
+    assert delivery[redirect["id"]] == {"attempt_id": active["id"], "mode": "next_turn"}
+    assert page["execution"]["label"] == "Saved — queued for the next turn"
+    # Only the sender's own queued message redirects.
+    post(api, "bots/ops/stop", {"attempt_id": active["id"], "redirect": redirect["id"]}, token="ben-test", expected=404)
+    stopped = post(api, "bots/ops/stop", {"attempt_id": active["id"], "redirect": redirect["id"]})
+    assert stopped == {"attempt_id": active["id"], "stopping": True, "redirect": redirect["id"]}
+    page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
+    assert {m["id"]: m.get("delivery") for m in page["messages"]}[redirect["id"]]["mode"] == "redirect"
+    # A steering host never folds the redirect into the turn it replaces.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.harness','claude','$.runtime','claude') WHERE bot='ops'")
+    assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [earlier["id"]]
+    post(api, f"attempts/{active['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, r["token"])
+    nxt = claim(api, r)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (nxt["job_id"],)).fetchone()[0] == redirect["id"]
+        assert H.message(c, redirect["id"])["conversation_id"] == origin["conversation_id"]
+
+
+def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
+    from backend.store import H
+    r = two_bots(api)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "bot:finance", "Close the books", "March.", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND bot<>'ops'")
+    active = claim(api, r, "ops")
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
+    post(api, "chat/finance", {"text": "Tell ops to use the new ledger"})
+    finance = claim(api, r, "finance")
+    steer = post(api, "messages", {"to": "ops", "kind": "steer", "text": "Use the new ledger",
+                                   "refs": {"task": task["id"]}}, finance["token"])
+    assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [steer["id"]]
+    # Only the task's requester steers it this way.
+    with api.app.state.store.transaction() as c:
+        other = H.task_create(c, "human:ana", "Pay the rent", "April.", "bot:ops", private=False, lint=False)
+    post(api, "messages", {"to": "ops", "kind": "steer", "text": "Skip it", "refs": {"task": other["id"]}},
+         finance["token"], expected=422)

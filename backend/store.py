@@ -1142,6 +1142,9 @@ class Store:
                 # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
                 # lease renewal. Unversioned like the key scope: an older release never reads the column.
                 H.add_column(c, "attempts", "stop_requested", "TEXT")
+                # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
+                # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
+                H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
                 # An attempt's lane (clients/sessions.py lane): a task-keyed turn runs in its own lane beside
                 # the bot's other tasks, everything else in `main`. At most one active attempt per bot and lane;
                 # an existing row and an older runner's turn are `main`, so a bot without lanes stays serial.

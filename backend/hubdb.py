@@ -82,7 +82,7 @@ from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
-from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA
+from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA, SIGNING_SCHEMA as TRIGGER_SIGNING_SCHEMA
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -656,7 +656,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               STORAGE_SCHEMA, TASK_REVIEW_SCHEMA, MEETING_REVIEW_SCHEMA, NUMBERS_SCHEMA, TASK_PRIVACY_SCHEMA,
               USAGE_SEGMENTS_SCHEMA, KPI_ARCHIVE_SCHEMA, WAITING_ON_SCHEMA,
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA]
+              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
+              TRIGGER_SIGNING_SCHEMA]
 
 
 class Refused(Exception):

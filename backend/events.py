@@ -257,6 +257,9 @@ RUNNER_TRIGGERS = [
     ("changes_runner_bots_update", "UPDATE", "bots", _changed("state"),
      _bot_runner("work", "NEW.slug") + _bot_runner("assignments", "NEW.slug")),
     ("changes_runner_bot_control_update", "UPDATE", "bot_control", None, _bot_runner("work", "NEW.bot")),
+    # A usage limit lifted (its reset passed, or Try now): the held jobs are claimable again.
+    ("changes_runner_bot_status_update", "UPDATE", "bot_status", "OLD.state='limited' AND NEW.state IS NOT 'limited'",
+     _bot_runner("work", "NEW.bot")),
     ("changes_runner_bot_control_delete", "DELETE", "bot_control", None, _bot_runner("work", "OLD.bot")),
     # Which bots it runs, and how they are configured (runners/assignments carries the config).
     ("changes_runner_assignments_insert", "INSERT", "assignments", None,

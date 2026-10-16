@@ -371,10 +371,33 @@ function v2MessageHTML(m) {
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
         : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body)}</div>
+    ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || []) : ''}
     ${v2RunHTML(m)}${v2MessageCards(m)}</div>`;
 }
+// A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
+// harness's `steer`). Its sender, if they may stop the bot, can have it replace the turn instead: Stop and redirect.
+function v2DeliveryHTML(m) {
+  if (m.run?.state === 'added_to_run') return '<div class="chat-delivery">Steered into the running turn</div>';
+  const d = m.delivery;
+  if (!d) return '';
+  if (d.mode === 'steer') return '<div class="chat-delivery">Steering this turn</div>';
+  if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
+  const slug = String(m.to_actor || '').replace(/^bot:/, '');
+  const can = m.from_actor === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));
+  return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-attempt="${esc(d.attempt_id)}">Stop and redirect</button>` : ''}</div>`;
+}
+document.addEventListener('click', async ev => {
+  const button = ev.target.closest('[data-redirect]'); if (!button) return;
+  ev.preventDefault();
+  button.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(button.dataset.redirectBot)}/stop`,
+      {attempt_id: button.dataset.redirectAttempt, redirect: button.dataset.redirect});
+    button.closest('.chat-delivery').textContent = 'Stopping this turn; this message starts the next one';
+  } catch (e) { button.disabled = false; toast(`Not redirected: ${e.message}`, true); }
+});
 // The chat is the person and the bot. A person's own words, the bot's replies to them, and anything that waits on them
 // (a question, an approval, a Confirm or credential card) are the conversation. Everything else is side traffic:
 // bots talking to each other, a bot's message relayed from another bot's run, the keeper's task and system notices, a

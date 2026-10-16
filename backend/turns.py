@@ -195,6 +195,36 @@ def mark_runs(c, messages):
     return messages
 
 
+def mark_delivery(c, messages):
+    """Say what happens to a message still queued while its bot answers in the same conversation.
+
+    `delivery.mode` is "steer" when the bot's harness writes it into the running turn (`steer`), "next_turn" when
+    it waits for that turn to end, and "redirect" once its sender chose Stop and redirect. `delivery.attempt_id`
+    is the running turn. A message a run took already has `run` instead (mark_runs)."""
+    pending = {m["id"]: m for m in messages if "run" not in m and str(m.get("to_actor", "")).startswith("bot:")}
+    if not pending:
+        return
+    from .harnesses import steers
+    ids, configs = list(pending), {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for row in c.execute(
+                "SELECT j.message_id,j.bot,j.redirect,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
+                " JOIN messages am ON am.id=aj.message_id WHERE a.bot=j.bot AND a.state IN ('leased','running')"
+                " AND (am.conversation_id=m.conversation_id OR EXISTS(SELECT 1 FROM attempt_conversations ac"
+                " WHERE ac.attempt_id=a.id AND ac.conversation_id=m.conversation_id)) ORDER BY a.created LIMIT 1) AS live"
+                " FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"
+                " AND j.message_id IN (%s)" % ",".join("?" * len(chunk)), tuple(chunk)):
+            if not row["live"]:
+                continue
+            if row["bot"] not in configs:
+                config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
+                configs[row["bot"]] = json.loads(config[0]) if config else {}
+            config = configs[row["bot"]]
+            mode = "redirect" if row["redirect"] else "steer" if steers(config, config.get("runtime")) else "next_turn"
+            pending[row["message_id"]]["delivery"] = {"attempt_id": row["live"], "mode": mode}
+
+
 def mark_prompts(c, messages):
     """Say who started the run that sent a bot's loose message to a person, on the message itself.
 
@@ -238,6 +268,7 @@ def annotate(c, auth, who, messages):
     and, on a bot's reply, what the run did to messages this reader may already see."""
     messages[:] = [m for m in messages if privacy.message_readable(c, privacy.actor(who), m)]
     mark_runs(c, messages)
+    mark_delivery(c, messages)
     mark_prompts(c, messages)
     titles = {}
     for tid in {v for m in messages for v in task_refs(m)}:

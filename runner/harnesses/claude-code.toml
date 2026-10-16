@@ -40,6 +40,8 @@ mcp_transports = ["http", "sse"]
 # An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
 serial_cold_start = true
 compaction = true
+# A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).
+steer = true
 resume_command = "claude --resume"
 model_list = "host"
 repo_permission_lint = true

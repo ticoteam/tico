@@ -7,7 +7,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
 `hub_` dropped: `hub message send` is `hub_message_send`, `hub bot go-live` is `hub_bot_go_live`.
 
     hub whoami
-    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...]
+    hub message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer]
                                            --fyi: expects no reply, takes no conversation or references
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
@@ -557,6 +557,8 @@ def parser():
     s.add_argument("--fyi", action="store_true", help="an fyi: it expects no reply, and takes no conversation or references")
     s.add_argument("--conversation")
     s.add_argument("--ref", action="append")
+    s.add_argument("--steer", action="store_true",
+                   help="with --ref task:<id> you requested: write this into its owner's running turn on that task")
     s.set_defaults(fn="message send")
     message.add_parser("list", help="the messages and fyis waiting for you").set_defaults(fn="message list")
     s = message.add_parser("mark-read", help="mark a message from your inbox as read (an external agent's own delivery)")

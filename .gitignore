@@ -14,3 +14,7 @@ app/.build/
 !docker/versions.env
 
 relay-rs/target/
+
+# Behaviour replay cases hold customer text; only the made-up example lives here.
+evals/replay/cases/*
+!evals/replay/cases/example.yaml

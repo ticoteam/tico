@@ -285,6 +285,7 @@ Computers), `paste_code` means it takes a pasted code, `auth.api_key_env` names 
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`; `false` forgets it so a retry starts fresh |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |

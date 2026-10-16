@@ -24,7 +24,7 @@ const {html, uiFile} = require('./support/page.cjs');
     const iso = ts => new Date(ts * 1000).toISOString();
     const view = () => ({computer: {id: 'c1', label: 'Build server'}, performance: machines[0].performance, may_switch: true,
       hours: 24, span: 60, since, until: now, columns: ['ts', 'cpu', 'cpu_max', 'mem', 'mem_max', 'load1', 'swap', 'disk_free', 'active'],
-      points: erased ? [] : points, mem_total: 16e9, swap_total: 0, disk_total: 1e11, scope: 'host',
+      points: erased ? [] : points, mem_total: 16e9, swap_total: 0, disk_total: 1e11, scope: 'container_cpu',
       runs: [{attempt: 'a1', bot: 'ops', model: 'claude-opus-5-5', started: iso(now - 7300), finished: iso(now - 6500), state: 'done'}],
       busiest: {bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], processes: [{name: 'cargo', cpu_minutes: 40.5, cpu_max: 400, mem_max: 2e9}]},
       overloads: [{started: now - 7200, ended: now - 6600, last: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
@@ -79,6 +79,8 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal(await page.locator('#perf-chart .perf-strip').count(), 1);
     assert.deepEqual(await page.locator('#perf-chart .perf-direct').allTextContents(), ['Memory 55%', 'CPU 20%']);   // top to bottom
     assert.match(await page.locator('.perf-summary').textContent(), /Overloaded once/);
+    // A container without a memory limit: CPU is its own, memory the host's.
+    assert.match(await page.locator('.card .sub').first().textContent(), /memory is the whole computer's/);
     // The tooltip under the pointer names the turn that was running.
     const band = await page.locator('#perf-chart rect.perf-band').boundingBox();
     await page.mouse.move(band.x + band.width / 2, band.y + 40);

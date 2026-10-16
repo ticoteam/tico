@@ -69,11 +69,21 @@ the routine's text, then the trigger's name, then the request body, fenced as da
   open nothing new.
 - Each webhook takes 60 calls an hour; past that the sender gets 429 and retries later, so a noisy
   sender cannot wake a bot without end.
-- Any person may add a webhook; the owner, the person who added it and BotOps may replace its secret or
-  delete it. A routine may name only a webhook that exists. Deleting one leaves its routines in place,
+- *Require signature* gives a webhook a signing secret, shown once (paste it as the GitHub webhook's
+  *Secret*). Then each call must carry the HMAC-SHA256 of its exact body under that secret, as GitHub's
+  `X-Hub-Signature-256: sha256=<hex>` or a generic `X-Signature` (`sha256=<hex>` or bare hex). A call
+  without a matching signature gets 401 and opens nothing. Tico keeps the signing secret sealed with the
+  credential key, because checking a signature needs the secret itself. *Stop signing* turns it off.
+- *Recent calls* under each webhook lists the last 50 calls, accepted and refused (bad or missing
+  signature, over the hourly limit), with the sender's delivery id. Only calls to the right address are
+  logged, and at most 60 refusals an hour, so a stranger cannot fill the log.
+- Any person may add a webhook; the owner, the person who added it and BotOps may replace its secret,
+  set or stop its signing secret, or delete it. A routine may name only a webhook that exists. Deleting one leaves its routines in place,
   silent, until a webhook with the same id is added again.
 - The API: `GET /api/v2/triggers` (no secrets), `POST /api/v2/triggers` (`name`, optional `id`),
-  `POST /api/v2/triggers/<id>/rotate`, `POST /api/v2/triggers/<id>/delete`.
+  `POST /api/v2/triggers/<id>/rotate`, `POST /api/v2/triggers/<id>/signing` (`{}` makes a secret,
+  `secret` sets one of 16+ characters, `off: true` stops checking), `GET /api/v2/triggers/<id>/deliveries`,
+  `POST /api/v2/triggers/<id>/delete`.
 
 ## What happens when one is due
 

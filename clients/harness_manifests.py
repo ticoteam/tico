@@ -29,6 +29,7 @@ FIELDS = {
     "mcp_transports": (list, []),
     "mcp_unsupported": (str, ""),
     "resume_after_interrupt": (bool, True),
+    "steer": (bool, False),
     "persistent_session": (bool, False),
     "goal_runs_across_turns": (bool, False),
     "serial_cold_start": (bool, False),

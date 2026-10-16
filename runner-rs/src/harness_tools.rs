@@ -96,6 +96,8 @@ pub struct Capabilities {
     pub mcp_transports: Vec<String>,
     pub mcp_unsupported: String,
     pub resume_after_interrupt: bool,
+    /// A running turn takes a new message (a steer); without it the message waits for the next turn.
+    pub steer: bool,
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
@@ -128,6 +130,7 @@ impl Default for Capabilities {
             mcp_transports: vec![],
             mcp_unsupported: String::new(),
             resume_after_interrupt: true,
+            steer: false,
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
@@ -450,6 +453,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             }
             "mcp_unsupported" => c.mcp_unsupported = text(k, v)?,
             "resume_after_interrupt" => c.resume_after_interrupt = flag(k, v)?,
+            "steer" => c.steer = flag(k, v)?,
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
@@ -1536,6 +1540,10 @@ mod tests {
         assert_eq!((caps.sign_in_status.check.as_str(), caps.sign_in_status.field.as_str(), caps.sign_in_status.timeout_s), ("json", "loggedIn", 30));
         assert!(caps.compaction && caps.repo_commands && caps.resume_after_interrupt && !caps.persistent_session);
         assert!(!all["codex"].capabilities.resume_after_interrupt && all["codex"].capabilities.goal_runs_across_turns);
+        // Steering is declared, never inferred from a name: only Claude Code and Codex take input mid-turn.
+        let steers: Vec<&str> = all.iter().filter(|(_, m)| m.capabilities.steer).map(|(id, _)| id.as_str()).collect();
+        assert_eq!(steers, vec!["claude-code", "codex"]);
+        assert!(!all["gemini-cli"].variants[0].capabilities.steer);
         let gemini = &all["gemini-cli"];
         assert_eq!(gemini.variants.len(), 1);
         let agy = &gemini.variants[0];

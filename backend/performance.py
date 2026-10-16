@@ -101,6 +101,7 @@ def ingest(c, runner_id, samples, now=None):
         if not minutes or minutes[-1] != ts:
             minutes.append(ts)
         free, total = _volume(s)
+        scope = "container_cpu" if s.scope == "container" and s.memory_scope == "host" else s.scope
         used = s.mem_used if s.mem_total else None
         load1 = s.load[0] if s.load else None
         row = c.execute("SELECT * FROM perf_points WHERE runner_id=? AND span=? AND ts=?", (runner_id, MINUTE, ts)).fetchone()
@@ -108,7 +109,7 @@ def ingest(c, runner_id, samples, now=None):
             n = row["n"]
             c.execute("UPDATE perf_points SET n=?,scope=?,cpu=?,cpu_max=?,load1=?,mem_used=?,mem_max=?,mem_total=?,"
                       "swap_used=?,swap_total=?,disk_free=?,disk_total=?,active=? WHERE runner_id=? AND span=? AND ts=?",
-                      (n + 1, s.scope, _merge(n, row["cpu"], s.cpu), max(row["cpu_max"], s.cpu),
+                      (n + 1, scope, _merge(n, row["cpu"], s.cpu), max(row["cpu_max"], s.cpu),
                        load1 if row["load1"] is None else _merge(n, row["load1"], load1) if load1 is not None else row["load1"],
                        None if used is None else int(_merge(n, row["mem_used"], used)),
                        max(row["mem_max"] or 0, used or 0) or None, s.mem_total or row["mem_total"],
@@ -117,7 +118,7 @@ def ingest(c, runner_id, samples, now=None):
                        total or row["disk_total"], max(row["active"], s.active), runner_id, MINUTE, ts))
         else:
             c.execute("INSERT INTO perf_points VALUES(?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (runner_id, MINUTE, ts, s.scope, s.cpu, s.cpu, load1, used, used, s.mem_total or None,
+                      (runner_id, MINUTE, ts, scope, s.cpu, s.cpu, load1, used, used, s.mem_total or None,
                        s.swap_used if s.swap_total else None, s.swap_total or None, free, total, s.active))
         for p in s.procs:
             _add_usage(c, runner_id, MINUTE, ts, "proc", p.name, "", "", 1, p.cpu, p.cpu, p.mem, p.mem)
@@ -175,8 +176,14 @@ def detect(c, runner_id, upto):
     # A late minute from before what the newest overload already covers changes nothing.
     if newest and latest["ts"] < (newest["last"] if newest["ended"] is None else newest["ended"]):
         return
-    open_ = newest if newest and newest["ended"] is None else None
     loaded = reasons(latest)
+    # The minute that ended it can fill in later (its samples split across posts): loaded after all, it carries on.
+    if newest and latest["ts"] == newest["ended"]:
+        if not loaded:
+            return
+        c.execute("UPDATE perf_overloads SET ended=NULL WHERE id=?", (newest["id"],))
+        newest = dict(newest) | {"ended": None}
+    open_ = newest if newest and newest["ended"] is None else None
     if open_:
         if loaded:
             why = sorted(set(json.loads(open_["reasons"])) | set(loaded))
@@ -323,17 +330,16 @@ def _window(c, runner_id, since, span):
 COLUMNS = ["ts", "cpu", "cpu_max", "mem", "mem_max", "load1", "swap", "disk_free", "active"]
 
 
-def _shown(bots, access):
-    """`bots` with those the reader may not see folded into one unnamed row ("another bot")."""
-    if access is None:
-        return bots
+def _shown(bots, access, limit=None):
+    """`bots` with those the reader may not see folded into one unnamed row ("another bot"), which `limit` (how many
+    named bots to keep) never cuts."""
     out, hidden = [], 0
     for b in bots:
-        if (access.get(b["bot"]) or {}).get("see"):
+        if access is None or (access.get(b["bot"]) or {}).get("see"):
             out.append(b)
         else:
             hidden += b.get("runs", 1)
-    return out + ([{"bot": "", "model": "", "runs": hidden}] if hidden else [])
+    return out[:limit] + ([{"bot": "", "model": "", "runs": hidden}] if hidden else [])
 
 
 def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
@@ -363,7 +369,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
                      "model": (r["model"] or "") if shown else "", "started": r["started"], "finished": r["finished"],
                      "state": r["state"]})
     name = lambda b: label(b) if b else ""
-    bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access)[:20]]
+    bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access, 20)]
     procs = []
     for r in c.execute("SELECT key,sum(cpu*n) cpu_n,max(cpu_max) cpu_max,max(mem_max) mem_max FROM perf_usage "
                        "WHERE runner_id=? AND ts>=? AND kind='proc' GROUP BY key ORDER BY cpu_n DESC LIMIT 15",

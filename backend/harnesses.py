@@ -46,6 +46,12 @@ def reports_tool_calls(config, runtime=None):
     return bool(manifests.caps(resolve_harness(config, runtime)).get("tool_events"))
 
 
+def steers(config, runtime=None):
+    """True when this bot's host writes a message sent mid-turn into that turn (`steer`); otherwise the message
+    waits for the next turn. The runner also needs a Claude Code that echoes its input, which the hub cannot see."""
+    return bool(manifests.caps(resolve_harness(config, runtime)).get("steer"))
+
+
 def is_external(config, runtime=None):
     """True when this bot is run by an external agent rather than a registered computer."""
     return resolve_harness(config, runtime) in EXTERNAL_HARNESSES

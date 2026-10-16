@@ -141,6 +141,19 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
+### Behaviour replay
+
+A release that changes a bot's prompt, a built-in template, the runner's hosts or how a turn is assembled also replays
+the signed real cases (`evals/replay/README.md`) on a scratch team running the candidate, before the tag:
+
+```
+python3 evals/replay/run.py --url <scratch team> --token <owner token> --cases <private cases> --candidate vX.Y.Z --report replay.md
+```
+
+Attach `replay.md` to the release task. A regression is rerun once with `--only <case>`; one that holds is fixed or
+named in the release task as accepted, with why. It needs real model turns, so it is not part of the PR tests or the
+hosted gate.
+
 ## Tag
 
 1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty

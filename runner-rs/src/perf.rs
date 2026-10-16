@@ -101,13 +101,13 @@ impl Sampler {
             _ => rates.iter().sum::<f64>() / cores,
         };
         let mut memory = memory();
-        let mut scope = "host";
+        let (mut scope, mut memory_scope) = ("host", "host");
         if crate::follow::kind() == "docker" {
             // A container's limits are what it runs out of, not the host's.
             if let Some((used, limit)) = cgroup_memory().filter(|(_, limit)| memory.total == 0 || *limit < memory.total) {
                 memory.total = limit;
                 memory.available = limit.saturating_sub(used);
-                scope = "container";
+                (scope, memory_scope) = ("container", "container");
             }
             // The container's own CPU time, over its quota or, without one, every core it can reach.
             if let (Some(u0), Some(u1)) = (previous_usage, usage) {
@@ -119,6 +119,10 @@ impl Sampler {
         let mut sample = Map::new();
         sample.insert("at".into(), json!(unix_now()));
         sample.insert("scope".into(), json!(scope));
+        if scope == "container" {
+            // Without a memory limit, memory is still the host's.
+            sample.insert("memory_scope".into(), json!(memory_scope));
+        }
         sample.insert("cpu".into(), json!(round1(cpu.clamp(0.0, 100.0))));
         sample.insert("cores".into(), json!(cores as u64));
         if let Some(load) = load_average() {

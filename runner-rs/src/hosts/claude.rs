@@ -1144,6 +1144,18 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_turns_event_gives_the_reset() {
+        // `rate_limit_event` as Claude Code sends it when the five-hour window refuses a turn.
+        let info: Value = serde_json::from_str(r#"{"status":"rejected","resetsAt":4102444800,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false}"#).unwrap();
+        for w in rate_limit_windows(&info) {
+            crate::profiles::remember_weekly("claude-reset-test", "claude", &w);
+        }
+        let now = 4102444800.0 - 3000.0;
+        assert_eq!(crate::profiles::limit_reset("claude-reset-test", "claude", now).as_deref(), Some("2100-01-01T00:00:00+00:00"));
+        crate::profiles::forget_windows("claude-reset-test", "claude");
+    }
+
+    #[test]
     fn only_claudes_own_notice_is_a_limit() {
         let text = "You've hit your session limit · resets 12:40am (UTC)";
         assert!(limit_notice(&json!({"error": "rate_limit", "message": {"model": "claude-opus-5-5"}}), text));

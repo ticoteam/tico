@@ -329,6 +329,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .run-fold>.did{margin-left:2px}
 .run-fold>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
 .run-fold>summary:hover{color:var(--ink)}
+.chat-delivery{align-self:flex-end;margin:2px 0;color:var(--muted);font-size:var(--t-sm);display:flex;gap:8px;align-items:center}
 .chat-warn{align-self:flex-start;margin:2px 0;padding:2px 8px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
 /* the hover time and the copy button are chrome: copying the thread copies only what was said */
 .chat-stamp,.chat-message-actions,.chat-fold .chat-time{user-select:none;-webkit-user-select:none}

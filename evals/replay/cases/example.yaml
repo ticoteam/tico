@@ -1,0 +1,31 @@
+# A made-up case showing the format. Real cases hold customer text and live outside this repository.
+id: example-weekly-summary
+title: Write this week's engineering summary
+source: {task: 00000000-0000-0000-0000-000000000000, captured: "2026-10-16T06:00:00+00:00"}
+reviewed_by: Example Person
+bot: engineering-lead
+prompt: {sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08, updated: "2026-10-15T09:00:00Z", exact: true}
+task:
+  title: Write this week's engineering summary
+  body: What shipped, what is stuck and what broke this week, on one page.
+  acceptance_criteria: []
+conversation:
+  - {from: person, text: Keep it to one page and lead with anything that broke.}
+files:
+  - {name: last-week.md, text: "# Last week\n\nShipped: 4 pull requests."}
+person:
+  - {when: asked, text: Use the main repository only.}
+  - {when: asked, text: "This week, Monday to Friday."}
+done:
+  - status: [done, review]
+  - file_attached: summary
+  - reply_not_matches: "I could not"
+limits: {person_steps: 2, jargon: 2, duplicates: 0, sent_elsewhere: 0}
+original:
+  status: done
+  transcript:
+    - [bot, "The summary is attached: 5 shipped, 1 stuck, nothing broke."]
+  files: [engineering-summary.md]
+  runs: 4
+  minutes: 6.5
+  person_steps: 2

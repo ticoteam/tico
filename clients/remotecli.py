@@ -252,7 +252,7 @@ def run(args, who=None):
         from clients import hubtools
         return hubtools.BY_NAME["hub_message_send"]["fn"](client, {
             "to": args.to, "text": args.text, "fyi": args.fyi, "conversation_id": args.conversation,
-            "refs": args.ref or [], "operation_id": key})
+            "refs": args.ref or [], "steer": getattr(args, "steer", False), "operation_id": key})
     if fn == "question answer":
         return post(f"messages/{args.message_id}/answer", {"text": args.text or args.unknown,
                     "unknown": bool(args.unknown)}, delegate=getattr(args, "on_behalf_of", None) or False)

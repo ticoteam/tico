@@ -26,6 +26,8 @@ privacy or permission boundary, migrations and data safety, or a core task/run f
 of wording or docs, no exhaustive parametrizations. Write tests freely while building, then keep only the highest-value ones. Real git, Docker, servers or long timers go behind
 `@pytest.mark.slow`. Adding a test that slows the default run means cutting another. `evals/botops/run.py` scores a real BotOps
 against a dev install with a real model, on demand only; `backend/tests/test_botops_evals.py` is its scripted layer.
+`evals/replay/run.py` replays signed real tasks on a candidate at release preparation (docs/releasing.md); its cases
+hold customer text and never enter this repository.
 
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
 never ship around a known failure. If a test may fail, it shouldn't exist.

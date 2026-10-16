@@ -45,6 +45,7 @@ class Scheduler:
             # is only the runs that used tools before they stopped.
             self.execution.auto_reconcile(c)
             self.execution.release_deploy_drains(c)
+            self.execution.release_limits(c)           # a usage limit lifts at its reset, not at the next claim
             self.execution.hold_unrunnable(c)
             placement.sweep(c, self.execution)            # an active bot with no computer gets one when one can take it
             H.lift_cooled_quarantines(c)

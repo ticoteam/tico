@@ -24,11 +24,14 @@ def test_on_by_default_everyone_reads_it_and_only_the_operator_or_an_admin_switc
     rid = r["runner_id"]
     assert beat(api, r)["performance"] is True
     now = time.time()
-    assert post(api, "runners/performance", {"samples": [sample(now - 30), sample(now)]}, token=r["token"]) == {"kept": 2}
+    # A container with no memory limit: its own CPU, the host's memory.
+    docker = sample(now) | {"scope": "container", "memory_scope": "host"}
+    assert post(api, "runners/performance", {"samples": [sample(now - 30), docker]}, token=r["token"]) == {"kept": 2}
     api.app.state.store.settings.test_identities["ops-bot"] = Identity("bot:ops", "bot", runner_id=rid, attempt_id=attempt["id"])
     for token in ("cara-test", "ops-bot"):                      # a member and a bot both read it
         seen = get(api, f"computers/{rid}/performance?hours=1", token=token)
         assert seen["performance"] == "on" and seen["points"] and seen["points"][0][1] == 20.0
+        assert seen["scope"] == "container_cpu"
         assert [x["attempt"] for x in seen["runs"]] == [attempt["id"]]    # the server's own record of what ran
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="cara-test", expected=403)
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="ops-bot", expected=403)
@@ -64,8 +67,14 @@ def test_ten_loaded_minutes_record_an_overload_that_names_what_ran_and_health_sh
     assert seen["summary"].startswith("Overloaded once") and "cargo" in seen["summary"]
     check = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)
     assert check["status"] == "warn" and "overloaded now" in check["summary"]
-    post(api, "runners/performance", {"samples": [sample(start + 600)]}, token=r["token"])   # a calm minute ends it
+    post(api, "runners/performance", {"samples": [sample(start + 600, cpu=85.0)]}, token=r["token"])   # a calm minute ends it
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
+    # ... until the rest of that minute arrives loaded (85% then 97%): the same overload carries on, not a second one.
+    post(api, "runners/performance", {"samples": [sample(start + 630, cpu=97.0)]}, token=r["token"])
+    (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
+    assert (o["started"], o["ended"], o["last"]) == (start, None, start + 600)
+    post(api, "runners/performance", {"samples": [sample(start + 660)]}, token=r["token"])
+    assert [x["ended"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
 
 
 def test_minutes_roll_into_ten_minute_points_after_two_days_and_everything_goes_after_fourteen(api):
@@ -114,20 +123,26 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     api, tokens, _ = world
     r, _, attempt = setup_attempt(api)
     rid = r["runner_id"]
-    set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
+    set_access(api, see={"teams": ["legal", "sales"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:               # the Legal bot's turn ran on this computer
         c.execute("UPDATE attempts SET bot=replace(bot,'ops','counsel'),created=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,'bot:counsel','legal-model-x')", (attempt["id"],))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
     assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["attempt"] == attempt["id"]
     assert cara["overloads"][0]["bots"][0]["bot"] == "counsel" and "counsel" in cara["summary"]
-    for who in ("dee", "stranger"):
-        seen = get(api, f"computers/{rid}/performance?hours=1", token=tokens[who])
-        assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "attempt": None}
-        assert seen["busiest"]["bots"] == [{"bot": "", "model": "", "runs": 1}]
-        assert seen["overloads"][0]["bots"] == [{"bot": "", "model": "", "runs": 1}]
-        assert "counsel" not in str(seen) and "another bot" in seen["summary"]
+    dee = get(api, f"computers/{rid}/performance?hours=1", token=tokens["dee"])     # Sales sees the bot, cannot read it
+    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "attempt": None}
+    seen = get(api, f"computers/{rid}/performance?hours=1", token=tokens["stranger"])
+    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "attempt": None}
+    assert seen["busiest"]["bots"] == [{"bot": "", "model": "", "runs": 1}]
+    assert seen["overloads"][0]["bots"] == [{"bot": "", "model": "", "runs": 1}]
+    assert "counsel" not in str(seen) and "legal-model-x" not in str(seen) and "another bot" in seen["summary"]
+    # A long list of bots the reader sees is cut, never the row for those it does not.
+    many = [{"bot": f"b{i:02}", "model": "", "runs": 2} for i in range(25)] + [{"bot": "counsel", "model": "", "runs": 1}]
+    shown = P._shown(many, {f"b{i:02}": {"see": True} for i in range(25)}, 20)
+    assert len(shown) == 21 and shown[-1] == {"bot": "", "model": "", "runs": 1}
 
 
 def test_a_fast_clock_or_a_backlog_still_judges_every_minute(api):
@@ -138,10 +153,15 @@ def test_a_fast_clock_or_a_backlog_still_judges_every_minute(api):
     post(api, "runners/performance", {"samples": [sample(now + 3 * 3600)]}, token=r["token"])
     start = now + 60
     with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT max(ts) FROM perf_points WHERE runner_id=?", (rid,)).fetchone()[0] <= time.time()
         P.ingest(c, rid, [P_sample(start + 60 * i, cpu=97.0) for i in range(10)], now=start + 600)
+        # A late minute from inside the overload changes nothing, open or ended.
+        P.ingest(c, rid, [P_sample(start + 300, cpu=97.0)], now=start + 600)
+        assert c.execute("SELECT last FROM perf_overloads WHERE runner_id=?", (rid,)).fetchone()[0] == start + 540
         # A backlog: two calm minutes then a loaded one, in one batch. The calm minute ends the overload.
         P.ingest(c, rid, [P_sample(start + 600, cpu=10.0), P_sample(start + 660, cpu=10.0), P_sample(start + 720, cpu=97.0)],
                  now=start + 720)
+        P.ingest(c, rid, [P_sample(start + 540, cpu=97.0)], now=start + 720)
         rows = [dict(x) for x in c.execute("SELECT started,ended FROM perf_overloads WHERE runner_id=?", (rid,))]
     assert rows == [{"started": start, "ended": start + 600}]
 

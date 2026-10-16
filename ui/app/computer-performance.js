@@ -49,7 +49,9 @@ function perfPaint(state) {
   const d = state.data, body = $('#perf-body');
   const off = d.performance === 'off'
     ? `<p class="perf-off" role="status">Performance diagnostics are off for this computer. What was recorded stays until it is 14 days old.</p>` : '';
-  const scope = d.scope === 'container' ? 'Measured inside its container, against the container\'s limits.' : d.scope ? 'Measured across the whole computer.' : '';
+  const scope = d.scope === 'container' ? 'Measured inside its container, against the container\'s limits.'
+    : d.scope === 'container_cpu' ? 'CPU is its container\'s own; memory is the whole computer\'s (the container has no memory limit).'
+    : d.scope ? 'Measured across the whole computer.' : '';
   const controls = d.may_switch ? `<div class="perf-controls">
       <button type="button" class="ghost" data-perf-mode="${d.performance === 'off' ? 'on' : 'off'}">${d.performance === 'off' ? 'Turn on' : 'Turn off'}</button>
       <button type="button" class="ghost danger-text" data-perf-erase>Delete history</button></div>` : '';

@@ -132,6 +132,8 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     await page.waitForFunction(() => !S.config.providers_configured);
     assert.deepEqual(writes.find(row => row.p === '/api/v2/providers').body.enabled, []);
     assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
+    // The check-model order was not edited, so the save leaves it alone instead of re-checking it.
+    assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
     await page.locator('#set-providers .muted', {hasText: 'Bots wait'}).waitFor();
     assert.match(await page.locator('#set-providers').innerText(), /Bots wait/);
     await page.locator('[data-settings-tab=people]').click();

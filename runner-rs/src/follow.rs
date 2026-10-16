@@ -366,6 +366,11 @@ pub fn shared() -> Option<&'static Follower> {
     SHARED.get()
 }
 
+/// Whether the server said it takes `name` (`runners/desired` features); false before it answered.
+pub fn feature(name: &str) -> bool {
+    shared().is_some_and(|f| f.inner.lock().unwrap().features[name] == true)
+}
+
 impl Follower {
     /// Ask the server's release (`desired` when the stream already said it), then decide.
     pub async fn poll(&self, client: &Client, desired: Option<String>) {

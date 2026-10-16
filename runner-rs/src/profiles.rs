@@ -400,6 +400,19 @@ pub fn windows(profile: &str, runtime: &str) -> Map<String, Value> {
     ["weekly", "five_hour"].into_iter().filter_map(|w| weekly.get(&(profile.to_string(), runtime.to_string(), w)).map(|v| (w.to_string(), v.clone()))).collect()
 }
 
+/// When `profile`'s `runtime` login can work again after a usage limit: the latest reset of a kept window the
+/// provider reported as spent (`rejected`, or used to 100%), if that reset is still ahead and within eight days.
+/// None when no window says so: the server then waits its own default instead.
+pub fn limit_reset(profile: &str, runtime: &str, now: f64) -> Option<String> {
+    windows(profile, runtime)
+        .values()
+        .filter(|w| w["status"] == "rejected" || w["used_percent"].as_f64().is_some_and(|p| p >= 100.0))
+        .filter_map(|w| w["resets_at"].as_str().map(crate::util::parse_iso))
+        .filter(|at| at.is_finite() && *at > now && *at <= now + 8.0 * 86400.0)
+        .reduce(f64::max)
+        .map(|at| crate::util::text_of(&crate::util::iso(&json!(at))))
+}
+
 /// A signed-out login's windows go with it: the next sign-in may be someone else's.
 pub fn forget_windows(profile: &str, runtime: &str) {
     weekly().lock().unwrap().retain(|(p, r, _), _| !(p == profile && r == runtime));
@@ -588,6 +601,35 @@ mod tests {
         assert_eq!(crate::accounts::account("win-test", "codex").unwrap()["plan"], "pro");
         weekly().lock().unwrap().retain(|k, _| k.0 != "win-test");
         crate::accounts::forget("win-test", "codex");
+    }
+
+    #[test]
+    fn a_spent_window_gives_the_limits_reset() {
+        let now = crate::util::epoch_s();
+        let at = |s: f64| crate::util::iso(&json!(now + s));
+        // Codex's `account/rateLimits/updated` / `rateLimits/read`: the five-hour window used up, the week not.
+        let codex = json!({"rateLimits": {"limitId": "codex", "planType": "plus",
+                           "primary": {"windowDurationMins": 300, "usedPercent": 100, "resetsAt": now + 5400.0},
+                           "secondary": {"windowDurationMins": 10080, "usedPercent": 64, "resetsAt": now + 400000.0}}});
+        crate::subscription_refresh::remember_windows("reset-test", &codex);
+        assert_eq!(limit_reset("reset-test", "codex", now), Some(crate::util::text_of(&at(5400.0))));
+        // Claude's `rate_limit_event` when it refuses: `rejected` with `resetsAt`, no percentage.
+        remember_weekly("reset-test", "claude", &json!({"used_percent": null, "window_minutes": 300, "resets_at": at(2400.0), "status": "rejected"}));
+        remember_weekly("reset-test", "claude", &json!({"used_percent": null, "window_minutes": 10080, "resets_at": at(90000.0), "status": "allowed"}));
+        assert_eq!(limit_reset("reset-test", "claude", now), Some(crate::util::text_of(&at(2400.0))));
+        // Both spent: work waits for the later one.
+        remember_weekly("reset-test", "claude", &json!({"used_percent": null, "window_minutes": 10080, "resets_at": at(90000.0), "status": "rejected"}));
+        assert_eq!(limit_reset("reset-test", "claude", now), Some(crate::util::text_of(&at(90000.0))));
+        // Nothing reported spent, a reset already past or one beyond a week: no reset, the server's default holds.
+        assert_eq!(limit_reset("reset-test", "gemini", now), None);
+        remember_weekly("reset-test2", "claude", &json!({"used_percent": null, "window_minutes": 300, "resets_at": at(2400.0), "status": "allowed"}));
+        assert_eq!(limit_reset("reset-test2", "claude", now), None);
+        remember_weekly("reset-test2", "codex", &json!({"used_percent": 100, "window_minutes": 300, "resets_at": at(-60.0)}));
+        assert_eq!(limit_reset("reset-test2", "codex", now), None);
+        remember_weekly("reset-test2", "codex", &json!({"used_percent": 100, "window_minutes": 10080, "resets_at": at(9.0 * 86400.0)}));
+        assert_eq!(limit_reset("reset-test2", "codex", now), None);
+        weekly().lock().unwrap().retain(|k, _| !k.0.starts_with("reset-test"));
+        crate::accounts::forget("reset-test", "codex");
     }
 
     #[tokio::test]

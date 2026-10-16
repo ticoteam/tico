@@ -388,13 +388,29 @@ impl Host {
         }
     }
 
-    pub fn supports_steer(&self) -> bool {
+    /// The manifest runtime and variant this host runs, for its declared capabilities.
+    fn harness(&self) -> (&'static str, &'static str) {
         match self {
-            Host::Claude(h) => h.supports_steer(),
-            Host::Codex(_) => true,
-            Host::Gemini(_) | Host::Antigravity(_) => false,
-            Host::MuseCode(_) | Host::Pi(_) | Host::Cursor(_) | Host::Grok(_) => false,
+            Host::Claude(_) => ("claude", ""),
+            Host::Codex(_) => ("codex", ""),
+            Host::Gemini(_) => ("gemini", ""),
+            Host::Antigravity(_) => ("gemini", "antigravity"),
+            Host::MuseCode(_) => ("musecode", ""),
+            Host::Pi(_) => ("pi", ""),
+            Host::Cursor(_) => ("cursor", ""),
+            Host::Grok(_) => ("grok", ""),
         }
+    }
+
+    /// A running turn takes new input only when the harness declares `steer`, and for Claude Code only when the
+    /// installed CLI echoes its input; otherwise the input waits for the next turn.
+    pub fn supports_steer(&self) -> bool {
+        let (runtime, harness) = self.harness();
+        crate::harness_tools::caps(runtime, harness).steer
+            && match self {
+                Host::Claude(h) => h.supports_steer(),
+                _ => true,
+            }
     }
 
     pub async fn start_thread(&self, bot: &str, settings: &Settings) -> Result<String, HostError> {
