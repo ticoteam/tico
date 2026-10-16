@@ -30,7 +30,7 @@ function helpVersionHTML() {
 function helpKnownIssuesHTML() {
   const u = S.config.update || {}, v = S.config.version ? ' ' + nvVersion(S.config.version) : '';
   const issue = i => `<li>${/^https:\/\//.test(i.url || '') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}${i.fixed_in ? ` <span class="help-ki-fixed">Fixed in ${esc(nvVersion(i.fixed_in))}</span>` : ''}</li>`;
-  const body = !u.known_issues_checked ? '<p class="help-ki-none">Could not check: this server does not reach Tico HQ.</p>'
+  const body = !u.known_issues_checked ? '<p class="help-ki-none">Could not check: this server\'s update check goes to GitHub, not Tico HQ.</p>'
     : (u.known_issues || []).length ? `<ul>${u.known_issues.map(issue).join('')}</ul>` : `<p class="help-ki-none">None known in${esc(v)}.</p>`;
   return `<section class="help-known-issues" id="help-known-issues" aria-labelledby="help-ki-h"><h2 id="help-ki-h">Known issues in your version</h2>${body}</section>`;
 }

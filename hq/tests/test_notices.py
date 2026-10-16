@@ -104,6 +104,10 @@ def test_an_install_too_old_to_show_a_message_gets_its_link_as_the_release_link(
     assert ping(client, "0.2.15").json()["html_url"] == LINK
     assert ping(client, "0.2.42").json()["html_url"] == LINK
     assert ping(client, "0.3.40").json()["html_url"].endswith("/v0.3.51")      # no message for 0.3
+    # The cutoff: from v0.3.53 the install shows the message itself, so its release link stays the release.
+    client.post("/v1/staff/notices", json={"versions": "0.3", "body": "Update for faster boards.", "url": LINK}, headers=staff())
+    assert ping(client, "0.3.52").json()["html_url"] == LINK
+    assert ping(client, "0.3.53").json()["html_url"].endswith("/v0.3.51")
 
 
 def test_staff_input_is_strict_and_staff_only(client):
