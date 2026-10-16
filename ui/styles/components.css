@@ -30,6 +30,8 @@ td.tags .pill{margin-right:2px}
 .pill.blocked,.pill.fail{background:var(--fail-bg);color:var(--fail)}
 .pill.ok,.pill.active{background:var(--ok-bg);color:var(--ok)}
 .pill.p0,.pill.p1{background:var(--fail-bg);color:var(--fail)}
+/* Beta: a feature on the server's Beta list (backend/beta.py); sits beside a nav item, a heading or a menu entry */
+.pill.beta{margin-left:6px;vertical-align:1px;background:color-mix(in srgb,var(--accent) 13%,var(--surface));color:var(--accent);font-weight:600}
 .empty{color:var(--muted);font-size:var(--t-base);padding:var(--s3) 0;line-height:1.5}
 /* Scrolled up while something new arrived: one small pill at the foot of the thread takes you down (ui/app/stick-scroll.js
    sets left and top to the thread's foot). */

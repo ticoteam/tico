@@ -1,5 +1,7 @@
 # Tico in Slack: the gateway
 
+> **Beta**: the Slack gateway works today and may still change. See [Beta features](support.md#beta-features).
+
 A DM to Tico, or an `@Tico` in a channel Tico has been invited to, wakes the bot the
 message is for. The reply comes back in the same thread or DM under that bot's name, with
 `(sent from <bot>)` as its last line. Everything else said in a channel Tico is in is

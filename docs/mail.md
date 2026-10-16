@@ -1,5 +1,7 @@
 # Message bots: how a bot reads and files email
 
+> **Beta**: message bots (mail and calendar) work today and may still change. See [Beta features](support.md#beta-features).
+
 In the web app, each connected mailbox and Slack channel is listed in the Team sidebar under the bot that covers it:
 an Inbox Manager's under **Message bots**, a team bot's under that bot. Open one to see that bot's instructions and routines on the
 left and example messages on the right. Email threads are synced copies; the mail tool still

@@ -61,8 +61,19 @@ function applyConfig(config) {
   noticeUpdatedServer();
   void renderAppUpdate();
   renderUsageNotice();
+  betaMark();
   renderVersionMessage();
   return S.config;
+}
+// Beta: the server's one list (backend/beta.py), so the app, Help, the manual and support diagnostics agree. The pill
+// shows only for an id on it; a static spot in the page is an empty `<span data-beta="id">` that betaMark fills.
+const betaFeature = id => (S.config.beta || []).find(f => f.id === id);
+const betaPill = id => betaFeature(id) ? '<span class="pill beta" title="Beta: works today and may still change">Beta</span>' : '';
+// The pill for a bot that is a Beta feature by its template (a message bot, Listening) or harness (an external agent).
+const botBetaPill = e => betaPill((S.config.beta || []).find(f => (f.templates || []).includes(e?.template)
+  || (f.harnesses || []).includes(e?.harness || e?.agent?.harness))?.id);
+function betaMark(root = document) {
+  root.querySelectorAll('[data-beta]').forEach(el => { el.innerHTML = betaPill(el.dataset.beta); });
 }
 // ----------------------------------------------------------------- derived state
 function stateOf(slug) {

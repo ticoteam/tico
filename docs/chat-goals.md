@@ -1,5 +1,7 @@
 # Chat goals and commands
 
+> **Beta**: chat goals and steering work today and may still change. See [Beta features](support.md#beta-features).
+
 Pin a goal in a bot conversation to let its native harness keep working toward an outcome.
 Claude Code and Codex support chat goals when the assigned computer reports that capability.
 Older computers and other harnesses report `supported: false`. Goals belong to their own

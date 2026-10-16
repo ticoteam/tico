@@ -62,7 +62,7 @@ function catalogCardHTML(state, card, note) {
         aria-label="Include ${esc(card.name || slug)}">
       <input type="text" class="cat-name" data-cat-name="${esc(slug)}" value="${esc(catalogName(state, card))}" maxlength="100"
         aria-label="Name for ${esc(card.name || slug)}">
-      ${card.required ? '<span class="pill ok">required</span>' : ''}</div>
+      ${card.required ? '<span class="pill ok">required</span>' : ''}${botBetaPill(card)}</div>
     ${card.summary ? `<p class="cat-summary">${esc(card.summary)}</p>` : ''}
     ${card.when ? `<p class="cat-when" data-cat-when="${esc(slug)}">${esc(card.when)}</p>` : ''}
     ${note ? `<p class="cat-reason" data-cat-reason="${esc(slug)}">Recommended because ${esc(note)}.</p>` : ''}

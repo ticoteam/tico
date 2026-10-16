@@ -282,6 +282,8 @@ ALLOWED = {
                  "bots": None, "bots_ready": None, "problems": None, "log": None}],
     "database": {"migration": None, "cloud_migration": None},
     "features": {},
+    # The Beta features this install has on or in use (backend/beta.py), by id.
+    "beta": [None],
     "counts": {"bots": None, "people": None, "routines": None},
     "logs": {"server": None, "updater": None, "app": None},
     "browser": [{"kind": None, "at": None, "file": None, "line": None, "column": None, "count": None}],
@@ -507,8 +509,8 @@ def _performance(c, hours):
 def build(store, settings, auth, who, census, github=None, config=None, performance_hours=0, shell=None):
     """The redacted bundle for this install, as a dictionary (`fit`-ted, allowlisted, every string redacted). A
     person attaching diagnostics chooses `performance_hours` (0 leaves performance out). `shell` is the desktop app the
-    page runs in ({version, lines}: support.AppShell), whose version and log go in labelled `app`."""
-    from . import health, onboarding, replication, runner_versions
+    page runs in ({version, lines, mac}: support.AppShell), whose version and log go in labelled `app`."""
+    from . import beta, health, onboarding, replication, runner_versions
     from .getting_started import _online_runners
     from .views import roster
     updater = _updater_report(settings)
@@ -533,6 +535,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         librarian = H.bot(c, "librarian")
         github_on = bool(github and github.row(c) and github.row(c)["installation_id"])
         perf = _performance(c, performance_hours) if performance_hours else None
+        beta_on = beta.turned_on(c, settings, shell)
     features = {"demo": bool(settings.demo), "updater": bool(releases._updater()[0]),
                 "update_check": releases.Checker.enabled(), "usage_count": census.enabled(),
                 "backups": backup.get("mode") not in (None, "off"), "github_app": github_on, "slack": slack,
@@ -568,6 +571,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         "runners": runners,
         "database": {"migration": migration, "cloud_migration": cloud},
         "features": features,
+        "beta": [x for x in beta_on if x in beta.IDS],
         "counts": {"bots": bots_total, "people": len(people.get("people") or []), "routines": routines},
         "logs": {"server": _lines(server_lines, LOG_LINES), "updater": _lines(updater.get("errors"), RUNNER_LINES),
                  **({"app": _lines(shell.get("lines"), APP_LINES)} if shell else {})},

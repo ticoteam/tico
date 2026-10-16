@@ -23,7 +23,7 @@ async function pageNotes() {
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now</button>
+      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>

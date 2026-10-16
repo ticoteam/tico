@@ -143,6 +143,8 @@ rollback step: it runs on the candidate's updater.
 
 ### Behaviour replay
 
+> **Beta**: behaviour replay and the computer Performance page work today and may still change. See [Beta features](support.md#beta-features).
+
 A release that changes a bot's prompt, a built-in template, the runner's hosts or how a turn is assembled also replays
 the signed real cases (`evals/replay/README.md`) on a scratch team running the candidate, before the tag:
 

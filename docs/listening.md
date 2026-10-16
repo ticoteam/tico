@@ -1,5 +1,7 @@
 # Listening
 
+> **Beta**: Listening works today and may still change. See [Beta features](support.md#beta-features).
+
 Listening saves posts a bot finds, asks the Decision provider to classify them, and routes useful posts to a receiving bot's
 inbox. A receiving bot accepts, rejects or marks each post as a duplicate. A score alone does not contact anyone.
 

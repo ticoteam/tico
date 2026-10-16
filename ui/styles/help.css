@@ -93,6 +93,7 @@
 .help-platforms p{display:grid;gap:4px;font-size:var(--t-base);color:var(--muted)}
 .help-glossary dl{padding:0 18px}.help-glossary dt{font-weight:600;margin-top:12px}.help-glossary dd{margin:4px 0;color:var(--muted);font-size:var(--t-base)}
 .help-glossary>p{padding:0 18px 12px;font-size:var(--t-base)}
+.help-beta>p{padding:0 18px;font-size:var(--t-base);color:var(--muted)}.help-beta ul{margin:8px 0 0;padding:0 18px 16px 36px}.help-beta li{margin:6px 0;font-size:var(--t-base)}
 #help-open[data-support-unread]{position:relative}
 /* The number of unread support replies, on the ? itself (support.js sets it; absent at zero). */
 #help-open[data-support-count]::after{content:attr(data-support-count);position:absolute;top:-6px;right:-8px;min-width:20px;height:20px;padding:0 4px;box-sizing:border-box;border-radius:10px;background:var(--accent);color:var(--accent-ink);font:700 var(--t-2xs)/16px var(--sans);text-align:center;border:2px solid var(--surface);pointer-events:none}

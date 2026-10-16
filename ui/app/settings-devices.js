@@ -348,8 +348,8 @@ function machineScreenHTML(machine) {
   if (!machine.screen || machine.screen === 'off' || machine.revoked_at) return '';
   if (!machine.screen_available) return '<span class="settings-cell-note">Screen not available</span>';
   const label = machine.screen === 'control' ? 'Screen · control' : 'Screen · view';
-  return screenMayOpen(machine) ? `<a class="machine-screen" href="${screenHref(machine.id)}"><span class="nav-icon" aria-hidden="true">computer</span>${label}</a>`
-    : `<span class="machine-screen"><span class="nav-icon" aria-hidden="true">computer</span>${label}</span>`;
+  return screenMayOpen(machine) ? `<a class="machine-screen" href="${screenHref(machine.id)}"><span class="nav-icon" aria-hidden="true">computer</span>${label}</a>${betaPill('computer_screen')}`
+    : `<span class="machine-screen"><span class="nav-icon" aria-hidden="true">computer</span>${label}</span>${betaPill('computer_screen')}`;
 }
 function renderSettingsMachines() {
   const el = $('#set-machines'); if (!el) return;
@@ -399,9 +399,9 @@ function renderSettingsMachines() {
     // and kept while a mode is set so it can be turned off again. The operator or a bot admin sets it.
     const screen = machine.screen || 'off';
     const screenChoice = screenMayOpen(machine) && (machine.screen_available || screen !== 'off')
-      ? `<div class="people-menu-check machine-screen-choice" data-computer-screen="${esc(machine.id)}"><span>Screen</span>${repoSegHTML(`screen-${machine.id}`, 'Screen', [['off', 'Off'], ['view', 'View'], ['control', 'Control']], screen, false, ' repo-seg-sm')}</div>` : '';
+      ? `<div class="people-menu-check machine-screen-choice" data-computer-screen="${esc(machine.id)}"><span>Screen${betaPill('computer_screen')}</span>${repoSegHTML(`screen-${machine.id}`, 'Screen', [['off', 'Off'], ['view', 'View'], ['control', 'Control']], screen, false, ' repo-seg-sm')}</div>` : '';
     // Performance (everyone reads it); its operator or a bot admin turns the diagnostics off and on.
-    const performance = machine.revoked_at ? '' : `<button type="button" role="menuitem" data-computer-performance="${esc(machine.id)}">Performance</button>`
+    const performance = machine.revoked_at ? '' : `<button type="button" role="menuitem" data-computer-performance="${esc(machine.id)}">Performance${betaPill('replay_performance')}</button>`
       + (screenMayOpen(machine) ? `<label class="people-menu-check"><input type="checkbox" data-performance-mode="${esc(machine.id)}" ${machine.performance !== 'off' ? 'checked' : ''}> Performance diagnostics</label>` : '');
     const menu = [bots.length ? `<button type="button" role="menuitem" data-computer-bots="${esc(machine.id)}">Show bots</button>` : '',
       performance, screenChoice,
@@ -513,12 +513,12 @@ function renderSettingsMachines() {
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen ? `<span class="muted"> · ${esc(ago(agent.last_seen))}</span>` : ''}</span></td></tr>`).join('');
   const list = `${revoked ? `<label class="settings-cell-note"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked computers (${revoked})</label>` : ''}
     ${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th>Operator</th><th>Bots</th><th>AI tools</th><th>Status</th><th aria-label="Actions"></th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${revoked ? 'No active computers.' : 'No computers yet.'}</div>`}
-    ${agents ? `<h3 class="settings-agents-title">External agents</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
+    ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer form (and the code it shows) keeps what was typed.
   if (!el.querySelector('.machine-enroll')) el.innerHTML = `<div data-machines-list></div>
     <div class="machine-enroll"><select class="settings-inline-select" id="machine-operator" aria-label="Computer owner">
       ${people.map(person => `<option value="${esc(person.id)}" ${person.id === S.me?.id ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select>
-      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer"><option value="mac">Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2, beta)</option></select>
+      <select class="settings-inline-select" id="machine-kind" aria-label="Kind of computer"><option value="mac">Mac</option><option value="linux">Linux or cloud server</option><option value="windows">Windows PC (WSL 2${betaFeature('windows') ? ', Beta' : ''})</option></select>
       <input id="machine-label" type="text" autocomplete="off" aria-label="Computer name" placeholder="Computer name" value="${esc(settingsPersonName(people.find(person => person.id === S.me?.id)?.id || people[0]?.id) + "'s Mac")}">
       <button class="primary" type="button" id="register-machine">Add computer</button>
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
@@ -539,7 +539,7 @@ function renderSettingsMachines() {
       const [main, ...more] = kind === 'windows' ? windowsRunnerCommands(code, label)
         : dockerRunnerCommands(code, label, '', kind).filter(Boolean);
       const line = ([note, command], i) => `<span class="muted">${esc(note)}</span><span class="machine-command"><code>${esc(command)}</code><button class="ghost" type="button" data-machine-copy="${i}">Copy</button></span>`;
-      status.innerHTML = `<span>Code for <strong>${esc(label)}</strong>, good 15 minutes. Then sign it in here.</span>${line(main, 0)}`
+      status.innerHTML = `<span>${kind === 'windows' ? `Windows PC through WSL 2${betaPill('windows')}. ` : ''}Code for <strong>${esc(label)}</strong>, good 15 minutes. Then sign it in here.</span>${line(main, 0)}`
         + (more.length ? `<details><summary>Other ways</summary>${more.map((row, i) => line(row, i + 1)).join('')}</details>` : '')
         + (kind === 'mac' ? '<button class="ghost" type="button" id="machine-checkout">Use a Tico checkout instead</button>' : '');
       const commands = [main, ...more];

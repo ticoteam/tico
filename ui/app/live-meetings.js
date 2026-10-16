@@ -20,7 +20,7 @@ async function pageLiveMeetings() {
     poll: 0, refreshTimer: 0, candidates: [], busy: false, drafts: {}, paintedId: '',
     listVersion: 0, detailVersions: {}, chatSending: new Set()};
   $('#main').innerHTML = `<section class="live-page">
-    <header class="live-head"><div><h1>Live now</h1><p class="muted">Transcript text stays in Tico. Audio is never sent.</p></div>
+    <header class="live-head"><div><h1>Live now${betaPill('live_meetings')}</h1><p class="muted">Transcript text stays in Tico. Audio is never sent.</p></div>
       <button type="button" class="ghost" id="live-back">Meetings</button></header>
     <form id="live-connect" class="live-connect"><label>Meeting title<input name="title" required maxlength="200" placeholder="Weekly team sync"></label>
       <label>Bot reply cap<input name="reply_cap" type="number" min="1" max="20" value="3" required></label>

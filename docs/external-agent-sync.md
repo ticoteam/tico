@@ -1,5 +1,7 @@
 # External agent sync: Grok Bot, Dots and Muse
 
+> **Beta**: external agents (Hermes, OpenClaw, Grok Bot, Dots and Muse sync) work today and may still change. See [Beta features](support.md#beta-features).
+
 Bots a human runs on another platform, shown on the team chart under that human, with their history and
 instructions kept in Tico in case the account goes away:
 

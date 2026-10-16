@@ -22,7 +22,7 @@ from clients.manifest import group_of, manifest_path, routines_of
 from . import goals as G
 from . import models as M
 from . import providers
-from . import census, changelog, releases, replication, runner_versions, ui_bundle
+from . import beta, census, changelog, releases, replication, runner_versions, ui_bundle
 from .config import ASSISTANT_NAME
 from . import rooms, routines, statuses
 from . import access as Access
@@ -310,6 +310,7 @@ def config_view(c, settings, who=None):
     value["usage_count_notice"] = census.notice_due(c, settings, who)
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
+    value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
     return value
 
 

@@ -285,7 +285,7 @@ function marketBlankHtml(row) {
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
   if (!(S.me?.cloud && S.me.role === 'owner')) return '<p class="market-none">Nothing here yet.</p>';
   return `<form class="market-start" data-market-research>
-      <h1>Market</h1>
+      <h1>Market${marketBeta()}</h1>
       <label for="market-sources">Your website, a description, or links to anything about your market</label>
       <textarea id="market-sources" name="text" rows="4" maxlength="8000" required autocomplete="off" placeholder="https://example.com"></textarea>
       <p class="err" data-market-error hidden></p>
@@ -337,9 +337,12 @@ function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
+// Market is a Beta feature (backend/beta.py): its pill sits on the empty form's title and on every Market page's kicker.
+const marketBeta = () => typeof betaPill === 'function' ? betaPill('market') : '';
+
 // The note's kicker, and Research for a page or entry the Librarian can add to.
 function marketHead(kicker, target) {
-  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
+  return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}${kicker === 'Market' ? marketBeta() : ''}</p>${target && S.me?.role === 'owner'
     ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
 }
 

@@ -121,7 +121,7 @@ async function pageMail() {
   const load = ++MAIL_LOAD;
   if (!$('#mail-page')) {
     $('#main').innerHTML = `<div id="mail-page">
-      <div class="meeting-head"><div><h1>Message bots</h1></div></div>
+      <div class="meeting-head"><div><h1>Message bots${betaPill('message_bots')}</h1></div></div>
       <div class="mail-shell">
         <nav class="mail-boxes" aria-label="Message bots"><h2>Message bots</h2><div class="mail-box-list" id="mail-box-list"></div></nav>
         <div class="mail-main">

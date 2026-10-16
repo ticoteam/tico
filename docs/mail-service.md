@@ -1,5 +1,7 @@
 # Message bots: the shared email and calendar service
 
+> **Beta**: message bots (mail and calendar) work today and may still change. See [Beta features](support.md#beta-features).
+
 Status: stages 1-2 built. `mail doctor` checks the Google service account against
 Gmail and Calendar, and calendar impersonation is verified read-only for each human in
 `registry/people.yaml`. Reading, filing, the rules engine, the policy file, lint,
