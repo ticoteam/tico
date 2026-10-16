@@ -35,6 +35,10 @@ All notable changes to Tico are recorded here. The format follows
   the request is still refused.
 - A chat file a person shares to a task in a comment now shows in the task's activity as a file added, is
   recorded in the audit log, and gets its preview straight away, as an uploaded file does.
+
+## [0.3.49] - 2026-10-15
+
+### Fixed
 - A message bot reads only its person's mailbox unless its `gmail` entry sets `org_read: true`, as the mail manual
   says. Being a person's `inbox_bot` used to add the mailboxes of everyone below that person too: in the mailboxes
   its runs could ask the runner for a token for, in the routine's and bot page's mail sources, and in the mail
@@ -123,18 +127,18 @@ All notable changes to Tico are recorded here. The format follows
   and `setup` no longer fail on them (for example "Worktree initialization marker cannot be read"). Files, modes
   and contents stay, a held lock stays held, and a symlink or hard link in either folder changes nothing outside it.
 
-### Changed
-- Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,
-  retains the same public listener, and no longer offers a Python relay or an opt-in overlay.
-- `hub task worktree add`, `setup` and `attach` refusing a repository for missing write access now say
-  whether Tico listed it read-only or not at all for this run, and which repositories the run can write to.
-
-### Fixed
 - A runner whose event stream drops now logs `event stream back after N s` when it reconnects, so a support
   bundle shows the outage ended, and names why the stream ended: no data from the server within the read
   timeout, or the connection and its cause, instead of calling every body error a `TimeoutError`.
 - Runtime and development Python locks share the same dependency pins. The desktop uses rustls 0.23.46,
   with compatible AWS, cryptography, JWT and browser telemetry SDK updates.
+
+### Changed
+- Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,
+  retains the same public listener, and no longer offers a Python relay or an opt-in overlay. Single-use tickets,
+  leased permissions, bounded buffering, cancellation and duplicate-safe audit reporting are retained.
+- `hub task worktree add`, `setup` and `attach` refusing a repository for missing write access now say
+  whether Tico listed it read-only or not at all for this run, and which repositories the run can write to.
 
 ### Added
 - Settings → Computers lists each AI tool on its own row: installed version, enabled, sign-in and the account it
@@ -142,9 +146,6 @@ All notable changes to Tico are recorded here. The format follows
   windows as bars with the reading's age (#610). Tools without an account or usage source read "unavailable".
   Accounts come from the tools' own status answers, never credential files, and are shown only to owners,
   admins and the computer's operator; see PRIVACY.md.
-- An opt-in Rust relay for computer-screen WebSockets, with single-use tickets, leased permissions,
-  bounded buffering and cancellation, and duplicate-safe audit reporting. Python remains the default;
-  the explicit installation overlay and rollback are documented in docs/install.md.
 
 ## [0.3.48] - 2026-10-15
 
@@ -2754,7 +2755,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.48...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.49...HEAD
+[0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/ticoteam/tico/compare/v0.3.46...v0.3.47
 [0.3.21]: https://github.com/ticoteam/tico/compare/v0.3.20...v0.3.21
