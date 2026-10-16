@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.50] - 2026-10-16
+
 ### Added
 - A task worktree whose cleanup stopped retrying has a **Retry cleanup** button in the task's Code list, for people
   who can move tasks. Fix what the refusal names first (the bot's write access, kept files); the button then asks
@@ -33,6 +35,8 @@ All notable changes to Tico are recorded here. The format follows
   can note the wait and end. The Health Monitor's finding no longer tells BotOps to update such a computer by hand:
   it updates by itself, and BotOps reads its update once, records the wait and ends the turn instead of watching it.
   Stopping a turn stays a person's choice; the 20-minute update drain is unchanged.
+- A Docker runner holding work after its updater lost its status says how to end the hold, and docs/updates.md gives
+  the exact commands.
 
 ### Fixed
 - A turn that ran on a fallback model no longer passes as its configured model's work. The agent's prompt names the
@@ -64,6 +68,9 @@ All notable changes to Tico are recorded here. The format follows
   the request is still refused.
 - A chat file a person shares to a task in a comment now shows in the task's activity as a file added, is
   recorded in the audit log, and gets its preview straight away, as an uploaded file does.
+- Worktree cleanup no longer keeps a Mac app checkout just because it holds SwiftPM/Xcode build output (`.build`,
+  `.swiftpm`, `DerivedData`) or Tauri's regenerated `gen/schemas`; `gen/apple`, `gen/android` and a bare `gen/` are
+  still kept.
 
 ## [0.3.49] - 2026-10-15
 
@@ -2784,7 +2791,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.49...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.50...HEAD
+[0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/ticoteam/tico/compare/v0.3.46...v0.3.47
