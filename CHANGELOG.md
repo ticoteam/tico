@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-10-16
+
 ### Added
 - Company cloud storage: the owner can store the company's files in its own S3 bucket from **Settings › Storage**
   (bucket, region, folder, access keys). Tico writes and reads back a check object before saving, seals the secret
@@ -2981,7 +2983,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.50...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.53...HEAD
+[0.3.53]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.53
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
