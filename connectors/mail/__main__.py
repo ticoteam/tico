@@ -289,8 +289,8 @@ def cmd_google_connect(args):
 
 
 def cmd_google_finish(args):
-    """Finish a sign-in the server started: the connectors job pipes the request (code, verifier, Tico's client)
-    on stdin, so nothing of it is on a command line or in the environment."""
+    """Finish a sign-in the server started: the connectors job pipes the request (the connect's id, the mailbox and
+    Tico's client id) on stdin, and the server exchanges the code with the secret it keeps (oauth.finish)."""
     try:
         request = json.loads(sys.stdin.read() or "{}")
     except ValueError:

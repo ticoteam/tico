@@ -15,6 +15,7 @@ rules, the database, the tests - works with nothing installed.
 """
 
 import json, os, stat
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import DEFAULT_KEY, Failure, oauth
@@ -169,6 +170,14 @@ def person_credentials(mailbox, found, scopes=None):
         raise Failure("the google-auth library is not installed",
                       "Run mail through scripts/mail.sh, which builds the venv "
                       "(connectors/mail/requirements.txt).")
+    if found.get("broker") == "server":
+        # Connected through Tico's server, which keeps the client secret: it refreshes, one service at a time.
+        if not service:
+            raise Failure(f"{mailbox}'s Google access is refreshed one service at a time", "Ask for gmail or calendar.")
+        token, expiry, granted = oauth.server_token(found, service, chosen, mailbox)
+        creds = Credentials(token=token, expiry=_naive_utc(expiry))
+        creds._tico_granted = granted
+        return creds
     creds = Credentials(token=None, refresh_token=found["refresh_token"], token_uri=found["token_uri"],
                         client_id=found["client_id"], client_secret=found["client_secret"], scopes=chosen)
     try:
@@ -183,6 +192,15 @@ def person_credentials(mailbox, found, scopes=None):
                       "Check this computer's network, then try again.")
     creds._tico_granted = chosen
     return creds
+
+
+def _naive_utc(stamp):
+    """google-auth's expiry: a naive UTC datetime, or None when the server sent none."""
+    try:
+        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when.astimezone(timezone.utc).replace(tzinfo=None) if when.tzinfo else when
 
 
 def source(mailbox, path=None):

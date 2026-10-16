@@ -4,9 +4,16 @@ The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google'
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
 Cloud project, a service account or domain-wide delegation). Google sends their browser back to
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
-The computer that syncs mail (runner/connectors.py) claims it, trades it for the grant there and confirms the
-account that signed in is the mailbox asked for (connectors/mail/oauth.py `finish`). The refresh token never
-reaches this server: only the outcome does, and the code and PKCE verifier are cleared with it.
+The computer that syncs mail (runner/connectors.py) claims it, asks this server to trade it for the grant, confirms
+the account that signed in is the mailbox asked for and keeps the grant (connectors/mail/oauth.py `finish`).
+
+The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
+computer holds it: the code exchange (`/exchange`) and every later refresh (`/token`) go through here. The server
+adds the secret, calls Google and answers the computer that holds the grant; it stores no token, and the refresh
+token it relays on the exchange and receives on a refresh is never written down or logged. It keeps only the
+grant's SHA-256 fingerprint (`grant_hash`), which can refresh nothing: a refresh must match a mailbox this
+computer holds and the grant this server issued for it, so the secret is never added to a token from anywhere
+else. A refreshed token carries only the read-only scopes of one service (SERVICE_SCOPES).
 
 Only the person connects or disconnects their own mailbox: the mailbox their message bot reads, else their email.
 Not a bot, not BotOps or the Assistant acting for them, not an admin for someone else. Disconnect is queued the
@@ -21,7 +28,9 @@ import hashlib
 import json
 import secrets
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -40,12 +49,33 @@ CREATE TABLE IF NOT EXISTS google_connects(
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
 """
+# The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
+# connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
+COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT"}
+
+
+def ensure_schema(c):
+    c.executescript(SCHEMA)
+    have = {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
+    for name, declaration in COLUMNS.items():
+        if name not in have:
+            c.execute(f"ALTER TABLE google_connects ADD COLUMN {name} {declaration}")
+
+
+def fingerprint(refresh_token):
+    return hashlib.sha256(str(refresh_token).encode()).hexdigest()
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 G = "https://www.googleapis.com/auth/"
 # The same list as connectors/mail/oauth.py IDENTITY_SCOPES + READ_SCOPES (backend/tests/test_google_connect.py).
 READ_SCOPES = ["openid", "email", G + "gmail.readonly", G + "calendar.events.readonly", G + "calendar.freebusy",
                G + "calendar.calendarlist.readonly"]
+# What a refreshed token may carry: one service's read-only scopes, never both and never a write.
+SERVICE_SCOPES = {"gmail": {G + "gmail.readonly"},
+                  "calendar": {G + "calendar.events.readonly", G + "calendar.freebusy",
+                               G + "calendar.calendarlist.readonly"}}
+GOOGLE_SECONDS = 20
 CALLBACK = "/api/v2/mail/google/callback"
 INBOX = "/#/settings/inbox"    # Settings > Inbox (ui/app/router.js), which reads the outcome itself
 SIGN_IN_SECONDS = 600           # Google's codes last about ten minutes; a sign-in left open longer starts again
@@ -56,6 +86,10 @@ QUEUED = ("ready", "disconnecting")
 CALLBACK_ERRORS = {"admin_policy_enforced": "admin_policy", "org_internal": "app_unavailable",
                    "access_denied": "declined", "invalid_scope": "app_config", "invalid_client": "app_config",
                    "unauthorized_client": "app_config", "redirect_uri_mismatch": "app_config"}
+# What Google's token endpoint may answer, as the kind the computer reports (connectors/mail/oauth.py REASONS).
+TOKEN_ERRORS = {"admin_policy_enforced": "admin_policy", "org_internal": "app_unavailable", "invalid_grant": "signin",
+                "invalid_client": "app_config", "unauthorized_client": "app_config", "invalid_scope": "app_config",
+                "redirect_uri_mismatch": "app_config"}
 KINDS = ("admin_policy", "app_unavailable", "declined", "app_config", "expired", "identity_mismatch",
          "no_refresh_token", "no_gmail", "code_rejected", "network", "signin", "unknown", "not_here", "error")
 
@@ -96,12 +130,50 @@ class ClaimRequest(M.Contract):
     holds_mail: bool = False        # this computer has a Google key or connected accounts (runner/connectors.py)
 
 
+class TokenRequest(M.Contract):
+    mailbox: str = Field(min_length=3, max_length=320)
+    service: Literal["gmail", "calendar"]
+    refresh_token: str = Field(min_length=1, max_length=512)
+    scopes: list[str] = Field(min_length=1, max_length=4)
+
+
 def configured(settings):
     return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
 
 
 def redirect_uri(settings):
     return settings.public_url.rstrip("/") + CALLBACK
+
+
+def post_token(fields):
+    """Google's token endpoint answer for `fields`. Raises urllib.error.HTTPError on a refusal, OSError when
+    Google can't be reached."""
+    request = urllib.request.Request(TOKEN_URI, data=urllib.parse.urlencode(fields).encode(),
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
+        return json.loads(answer.read().decode() or "{}")
+
+
+def google_token(settings, fields):
+    """Google's answer to a code exchange or a refresh with this server's client added. A refusal is a Problem
+    naming only Google's reason as a kind (TOKEN_ERRORS); Google's body and the request never reach a log."""
+    fields = dict(fields, client_id=settings.google_oauth_client_id,
+                  client_secret=settings.google_oauth_client_secret)
+    try:
+        answer = post_token(fields)
+    except urllib.error.HTTPError as e:
+        try:
+            error = str(json.loads(e.read().decode() or "{}").get("error") or "")
+        except (OSError, ValueError, AttributeError):
+            error = ""
+        kind = TOKEN_ERRORS.get(error.strip().lower(), "error")
+        raise Problem("google_refused", f"Google refused it ({error or e.code})", 409, extra={"kind": kind})
+    except (OSError, ValueError) as e:
+        raise Problem("google_refused", f"Tico's server could not reach Google ({type(e).__name__})", 409,
+                      extra={"kind": "network"})
+    if not isinstance(answer, dict) or not answer.get("access_token"):
+        raise Problem("google_refused", "Google returned no access token", 409, extra={"kind": "error"})
+    return answer
 
 
 def mailbox_for(c, person_id):
@@ -260,8 +332,8 @@ def install(app, store, publisher, mutate):
 
     @app.post("/api/v2/connectors/mail/google/claim")
     def google_claim(request: Request, body: ClaimRequest | None = None):
-        """The next connect or disconnect for the computer that syncs mail. A connect carries the code, the
-        verifier and Tico's OAuth client, once: they are cleared when the computer answers."""
+        """The next connect or disconnect for the computer that syncs mail. A connect carries no code and no
+        secret: the computer asks `/exchange` for the grant, and the code is spent there."""
         with store.transaction() as c:
             runner = publisher(c, request.state.identity)
             holds = bool(body and body.holds_mail)
@@ -280,10 +352,58 @@ def install(app, store, publisher, mutate):
                        row["person_id"]))
             out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
             if action == "connect":
-                out.update(code=row["code"], verifier=row["verifier"], redirect_uri=redirect_uri(settings),
-                           client_id=settings.google_oauth_client_id,
-                           client_secret=settings.google_oauth_client_secret)
+                out.update(client_id=settings.google_oauth_client_id, broker="server")
             return {"connect": out}
+
+    @app.post("/api/v2/connectors/mail/google/{person_id}/exchange")
+    def google_exchange(person_id: str, request: Request, body: M.Empty | None = None):
+        """Trade a claimed connect's code for its grant, for the computer that claimed it, once. The code and the
+        verifier are cleared before Google is asked; the answer goes to that computer and is not kept here."""
+        with store.transaction() as c:
+            runner = publisher(c, request.state.identity)
+            row = c.execute("SELECT * FROM google_connects WHERE person_id=?", (person_id,)).fetchone()
+            if (not row or row["runner_id"] != runner["id"] or row["status"] != "finishing" or not row["code"]
+                    or not row["verifier"]):
+                raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
+            code, verifier = row["code"], row["verifier"]
+            c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated=? WHERE person_id=?",
+                      (H.now(), person_id))
+        if not configured(settings):
+            raise Problem("google_refused", "This Tico server has no Google app set up", 409,
+                          extra={"kind": "app_config"})
+        answer = google_token(settings, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                         "redirect_uri": redirect_uri(settings)})
+        if answer.get("refresh_token"):
+            with store.transaction() as c:
+                c.execute("UPDATE google_connects SET pending_hash=? WHERE person_id=? AND runner_id=? AND "
+                          "status='finishing'", (fingerprint(answer["refresh_token"]), person_id, runner["id"]))
+        return {k: answer[k] for k in ("access_token", "refresh_token", "expires_in", "scope") if k in answer}
+
+    @app.post("/api/v2/connectors/mail/google/token")
+    def google_refresh(request: Request, body: TokenRequest):
+        """A short-lived access token for a grant this computer holds: one service, read only. The grant must be the
+        one this server issued for that mailbox and this computer (its fingerprint); nothing about the request is
+        stored."""
+        wanted = set(body.scopes)
+        if not wanted <= SERVICE_SCOPES[body.service]:
+            raise Problem("scope", f"A {body.service} token from Connect Google carries only its read-only scopes", 422)
+        with store.transaction() as c:
+            runner = publisher(c, request.state.identity)
+            held = c.execute("SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND holder=? AND grant_hash=? "
+                             "LIMIT 1", (body.mailbox.strip().lower(), runner["id"],
+                                         fingerprint(body.refresh_token))).fetchone()
+            if not held:
+                raise Problem("forbidden", "This computer holds no Connect Google grant from this server for that "
+                                           "mailbox", 403)
+        if not configured(settings):
+            raise Problem("google_refused", "This Tico server has no Google app set up", 409,
+                          extra={"kind": "app_config"})
+        answer = google_token(settings, {"grant_type": "refresh_token", "refresh_token": body.refresh_token,
+                                         "scope": " ".join(sorted(wanted))})
+        granted = sorted(set(str(answer.get("scope") or "").split()) & wanted) or sorted(wanted)
+        expires = int(answer.get("expires_in") or 3600)
+        return {"access_token": answer["access_token"], "expires_in": expires,
+                "expiry": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + expires)), "scopes": granted}
 
     @app.post("/api/v2/connectors/mail/google/{person_id}/result")
     def google_result(person_id: str, request: Request, body: ConnectorResult):
@@ -301,12 +421,14 @@ def install(app, store, publisher, mutate):
             # The grant is where it was connected, gone once revoked, and unchanged by a failure (a failed reconnect
             # stores nothing, so an earlier grant stays where it was).
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
-            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,state=NULL,"
-                      "verifier=NULL,code=NULL,updated=? WHERE person_id=?",
+            # Likewise the grant the server will refresh: the new one once connected, none once revoked.
+            grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
+            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,grant_hash=?,"
+                      "pending_hash=NULL,state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
-                       json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, H.now(),
-                       person_id))
+                       json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,
+                       H.now(), person_id))
             H.event(c, "human:" + person_id, "mail.google." + body.status, row["mailbox"],
                     {"kind": kind} if body.status == "failed" else {})
             return {"ok": True}

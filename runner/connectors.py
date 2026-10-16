@@ -51,6 +51,19 @@ def mail_credential_present(config=None):
     return mail_secret_path(config).is_file() or mail_grants_path(config).is_file()
 
 
+def mail_cli_env(config, key_path):
+    """The local mail CLI's environment (this job and the supervisor's mint-token, runner/mail_key.py): the runner's
+    without the hub token, the key at `key_path`, and the server and this computer's registration, which only the
+    Connect Google refresh uses (connectors/mail/oauth.py broker): the client secret stays on the server."""
+    from connectors.mail.oauth import BROKER_AUTH_ENV, BROKER_URL_ENV          # noqa: PLC0415
+    dropped = ("HUB_TOKEN", BROKER_URL_ENV, BROKER_AUTH_ENV)
+    env = {key: value for key, value in os.environ.items() if key not in dropped}
+    env.setdefault("GOOGLE_SA_KEY", str(key_path))
+    if (config or {}).get("url") and (config or {}).get("token"):
+        env[BROKER_URL_ENV], env[BROKER_AUTH_ENV] = str(config["url"]), str(config["token"])
+    return env
+
+
 def mail_sync_seconds(config=None):
     raw = (config or {}).get("mail_sync_seconds")
     if raw is None or raw == "":
@@ -143,11 +156,9 @@ class ConnectorPublisher:
             raise RuntimeError("The local calendar connector script is not executable")
 
     def mail_env(self):
-        """The environment of the local mail CLI: the runner's, without its hub token, and with the
-        key where the supervisor keeps it."""
-        env = {key: value for key, value in os.environ.items() if key != "HUB_TOKEN"}
-        env.setdefault("GOOGLE_SA_KEY", str(mail_secret_path(self.config)))
-        return env
+        """The environment of the local mail CLI: the runner's, without its hub token, with the key where the
+        supervisor keeps it, and with this registration for the server that refreshes Connect Google grants."""
+        return mail_cli_env(self.config, mail_secret_path(self.config))
 
     def mail_secret(self):
         if not mail_credential_present(self.config):
@@ -205,13 +216,13 @@ class ConnectorPublisher:
         return payload
 
     def google_finish(self, request):
-        """Run `mail.sh google finish` (or `google revoke`) for one claimed Connect Google. The code, the verifier and
-        the client go on stdin, never a command line; the grant stays in this computer's protected file. Returns
+        """Run `mail.sh google finish` (or `google revoke`) for one claimed Connect Google. The request goes on stdin,
+        never a command line; the CLI asks the server to exchange the code, and the grant stays in this computer's
+        protected file. Returns
         the result for the hub: the outcome and why, never a token."""
         connect = request["action"] == "connect"
         args = ["google", "finish"] if connect else ["google", "revoke", "--mailbox", request["mailbox"], "--json"]
-        payload = {key: request.get(key) for key in ("mailbox", "code", "verifier", "redirect_uri", "client_id",
-                                                     "client_secret")} if connect else None
+        payload = {key: request.get(key) for key in ("id", "mailbox", "client_id", "broker")} if connect else None
         result = subprocess.run([str(self.script), *args], cwd=self.script.parents[1],
                                 input=json.dumps(payload) if connect else "", capture_output=True, text=True,
                                 timeout=60, env=self.mail_env(), **mail_umask())

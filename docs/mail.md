@@ -504,11 +504,18 @@ ways to supply it:
   app in **Testing** takes at most 100 listed test users, and Google ends each grant after 7 days. That is enough to
   try Connect Google, not for lasting sync.
 
-The computer that syncs mail keeps each grant together with the app's client secret, because Google refreshes a
-grant only with the client that issued it. For a private app that is the same organization's secret on its own
-computer. Tico's public app must not hand its secret to every team's computers this way: it is not to be switched on
-until the server refreshes grants on the computers' behalf (the computer sends the refresh token, the server adds the
-secret and returns only an hour-long access token, keeping nothing).
+The app's client secret never leaves the Tico server, for either kind of app: one public app's secret is shared by
+every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server does
+it on the computers' behalf. The computer that holds the grant sends its refresh token to the server
+(`POST /api/v2/connectors/mail/google/token`, with its runner registration). The server adds the secret, asks Google
+for one service's read-only scopes and returns only an hour-long access token and its expiry. It keeps nothing,
+and logs no token. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
+claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
+grant from this server may ask, and only for `gmail.readonly` or the calendar read scopes, one service at a time. The
+computer's runner gives the mail CLI the server's address and its registration for this; a mail CLI run by hand, or
+a bot's turn on a Mac without the runner's credential socket, cannot refresh such a grant and says to use the runner.
+A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
+the computer as before.
 
 Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
 Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**

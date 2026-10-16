@@ -9,8 +9,12 @@ bot's turn still gets only a short-lived access token for one of the mailboxes t
 
 A person connects from Settings > Inbox > Connect Google (backend/google_connect.py): the sign-in uses Tico's own
 OAuth client, Google returns the browser to the server, and this computer's connectors job finishes it here with
-`finish` (scripts/mail.sh google finish, the request on stdin). Nobody makes a Google Cloud project. A self-hosted
-team may still connect from the runner with its own Desktop client (`google connect --client-file`).
+`finish` (scripts/mail.sh google finish, the request on stdin). Nobody makes a Google Cloud project. That client's
+secret stays on the server: the server trades the code for the grant and refreshes it (`server_exchange`,
+`server_token`), so such a grant is stored with `"broker": "server"` and no secret. The runner gives the mail CLI
+the server's address and its own registration for that (BROKER_URL_ENV, BROKER_AUTH_ENV). A self-hosted team may
+still connect from the runner with its own Desktop client (`google connect --client-file`); that grant keeps its
+own client's secret and refreshes here.
 
 The file holds one grant per mailbox, keyed by the address Google confirmed at sign-in, each with the OAuth client
 that issued it (a refresh token works only with its own client). A mailbox with a grant is always
@@ -29,6 +33,8 @@ from pathlib import Path
 from . import Failure, Refused
 
 GRANTS_ENV = "GOOGLE_OAUTH_GRANTS"
+BROKER_URL_ENV = "TICO_GOOGLE_BROKER_URL"       # the Tico server that holds the client secret (runner/connectors.py)
+BROKER_AUTH_ENV = "TICO_GOOGLE_BROKER_AUTH"     # this computer's runner registration, to ask it
 FILE = "google-oauth.json"
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -160,7 +166,7 @@ def save(data, path=None):
 
 def grant(mailbox, path=None):
     """The stored grant for `mailbox` (lowercased), or None. A refresh token works only with the client that
-    obtained it, so each grant keeps its own client id and secret."""
+    obtained it, so each grant keeps its own client id, and its secret unless the server refreshes it (`broker`)."""
     data = load(path)
     found = (data.get("grants") or {}).get(str(mailbox or "").strip().lower())
     if not isinstance(found, dict) or not found.get("refresh_token"):
@@ -270,6 +276,51 @@ def exchange(client, code, verifier, redirect_uri=REDIRECT_URI, opener=None, mai
                            "Check this computer's network, then start the sign-in again.")
 
 
+def broker(retries=1):
+    """A client for the Tico server that refreshes Connect Google grants, from the runner's environment."""
+    url, auth = os.environ.get(BROKER_URL_ENV), os.environ.get(BROKER_AUTH_ENV)
+    if not url or not auth:
+        raise Failure("this Google account was connected through Tico's server, which refreshes its access, and "
+                      "this process was not started by the runner that can ask it",
+                      "Use mail through the runner: its connectors job, or a bot turn on this computer.")
+    from clients.tico import Client                     # noqa: PLC0415
+    return Client(url, auth, timeout=35, retries=retries)
+
+
+def _broker_call(path, body, mailbox, retries=1):
+    from clients.tico import APIError                   # noqa: PLC0415
+    try:
+        return broker(retries).post(path, body)
+    except APIError as e:
+        kind = str((e.extra or {}).get("kind") or "")
+        if e.code == "google_refused" and kind == "network":
+            raise SignInFailed("network", f"Tico's server could not reach Google for {mailbox}",
+                               "Try again in a few minutes.")
+        if e.code == "google_refused":
+            raise refused(kind if kind in ("admin_policy", "app_config", "app_unavailable") else "signin", mailbox,
+                          e.detail)
+        raise Failure(f"Tico's server would not give access to {mailbox}: {e.code}",
+                      "Check this computer's runner is registered and online, then try again.")
+
+
+def server_exchange(person_id, mailbox):
+    """Google's answer to the code the server holds for `person_id`'s claimed connect: the server adds the secret.
+    Sent once: the server spends the code on the first ask."""
+    return _broker_call(f"connectors/mail/google/{urllib.parse.quote(str(person_id), safe='')}/exchange", {},
+                        mailbox, retries=0)
+
+
+def server_token(found, service, scopes, mailbox):
+    """(access token, expiry ISO, granted scopes) for a server-refreshed grant, narrowed to one service."""
+    answer = _broker_call("connectors/mail/google/token",
+                          {"mailbox": mailbox, "service": service, "refresh_token": found["refresh_token"],
+                           "scopes": list(scopes)},
+                          mailbox)
+    if not isinstance(answer, dict) or not answer.get("access_token"):
+        raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")
+    return answer["access_token"], str(answer.get("expiry") or ""), [str(s) for s in answer.get("scopes") or scopes]
+
+
 def confirmed_identity(access_token, opener=None):
     """(email, granted scopes) for the token, as Google reports them."""
     try:
@@ -291,6 +342,12 @@ def connect(mailbox, client, code, verifier, capabilities=(), path=None, redirec
     reaches beyond the account that made it). Returns the public description of the stored grant."""
     mailbox = str(mailbox or "").strip().lower()
     tokens = exchange(client, code, verifier, redirect_uri, opener, mailbox)
+    return keep(mailbox, client, tokens, capabilities, path, opener, now)
+
+
+def keep(mailbox, client, tokens, capabilities=(), path=None, opener=None, now=None):
+    """Store the grant in Google's answer `tokens`, once Google confirms `mailbox` itself signed in. A grant the server
+    refreshes (`client["broker"]`) is kept with its client id and no secret."""
     refresh, access = tokens.get("refresh_token"), tokens.get("access_token")
     if not access:
         raise Failure("Google returned no access token", "Start the sign-in again.")
@@ -307,8 +364,11 @@ def connect(mailbox, client, code, verifier, capabilities=(), path=None, redirec
         raise SignInFailed("no_gmail", "the grant has no Gmail access (the Gmail box was unticked on Google's page); "
                            "nothing was stored", "Connect again and leave the read your email box ticked.")
     data = load(path)
-    data["client"] = public = {"client_id": client["client_id"], "client_secret": client["client_secret"],
-                               "token_uri": client.get("token_uri") or TOKEN_URI}
+    if client.get("broker"):
+        public = {"client_id": client["client_id"], "broker": client["broker"]}
+    else:                                               # this computer's own client, kept for later connects
+        data["client"] = public = {"client_id": client["client_id"], "client_secret": client["client_secret"],
+                                   "token_uri": client.get("token_uri") or TOKEN_URI}
     stamp = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
     data.setdefault("grants", {})[mailbox] = dict(public, refresh_token=refresh, scopes=granted, email=email,
                                                   capabilities=sorted(set(capabilities)), connected_at=stamp)
@@ -316,18 +376,19 @@ def connect(mailbox, client, code, verifier, capabilities=(), path=None, redirec
     return describe(mailbox, data["grants"][mailbox])
 
 
-def finish(request, path=None, opener=None):
-    """Finish a sign-in the server started (scripts/mail.sh google finish): `request` carries the mailbox, the
-    code Google sent to the server's callback, the PKCE verifier, the redirect URI and Tico's OAuth client.
-    Returns {"status": "connected", ...describe} or {"status": "failed", "kind", "message", "hint"}; never a token."""
+def finish(request, path=None, opener=None, exchange_with=None):
+    """Finish a sign-in the server started (scripts/mail.sh google finish): `request` carries the connect's id, the
+    mailbox and Tico's OAuth client id; the server trades the code for the grant (`server_exchange`) and the secret
+    stays there. Returns {"status": "connected", ...describe} or {"status": "failed", "kind", "message", "hint"};
+    never a token."""
     mailbox = str(request.get("mailbox") or "").strip().lower()
     try:
-        client = {k: str(request.get(k) or "") for k in ("client_id", "client_secret", "token_uri")}
-        if not mailbox or not client["client_id"] or not client["client_secret"]:
+        client = {"client_id": str(request.get("client_id") or ""), "broker": "server"}
+        if not mailbox or not request.get("id") or not client["client_id"] or request.get("broker") != "server":
             raise SignInFailed("app_config", "this sign-in has no mailbox or no OAuth client",
                                "This is Tico's Google app configuration, not yours: tell Tico's support.")
-        found = connect(mailbox, client, str(request.get("code") or ""), str(request.get("verifier") or ""), (),
-                        path, str(request.get("redirect_uri") or ""), opener)
+        tokens = (exchange_with or server_exchange)(request["id"], mailbox)
+        found = keep(mailbox, client, tokens if isinstance(tokens, dict) else {}, (), path, opener)
         return dict(found, status="connected")
     except SignInFailed as e:
         return {"status": "failed", "kind": e.kind, "message": e.msg, "hint": e.hint, "mailbox": mailbox}

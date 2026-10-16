@@ -76,8 +76,8 @@ class FakeCredentials:
     refresh_error = None
 
     def __init__(self, token=None, refresh_token=None, token_uri=None, client_id=None, client_secret=None,
-                 scopes=None):
-        self.token, self.refresh_token, self.scopes, self.expiry = token, refresh_token, scopes, None
+                 scopes=None, expiry=None):
+        self.token, self.refresh_token, self.scopes, self.expiry = token, refresh_token, scopes, expiry
         self.client_id = client_id
         FakeCredentials.made.append(self)
 
@@ -114,7 +114,7 @@ class Base(unittest.TestCase):
         self.grants = self.dir / "google-oauth.json"
         self.env = patch.dict(os.environ, {"GOOGLE_SA_KEY": str(self.key)}, clear=False)
         self.env.start()
-        for name in (auth.SOCKET_ENV, oauth.GRANTS_ENV, "HUB_TOKEN"):
+        for name in (auth.SOCKET_ENV, oauth.GRANTS_ENV, "HUB_TOKEN", oauth.BROKER_URL_ENV, oauth.BROKER_AUTH_ENV):
             os.environ.pop(name, None)
         self.modules = patch.dict(sys.modules, google_modules())
         self.modules.start()
@@ -304,18 +304,121 @@ class ReadOnlyRefusals(Base):
         self.assertIn("Reconnect", caught.exception.hint)       # a revoked grant reads as reconnect in a turn
 
 
+SERVER_CONNECT = {"id": "ana", "mailbox": "Ana@Acme.example", "client_id": CLIENT["client_id"], "broker": "server"}
+GRANTED = {"access_token": "ya29.access-secret", "refresh_token": "1//refresh-secret", "expires_in": 3599,
+           "scope": " ".join(READ_ONLY)}
+
+
+class Server:
+    """Tico's server as oauth.broker() reaches it: the exchange and the refresh, recorded."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def post(self, path, body):
+        self.calls.append((path, body))
+        if self.error:
+            raise self.error
+        if path.endswith("/exchange"):
+            return dict(GRANTED)
+        return {"access_token": "ya29.from-server", "expires_in": 3599, "expiry": "2026-10-16T01:00:00Z",
+                "scopes": body["scopes"]}
+
+
+class ServerRefreshed(Base):
+    """A grant from Settings > Inbox > Connect Google: Tico's server holds the client secret and refreshes it."""
+
+    def finish(self, server=None, google=None):
+        server = server or Server()
+        with patch.object(oauth, "broker", return_value=server):
+            return oauth.finish(dict(SERVER_CONNECT), opener=google or FakeGoogle()), server
+
+    def test_finish_asks_the_server_for_the_grant_and_keeps_no_secret(self):
+        result, server = self.finish()
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(server.calls, [("connectors/mail/google/ana/exchange", {})])
+        stored = json.loads(self.grants.read_text())
+        self.assertNotIn("client", stored, "no client of this computer's own to keep")
+        grant = stored["grants"]["ana@acme.example"]
+        self.assertEqual((grant["client_id"], grant["broker"]), (CLIENT["client_id"], "server"))
+        self.assertNotIn("client_secret", grant)
+        self.assertNotIn("client-secret-value", self.grants.read_text())
+        self.assertNotIn("refresh-secret", json.dumps(result))
+
+    def test_finish_without_the_server_s_connect_is_refused(self):
+        for request in ({**SERVER_CONNECT, "broker": None}, {**SERVER_CONNECT, "id": ""},
+                        {"mailbox": "ana@acme.example", "code": "4/0", "verifier": "v", **CLIENT}):
+            server = Server()
+            with patch.object(oauth, "broker", return_value=server):
+                result = oauth.finish(request, opener=FakeGoogle())
+            self.assertEqual((result["status"], result["kind"]), ("failed", "app_config"))
+            self.assertEqual(server.calls, [])
+        self.assertFalse(self.grants.exists())
+
+    def test_the_account_check_still_applies_to_a_server_exchange(self):
+        google = FakeGoogle(email="eve@acme.example")
+        result, _ = self.finish(google=google)
+        self.assertEqual(result["kind"], "identity_mismatch")
+        self.assertEqual(google.revoked, ["1//refresh-secret"])
+        self.assertFalse(self.grants.exists())
+
+    def test_each_service_s_token_comes_from_the_server_narrowed_to_what_was_granted(self):
+        self.finish()
+        server = Server()
+        with patch.object(oauth, "broker", return_value=server):
+            token, expiry, granted = auth.mint_token("ana@acme.example", "gmail")
+            self.assertEqual((token, granted), ("ya29.from-server", [G + "gmail.readonly"]))
+            self.assertEqual(expiry, "2026-10-16T01:00:00")
+            _token, _expiry, granted = auth.mint_token("ana@acme.example", "calendar")
+        self.assertEqual(server.calls[0], ("connectors/mail/google/token", {
+            "mailbox": "ana@acme.example", "service": "gmail", "refresh_token": "1//refresh-secret", "scopes": [G + "gmail.readonly"]}))
+        self.assertEqual(server.calls[1][1]["scopes"], [G + "calendar.events.readonly", G + "calendar.freebusy",
+                                                        G + "calendar.calendarlist.readonly"])
+        self.assertEqual(FakeCredentials.made[-1].refresh_token, None, "google-auth never refreshes it here")
+        self.assertEqual([c for c in FakeCredentials.made if c.refresh_token], [])
+
+    def test_a_server_refusal_says_reconnect_or_admin_and_never_falls_back(self):
+        from clients.tico import APIError
+        self.finish()
+        self.key.write_text("{}")                        # a service-account key on the same computer
+        os.chmod(self.key, 0o600)
+        for kind, expected in (("signin", "signin"), ("admin_policy", "admin_policy"), ("app_config", "app_config"),
+                               ("network", "network"), ("error", "signin")):
+            refusal = APIError("google_refused", "Google refused it (x)", 409, extra={"kind": kind})
+            with patch.object(oauth, "broker", return_value=Server(refusal)):
+                with self.assertRaises(oauth.SignInFailed) as caught:
+                    auth.mint_token("ana@acme.example", "gmail")
+            self.assertEqual(caught.exception.kind, expected)
+        with patch.object(oauth, "broker", return_value=Server(APIError("forbidden", "no", 403))):
+            with self.assertRaises(Failure) as caught:
+                auth.mint_token("ana@acme.example", "gmail")
+        self.assertIn("forbidden", caught.exception.msg)
+
+    def test_without_the_runner_s_registration_it_says_so(self):
+        self.finish()
+        for name in (oauth.BROKER_URL_ENV, oauth.BROKER_AUTH_ENV):
+            os.environ.pop(name, None)
+        with self.assertRaises(Failure) as caught:
+            auth.mint_token("ana@acme.example", "gmail")
+        self.assertIn("connected through Tico's server", caught.exception.msg)
+        os.environ[oauth.BROKER_URL_ENV], os.environ[oauth.BROKER_AUTH_ENV] = "https://team.acme.example", "rt"
+        self.assertEqual(oauth.broker().url, "https://team.acme.example")
+
+    def test_a_self_hosted_desktop_client_grant_still_refreshes_here(self):
+        self.connect()
+        grant = oauth.grant("ana@acme.example")
+        self.assertEqual(grant["client_secret"], CLIENT["client_secret"])
+        self.assertNotIn("broker", grant)
+        with patch.object(oauth, "broker", side_effect=AssertionError("the server must not be asked")):
+            auth.mint_token("ana@acme.example", "gmail")
+        self.assertEqual(FakeCredentials.made[-1].refresh_token, "1//refresh-secret")
+
+
 class AdminPolicy(Base):
     def test_a_workspace_policy_block_is_named_as_the_admins_and_nothing_is_widened(self):
-        class Blocked(FakeGoogle):
-            def __call__(self, request, timeout=None):
-                if request.full_url.split("?")[0] == oauth.TOKEN_URI:
-                    import urllib.error
-                    raise urllib.error.HTTPError(request.full_url, 400, "Bad Request", {},
-                                                 io.BytesIO(b'{"error": "admin_policy_enforced"}'))
-                return super().__call__(request, timeout)
-        result = oauth.finish({"mailbox": "ana@acme.example", "code": "4/0", "verifier": "v",
-                               "redirect_uri": "https://team.acme.example/api/v2/mail/google/callback", **CLIENT},
-                              opener=Blocked())
+        def blocked(_person, mailbox):
+            raise oauth.refused("admin_policy", mailbox, "admin_policy_enforced")
+        result = oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(), exchange_with=blocked)
         self.assertEqual((result["status"], result["kind"]), ("failed", "admin_policy"))
         self.assertIn("Workspace admin for acme.example", result["hint"])
         self.assertFalse(self.grants.exists())
@@ -331,14 +434,9 @@ class AdminPolicy(Base):
         self.assertEqual([c.scopes for c in FakeCredentials.made], [[G + "gmail.readonly"]], "never widened")
 
     def test_finish_connects_and_reports_no_token(self):
-        result = oauth.finish({"mailbox": "Ana@Acme.example", "code": "4/0", "verifier": "v",
-                               "redirect_uri": "https://team.acme.example/api/v2/mail/google/callback", **CLIENT},
-                              opener=FakeGoogle())
+        result = oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(), exchange_with=lambda *_: dict(GRANTED))
         self.assertEqual(result["status"], "connected")
         self.assertNotIn("refresh-secret", json.dumps(result))
-        self.assertEqual(oauth.finish({"mailbox": "ana@acme.example", **CLIENT, "code": "c", "verifier": "v",
-                                       "redirect_uri": "r"}, opener=FakeGoogle(email="eve@acme.example"))["kind"],
-                         "identity_mismatch")
 
 
 class Doctor(Base):

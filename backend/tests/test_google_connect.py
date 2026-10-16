@@ -4,9 +4,11 @@ The browser comes back to the server; the computer that syncs mail finishes the 
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
 """
 
+import io
 import json
 import subprocess
 import time
+import urllib.error
 import urllib.parse
 
 import pytest
@@ -123,9 +125,8 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
         assert google_connect.pending(c, machine["runner_id"])
     assert get(app, "runners/connectors", machine["token"])["connectors"] == ["mail"]
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
-    assert claimed["action"] == "connect" and claimed["mailbox"] == "cara@acme.example"
-    assert claimed["code"] == "c-1" and claimed["client_id"] == CLIENT and claimed["client_secret"] == "tico-secret"
-    assert claimed["verifier"] and claimed["redirect_uri"].endswith("/api/v2/mail/google/callback")
+    assert claimed == {"id": "cara", "action": "connect", "mailbox": "cara@acme.example", "client_id": CLIENT,
+                       "broker": "server"}                         # no code, no verifier, no secret
     assert post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"] is None
     other = runner(app, label="Other Mac")
     r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/result", json={"status": "connected"},
@@ -138,6 +139,186 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     stored = row(app)
     assert stored["code"] is None and stored["verifier"] is None and stored["state"] is None
     assert get(app, "runners/connectors", machine["token"])["connectors"] == []
+
+
+class FakeGoogle:
+    """Google's token endpoint as google_connect.post_token sees it."""
+
+    def __init__(self, answer=None, error=None):
+        self.calls, self.answer, self.error = [], answer, error
+
+    def __call__(self, fields):
+        self.calls.append(dict(fields))
+        if isinstance(self.error, OSError) and not hasattr(self.error, "code"):
+            raise self.error
+        if self.error:
+            raise urllib.error.HTTPError(google_connect.TOKEN_URI, 400, "Bad Request", {},
+                                         io.BytesIO(json.dumps({"error": self.error}).encode()))
+        return dict(self.answer or {"access_token": "ya29.fresh", "expires_in": 3599,
+                                    "scope": oauth.G + "gmail.readonly"})
+
+
+def claimed_connect(app, machine):
+    _, query = start(app)
+    back(app, state=query["state"], code="c-1")
+    return post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+
+
+def test_the_server_trades_the_code_once_for_the_computer_that_claimed_it(app, monkeypatch):
+    google = FakeGoogle({"access_token": "ya29.first", "refresh_token": "1//grant", "expires_in": 3599,
+                         "scope": "openid " + oauth.G + "gmail.readonly", "id_token": "jwt"})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    machine, other = runner(app), runner(app, label="Other Mac")
+    claimed = claimed_connect(app, machine)
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(other["token"]))
+    assert r.status_code == 409 and google.calls == []              # only the computer that claimed it
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers("cara-test"))
+    assert r.status_code == 403                                      # never a person
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 200 and "no-store" in r.headers["cache-control"]
+    assert r.json() == {"access_token": "ya29.first", "refresh_token": "1//grant", "expires_in": 3599,
+                        "scope": "openid " + oauth.G + "gmail.readonly"}
+    sent = google.calls[0]
+    assert sent["grant_type"] == "authorization_code" and sent["code"] == "c-1" and sent["code_verifier"]
+    assert sent["client_id"] == CLIENT and sent["client_secret"] == "tico-secret"
+    assert sent["redirect_uri"].endswith("/api/v2/mail/google/callback")
+    assert row(app)["code"] is None and row(app)["verifier"] is None
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 409 and len(google.calls) == 1          # the code is spent
+
+
+def test_a_refused_exchange_names_google_s_reason_only(app, monkeypatch):
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(error="admin_policy_enforced"))
+    machine = runner(app)
+    claimed = claimed_connect(app, machine)
+    r = app.post(f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 409 and r.json()["error"]["kind"] == "admin_policy"
+    assert "tico-secret" not in r.text and "c-1" not in r.text
+
+
+def exchanged(app, machine, refresh_token="1//grant", status="connected", kind=""):
+    """A connect claimed, exchanged at the server for a grant with `refresh_token`, and answered by `machine`."""
+    claimed = claimed_connect(app, machine)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(google_connect, "post_token", FakeGoogle({"access_token": "ya29.first", "expires_in": 3599,
+                                                                "refresh_token": refresh_token}))
+        post(app, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
+    post(app, f"connectors/mail/google/{claimed['id']}/result",
+         {"status": status, "can": ["read"]} if status == "connected" else {"status": status, "kind": kind},
+         machine["token"])
+
+
+def holding(app, monkeypatch, google=None):
+    machine = runner(app)
+    exchanged(app, machine)
+    google = google or FakeGoogle()
+    monkeypatch.setattr(google_connect, "post_token", google)
+    return machine, google
+
+
+def refresh(app, token, **body):
+    body = {"mailbox": "cara@acme.example", "service": "gmail", "refresh_token": "1//grant",
+            "scopes": [oauth.G + "gmail.readonly"], **body}
+    return app.post("/api/v2/connectors/mail/google/token", json=body, headers=headers(token))
+
+
+def test_the_server_refreshes_a_grant_and_returns_only_the_access_token(app, monkeypatch, caplog, capsys):
+    machine, google = holding(app, monkeypatch)
+    r = refresh(app, machine["token"])
+    assert r.status_code == 200 and "no-store" in r.headers["cache-control"]
+    answer = r.json()
+    assert set(answer) == {"access_token", "expires_in", "expiry", "scopes"}
+    assert answer["access_token"] == "ya29.fresh" and answer["expires_in"] == 3599
+    assert answer["scopes"] == [oauth.G + "gmail.readonly"] and answer["expiry"].endswith("Z")
+    sent = google.calls[-1]
+    assert sent == {"grant_type": "refresh_token", "refresh_token": "1//grant", "scope": oauth.G + "gmail.readonly",
+                    "client_id": CLIENT, "client_secret": "tico-secret"}
+    # Stored nowhere and logged nowhere: not in the database, not in a log line, not on stdout.
+    with app.app.state.store.read() as c:
+        dump = "\n".join(c.connection.iterdump()) if hasattr(c, "connection") else "\n".join(c.iterdump())
+    assert "INSERT INTO \"google_connects\"" in dump
+    for secret in ("1//grant", "ya29.fresh"):
+        assert secret not in dump
+        assert secret not in caplog.text
+        assert secret not in "".join(capsys.readouterr())
+
+
+def test_a_refresh_carries_one_service_s_read_only_scopes_only(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)
+    for scopes, service in (([oauth.G + "gmail.modify"], "gmail"), ([oauth.G + "gmail.compose"], "gmail"),
+                            ([oauth.G + "calendar.events"], "calendar"), (["https://mail.google.com/"], "gmail"),
+                            ([oauth.G + "gmail.readonly", oauth.G + "calendar.freebusy"], "gmail"),
+                            ([oauth.G + "gmail.readonly"], "calendar"), ([], "gmail")):
+        r = refresh(app, machine["token"], service=service, scopes=scopes)
+        assert r.status_code == 422, (scopes, service, r.text)
+    assert google.calls == []
+    r = refresh(app, machine["token"], service="calendar",
+                scopes=[oauth.G + "calendar.freebusy", oauth.G + "calendar.events.readonly"])
+    assert r.status_code == 200
+    assert google.calls[-1]["scope"].split() == sorted([oauth.G + "calendar.events.readonly",
+                                                        oauth.G + "calendar.freebusy"])
+
+
+def test_only_a_computer_holding_a_grant_from_this_server_may_refresh(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)
+    stranger = runner(app, label="Laptop")
+    assert refresh(app, stranger["token"]).status_code == 403
+    assert refresh(app, "cara-test").status_code == 403
+    assert refresh(app, "inbox-test").status_code == 403
+    # The secret is added only to the grant this server issued, for its own mailbox: never to a token from elsewhere.
+    assert refresh(app, machine["token"], refresh_token="1//someone-elses").status_code == 403
+    assert refresh(app, machine["token"], mailbox="ben@acme.example").status_code == 403
+    assert refresh(app, machine["token"], mailbox="Cara@Acme.example").status_code == 200
+    assert len(google.calls) == 1
+    with app.app.state.store.read() as c:
+        stored = dict(c.execute("SELECT grant_hash,pending_hash FROM google_connects").fetchone())
+    assert stored == {"grant_hash": google_connect.fingerprint("1//grant"), "pending_hash": None}
+    google.calls.clear()
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])
+    post(app, "connectors/mail/google/cara/result", {"status": "disconnected"}, machine["token"])
+    assert refresh(app, machine["token"]).status_code == 403        # disconnected: nothing left to refresh
+    assert google.calls == []
+
+
+def test_a_failed_reconnect_keeps_the_earlier_grant_refreshable_and_disconnect_ends_it(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)
+    exchanged(app, machine, refresh_token="1//stray", status="failed", kind="identity_mismatch")
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(app, machine["token"]).status_code == 200
+    assert refresh(app, machine["token"], refresh_token="1//stray").status_code == 403
+    exchanged(app, machine, refresh_token="1//second")
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(app, machine["token"]).status_code == 403        # replaced by the reconnect
+    assert refresh(app, machine["token"], refresh_token="1//second").status_code == 200
+
+
+def test_an_older_google_connects_table_gets_the_fingerprint_columns():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
+              "state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
+              "holder TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL)")
+    google_connect.ensure_schema(c)
+    google_connect.ensure_schema(c)
+    assert {"pending_hash", "grant_hash"} <= {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
+
+
+@pytest.mark.parametrize("error,kind", [("invalid_grant", "signin"), ("admin_policy_enforced", "admin_policy"),
+                                        ("invalid_client", "app_config"), ("org_internal", "app_unavailable"),
+                                        ("server_error", "error")])
+def test_a_refused_refresh_says_why_and_nothing_else(app, monkeypatch, error, kind):
+    machine, _ = holding(app, monkeypatch, FakeGoogle(error=error))
+    r = refresh(app, machine["token"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "google_refused"
+    assert r.json()["error"]["kind"] == kind
+    assert "1//grant" not in r.text and "tico-secret" not in r.text
+
+
+def test_google_out_of_reach_is_a_network_refusal(app, monkeypatch):
+    machine, _ = holding(app, monkeypatch, FakeGoogle(error=OSError("unreachable")))
+    r = refresh(app, machine["token"])
+    assert r.status_code == 409 and r.json()["error"]["kind"] == "network"
 
 
 def test_another_account_signing_in_is_shown_as_refused(app):
@@ -277,21 +458,24 @@ def mail_script(tmp_path, body):
     return script
 
 
-def test_the_computer_finishes_the_sign_in_with_the_code_on_stdin_only(tmp_path):
+def test_the_computer_finishes_the_sign_in_through_the_server_with_the_request_on_stdin(tmp_path, monkeypatch):
     seen = tmp_path / "seen"
-    mail_script(tmp_path, f'echo "$@" > {seen}.args\ncat > {seen}.stdin\n'
+    mail_script(tmp_path, f'echo "$@" > {seen}.args\ncat > {seen}.stdin\nenv > {seen}.env\n'
                           'echo \'{"status": "connected", "mailbox": "cara@acme.example", "can": ["read"]}\'\n')
-    hub = Hub([{"id": "cara", "action": "connect", "mailbox": "cara@acme.example", "code": "c-1",
-                "verifier": "v-1", "redirect_uri": "https://tico.acme.example/api/v2/mail/google/callback",
-                "client_id": CLIENT, "client_secret": "tico-secret"}])
-    publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "test", "projects_dir": str(tmp_path)},
-                                   client=hub)
+    hub = Hub([{"id": "cara", "action": "connect", "mailbox": "cara@acme.example", "client_id": CLIENT,
+                "broker": "server"}])
+    monkeypatch.setenv("HUB_TOKEN", "hub-token")
+    publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "runner-token",
+                                    "projects_dir": str(tmp_path)}, client=hub)
     publisher.script = tmp_path / "hub/scripts/mail.sh"
     assert publisher.google_connect_tick() == 1
     assert hub.results == [("connectors/mail/google/cara/result", {"status": "connected", "can": ["read"]})]
-    args = (tmp_path / "seen.args").read_text()
-    assert args.split() == ["google", "finish"] and "c-1" not in args and "tico-secret" not in args
-    assert json.loads((tmp_path / "seen.stdin").read_text())["code"] == "c-1"
+    assert (tmp_path / "seen.args").read_text().split() == ["google", "finish"]
+    assert json.loads((tmp_path / "seen.stdin").read_text()) == {"id": "cara", "mailbox": "cara@acme.example",
+                                                                 "client_id": CLIENT, "broker": "server"}
+    env = dict(line.split("=", 1) for line in (tmp_path / "seen.env").read_text().splitlines() if "=" in line)
+    assert env[oauth.BROKER_URL_ENV] == "http://localhost:8765" and env[oauth.BROKER_AUTH_ENV] == "runner-token"
+    assert "HUB_TOKEN" not in env
 
 
 def test_a_failed_finish_carries_only_its_kind_and_words(tmp_path):

@@ -19,7 +19,9 @@ All notable changes to Tico are recorded here. The format follows
   account. Disconnect revokes the grant at Google. Each server names its own Google app: a private one for a few known
   people (Google's personal-use exemption, with its unverified-app screen and 100-user cap), or Tico's public app,
   which needs Google's verification for lasting grants; in Google's Testing state grants end after 7 days
-  (docs/mail.md).
+  (docs/mail.md). The app's client secret stays on the server: the server exchanges the sign-in code and refreshes
+  each grant for the computer that holds it, returns only an hour-long, read-only access token for one service, and
+  stores and logs no token. The grant on the computer keeps no secret.
 
 ### Fixed
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential

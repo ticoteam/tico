@@ -261,23 +261,38 @@ fn carry(config: &Config, stale: &Path, temporary: &mut Option<PathBuf>, file: &
     Ok(true)
 }
 
-/// The key the socket's mail answers mint with, set once at start (None: this computer gives no mail access).
-static MINT: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+/// How the socket's mail answers mint, set once at start (None: this computer gives no mail access).
+struct Mint {
+    script: PathBuf,
+    key: PathBuf,
+    /// The server and this registration, for a Connect Google grant the server refreshes: its client secret stays
+    /// there (connectors/mail/oauth.py broker, runner/connectors.py mail_cli_env).
+    broker: Option<(String, String)>,
+}
+
+static MINT: OnceLock<Mint> = OnceLock::new();
 
 /// Turn on mail answers: `<root>/scripts/mail.sh mint-token` with the protected key.
 pub fn init(config: &Config) {
-    let _ = MINT.set((crate::env::root().join("scripts").join("mail.sh"), protected_path(config)));
+    let (url, token) = (config.url(), config.token());
+    let broker = (!url.is_empty() && !token.is_empty()).then_some((url, token));
+    let _ = MINT.set(Mint { script: crate::env::root().join("scripts").join("mail.sh"), key: protected_path(config), broker });
 }
 
 /// One short-lived token: the mail CLI, run here with the key, prints {"token", "expiry"}.
-async fn mint(script: &Path, key: &Path, service: &str, mailbox: &str) -> Result<Value, String> {
-    let mut cmd = tokio::process::Command::new(script);
+async fn mint(how: &Mint, service: &str, mailbox: &str) -> Result<Value, String> {
+    let mut cmd = tokio::process::Command::new(&how.script);
     cmd.args(["mint-token", "--mailbox", mailbox, "--service", service])
         .current_dir(crate::env::root())
         .env_remove("HUB_TOKEN")
-        .env("GOOGLE_SA_KEY", key)
+        .env_remove("TICO_GOOGLE_BROKER_URL")
+        .env_remove("TICO_GOOGLE_BROKER_AUTH")
+        .env("GOOGLE_SA_KEY", &how.key)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
+    if let Some((url, token)) = &how.broker {
+        cmd.env("TICO_GOOGLE_BROKER_URL", url).env("TICO_GOOGLE_BROKER_AUTH", token);
+    }
     if crate::isolation::enabled() {
         // The mail CLI's database is shared with message bots in the same group (connectors.mail_umask).
         // SAFETY: the closure only calls umask.
@@ -304,7 +319,7 @@ async fn mint(script: &Path, key: &Path, service: &str, mailbox: &str) -> Result
 pub async fn answer(allowed: &BTreeSet<String>, asked: &Value) -> Value {
     let service = asked.get("service").and_then(|s| s.as_str()).unwrap_or_default();
     let mailbox = crate::manifest::text_or_empty(asked.get("mailbox")).trim().to_lowercase();
-    let Some((script, key)) = MINT.get() else { return json!({"error": "no mail access"}) };
+    let Some(how) = MINT.get() else { return json!({"error": "no mail access"}) };
     if !asked.is_object() || !SERVICES.contains(&service) {
         return json!({"error": "no mail access"});
     }
@@ -314,7 +329,7 @@ pub async fn answer(allowed: &BTreeSet<String>, asked: &Value) -> Value {
     if !allowed.contains(&mailbox) {
         return json!({"error": "not this bot's mailbox", "mailboxes": allowed.iter().collect::<Vec<_>>()});
     }
-    match mint(script, key, service, &mailbox).await {
+    match mint(how, service, &mailbox).await {
         Ok(granted) if granted.is_object() && crate::util::truthy(Some(&granted)) => {
             let mut reply = json!({"token": granted["token"], "expiry": granted.get("expiry").cloned().unwrap_or(json!(""))});
             // A person's own connected account (connectors/mail/oauth.py): the turn refuses a write it did not grant.
@@ -421,8 +436,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tico-mint-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("mail.sh");
-        crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
-        let _ = MINT.set((script, dir.join(FILE)));
+        crate::util::write_script(&script, "#!/bin/sh\n[ -z \"$HUB_TOKEN\" ] || exit 9\n[ \"$TICO_GOOGLE_BROKER_URL $TICO_GOOGLE_BROKER_AUTH\" = \"https://t.example runner-token\" ] || exit 8\ncase \"$3\" in ben@*) s=', \"scopes\": [\"gmail.readonly\"]';; *) s='';; esac\nprintf '{\"token\": \"ya29.%s-%s\", \"expiry\": \"soon\", \"key\": \"%s\"%s}' \"$3\" \"$5\" \"$GOOGLE_SA_KEY\" \"$s\"\n");
+        // The server that refreshes a Connect Google grant reaches the CLI; the hub token never does.
+        let broker = Some(("https://t.example".to_string(), "runner-token".to_string()));
+        let _ = MINT.set(Mint { script, key: dir.join(FILE), broker });
         let allowed: BTreeSet<String> = mailboxes(&json!({"mailboxes": ["Ana@Acme.example", "ben@acme.example"]}));
         assert_eq!(answer(&allowed, &json!({"service": "drive", "mailbox": "ana@acme.example"})).await, json!({"error": "no mail access"}));
         assert_eq!(answer(&BTreeSet::new(), &json!({"service": "gmail", "mailbox": "x@y"})).await, json!({"error": "no mailbox", "mailboxes": []}));

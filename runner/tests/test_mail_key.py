@@ -286,3 +286,19 @@ def test_a_corrupt_workspace_grants_file_leaves_the_protected_one_alone(tmp_path
         mail_key.protect(config)                                    # logs, never raises
         assert (home / "state-r1" / mail_key.GRANTS).read_text() == protected
         assert (secrets / mail_key.GRANTS).is_file()                # left for a person to look at
+
+
+def test_the_supervisor_s_mint_reaches_the_server_that_refreshes_connect_google_never_with_the_hub_token(
+        tmp_path, monkeypatch):
+    script = tmp_path / "mail.sh"
+    script.write_text('#!/bin/sh\n[ -z "$HUB_TOKEN" ] || exit 9\n'
+                      'printf \'{"token": "ya29.t", "expiry": "", "url": "%s", "auth": "%s"}\' '
+                      '"$TICO_GOOGLE_BROKER_URL" "$TICO_GOOGLE_BROKER_AUTH"\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("HUB_TOKEN", "hub-token")
+    monkeypatch.setenv("TICO_GOOGLE_BROKER_AUTH", "inherited")       # never one the runner did not set itself
+    config = {"url": "https://team.acme.example", "token": "runner-token", "state_dir": str(tmp_path)}
+    minted = mail_key.minter(config, script)("gmail", "ana@acme.example")
+    assert (minted["url"], minted["auth"]) == ("https://team.acme.example", "runner-token")
+    minted = mail_key.minter({"state_dir": str(tmp_path)}, script)("gmail", "ana@acme.example")
+    assert (minted["url"], minted["auth"]) == ("", "")

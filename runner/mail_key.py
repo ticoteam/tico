@@ -200,12 +200,12 @@ def held_by_computer(config):
 
 def minter(config, script=None):
     """(service, mailbox) -> {"token", "expiry"}: the mail CLI, run here with the key, prints one token."""
-    from .connectors import mail_umask
+    from .connectors import mail_cli_env, mail_umask
     script = script or ROOT / "scripts" / "mail.sh"
     key = protected_path(config)
 
     def mint(service, mailbox):
-        env = {k: v for k, v in os.environ.items() if k != "HUB_TOKEN"}
+        env = mail_cli_env(config, key)
         env["GOOGLE_SA_KEY"] = str(key)
         result = subprocess.run([str(script), "mint-token", "--mailbox", mailbox, "--service", service],
                                 cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True,
