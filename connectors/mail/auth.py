@@ -1,6 +1,9 @@
-"""Service account + domain-wide delegation.
+"""Google access for one mailbox: that person's own connected account, else the service account.
 
-One Google service account acts as every mailbox. The key is never in a bot's environment;
+A person can connect their own Google account (connectors/mail/oauth.py): no domain-wide delegation, and the
+grant reaches only their mailbox and calendar. A mailbox with such a grant is always served from it, never
+from the service account. Otherwise one Google service account with domain-wide delegation acts as every
+mailbox. The key is never in a bot's environment;
 this module reads it by path (`GOOGLE_SA_KEY`, default <projects>/secrets/google-sa.json) and
 mints a credential impersonating one mailbox at a time (`subject=`).
 
@@ -14,7 +17,7 @@ rules, the database, the tests - works with nothing installed.
 import json, os, stat
 from pathlib import Path
 
-from . import DEFAULT_KEY, Failure
+from . import DEFAULT_KEY, Failure, oauth
 
 KEY_ENV = "GOOGLE_SA_KEY"
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
@@ -27,7 +30,8 @@ REQUIRED_FIELDS = ("type", "client_email", "client_id", "private_key", "token_ur
 SETUP_HINT = ("The owner creates it once: Google Cloud console > project acme-tico-hub > enable "
               "the Gmail API and the Google Calendar API > IAM & Admin > Service Accounts > "
               "company-hub-mail > Keys > Add key > JSON. Save it as the path above and "
-              "`chmod 600` it. Full steps: connectors/mail/README.md.")
+              "`chmod 600` it. Full steps: connectors/mail/README.md. Without domain-wide delegation, "
+              "each person connects their own account instead: docs/mail.md, Connect your Google account.")
 
 
 def key_path():
@@ -78,11 +82,13 @@ def delegation_hint(scope, client_id):
 
 
 def mint_token(mailbox, service):
-    """(access token, ISO expiry) acting as `mailbox`, from the key file. Only the supervisor can read it."""
+    """(access token, ISO expiry, granted scopes or None) acting as `mailbox`, from its grant or the key file.
+    Only the supervisor reads them. The scopes travel with the token so a turn refuses what was not granted."""
     creds = credentials(mailbox, SERVICE_SCOPES[service], key_only=True)
-    from google.auth.transport.requests import Request  # noqa: PLC0415
-    creds.refresh(Request())
-    return creds.token, creds.expiry.isoformat() if creds.expiry else ""
+    if not creds.token:
+        from google.auth.transport.requests import Request  # noqa: PLC0415
+        creds.refresh(Request())
+    return creds.token, creds.expiry.isoformat() if creds.expiry else "", getattr(creds, "_tico_granted", None)
 
 
 def supervisor_token(mailbox, scopes):
@@ -113,6 +119,9 @@ def supervisor_token(mailbox, scopes):
             raise Failure(f"the runner would not let this turn act as {mailbox}; this bot may use {', '.join(e.mailboxes)}",
                           "The server names those for this bot, not its bot.yaml. If the address is wrong, an owner or admin "
                           'sets it: POST /api/v2/access/people/<person> {"mailbox": "<address>"}. docs/mail.md, Who can read the key.')
+        reason = getattr(e, "reason", "") or str(e)
+        if reason in ("signin", "admin_policy", "app_config", "app_unavailable"):
+            raise oauth.refused(reason, mailbox)
         raise Failure(f"the runner would not give this turn access to {mailbox}: {e}",
                       "The run's attempt is not known to the runner, or it has ended. docs/mail.md, Works on Linux runners.")
 
@@ -123,7 +132,13 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
         granted = supervisor_token(mailbox, scopes)
         if granted:
             from google.oauth2.credentials import Credentials     # noqa: PLC0415
-            return Credentials(token=granted["token"])
+            creds = Credentials(token=granted["token"])
+            if isinstance(granted.get("scopes"), list):           # a connected account: what it granted
+                creds._tico_granted = [str(s) for s in granted["scopes"]]
+            return creds
+    found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
+    if found:
+        return person_credentials(mailbox, found, scopes)
     try:
         from google.oauth2 import service_account       # noqa: PLC0415
     except ImportError:
@@ -136,6 +151,45 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
     return creds.with_subject(mailbox)
 
 
+def person_credentials(mailbox, found, scopes=None):
+    """A refreshed credential from `mailbox`'s own grant, narrowed to the granted scopes of the asked service.
+    A refresh that fails names the reconnect; it never falls back to the service account."""
+    service = next((k for k, v in SERVICE_SCOPES.items() if list(scopes or []) == v), None)
+    if service:
+        chosen = oauth.service_scopes(found, service, mailbox)
+    else:                                               # both services: whatever of them was granted
+        chosen = [s for k in SERVICE_SCOPES for s in oauth.SERVICE_SCOPES[k] if s in set(found.get("scopes") or [])]
+        if not chosen:
+            oauth.service_scopes(found, "gmail", mailbox)
+    try:
+        from google.auth.exceptions import RefreshError, TransportError    # noqa: PLC0415
+        from google.auth.transport.requests import Request    # noqa: PLC0415
+        from google.oauth2.credentials import Credentials     # noqa: PLC0415
+    except ImportError:
+        raise Failure("the google-auth library is not installed",
+                      "Run mail through scripts/mail.sh, which builds the venv "
+                      "(connectors/mail/requirements.txt).")
+    creds = Credentials(token=None, refresh_token=found["refresh_token"], token_uri=found["token_uri"],
+                        client_id=found["client_id"], client_secret=found["client_secret"], scopes=chosen)
+    try:
+        creds.refresh(Request())
+    except RefreshError as e:
+        reason = str(e.args[0] if e.args else e).split(":")[0].strip() or "refused"
+        kind = oauth.reason_of(reason)
+        raise oauth.refused(kind if kind in ("admin_policy", "app_config", "app_unavailable") else "signin",
+                            mailbox, reason)
+    except TransportError as e:
+        raise Failure(f"could not reach Google to refresh {mailbox}'s access: {type(e).__name__}",
+                      "Check this computer's network, then try again.")
+    creds._tico_granted = chosen
+    return creds
+
+
+def source(mailbox, path=None):
+    """'oauth' when `mailbox` has its own connected Google account here, else 'service_account'."""
+    return "oauth" if oauth.grant(mailbox, oauth.grants_path(path) if path else None) else "service_account"
+
+
 def build_service(api, version, mailbox, scopes=None, path=None):
     try:
         from googleapiclient.discovery import build     # noqa: PLC0415
@@ -146,8 +200,10 @@ def build_service(api, version, mailbox, scopes=None, path=None):
     # A test seam for the container smoke: a fake Google on this address. Unset, Google's own.
     endpoint = os.environ.get("TICO_GOOGLE_API_ENDPOINT")
     options = {"client_options": {"api_endpoint": endpoint}} if endpoint else {}
-    return build(api, version, credentials=credentials(mailbox, scopes, path),
-                 cache_discovery=False, **options)
+    creds = credentials(mailbox, scopes, path)
+    service = build(api, version, credentials=creds, cache_discovery=False, **options)
+    service._tico_granted = getattr(creds, "_tico_granted", None)      # oauth.require reads it
+    return service
 
 
 def gmail_service(mailbox, path=None):

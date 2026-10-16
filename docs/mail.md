@@ -405,6 +405,7 @@ or find it with `docker ps`. Only the optional unnamed manual install uses `tico
 See [Computer sign-in and diagnostics](install.md#linux-or-cloud-server-docker).
 
 1. Create the Google service account with domain-wide delegation once (`connectors/mail/README.md`, Setup), and download its JSON key.
+   Without delegation, each person connects their own account instead ([Connect your Google account](#connect-your-google-account)) and you skip step 2.
 2. Put the key on **one** runner, in the runner's own state directory, where only the runner can read it (owner `ticorun`, mode 0600):
    `docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`.
    A key left in `workspace/secrets/google-sa.json` (an older install, or an older version of this page) is moved there within
@@ -441,6 +442,90 @@ after an hour, and shows one issue in Settings > Health that names the mailbox a
 `Mail can't refresh for ana@acme-signin.example: the Google service account has no domain-wide delegation for the domain acme-signin.example`.
 Fix it by adding the delegation for that domain in the Google Workspace admin console, or by giving the message bot a mailbox on
 a domain the key covers. The issue goes away on its own once the mailbox syncs.
+
+### Connect your Google account
+
+A person can connect their own Google account from Tico, with no service account, no domain-wide delegation, no
+Workspace admin console and no Google Cloud project of their own. It works for an ordinary mailbox user who can sign in.
+Tico supplies the Google app ("Tico") and the consent screen. Google itself enforces what Tico may do: the grant belongs to
+the account that signed in and cannot reach anyone else in the Workspace.
+
+1. In Tico, the person opens **Settings > Inbox** and chooses **Connect Google**. Tico names the mailbox it will connect:
+   the one their message bot manages.
+2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. Nothing that writes or
+   sends is asked for.
+3. Google returns them to Tico. The computer that runs the mail sync finishes the sign-in and keeps the grant. Settings
+   shows that it is connected, read only, and the sync starts on its next cycle. The server sees a one-time code for a few
+   minutes and never the grant itself.
+
+Tico refuses any other account: if Google says someone else signed in, nothing is stored and that grant is revoked at
+once. Only the person can connect their own mailbox; an owner cannot connect it for them.
+
+What it allows: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
+`calendar.calendarlist.readonly`. A bot's `read` verb in Tico also covers labelling, archiving and triage, but a
+read-only grant cannot do those at Google, so Tico refuses them before calling Google (exit 2, "connected to Tico
+read-only at Google"). Sending stays off ([Turning sending on](#turning-sending-on)). Tico never asks Google for more on
+its own.
+
+When Google says no. A Workspace's admin can block apps for everyone in it. Tico cannot get around that and does not
+try. When Google answers `admin_policy_enforced`, Settings says so in those words: "The Google Workspace for
+acme.example has a policy that blocks Tico", and that only a Workspace admin can allow it (Admin console > Security >
+API controls > App access control > Tico). Google sometimes shows that block on its own page ("Access blocked: Tico is
+not approved by your admin", Error 400 `admin_policy_enforced`) and never sends the person back; it is the same block.
+A cancelled consent reads as "not approved", and a problem with Tico's own Google app says it is Tico's to fix.
+
+Reconnect and revoke:
+- If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
+  later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
+  to a service account for that mailbox. **Connect Google** again replaces the grant.
+- **Disconnect** in Settings > Inbox revokes the grant at Google and deletes it from the computer that holds it.
+  A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
+  already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
+  holds nothing, and Settings shows that instead of "disconnected".
+
+Where the grant is kept: `google-oauth.json` beside `google-sa.json` (the runner's state directory on Linux, mode 0600,
+closed to bots). It moves out of `workspace/secrets` without dropping other grants, and follows a re-enrollment the
+same way the key does. No token reaches a bot's environment, a log or a report: a message bot's run still gets an
+hour-long token for one mailbox the server named for it, and nothing else. A computer can hold both a key and grants:
+mailboxes without a connected account still use the service account, if there is one.
+
+Tico's Google app, testing and verification. Each Tico server names its own OAuth client, so there are two honest
+ways to supply it:
+- **A private app for one server** (for example one person's own mailbox). A Google Cloud project used by that server
+  alone, by fewer than 100 people its operator knows, is a personal-use app, which Google lists as exempt from
+  verification (support.google.com/cloud/answer/13464323). Publish it **In production** without submitting it for
+  verification. Each person then sees Google's "Google hasn't verified this app" screen before consent and continues
+  with **Advanced**. The project can never have more than 100 users in total, and Google's API Services User Data
+  Policy still applies. Name it honestly as private to that server, never as Tico's public app, and don't share one
+  such client across servers to stay under the cap. Google's 7-day limit applies to apps in **Testing**, so an app in
+  production should keep its grants; check that on the real project by seeing a sync still work after the eighth day.
+- **Tico's public app** for every team. Lasting grants for anyone need it **In production** and verified by Google.
+  `gmail.readonly` is a restricted scope, so verification includes Google's yearly security assessment. Until then an
+  app in **Testing** takes at most 100 listed test users, and Google ends each grant after 7 days. That is enough to
+  try Connect Google, not for lasting sync.
+
+The computer that syncs mail keeps each grant together with the app's client secret, because Google refreshes a
+grant only with the client that issued it. For a private app that is the same organization's secret on its own
+computer. Tico's public app must not hand its secret to every team's computers this way: it is not to be switched on
+until the server refreshes grants on the computers' behalf (the computer sends the refresh token, the server adds the
+secret and returns only an hour-long access token, keeping nothing).
+
+Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
+Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
+app avoids verification only for accounts in the Workspace that owns the project.
+
+Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
+use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
+
+For the Tico server's operator: Connect Google needs Tico's OAuth client on the server (`TICO_GOOGLE_OAUTH_CLIENT_ID`,
+`TICO_GOOGLE_OAUTH_CLIENT_SECRET`, a Web application client whose redirect URI is
+`<TICO_PUBLIC_URL>/api/v2/mail/google/callback`). Without it, Settings says Connect Google is not available on this
+server. A self-hosted team may use its own client the same way, or connect from the runner with
+`scripts/mail.sh google connect --mailbox <address> --client-file client.json` (a Desktop app client). `google status`,
+`google revoke` and `doctor` list, remove and check grants there.
+
+IMAP is not an alternative here: Google's OAuth for IMAP needs full-mail access, it carries no calendar, and a Workspace
+that blocks apps usually blocks IMAP as well.
 
 ### Who can read the key
 
@@ -483,6 +568,7 @@ the job (and show a sign-in problem in Settings until the key is there).
 | `TICO_MAIL_VENV` | `<projects>/runtime/mail/venv` | `<tools>/mail-venv` for the `connectors` job; a bot's run is given `TICO_PROJECTS_DIR`, so its first `mail.sh` builds `<home>/workspace/runtime/mail/venv` (the bot user can write it) |
 | `TICO_MAIL_RUNTIME_DIR` mail.db, audit log | `<projects>/runtime/mail` | same, under `workspace/runtime/mail` |
 | `GOOGLE_SA_KEY` | `<projects>/secrets/google-sa.json` | the runner's state directory (`~/state-<id>/google-sa.json`) |
+| `GOOGLE_OAUTH_GRANTS` connected accounts | `google-oauth.json` beside the key | beside the key, in the runner's state directory |
 | `TICO_REGISTRY_DIR` | `<checkout>/registry` | unset: the sync needs no registry; per-bot mailbox rules do. There is no `mail-policy.yaml` either, so the mail policy is the built-in one (below) |
 | `TICO_INTERNAL_DOMAINS` | the domains the policy file lists | optional, comma separated: the team's own mail domains when there is no policy file. Without it they come from the bot's mailbox and the team roster |
 
