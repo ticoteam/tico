@@ -186,6 +186,31 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
         assert H.task(c, task['id'])['status'] != 'done'
 
 
+def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(api):
+    from backend.tests.test_member_bots import finish
+    machine, task = task_goal_world(api)
+    first = claim(api, machine)
+    assert first['chat_goal']['status'] == 'active'
+    finish(api, machine, first)
+    assign(api, machine, 'product-design')
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
+         'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {'schema_version': 1, 'bots': {
+         'ops': {'ready': True, 'runtime': 'codex', 'goals': True},
+         'product-design': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
+    with api.app.state.store.transaction() as c:      # the owner tells another bot, in the task's room
+        conv = H.conversation(c, task['conversation_id'])
+        H._write_message(c, 'bot:ops', 'bot:product-design', 'The summary is drafted.', conv, 'say',
+                         {'task': task['id']}, None, None)
+    other = claim(api, machine)
+    assert other['bot'] == 'product-design' and other['task']['id'] == task['id']
+    goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
+    assert goal['id'] == first['chat_goal']['id'] and goal['status'] == 'active'
+    with api.app.state.store.read() as c:
+        queued = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' "
+                           "AND json_extract(m.refs_json,'$.goal_action') IS NOT NULL").fetchone()[0]
+    assert queued == 0
+
+
 def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api):
     machine, task = task_goal_world(api)
     attempt = claim(api, machine)

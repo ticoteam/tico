@@ -1295,8 +1295,10 @@ class Execution:
                                  "checkpoint_by": root.get("checkpoint_by") if kept else None})
             own_room = conv and conv.get("kind") == "task" and conv.get("task_id") == task["id"]
             from .chat_goals import clear_task_goal, task_goal_row
-            if own_room and not goal:
-                # goal:off, or the bot's task_goal turned off: the goal Tico set for the task ends.
+            if own_room and not goal and task.get("owner") == "bot:" + row["bot"]:
+                # goal:off, or the bot's task_goal turned off: the goal Tico set for the task ends. Only the
+                # owner's turn decides that: task_goal is None for any other bot, such as the requester answering
+                # in the room, and its turn says nothing about the owner's goal.
                 clear_task_goal(c, conv)
             if (goal and own_room and lane != sessions.MAIN_LANE and task_goals_on(runner)
                     and task.get("session_task_id", task["id"]) == task["id"]):
