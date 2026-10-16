@@ -224,6 +224,24 @@ fn read_status(directory: &Path) -> Value {
     }
 }
 
+/// The saved Docker update hold: None when there is none, an error when one is there but cannot be read.
+fn read_hold(path: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) if v["to"].as_str().is_some_and(|to| !to.is_empty()) => Ok(Some(text_of(&v["to"]))),
+            _ => Err("it does not name an update".into()),
+        },
+    }
+}
+
+fn write_hold(directory: &Path, to: &str) -> std::io::Result<()> {
+    let tmp = directory.join("docker-update-hold.tmp");
+    std::fs::write(&tmp, json!({"to": to}).to_string())?;
+    std::fs::rename(tmp, directory.join(HOLD_FILE))
+}
+
 fn write_status(directory: &Path, fields: Value) {
     let path = directory.join(STATUS_FILE);
     let tmp = directory.join("update-status.tmp");
@@ -293,6 +311,9 @@ struct Inner {
     prepare_after: Option<Instant>,
     /// The checkout moved to newer runner code: exit once no turn runs, never draining for it (service.py restart_due).
     restart_due: bool,
+    /// The Docker update this process saw changing containers (Follower::unsettled): held here as well as on disk,
+    /// so a hold that could not be saved is not forgotten while this process runs.
+    docker_hold: Option<String>,
 }
 
 pub struct Follower {
@@ -437,30 +458,62 @@ impl Follower {
 
     /// Why this runner must hold work for a Docker update that may still change containers, or None. Once the updater
     /// says `restarting` or `uncertain`, Docker may stop this runner (an accepted stop outlives its client), so the
-    /// hold is written to disk and ends only when the updater answers with that update's outcome: not when it stops
-    /// answering, loses its status, or this runner restarts. A missing updater with no such update keeps claiming.
+    /// hold is kept in memory and on disk and ends only when the updater answers with that update's outcome: not when
+    /// it stops answering, loses its status, or this runner restarts. A saved hold that cannot be read holds until it
+    /// is removed. Only no hold at all, with no such update, lets a missing updater leave the runner claiming.
     async fn unsettled(&self) -> Option<String> {
-        if self.kind != "docker" || self.sidecar.url.is_empty() {
+        if self.kind != "docker" {
             return None;
         }
         let path = self.directory.join(HOLD_FILE);
-        let held = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).map(|h| text_of(&h["to"]));
+        let saved = read_hold(&path);
+        let memory = self.inner.lock().unwrap().docker_hold.clone();
+        let held: Option<Result<String, String>> = match (&memory, &saved) {
+            (Some(to), _) => Some(Ok(to.clone())),
+            (None, Ok(to)) => to.clone().map(Ok),
+            (None, Err(why)) => Some(Err(why.clone())),
+        };
+        let unknown = |why: &str| {
+            format!("holding work: the saved hold for a Docker update at {} cannot be read ({why}); it holds until it is removed, once the updater shows the runner settled", path.display())
+        };
+        if self.sidecar.url.is_empty() {
+            return held.map(|h| match h {
+                Ok(to) => format!("holding work: the updater was changing containers for {to} and no updater is set up"),
+                Err(why) => unknown(&why),
+            });
+        }
         let answer = self.sidecar.call(None).await;
         let (state, to) = match &answer {
             Ok(status) => (status["state"].as_str().unwrap_or_default().to_string(), text_of(&status["to"])),
             Err(_) => (String::new(), String::new()),
         };
         if state == "restarting" || state == "uncertain" {
-            if held.as_deref() != Some(to.as_str()) {
-                let _ = std::fs::write(&path, json!({"to": to}).to_string());
+            self.inner.lock().unwrap().docker_hold = Some(to.clone());
+            let mut message = answer.map(|status| text_of(&status["message"])).unwrap_or_default();
+            if saved.as_ref().ok() != Some(&Some(to.clone())) {
+                if let Err(e) = write_hold(&self.directory, &to) {   // tried again on every check while it fails
+                    message = format!("{message} (could not save this hold, so a restart would lose it: {e})").trim().to_string();
+                }
             }
-            return Some(answer.map(|status| text_of(&status["message"])).unwrap_or_default());
+            return Some(message);
         }
-        let held = held?;
-        if matches!(state.as_str(), "rolled_back" | "failed" | "healthy") && to == held {
-            let _ = std::fs::remove_file(&path);
-            return None;
+        let held = match held? {
+            Ok(to) => to,
+            Err(why) => return Some(unknown(&why)),
+        };
+        // Settled only by that update's own outcome; a target that is not known never matches.
+        if !held.is_empty() && to == held && matches!(state.as_str(), "rolled_back" | "failed" | "healthy") {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    Some(format!("holding work: the update to {held} settled, but its saved hold could not be removed: {e}"))
+                }
+                _ => {
+                    self.inner.lock().unwrap().docker_hold = None;
+                    None
+                }
+            };
         }
+        let held = if held.is_empty() { "an unknown release".to_string() } else { held };
         Some(match answer {
             Ok(_) => format!("holding work: the updater was changing containers for {held} and has not said how that ended (it says {})", if state.is_empty() { "nothing" } else { &state }),
             Err(code) if code == "unreachable" => format!("holding work: the updater was changing containers for {held} and does not answer"),
@@ -877,6 +930,64 @@ mod tests {
         let f = docker_follower(&dir, "http://127.0.0.1:9", "0.3.46");
         f.decide().await;
         assert!(!f.blocks_claims(false).await);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_docker_hold_that_cannot_be_saved_or_read_still_holds() {
+        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = std::sync::Arc::new(Mutex::new(r#"{"state": "uncertain", "to": "v0.3.47", "message": "Not settled"}"#.to_string()));
+        let url = fake_updater(body.clone()).await;
+        let holds = |f: &Follower| f.inner.lock().unwrap().running;
+        let behind = |f: &Follower| *f.inner.lock().unwrap() = Inner { state: "idle".into(), desired: Some("0.3.47".into()), ..Default::default() };
+
+        // Seen but not saved, with nothing on disk (the save's temporary file is blocked): only memory holds it.
+        std::fs::create_dir_all(dir.join("docker-update-hold.tmp")).unwrap();
+        let f = docker_follower(&dir, &url, "0.3.47");
+        f.decide().await;
+        assert!(holds(&f) && f.inner.lock().unwrap().error.contains("could not save this hold"));
+        assert!(!dir.join(HOLD_FILE).exists());
+        let quiet = Follower { sidecar: Sidecar { url: "http://127.0.0.1:9".into(), token_file: dir.join("t") }, ..f };
+        quiet.decide().await;
+        assert!(holds(&quiet) && quiet.blocks_claims(false).await);
+        std::fs::remove_dir(dir.join("docker-update-hold.tmp")).unwrap();
+
+        // The same with the hold's own place blocked, so it can be neither saved nor read.
+        std::fs::create_dir_all(dir.join(HOLD_FILE)).unwrap(); // a directory where the hold goes
+        let f = docker_follower(&dir, &url, "0.3.47");
+        f.decide().await;
+        assert!(holds(&f) && f.inner.lock().unwrap().error.contains("could not save this hold"));
+        let quiet = Follower { sidecar: Sidecar { url: "http://127.0.0.1:9".into(), token_file: dir.join("t") }, ..f };
+        quiet.decide().await;
+        assert!(holds(&quiet) && quiet.blocks_claims(false).await);
+
+        // A fresh runner, on the new release or still behind it: the unreadable hold holds, even past an outcome.
+        *body.lock().unwrap() = r#"{"state": "rolled_back", "to": "v0.3.47"}"#.into();
+        for (url, release) in [("http://127.0.0.1:9", "0.3.47"), ("", "0.3.47"), (url.as_str(), "0.3.46"), ("http://127.0.0.1:9", "0.3.46")] {
+            let f = docker_follower(&dir, url, release);
+            behind(&f);
+            f.decide().await;
+            assert!(holds(&f) && f.blocks_claims(false).await, "{url} {release}");
+            assert!(f.inner.lock().unwrap().error.contains("cannot be read"), "{url} {release}");
+        }
+
+        // A saved hold that does not name an update holds the same way, until it is removed.
+        std::fs::remove_dir(dir.join(HOLD_FILE)).unwrap();
+        for bad in ["{", r#"{"to": ""}"#] {
+            std::fs::write(dir.join(HOLD_FILE), bad).unwrap();
+            for release in ["0.3.47", "0.3.46"] {
+                let f = docker_follower(&dir, "http://127.0.0.1:9", release);
+                behind(&f);
+                f.decide().await;
+                assert!(holds(&f) && f.blocks_claims(false).await, "{bad} {release}");
+            }
+        }
+        std::fs::remove_file(dir.join(HOLD_FILE)).unwrap();
+        let f = docker_follower(&dir, "http://127.0.0.1:9", "0.3.46");
+        behind(&f);
+        f.decide().await;
+        assert!(!holds(&f) && !f.blocks_claims(false).await); // no hold at all: a missing updater still claims
         let _ = std::fs::remove_dir_all(dir);
     }
 
