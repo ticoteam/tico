@@ -51,6 +51,7 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
     limiter = limiter or Limiter()
     tickets = tickets or Tickets(db)
     notices = Notices(db)
+    tickets.on_release = notices.catch_up
     watch = watch or Watch(notices, latest, **(watch_args or {}))
     header = client_ip_header.strip().lower()
 

@@ -24,6 +24,7 @@ fixed-in reply on every open or answered request linked to one of them. The Supp
 """
 import re
 import threading
+from contextlib import contextmanager
 
 import httpx
 from fastapi import Request
@@ -36,7 +37,13 @@ MAX_NOTICE = 280
 MAX_TITLE = 200
 MAX_LISTED = 50
 REF = re.compile(r"#?([0-9]{1,7})")
-MENTION = re.compile(r"(?<![\w/])#([0-9]{1,7})\b")
+# What a commit says it fixes: the pull request a merge commit names, a squash merge's trailing "(#123)" on its subject,
+# and "fixes/closes/resolves #123" anywhere in it. A bare "#123" ("part 1 of #415", "refs #700") is not a fix.
+MERGED = re.compile(r"^Merge pull request #([0-9]{1,7})\b")
+SQUASHED = re.compile(r"\(#([0-9]{1,7})\)\s*$")
+FIXES = re.compile(r"\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s*:?\s+#([0-9]{1,7})\b", re.I)
+PER_PAGE = 100
+MAX_PAGES = 30             # 3000 commits between two releases; more than that is read as GitHub not answering
 URL = re.compile(r"https://[^\s<>\"']{1,490}")
 # A message's versions: a release ("0.3.50") or a whole minor line ("0.2"). Matched the same way on both sides.
 VERSIONS = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?")
@@ -56,6 +63,7 @@ CREATE TABLE IF NOT EXISTS ticket_fixes(
  ticket_id TEXT NOT NULL, ref INTEGER NOT NULL, linked TEXT NOT NULL, fixed_in TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(ticket_id, ref));
 CREATE TABLE IF NOT EXISTS release_sweeps(tag TEXT PRIMARY KEY, swept TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS shipped_refs(ref INTEGER PRIMARY KEY, tag TEXT NOT NULL, url TEXT NOT NULL, shipped TEXT NOT NULL);
 """
 
 
@@ -75,6 +83,20 @@ def affected(issue, version):
     """Whether a known issue is in `version`: from `since`, until the release that fixed it."""
     have, since, fixed = triple(version), triple(issue["since"]), triple(issue.get("fixed_in"))
     return bool(have and since) and since <= have and not (fixed and have >= fixed)
+
+
+def fixed_refs(message):
+    """The issue and pull request numbers one commit message says it fixes. A revert fixes nothing."""
+    message = str(message or "")
+    subject = message.split("\n", 1)[0].strip()
+    if subject.lower().startswith("revert"):
+        return set()
+    found = {int(n) for n in FIXES.findall(message)}
+    for pattern in (MERGED, SQUASHED):
+        match = pattern.search(subject)
+        if match:
+            found.add(int(match.group(1)))
+    return found
 
 
 def fixed_text(tag, url):
@@ -189,35 +211,70 @@ class Notices:
 
     def shipped(self, tag, url, refs):
         """A release shipped `refs`: the fixed-in reply on each open or answered request linked to one, once per
-        request, and each known issue linked to one marked fixed in it. Running it again posts nothing new."""
+        request, and each known issue linked to one marked fixed in it. Running it again posts nothing new. A request
+        held as spam gets none; if a person releases it later, `catch_up` posts it then."""
         refs, version = sorted(set(refs)), tag.lstrip("v")
-        body, moment = fixed_text(tag, url), stamp(self.now())
         posted, issues = [], []
         if not refs:
             return {"tag": tag, "notified": posted, "known_issues_fixed": issues}
-        marks = ",".join("?" * len(refs))
-        with self.db.lock:
+        marks, moment = ",".join("?" * len(refs)), stamp(self.now())
+        with self.db.lock, self._transaction():
+            self.db.conn.executemany("INSERT OR IGNORE INTO shipped_refs(ref,tag,url,shipped) VALUES(?,?,?,?)",
+                                     [(ref, tag, url, moment) for ref in refs])
             rows = self.db.conn.execute(
                 f"SELECT DISTINCT t.* FROM ticket_fixes f JOIN tickets t ON t.ticket_id=f.ticket_id WHERE f.ref IN ({marks}) "
                 "AND f.fixed_in='' AND t.held=0", refs).fetchall()
             for row in rows:
-                self.db.conn.execute(f"UPDATE ticket_fixes SET fixed_in=? WHERE ticket_id=? AND ref IN ({marks})",
-                                     (version, row["ticket_id"], *refs))
-                if row["status"] == "closed" or self.db.conn.execute(
-                        "SELECT 1 FROM ticket_replies WHERE ticket_id=? AND author='staff' AND body=?",
-                        (row["ticket_id"], body)).fetchone():
-                    continue
-                reply = self.db.conn.execute("INSERT INTO ticket_replies(ticket_id,created,body,author) VALUES(?,?,?,'staff')",
-                                             (row["ticket_id"], moment, body)).lastrowid
-                self.db.conn.execute("UPDATE tickets SET status='answered', updated=?, email_pending=? WHERE ticket_id=?",
-                                     (moment, 1 if row["email"] else row["email_pending"], row["ticket_id"]))
-                posted.append({"ticket_id": row["ticket_id"], "reply_id": reply,
-                               "email_pending": bool(row["email"] or row["email_pending"])})
+                done = self._notify(row, tag, url, refs, moment)
+                if done:
+                    posted.append(done)
             for row in self.db.conn.execute(f"SELECT id FROM known_issues WHERE ref IN ({marks}) AND fixed_in=''",
                                             refs).fetchall():
                 self.db.conn.execute("UPDATE known_issues SET fixed_in=?, updated=? WHERE id=?", (version, moment, row["id"]))
                 issues.append(row["id"])
         return {"tag": tag, "notified": posted, "known_issues_fixed": issues}
+
+    def catch_up(self, ticket_id):
+        """A request a person released from the spam hold: if a release already shipped a fix it is linked to, the
+        fixed-in reply now, once (the first release that shipped one). Returns the notice posted, or None."""
+        moment = stamp(self.now())
+        with self.db.lock, self._transaction():
+            row = self.db.conn.execute("SELECT * FROM tickets WHERE ticket_id=? AND held=0", (ticket_id,)).fetchone()
+            first = self.db.conn.execute(
+                "SELECT s.tag, s.url FROM ticket_fixes f JOIN shipped_refs s ON s.ref=f.ref WHERE f.ticket_id=? "
+                "AND f.fixed_in='' ORDER BY s.shipped, s.tag LIMIT 1", (ticket_id,)).fetchone()
+            if not row or not first:
+                return None
+            refs = [r[0] for r in self.db.conn.execute(
+                "SELECT f.ref FROM ticket_fixes f JOIN shipped_refs s ON s.ref=f.ref WHERE f.ticket_id=? AND f.fixed_in=''",
+                (ticket_id,))]
+            return self._notify(row, first["tag"], first["url"], refs, moment)
+
+    def _notify(self, row, tag, url, refs, moment):
+        """One request's fixed-in reply, unless it is closed or already has it; its links to `refs` are marked either
+        way. Caller holds the lock, in a transaction."""
+        marks, body = ",".join("?" * len(refs)), fixed_text(tag, url)
+        self.db.conn.execute(f"UPDATE ticket_fixes SET fixed_in=? WHERE ticket_id=? AND ref IN ({marks})",
+                             (tag.lstrip("v"), row["ticket_id"], *refs))
+        if row["status"] == "closed" or self.db.conn.execute(
+                "SELECT 1 FROM ticket_replies WHERE ticket_id=? AND author='staff' AND body=?", (row["ticket_id"], body)).fetchone():
+            return None
+        reply = self.db.conn.execute("INSERT INTO ticket_replies(ticket_id,created,body,author) VALUES(?,?,?,'staff')",
+                                     (row["ticket_id"], moment, body)).lastrowid
+        self.db.conn.execute("UPDATE tickets SET status='answered', updated=?, email_pending=? WHERE ticket_id=?",
+                             (moment, 1 if row["email"] else row["email_pending"], row["ticket_id"]))
+        return {"ticket_id": row["ticket_id"], "reply_id": reply, "email_pending": bool(row["email"] or row["email_pending"])}
+
+    @contextmanager
+    def _transaction(self):
+        """All of a release's notices and marks, or none of them. Caller holds the lock."""
+        self.db.conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.db.conn.execute("ROLLBACK")
+            raise
+        self.db.conn.execute("COMMIT")
 
     # ------------------------------------------------------------------ the release watch
     def last_swept(self):
@@ -242,19 +299,29 @@ class Watch:
         self.lock = threading.Lock()
 
     def refs_between(self, base, head):
-        """Every #number the commits from `base` to `head` name, or None when GitHub did not answer."""
+        """Every issue or pull request the commits from `base` to `head` say they fix (fixed_refs), or None when GitHub
+        did not give all of them: the compare API pages its commits, so each page is read until `total_commits`."""
+        commits, total = [], None
         try:
             with httpx.Client(timeout=10, transport=self.transport) as http:
-                r = http.get(self.compare_url.format(base=base, head=head), headers=self.headers)
-            body = r.json() if r.status_code == 200 else None
+                for page in range(1, MAX_PAGES + 1):
+                    r = http.get(self.compare_url.format(base=base, head=head), headers=self.headers,
+                                 params={"per_page": PER_PAGE, "page": page})
+                    body = r.json() if r.status_code == 200 else None
+                    if not isinstance(body, dict) or not isinstance(body.get("commits"), list):
+                        return None
+                    if total is None:
+                        total = body.get("total_commits")
+                    commits += body["commits"]
+                    if not body["commits"] or not isinstance(total, int) or len(commits) >= total:
+                        break
         except (httpx.HTTPError, ValueError):
             return None
-        if not isinstance(body, dict) or not isinstance(body.get("commits"), list):
-            return None
+        if isinstance(total, int) and len(commits) < total:
+            return None                         # cut short: asked again on the next look rather than half-swept
         found = set()
-        for commit in body["commits"]:
-            message = ((commit or {}).get("commit") or {}).get("message") or ""
-            found.update(int(n) for n in MENTION.findall(str(message)))
+        for commit in commits:
+            found |= fixed_refs(((commit or {}).get("commit") or {}).get("message") or "")
         return found
 
     def check(self):
@@ -395,12 +462,14 @@ def install(app, notices, staff_only, watch):
             refs = [_ref(r) for r in refs] if refs is not None else None
         except Invalid as wrong:
             return refuse("invalid", 422, field=wrong.field)
-        if refs is None:
+        from_commits = refs is None
+        if from_commits:
             base = notices.last_swept()
             refs = watch.refs_between(base, tag) if base and base != tag else set()
             if refs is None:
                 return refuse("github_unavailable", 502)
         done = notices.shipped(tag, url, refs)
-        notices.mark_swept(tag)
+        if from_commits:                        # named refs leave the release's other commits to the watch
+            notices.mark_swept(tag)
         return no_store(done)
 

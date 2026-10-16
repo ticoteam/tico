@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from hq.app import create_app
 from hq.db import Database
-from hq.notices import Notices, Watch, affected, covers
+from hq.notices import Notices, Watch, affected, covers, fixed_refs
 
 STAFF = "s" * 32
 LINK = "https://github.com/ticoteam/tico/blob/main/docs/updates.md"
@@ -59,7 +59,9 @@ def client(db, release, commits, asked):
         if span not in commits:
             return httpx.Response(404, json={})
         return httpx.Response(200, json={"commits": [{"commit": {"message": m}} for m in commits[span]]})
-    app = create_app(db, release, staff_key=STAFF, watch_args={"transport": httpx.MockTransport(github)}, watch_every=0)
+    judge = lambda text: ("spam", "test") if "SPAM" in text else ("legit", "test")      # noqa: E731
+    app = create_app(db, release, staff_key=STAFF, watch_args={"transport": httpx.MockTransport(github)}, watch_every=0,
+                     judge=judge)
     with TestClient(app, client=("203.0.113.9", 5000)) as c:
         yield c
 
@@ -191,3 +193,59 @@ def test_a_staffed_hq_looks_for_releases_by_itself(db, release):
     looked.clear()
     with TestClient(create_app(db, release, watch=Stub(), watch_every=3600)):     # no staff key: no tickets to notify
         assert not looked.wait(0.5)
+
+
+def test_only_what_a_commit_says_it_fixes_counts():
+    assert fixed_refs("Merge pull request #712 from ticoteam/fix-board\n\nBoard fix") == {712}
+    assert fixed_refs("Fix the tunnel (#715)\n\nFixes #700, closes #701 and resolved: #702") == {715, 700, 701, 702}
+    for message in ('Revert "Fix the tunnel (#715)"\n\nThis reverts commit abc. Fixes #700', "Part 1 of #415",
+                    "Refs #700", "Escape &#39; in titles", "Split the board (#415, part 1)", "Test text #4821 (#)"):
+        assert fixed_refs(message) == set(), message
+
+
+def test_the_commit_list_is_read_page_by_page_and_a_short_one_is_not_swept(db, release):
+    messages = [f"Merge pull request #{n} from x" for n in range(1, 271)]
+
+    def github(request, cut=False):
+        page, per = int(request.url.params["page"]), int(request.url.params["per_page"])
+        chunk = messages[(page - 1) * per:page * per]
+        if cut and page == 3:
+            chunk = []
+        return httpx.Response(200, json={"total_commits": len(messages), "commits": [{"commit": {"message": m}} for m in chunk]})
+    full = Watch(Notices(db), release, transport=httpx.MockTransport(github))
+    assert full.refs_between("v0.3.51", "v0.3.52") == set(range(1, 271))
+    short = Watch(Notices(db), release, transport=httpx.MockTransport(lambda r: github(r, cut=True)))
+    assert short.refs_between("v0.3.51", "v0.3.52") is None
+    notices = Notices(db)
+    notices.mark_swept("v0.3.51")
+    release.tag = "v0.3.52"
+    assert short.check() is None and notices.last_swept() == "v0.3.51"      # asked again, not half-swept
+
+
+def test_named_refs_by_hand_leave_the_release_to_the_watch(client, db):
+    Notices(db).mark_swept("v0.3.51")
+    client.post("/v1/staff/releases", json={"tag": "v0.3.52", "refs": [712]}, headers=staff())
+    assert Notices(db).last_swept() == "v0.3.51"
+
+
+def test_a_held_request_gets_its_missed_notice_once_when_a_person_releases_it(client, db, release):
+    held = ticket(client)
+    spam = client.post("/v1/support", json={"message": "SPAM buy now", "version": "0.3.50"}).json()
+    for t in (held, spam):
+        client.post(f"/v1/staff/tickets/{t['ticket_id']}/fix", json={"ref": "#712"}, headers=staff())
+    done = client.post("/v1/staff/releases", json={"tag": "v0.3.52", "refs": [712]}, headers=staff()).json()
+    assert [n["ticket_id"] for n in done["notified"]] == [held["ticket_id"]]
+    mine = lambda: client.get(f"/v1/support/{spam['ticket_id']}", headers={"x-ticket-secret": spam["secret"]}).json()  # noqa: E731
+    assert mine()["messages"] == []
+    assert client.post(f"/v1/staff/tickets/{spam['ticket_id']}/verdict", json={"verdict": "legit"}, headers=staff()).status_code == 200
+    assert [m["body"] for m in mine()["messages"]] == [
+        "Fixed in v0.3.52, update here: https://github.com/ticoteam/tico/releases/tag/v0.3.52"]
+    client.post(f"/v1/staff/tickets/{spam['ticket_id']}/verdict", json={"verdict": "spam"}, headers=staff())
+    client.post(f"/v1/staff/tickets/{spam['ticket_id']}/verdict", json={"verdict": "legit"}, headers=staff())
+    assert len(mine()["messages"]) == 1
+    # A released request whose fix has not shipped gets nothing yet, and the release posts it as usual.
+    later = client.post("/v1/support", json={"message": "SPAM again", "version": "0.3.50"}).json()
+    client.post(f"/v1/staff/tickets/{later['ticket_id']}/fix", json={"ref": "#800"}, headers=staff())
+    client.post(f"/v1/staff/tickets/{later['ticket_id']}/verdict", json={"verdict": "legit"}, headers=staff())
+    assert client.get(f"/v1/support/{later['ticket_id']}", headers={"x-ticket-secret": later["secret"]}).json()["messages"] == []
+

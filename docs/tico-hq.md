@@ -75,10 +75,12 @@ The team writes them with the staff key (`Authorization: Bearer $HQ_STAFF_KEY`):
   (`software/hq-tickets link` in the Support Agent).
 
 **Fixed-in, by itself.** Every 15 minutes a staffed HQ looks at the latest release. When the tag changes it reads the commits since
-the tag it last saw (GitHub's compare API; `GITHUB_TOKEN` raises the rate limit, `HQ_COMPARE_URL` points elsewhere), collects
-every `#123` they name (a merge commit names its pull request; a commit can say `Fixes #700`), and on every open or answered request
-linked to one of them posts `Fixed in vX, update here: <release page>`. A known issue with that `ref` gets `fixed_in`. A request
-gets the notice once; a closed or held one gets none. The first tag an HQ sees is only remembered, and GitHub not answering means
-the next look tries again. `POST /v1/staff/releases` `{"tag": "v0.3.52", "refs": [712]}` does the same by hand (without `refs`, from
-the commits).
+the tag it last saw (GitHub's compare API, every page of it; `GITHUB_TOKEN` raises the rate limit, `HQ_COMPARE_URL` points
+elsewhere) and collects what they say they fix: the pull request a merge commit names, a squash merge's trailing `(#123)`, and
+`fixes`, `closes` or `resolves #123`. A bare `#123` is not a fix, and a revert fixes nothing. On every open or answered request
+linked to one of them it posts `Fixed in vX, update here: <release page>`. A known issue with that `ref` gets `fixed_in`. A request
+gets the notice once; a closed one gets none, and one held as spam gets it only if a person releases it (by correcting the verdict),
+then, once. The first tag an HQ sees is only remembered, and GitHub not answering, or not giving every commit, means the next look
+tries again. `POST /v1/staff/releases` `{"tag": "v0.3.52", "refs": [712]}` posts for those refs by hand and leaves the release's other
+commits to the watch; without `refs` it reads the commits and counts as the watch's look.
 
