@@ -34,7 +34,8 @@
         "mpim:history",
         "mpim:read",
         "app_mentions:read",
-        "files:read"
+        "files:read",
+        "files:write"
       ]
     }
   },

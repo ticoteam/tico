@@ -47,6 +47,10 @@ $HUB_DIR/connectors/slack.py history --as <slug> --channel '#release_notes' --si
 $HUB_DIR/connectors/slack.py history --as <slug> --channel '#marketing,#sales' --since 7d --tz America/Los_Angeles --format json
 $HUB_DIR/connectors/slack.py post --as <slug> --channel '#marketing' --text 'Shipped 3 doc updates.'
 printf '%s\n' "$BODY" | $HUB_DIR/connectors/slack.py post --as <slug> --channel '#agents' --text -
+$HUB_DIR/connectors/slack.py post --as <slug> --channel '#agents' --text 'Bot health' --blocks health.json   # Block Kit; prints the ts
+$HUB_DIR/connectors/slack.py update --as <slug> --channel '#agents' --ts 1756742400.000100 --text 'Bot health' --blocks health.json
+$HUB_DIR/connectors/slack.py upload --as <slug> --file chart.png                # private to the app; prints F... for a slack_file image block
+$HUB_DIR/connectors/slack.py upload --as <slug> --channel '#agents' --file chart.png --comment 'Waiting tasks by person'
 $HUB_DIR/connectors/slack.py inbox --since 24h --format md --mark    # DMs people sent the bot; --mark advances the watermark
 $HUB_DIR/connectors/slack.py dm --as <slug> --to person@example.com --text 'Pricing doc is live.'
 $HUB_DIR/connectors/slack.py reply --as <slug> --to person@example.com --thread 1756742400.000100 --text 'On it.'
@@ -70,6 +74,14 @@ Inside a hosted turn `HUB_BOT` stands in for `--as`. Exit codes: `0` ok, `1` fai
 - Posting needs `post` in `can`, and the channel must be on the Slack channel list
   (Tools > Slack channels) with posting on, as it is unless an owner or admin turned it off. Externally shared (Slack Connect) channels are refused: posting there is an
   outbound send. Text over 4,000 characters is refused.
+- `--blocks` takes a Block Kit array (a file, or `-` for stdin) of at most 50 blocks; `--text` stays required as the
+  notification text. Blocks may not carry `image_url`, because Slack would fetch that address and any data in it
+  leaves the workspace: upload the image and use an image block with `"slack_file": {"id": "F..."}`.
+- `update` edits a message only when this computer's audit log shows the same bot posted it in that channel (every bot
+  shares the app's token, and Slack alone would let one edit another's posts). A dashboard is one `post` whose ts the
+  bot keeps, then an `update` each run. Without `--blocks` the message goes back to plain text.
+- `upload` takes a png, jpg or gif up to 10 MB and needs the app's `files:write` scope. With `--channel` the channel
+  rules above apply; without it the image is shared nowhere until an image block shows it.
 - A DM goes only to a person in `registry/hub-access.yaml`; bots and deactivated accounts are
   refused. Several recipients make one group DM.
 - Internal posts and DMs are not outbound sends, so `outbound_send` does not gate them; the
