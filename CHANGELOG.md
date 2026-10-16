@@ -118,6 +118,9 @@ All notable changes to Tico are recorded here. The format follows
   ranked roadmap view, and requesters (Requested by) on tasks.
 
 ### Changed
+- The hosted release validation runs its gate as six parallel parts (Docker checks, browser suite, four Python
+  shards) and then proves every part passed and the shards covered the whole Python suite once; the checks and
+  the zero-failure rule are unchanged. A candidate from before the split still runs its whole gate in one part.
 - Help is about a quarter of its old length on every screen: what Tico is, where to start (your first result, the tour,
   the Assistant) and how to get help, with links to the docs. The map, Who does what, the agent platforms and the
   glossary moved to [How Tico works](docs/how-it-works.md) and the [Glossary](docs/glossary.md).

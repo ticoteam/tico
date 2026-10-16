@@ -69,6 +69,15 @@ architecture, capacity, worker settings, phase exits and bounded log tails as a 
 stay clean through completion. It checkpoints the command and actual process start so an interrupted run stays honest.
 Only one manual release validation runs at a time. A missing prerequisite, insufficient space or failed phase blocks it.
 
+The gate runs as six parts on six VMs at once, each with `release_checks.py --release --part ...`: `docker` (image
+builds, journey, smoke, side jobs, isolation; two Python workers, no browsers or native builds), `browser` (the browser
+suite) and `python --shard 1/4` to `4/4` (every fourth collected Python test each, four workers). A final `verify` job
+reads every part's receipt: all passed, one candidate and source tree, and the four shards collected the same tests
+(count and SHA-256 of the node ids) and selected all of them between them. Native builds cache third-party crates
+only (rust-cache drops the workspace crates), so both binaries still compile from the candidate and keep their
+fingerprint check. A candidate whose `release_checks.py` has no `--part` runs its whole gate in the `docker` part, as
+before; the other parts record that and run nothing.
+
 On this disposable hosted VM only, the controls may remove fixed unused Android, .NET and Haskell SDK directories to
 retain at least30GiBfree after prerequisites and before the gate. They refuse local/self-hosted execution. No paid runner,
 new machine, production mount or broad Docker prune is used. A capacity refusal requires fixing that environment rather

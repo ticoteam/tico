@@ -53,3 +53,55 @@ def test_artifacts_keep_only_bounded_owned_log_tails(tmp_path):
     with gate.open('w+b') as stream:
         check.log_line(stream, 'b' * (check.LOG_LIMIT + 123))
     assert gate.stat().st_size <= check.LOG_LIMIT
+
+
+def receipts(split=True, changes=()):
+    parts = []
+    for part, shard in check.PARTS:
+        receipt = {'part': part, 'shard': shard, 'success': True, 'candidate_sha': 'a' * 40, 'source_tree': 't',
+                   'gate_exit': 0, 'plan': {'split': split}}
+        if split and part == 'python':
+            index = int(shard.split('/')[0])
+            receipt['python_shard'] = {'index': index, 'count': check.PYTHON_SHARDS, 'collected': 10,
+                                       'selected': 3 if index < 3 else 2, 'collection_sha256': 'h'}
+        parts.append(receipt)
+    for (part, shard), change in changes:
+        next(r for r in parts if (r['part'], r['shard']) == (part, shard)).update(change)
+    return parts
+
+
+def test_verify_needs_every_part_green_and_the_shards_to_cover_one_collection():
+    assert check.verify(receipts()) == {'split': True, 'python_tests': 10}
+    assert check.verify(receipts(split=False)) == {'split': False}
+    bad = [receipts()[:-1], receipts() + receipts()[-1:],
+           receipts(changes=[(('browser', None), {'success': False})]),
+           receipts(changes=[(('docker', None), {'source_tree': 'other'})])]
+    for broken in ({'collection_sha256': 'other'}, {'selected': 1}, {'index': 1}):
+        parts = receipts()
+        parts[-1]['python_shard'].update(broken)
+        bad.append(parts)
+    parts = receipts()
+    del parts[-1]['python_shard']
+    bad.append(parts)
+    parts = receipts(split=False)
+    parts[0]['gate_exit'] = None
+    bad.append(parts)
+    for parts in bad:
+        with pytest.raises(RuntimeError):
+            check.verify(parts)
+
+
+def test_only_a_splitting_candidate_runs_parts(tmp_path):
+    (tmp_path / 'scripts').mkdir()
+    gate = tmp_path / 'scripts/release_checks.py'
+    gate.write_text("parser.add_argument('--part', choices=PARTS)")
+    whole = {'split': False, 'gate': True, 'natives': True, 'browsers': True}
+    assert check.plan(tmp_path, None, None) == whole   # no part named: the whole gate, as before the split
+    gate.write_text("parser.add_argument('--release')")
+    assert check.plan(tmp_path, 'docker', None) == {'split': False, 'gate': True, 'natives': True, 'browsers': True}
+    assert check.plan(tmp_path, 'python', '2/4')['gate'] is False
+    gate.write_text("parser.add_argument('--part', choices=PARTS)")
+    assert check.plan(tmp_path, 'docker', None) == {'split': True, 'gate': True, 'natives': False, 'browsers': False}
+    assert check.plan(tmp_path, 'python', '2/4') == {'split': True, 'gate': True, 'natives': True, 'browsers': True}
+    with pytest.raises(RuntimeError):
+        check.plan(tmp_path, 'python', '5/4')

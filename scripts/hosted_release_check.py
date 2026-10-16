@@ -19,6 +19,9 @@ import time
 GIB = 1024 ** 3
 UNUSED_SDKS = ("/usr/local/lib/android", "/usr/share/dotnet", "/opt/ghc", "/usr/local/.ghcup")
 LOG_LIMIT = 5 * 1024 ** 2
+PYTHON_SHARDS = 4
+# Each part of the split gate runs on its own VM; a candidate from before the split runs its whole gate in "docker".
+PARTS = [("docker", None), ("browser", None)] + [("python", f"{i}/{PYTHON_SHARDS}") for i in range(1, PYTHON_SHARDS + 1)]
 
 
 def require(ok, reason):
@@ -101,6 +104,44 @@ def native_binaries(root):
     return result
 
 
+def splits(root):
+    """Whether the candidate's own gate can run as parts (release_checks.py --part)."""
+    return "'--part'" in (root / "scripts/release_checks.py").read_text()
+
+
+def plan(root, part, shard):
+    """What this job installs and runs: each part only what its checks use; old candidates run the whole gate once."""
+    if part is None:   # a workflow without parts runs the whole gate in one job
+        return {"split": False, "gate": True, "natives": True, "browsers": True}
+    require((part, shard) in PARTS, "unknown gate part")
+    if not splits(root):
+        whole = part == "docker"
+        return {"split": False, "gate": whole, "natives": whole, "browsers": whole}
+    return {"split": True, "gate": True, "natives": part != "docker", "browsers": part != "docker"}
+
+
+def verify(receipts):
+    """Every part ran green, and the Python shards are disjoint and cover one identical collection."""
+    found = {(r.get("part"), r.get("shard")): r for r in receipts}
+    require(sorted(found, key=str) == sorted(PARTS, key=str) and len(receipts) == len(PARTS),
+            "expected exactly one receipt per gate part")
+    require(all(r.get("success") is True for r in receipts), "a gate part did not pass")
+    require(len({r.get("candidate_sha") for r in receipts}) == 1 and len({r.get("source_tree") for r in receipts}) == 1,
+            "gate parts validated different candidates")
+    split = {r["plan"]["split"] for r in receipts}
+    require(len(split) == 1, "gate parts disagree on whether the candidate splits")
+    if not split.pop():
+        require(found[("docker", None)].get("gate_exit") == 0, "the whole gate did not run")
+        return {"split": False}
+    shards = [found[key].get("python_shard") for key in PARTS if key[0] == "python"]
+    require(all(shards), "a Python shard did not report its selection")
+    require(len({(s["collected"], s["collection_sha256"]) for s in shards}) == 1, "Python shards collected different tests")
+    require([(s["index"], s["count"]) for s in shards] == [(i, PYTHON_SHARDS) for i in range(1, PYTHON_SHARDS + 1)],
+            "Python shard numbering is incomplete")
+    require(sum(s["selected"] for s in shards) == shards[0]["collected"], "Python shards do not cover the collection")
+    return {"split": True, "python_tests": shards[0]["collected"]}
+
+
 def collect(temp, report):
     """Only bounded text logs from this gate's own temp directory, never home/config/DB."""
     budget = 50 * 1024 ** 2
@@ -130,10 +171,18 @@ def log_line(log, line):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "run", "collect"))
+    parser.add_argument("mode", choices=("prepare", "run", "collect", "verify"))
+    parser.add_argument("--part", choices=sorted({part for part, _ in PARTS}), help="one part of a split gate")
+    parser.add_argument("--shard", help="I/N, for the python part")
+    parser.add_argument("--receipts", type=Path, help="verify: the downloaded artifacts of every part")
     args = parser.parse_args()
     hosted(os.environ)
     sha, previous = inputs(os.environ)
+    if args.mode == "verify":
+        receipts = [json.loads(path.read_text()) for path in sorted(args.receipts.glob("*/run.json"))]
+        require(all(r.get("candidate_sha") == sha for r in receipts), "a receipt names another candidate")
+        print(json.dumps({"verified": verify(receipts)}), flush=True)
+        return 0
     temp = Path(os.environ["RUNNER_TEMP"])
     root = Path(os.environ["GITHUB_WORKSPACE"]) / "candidate"
     report = temp / "release-validation-report"
@@ -148,7 +197,7 @@ def main():
                "cpu_count": os.cpu_count(), "started_unix": time.time(), "mode": args.mode,
                "test_settings": {name: os.environ.get(name) for name in
                                  ("TICO_PYTHON_WORKERS", "TICO_UI_JOBS", "TICO_UI_SLOWDOWN", "TICO_BROWSER_CHANNEL")},
-               "gate_started": False, "success": False}
+               "part": args.part, "shard": args.shard, "gate_started": False, "success": False}
     gate_clock = None
     def checkpoint():
         (report / (args.mode + ".json")).write_text(json.dumps(receipt, indent=2) + "\n")
@@ -159,15 +208,24 @@ def main():
         receipt["docker"] = output(["docker", "info", "--format", "{{.ServerVersion}} {{.Architecture}} cpus={{.NCPU}} memory={{.MemTotal}}"])
         receipt["compose"] = output(["docker", "compose", "version", "--short"])
         require(not output(["docker", "ps", "-aq"]), "ephemeral Docker VM has existing containers")
+        receipt["plan"] = plan(root, args.part, args.shard)
         if args.mode == "prepare":
+            with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+                stream.writelines(f"{name}={str(value).lower()}\n" for name, value in receipt["plan"].items())
             receipt["success"] = True
             return 0
-        receipt["native_binaries"] = native_binaries(root)
+        if not receipt["plan"]["gate"]:
+            receipt.update({"gate_state": "in the docker part's whole gate", "success": True})
+            return 0
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
-        env = {**os.environ, "TMPDIR": str(gate_temp),
-               "TICO_SCREEN_RELAY_BIN": receipt["native_binaries"]["relay"]["path"]}
+        env = {**os.environ, "TMPDIR": str(gate_temp)}
+        if receipt["plan"]["natives"]:
+            receipt["native_binaries"] = native_binaries(root)
+            env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         command = [sys.executable, "scripts/release_checks.py", "--release", "--previous", previous]
+        if receipt["plan"]["split"]:
+            command += ["--part", args.part] + (["--shard", args.shard] if args.shard else [])
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})
         checkpoint()  # Survives timeout/cancellation even when the finalizer cannot run.
         gate_clock = time.monotonic()
@@ -178,6 +236,8 @@ def main():
             checkpoint()
             for line in process.stdout:
                 log_line(log, line)
+                if line.startswith("PYTHON_SHARD "):
+                    receipt["python_shard"] = json.loads(line.split(" ", 1)[1])
                 print(line, end="", flush=True)
             code = process.wait()
         receipt["gate_exit"] = code

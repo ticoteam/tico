@@ -36,7 +36,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
                 return 'synthetic build failure'
 
         monkeypatch.setattr(release_checks, 'Check', Check)
-        assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
+        assert release_checks.release(SimpleNamespace(previous=None, part=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
         python_command = calls['all-python'][0]
         isolation_file = 'runner/tests/test_isolation_docker.py'
@@ -78,3 +78,56 @@ def test_a_test_step_that_passes_nothing_fails(tmp_path):
     assert run('4 skipped in 0.5s') == 1                # all skipped: the step proved nothing
     assert run('no tests ran in 0.4s') == 1
     assert run('4 skipped in 0.5s', tests=False) == 0   # a non-test step is judged by its exit code alone
+
+
+def test_the_parts_together_run_exactly_the_full_gate(tmp_path, monkeypatch, capsys):
+    tests = [f'backend/tests/test_{n % 3}.py::test_{n}' for n in range(10)]
+    collect = SimpleNamespace(returncode=0, stdout='\n'.join(tests) + '\n\n10 tests collected in 0.1s\n', stderr='')
+    monkeypatch.setattr(release_checks, 'os', SimpleNamespace(
+        environ={'TICO_PYTHON_WORKERS': '4'}, getloadavg=lambda: (0, 0, 0), cpu_count=lambda: 4))
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
+        run=lambda command, **kwargs: collect if '--collect-only' in command else SimpleNamespace(stdout='a' * 40)))
+    monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
+    monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
+    monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 10000)).__next__))
+    calls = {}
+
+    class Check:
+        def __init__(self, name, command, log_dir, env, tests=False):
+            calls[name] = (command, tests)
+            self.name, self.log, self.started, self.code, self.seconds = name, tmp_path / name, 1, 0, 1.0
+
+        def join(self):
+            return 0
+
+    monkeypatch.setattr(release_checks, 'Check', Check)
+    run = lambda part, shard=None: release_checks.release(SimpleNamespace(previous=None, part=part, shard=shard))
+
+    assert run('docker') == 0
+    assert 'all-python' not in calls and 'all-browser' not in calls
+    assert {'journey', 'build-runner', 'smoke', 'side-jobs', 'isolation'} <= calls.keys()
+    calls.clear()
+    assert run('browser') == 0 and list(calls) == ['all-browser']
+    assert calls['all-browser'] == (['node', 'scripts/ui-tests.cjs', '--all'], False)
+    selected, receipts = [], []
+    for index in range(1, 4):
+        calls.clear()
+        assert run('python', (index, 3)) == 0
+        command, test_step = calls[f'python-shard-{index}']
+        assert test_step and command[command.index('-n') + 1] == '4'
+        assert command[6:9] == release_checks.PYTHON_SELECTION
+        selected += command[9:]
+        receipts.append(next(line for line in capsys.readouterr().out.splitlines() if line.startswith('PYTHON_SHARD ')))
+    assert sorted(selected) == sorted(tests) and len(selected) == len(tests)   # disjoint and complete
+    assert all('"collected": 10' in line for line in receipts)
+    collect.returncode = 2
+    assert run('python', (1, 3)) == 1   # a collection error fails the shard rather than running nothing
+
+
+def test_shard_arguments_are_checked():
+    import argparse
+    import pytest
+    assert release_checks.shard('2/4') == (2, 4)
+    for text in ('0/4', '5/4', '4', 'a/b'):
+        with pytest.raises(argparse.ArgumentTypeError):
+            release_checks.shard(text)
