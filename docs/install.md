@@ -590,6 +590,8 @@ instance metadata hop limit at 1 for runner computers too.
 
 ### Screen
 
+> **Beta**: a computer's screen (View and Control) works today and may still change. See [Beta features](support.md#beta-features).
+
 A Linux runner can offer its screen to the web app, so people can watch bots work in a headed browser and, if
 allowed, take control. It is off until you turn it on on the computer itself:
 
@@ -665,6 +667,8 @@ each side job exits and restarts when it sees the checkout move to another revis
 keeps old code in memory. `scripts/tico restart` does the same by hand.
 
 ### Windows PC (WSL 2)
+
+> **Beta**: Windows computers through WSL 2 work today and may still change. See [Beta features](support.md#beta-features).
 
 A Windows PC runs the Linux runner inside WSL 2. Choose **Windows** in Add computer and paste the line it shows into
 PowerShell opened **as administrator**:

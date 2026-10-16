@@ -89,6 +89,7 @@ class AppShell(Contract):
     """The desktop app the page runs in: its version and the end of its log file (app/src/applog.rs)."""
     version: str = Field(default="", max_length=40)
     lines: list[Annotated[str, Field(max_length=2000)]] = Field(default_factory=list, max_length=diagnostics.APP_LINES)
+    mac: bool = False           # the Mac app, which is Beta until it is signed (backend/beta.py)
 
 
 class DiagnosticsCapture(Contract):

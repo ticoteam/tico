@@ -55,7 +55,7 @@ async function pageComputerScreen(id, from) {
   $('#main').innerHTML = `<div class="scr" id="scr">
     <div class="scr-bar">
       <button class="ghost scr-btn" type="button" id="scr-back" aria-label="Back" title="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></button>
-      <strong class="scr-name" id="scr-name">${esc(screenMachine(id)?.label || 'Computer')}</strong>
+      <strong class="scr-name" id="scr-name">${esc(screenMachine(id)?.label || 'Computer')}</strong>${betaPill('computer_screen')}
       <span class="scr-state" id="scr-state" role="status"></span>
       <span class="spacer"></span>
       <button class="ghost scr-btn" type="button" id="scr-fit" hidden>Fit</button>

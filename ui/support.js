@@ -27,7 +27,8 @@
     if (!(window.ticoNativeFeatures || []).includes('appLog') || typeof window.ticoNativeLog !== 'function') return null;
     try {
       const got = await window.ticoNativeLog();
-      return {version: String(got?.version || '').slice(0, 40), lines: (Array.isArray(got?.lines) ? got.lines : []).slice(-200).map(x => String(x).slice(0, 2000))};
+      return {version: String(got?.version || '').slice(0, 40), lines: (Array.isArray(got?.lines) ? got.lines : []).slice(-200).map(x => String(x).slice(0, 2000)),
+        mac: /Macintosh|Mac OS X/.test(navigator.userAgent)};
     } catch (_) { return null; }
   }
   // `hours` of each computer's performance history go with the attachment (0: none).

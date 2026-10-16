@@ -216,7 +216,7 @@ function v2MessageCards(m) {
   if (refs.action_result?.approval) bits.push(`<span class="fchip">${esc(refs.action_result.decision || 'updated')} approval <span class="mono">${esc(String(refs.action_result.approval).slice(0, 8))}</span></span>`);
   // A message that came in from Slack (docs/slack-gateway.md): where, and why the decision model sent it here.
   if (refs.slack && typeof refs.slack === 'object' && refs.slack.permalink) {
-    bits.push(`<a class="fchip" href="${esc(String(refs.slack.permalink))}" target="_blank" rel="noopener">Slack ${esc(String(refs.slack.channel_name || ''))}</a>`);
+    bits.push(`<a class="fchip" href="${esc(String(refs.slack.permalink))}" target="_blank" rel="noopener">Slack ${esc(String(refs.slack.channel_name || ''))}</a>${betaPill('slack_gateway')}`);
   }
   if (refs.routing && typeof refs.routing === 'object') {
     const r = refs.routing;
@@ -379,10 +379,10 @@ function v2MessageHTML(m) {
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
 // harness's `steer`). Its sender, if they may stop the bot, can have it replace the turn instead: Stop and redirect.
 function v2DeliveryHTML(m) {
-  if (m.run?.state === 'added_to_run') return '<div class="chat-delivery">Steered into the running turn</div>';
+  if (m.run?.state === 'added_to_run') return `<div class="chat-delivery">Steered into the running turn${betaPill('chat_goals')}</div>`;
   const d = m.delivery;
   if (!d) return '';
-  if (d.mode === 'steer') return '<div class="chat-delivery">Steering this turn</div>';
+  if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn${betaPill('chat_goals')}</div>`;
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
   const slug = String(m.to_actor || '').replace(/^bot:/, '');
   const can = m.from_actor === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));

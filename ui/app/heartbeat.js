@@ -124,7 +124,7 @@ async function renderDownloadLink() {
     const label = company ? `Download Tico for ${companyName()}` : 'Generic Tico · manual setup';
     a.href = d.url;
     a.textContent = '';
-    a.insertAdjacentHTML('beforeend', `<span class="nav-icon" aria-hidden="true">download</span>${esc(label)}`);
+    a.insertAdjacentHTML('beforeend', `<span class="nav-icon" aria-hidden="true">download</span>${esc(label)}${os === 'mac' ? betaPill('mac_app') : ''}`);
     a.title = `${company ? appName() : 'Generic Tico'} ${d.version || ''} for ${OS_WORDS[os]} (${d.size_mb || '?'} MB)${company ? '' : '. Requires manual server setup'}${d.notarized || os !== 'mac' ? '' : '. First open: System Settings → Privacy & Security → Open Anyway'}`;
     a.hidden = false;
     if (!nudge || !company) return;

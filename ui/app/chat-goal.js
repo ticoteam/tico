@@ -127,7 +127,7 @@ function chatGoalBarHTML(g) {
   return `<div class="cg-bar" role="button" tabindex="0" aria-expanded="false" aria-label="Goal">
       <span class="nav-icon cg-icon" aria-hidden="true">target</span>
       <div class="cg-text">${esc(g.objective || '')}</div>
-      ${chip ? `<span class="pill ${tone} cg-chip">${chip}</span>` : ''}</div>
+      <span>${chip ? `<span class="pill ${tone} cg-chip">${chip}</span>` : ''}${betaPill('chat_goals')}</span></div>
     <div class="cg-actions" hidden>
       <button class="ghost" type="button" data-goal="edit">Edit</button>
       <button class="ghost" type="button" data-goal="${g.status === 'paused' ? 'resume' : 'pause'}">${g.status === 'paused' ? 'Resume' : 'Pause'}</button>

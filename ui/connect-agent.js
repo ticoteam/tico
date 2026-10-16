@@ -16,24 +16,25 @@
   const POLL_MS = 3000, POLL_FOR_MS = 5 * 60 * 1000;
 
   // Each agent: its tile, what an existing token label of it looks like, its steps (HTML, 2-4 short
-  // lines) and the blocks to paste, with the URL and token filled in. docs/connect-an-agent.md says
+  // lines) and the blocks to paste, with the URL and token filled in; `beta` marks the agents Tico syncs, which are on
+  // the Beta list as external agents (backend/beta.py). docs/connect-an-agent.md says
   // where each path comes from. Muse, Claude and Dots show letters: Meta and Anthropic allow their
   // marks only with approval, and Dots has none of its own.
   const header = token => `Authorization: Bearer ${token}`;
   const AGENTS = [
-    {id: 'grok', name: 'Grok', logo: 'grok', alias: /^grok\b|^grok-bot/i,
+    {id: 'grok', name: 'Grok', logo: 'grok', beta: true, alias: /^grok\b|^grok-bot/i,
       steps: ['In one of your <b>Grok Bots</b>, ask it to add a custom MCP server with the block below.',
         'Or on grok.com, <b>Connectors › New Connector › Custom</b>: paste the URL, and the token if it asks.',
         '<b>Grok Build</b>: run the command below.',
         'Ask it “who needs me”.'],
       blocks: (url, token) => [['For a Grok Bot', `Add a custom MCP server:\nName: tico\nURL: ${url}\nHeader: ${header(token)}`],
         ['Grok Build', `grok mcp add --transport http tico ${url} --header "${header(token)}"`]]},
-    {id: 'dots', name: 'Dots', logo: '', alias: /^dots\b/i, oauth: true,
+    {id: 'dots', name: 'Dots', logo: '', alias: /^dots\b/i, oauth: true, beta: true,
       steps: ['In Dots, add a <b>connector</b> (remote MCP server) with the URL below. No token needed.',
         'When it asks, sign in to Tico and press <b>Allow</b>.',
         'Ask it “who needs me”.'],
       blocks: () => []},
-    {id: 'muse', name: 'Muse', logo: '', alias: /^muse\b|^meta-muse|^meta muse/i,
+    {id: 'muse', name: 'Muse', logo: '', beta: true, alias: /^muse\b|^meta-muse|^meta muse/i,
       steps: ['In <b>Muse</b>, ask it to make a custom connector for the MCP server at the URL, with the header below.',
         '<b>Muse Code</b>: add the JSON below to <code>~/.config/muse/settings.json</code>.',
         'Ask it “who needs me”.'],
@@ -175,7 +176,7 @@
     async function showPicker() {
       stopPolling(); issued = null;
       body.innerHTML = `<ul class="ca-tiles" aria-label="External agents">${AGENTS.map(agent =>
-        `<li><button class="ca-tile" type="button" data-agent="${agent.id}">${logo(agent, agent.name)}<span>${esc(agent.name)}</span></button></li>`).join('')}</ul>
+        `<li><button class="ca-tile" type="button" data-agent="${agent.id}">${logo(agent, agent.name)}<span>${esc(agent.name)}${agent.beta ? betaPill('external_agents') : ''}</span></button></li>`).join('')}</ul>
         <section class="ca-section" data-conns hidden></section>`;
       body.querySelectorAll('[data-agent]').forEach(button => { button.onclick = () => void showAgent(byId(button.dataset.agent)); });
       await renderConnections();

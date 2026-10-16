@@ -76,7 +76,7 @@ const HELP_WHO = [
   ['Librarian', true, 'Answers from your docs and the Tico manual, with sources', 'Ask the Librarian on Docs and Market', 'What is our refund limit?'],
   ['Goal Manager', true, 'Keeps KPIs and goal colours current', 'Top of Goals', 'Why is this goal yellow?'],
   ['Your bots', false, 'Do the team\'s work from their Instructions', 'Team in the sidebar: chat or a task', 'Draft replies to the open tickets'],
-  ['Message bots', false, 'Work a human\'s email or a Slack channel', 'Message bots in the sidebar', 'Sort today\'s email'],
+  ['Message bots', false, 'Work a human\'s email or a Slack channel', 'Message bots in the sidebar', 'Sort today\'s email', 'message_bots'],
 ];
 const HELP_GLOSSARY = [
   ['Human teammate', 'A person who directs work, answers questions, and reviews results.'],
@@ -89,9 +89,20 @@ const HELP_GLOSSARY = [
 const HELP_PLATFORMS = [
   ['Claude', 'Claude Code works with your team’s shared context and tools.'],
   ['OpenAI', 'Codex works with your team’s shared context and tools.'],
-  ['Hermes', 'Connect a Hermes agent to your team’s shared work.'],
-  ['OpenClaw', 'Pair an OpenClaw profile with a code; it checks in on its own schedule.'],
+  ['Hermes', 'Connect a Hermes agent to your team’s shared work.', 'external_agents'],
+  ['OpenClaw', 'Pair an OpenClaw profile with a code; it checks in on its own schedule.', 'external_agents'],
 ];
+// The Beta features, from the server's one list (backend/beta.py), each with its pages in the manual.
+function helpBetaHTML() {
+  const rows = S.config.beta || [];
+  if (!rows.length) return '';
+  const page = doc => `<a href="${GH}/blob/main/docs/${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(doc.replace(/\.md(#.*)?$/, ''))}</a>`;
+  return `<details class="help-tools help-beta" id="help-beta">
+      <summary><strong>Beta features</strong></summary>
+      <p>These work today and may still change. A support request's diagnostics say which of them your team has on.</p>
+      <ul>${rows.map(f => `<li>${esc(f.name)}${betaPill(f.id)} <span class="muted">${(f.docs || []).map(page).join(' · ')}</span></li>`).join('')}</ul>
+    </details>`;
+}
 
 // The server's version, and inside the desktop app its own version (app/src/main.rs bridge_script) and a way to its
 // log file (app/src/applog.rs), which a shell that keeps one says in ticoNativeFeatures.
@@ -111,14 +122,14 @@ function pageHelp() {
 
     <figure class="help-map" id="help-map" role="img" aria-label="${esc(HELP_MAP_ALT)}">${helpMapSVG(false)}${helpMapSVG(true)}</figure>
     <div class="help-team-description"><p><strong>Human teammates</strong> set priorities, delegate work, answer questions, and review results.</p><p><strong>AI teammates</strong> follow instructions, use granted tools, and report progress. Built-in bots run on your computers; connected agents join from their own apps.</p></div>
-    <section class="help-platforms" aria-label="Agent platforms">${HELP_PLATFORMS.map(([name, body]) => `<p><strong>${esc(name)}</strong><span>${esc(body)}</span></p>`).join('')}</section>
+    <section class="help-platforms" aria-label="Agent platforms">${HELP_PLATFORMS.map(([name, body, beta]) => `<p><strong>${esc(name)}${beta ? betaPill(beta) : ''}</strong><span>${esc(body)}</span></p>`).join('')}</section>
 
     <section class="help-who" aria-labelledby="help-who-h">
       <h2 id="help-who-h">Who does what</h2>
       <table>
         <thead><tr><th scope="col">Teammate</th><th scope="col">For</th><th scope="col">Find it</th><th scope="col">Ask</th></tr></thead>
-        <tbody>${HELP_WHO.map(([name, builtIn, what, where, ask]) => `<tr${builtIn ? ' class="built-in"' : ''}>
-          <th scope="row">${esc(name)}${builtIn ? '<span class="help-tag">Built-in</span>' : ''}</th>
+        <tbody>${HELP_WHO.map(([name, builtIn, what, where, ask, beta]) => `<tr${builtIn ? ' class="built-in"' : ''}>
+          <th scope="row">${esc(name)}${builtIn ? '<span class="help-tag">Built-in</span>' : ''}${beta ? betaPill(beta) : ''}</th>
           <td data-label="For">${esc(what)}</td><td data-label="Find it">${esc(where)}</td><td data-label="Ask" class="help-ask">“${esc(ask)}”</td></tr>`).join('')}</tbody>
       </table>
     </section>
@@ -128,6 +139,7 @@ function pageHelp() {
       <dl>${HELP_GLOSSARY.map(([term, meaning]) => `<dt>${esc(term)}</dt><dd>${esc(meaning)}</dd>`).join('')}</dl>
       <p><a href="${GH}/blob/main/docs/glossary.md" target="_blank" rel="noopener noreferrer">Full glossary</a> · <a href="${GH}/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">MCP and CLI reference</a></p>
     </details>
+    ${helpBetaHTML()}
     <p class="help-foot">${helpVersionHTML()}</p>
   </article>`;
   $('#help-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));

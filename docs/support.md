@@ -39,7 +39,8 @@ If HQ refuses an attachment, remove it yourself to send just the message; it is 
 its own fresh, edited diagnostics without replacing the first report.
 
 Diagnostics contain redacted versions, health, computer readiness and last heartbeat, capped server/runner/updater failures,
-and capture coverage. From the desktop app they also carry the app's version (`versions.app`) and the last 200 lines of its log
+and capture coverage, and the [Beta features](#beta-features) your team has on or in use (`beta`, by id). From the desktop
+app they also carry the app's version (`versions.app`) and the last 200 lines of its log
 file (`logs.app`, [Desktop app](desktop.md)). The server groups adjacent repeated failures; failed HTTP requests record only their registered route
 pattern and status in the bounded diagnostics buffer. Unexpected exceptions include their type and up to three application
 module/line locations, never values, locals or a raw traceback. Browser errors contribute up to 20 groups containing only
@@ -83,6 +84,25 @@ copy-and-paste task, and nothing leaves the install until a person says yes:
    reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
 
 No email and no diagnostics bundle go this way: diagnostics need a person to preview them on the form.
+
+## Beta features
+
+A Beta feature works today and may still change. The app shows a **Beta** pill beside it (its nav item, settings section,
+page title or template card), Help lists them under **Beta features**, and its page in this manual opens with a Beta note.
+@diagnostics lists the ones your team has on or in use; a Windows computer through WSL 2 reports itself as Linux, so the
+server cannot tell one is connected. One list in `backend/beta.py` drives all of these.
+
+- Windows computers through WSL 2: [install](install.md#windows-pc-wsl-2)
+- Chat goals and steering: [chat-goals](chat-goals.md)
+- Message bots: mail and calendar: [messaging](messaging.md), [mail](mail.md), [mail-service](mail-service.md)
+- Slack gateway: [slack-gateway](slack-gateway.md)
+- Listening: [listening](listening.md)
+- Market: [librarian](librarian.md#setting-up-the-market)
+- Live Meetings API and Recorder: [live-meetings-api](live-meetings-api.md)
+- Computer screen (View and Control): [install](install.md#screen), [permissions](permissions.md#a-computers-screen)
+- External agents: Hermes, OpenClaw, Grok Bot, Dots, Muse sync: [hermes-agents](hermes-agents.md), [openclaw-agents](openclaw-agents.md), [external-agent-sync](external-agent-sync.md)
+- Behaviour replay and the computer Performance page: [releasing](releasing.md#behaviour-replay), [permissions](permissions.md#a-computers-performance)
+- The Mac desktop app: [desktop](desktop.md)
 
 ## What is sent and kept
 

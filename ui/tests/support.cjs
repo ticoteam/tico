@@ -1,12 +1,12 @@
 // Offline browser regression: Support on the Help page. The form shows exactly what it will send, Enter files the ticket
 // (Shift+Enter is a new line), the list shows each request with its status badge and an unread dot, a reply puts a count
 // on the ? and opening the conversation reads it, a failed send says so in place, the trash asks first, and nothing a
-// ticket says is rendered as HTML.
+// ticket says is rendered as HTML. Help lists the Beta features the server names.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, uiFile, beta} = require('./support/page.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
@@ -40,7 +40,7 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
         if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false};
+        const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json(config);
         if (p.startsWith('/api/v2/support/')) {
@@ -82,6 +82,10 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     let v = await visit();
     const {page} = v;
     await page.locator('#support-rail').waitFor();
+    // Help lists the server's Beta features, each with its pill, and the sidebar's static spots draw theirs.
+    assert.deepEqual(await page.locator('#help-beta li').evaluateAll(rows => rows.map(li => li.firstChild.textContent)), beta.map(f => f.name));
+    assert.equal(await page.locator('#help-beta li .pill.beta').count(), beta.length);
+    assert.equal(await page.locator('[data-nav=market] .pill.beta').count(), 1);
     const form = page.locator('[data-compose]'), box = form.locator('[name=message]');
     const requests = page.locator('[data-requests] .support-item'), help = page.locator('#help-open');
     // No requests yet: a friendly prompt with the composer, no list.
@@ -238,7 +242,7 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
     await v.page.locator('[data-compose] [name=message]').press('Enter');
     await v.page.locator('.support-msg.you').waitFor();
     const captured = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture {')).slice('POST diagnostics/capture '.length));
-    assert.deepEqual(captured.app, {version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401']});
+    assert.deepEqual(captured.app, {version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401'], mac: false});
     const filed = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
     assert.equal(filed.app_version, '0.3.48');
     assert.equal(filed.diagnostics, 'c'.repeat(64));

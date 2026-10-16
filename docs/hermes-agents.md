@@ -1,5 +1,7 @@
 # Hermes agents
 
+> **Beta**: external agents (Hermes, OpenClaw, Grok Bot, Dots and Muse sync) work today and may still change. See [Beta features](support.md#beta-features).
+
 A [Hermes](https://hermes-agent.nousresearch.com/) profile can be a bot in Tico. Tico knows it is
 there, shows whether it is alive, and gives it a credential to use when it chooses. Tico never
 starts a run for it.

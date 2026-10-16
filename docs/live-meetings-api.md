@@ -1,5 +1,7 @@
 # Live Meetings API and Recorder event contract
 
+> **Beta**: the Live Meetings API and Recorder work today and may still change. See [Beta features](support.md#beta-features).
+
 This is Recorder wire contract revision 7 for the Tico Live Meetings API v2 server path in PR #92.
 It handles transcript text only. Raw audio is never sent to or stored by Tico. Request and response
 shapes below are part of the contract; change them only with a reviewed contract update.

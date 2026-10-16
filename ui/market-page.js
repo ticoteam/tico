@@ -285,7 +285,7 @@ function marketBlankHtml(row) {
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
   if (!(S.me?.cloud && S.me.role === 'owner')) return '<p class="market-none">Nothing here yet.</p>';
   return `<form class="market-start" data-market-research>
-      <h1>Market</h1>
+      <h1>Market${typeof betaPill === 'function' ? betaPill('market') : ''}</h1>
       <label for="market-sources">Your website, a description, or links to anything about your market</label>
       <textarea id="market-sources" name="text" rows="4" maxlength="8000" required autocomplete="off" placeholder="https://example.com"></textarea>
       <p class="err" data-market-error hidden></p>

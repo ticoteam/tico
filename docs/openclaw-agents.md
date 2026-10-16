@@ -1,5 +1,7 @@
 # OpenClaw agents
 
+> **Beta**: external agents (Hermes, OpenClaw, Grok Bot, Dots and Muse sync) work today and may still change. See [Beta features](support.md#beta-features).
+
 An [OpenClaw](https://openclaw.ai/) profile can be a bot in Tico, the same way a
 [Hermes profile](hermes-agents.md) can: Tico knows it is there, shows whether it is alive, and gives it a
 credential to use when it chooses. Tico never starts a run for it. It uses the same `hermes_agent.py` Tool,

@@ -25,7 +25,7 @@ async function pageComputerPerformance(id) {
   const state = PERF = {id, hours: PERF_WINDOWS.some(w => w[0] === saved) ? saved : '24', data: null, gen: 0};
   $('#main').innerHTML = `<div class="perf-page">
     <div class="perf-head"><a class="ghost perf-back" href="#/settings" aria-label="Back to Settings" title="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>
-      <h1 id="perf-title">${esc(screenMachine(id)?.label || 'Computer')} · Performance</h1><span class="spacer"></span>
+      <h1 id="perf-title">${esc(screenMachine(id)?.label || 'Computer')} · Performance${betaPill('replay_performance')}</h1><span class="spacer"></span>
       ${repoSegHTML('perf-hours', 'Window', PERF_WINDOWS, state.hours, false, ' repo-seg-sm')}</div>
     <div id="perf-body" aria-live="polite"><p class="empty">Loading…</p></div></div>`;
   $('#main').querySelector('.repo-seg').onchange = event => {
@@ -41,7 +41,7 @@ async function perfLoad(state) {
   catch (error) { if (PERF === state && gen === state.gen) $('#perf-body').innerHTML = `<p class="err">${esc(error.message)}</p>`; return; }
   if (PERF !== state || gen !== state.gen) return;
   state.data = data;
-  $('#perf-title').textContent = `${data.computer.label} · Performance`;
+  $('#perf-title').innerHTML = `${esc(data.computer.label)} · Performance${betaPill('replay_performance')}`;
   perfPaint(state);
 }
 

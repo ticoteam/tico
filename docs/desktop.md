@@ -1,5 +1,7 @@
 # Tico desktop app
 
+> **Beta** on Mac: the Mac app stays Beta until it is signed ([#45](https://github.com/ticoteam/tico/issues/45)); the Windows and Linux apps are not Beta. See [Beta features](support.md#beta-features).
+
 Download **Tico** from your server's **Download for Mac**, **Download for Windows** or
 **Download for Linux** link, or from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
 The same app connects to any Tico server.

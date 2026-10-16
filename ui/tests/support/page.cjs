@@ -23,6 +23,11 @@ Object.defineProperty(exports, 'harnesses', {enumerable: true, get: () => harnes
   process.env.TICO_PYTHON || 'python3',
   ['-c', 'import json; from backend.harnesses import HARNESS_CATALOG; print(json.dumps(HARNESS_CATALOG))'],
   {cwd: path.join(ui, '..')}).toString())});
+// The Beta list GET /v2/config sends (backend/beta.py), read the same way.
+let beta;
+Object.defineProperty(exports, 'beta', {enumerable: true, get: () => beta ||= JSON.parse(execFileSync(
+  process.env.TICO_PYTHON || 'python3', ['-c', 'import json; from backend.beta import listing; print(json.dumps(listing()))'],
+  {cwd: path.join(ui, '..')}).toString())});
 exports.html = fs.readFileSync(path.join(out || ui, 'index.html'), 'utf8');
 // A path under ui/ (what follows /tico/ui/ in a URL) to the file on disk; the bundles live in the temp folder.
 exports.uiFile = name => out && (name === 'app.bundle.js' || name === 'app.bundle.css') ? path.join(out, name) : path.join(ui, name);
