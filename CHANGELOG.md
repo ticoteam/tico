@@ -44,6 +44,8 @@ All notable changes to Tico are recorded here. The format follows
   that stops answering, loses its status or reports an older update's outcome does not end it, and neither does a
   runner restart; only the updater's outcome for that update does. A hold the runner could not save still holds
   while it runs (and says the save failed), and a saved hold that cannot be read holds until it is removed. A runner whose image cannot be read is reported "Not updated" instead.
+- A released task worktree whose cleanup was refused for unpushed commits is cleaned up again once the bot pushes.
+  Before, a push alone left its cleanup stopped, since only a new commit, a changed file or new activity resumed it.
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential
   as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
   BotOps' requests refused every `Authorization` key, so the documented declaration failed with `secret_in_request`
