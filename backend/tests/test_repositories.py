@@ -288,3 +288,29 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     # Turning it off is a narrowing, said on the reply.
     off = put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [{**flagged[0], 'run_workflows': False}]})
     assert off['workflows_stopped'] == ['Acme/product']
+
+
+def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token(api, gh):
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    put(api, 'repositories/Acme/product', {'enabled': True})
+    put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [
+        {'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]})
+    # The installation reports Actions: write, but GitHub refuses every token asking for it.
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    gh.refuse_actions_write = True
+    response = turn_token(api)
+    assert response.status_code == 200, response.text
+    token = response.json()
+    assert token['workflows_withheld']['repositories'] == ['Acme/product']
+    assert 'although the installation reports it' in token['workflows_withheld']['reason']
+    assert all(t.get('actions') is None for t in token['tokens'])
+    assert 'Acme/product' in token['repositories']
+    # The refusal was Actions', not the reads': the fallback keeps them, and Health blames neither.
+    fallback = gh.of('/access_tokens')[-1][2]['permissions']
+    assert fallback['actions'] == 'read' and fallback['checks'] == 'read'
+    checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    assert 'github_workflows' not in checks
+    with api.app_state.store.read() as c:
+        row = c.execute("SELECT last_error FROM service_health WHERE service='github:token'").fetchone()
+    assert row is None or row['last_error'] is None

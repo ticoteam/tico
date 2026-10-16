@@ -45,6 +45,7 @@ class FakeGitHub:
         self.create_response_message = ""
         self.history = set()                     # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
+        self.refuse_actions_write = False        # refuse Actions: write whatever the live permissions say
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
@@ -84,7 +85,8 @@ class FakeGitHub:
         if path.endswith("/access_tokens"):
             if self.refuse:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
-            if any(name in body.get("permissions", {}) and (name not in (self.permissions or {}) or
+            if self.refuse_actions_write and body.get("permissions", {}).get("actions") == "write" or any(
+                    name in body.get("permissions", {}) and (name not in (self.permissions or {}) or
                    body["permissions"][name] == "write" and self.permissions[name] != "write")
                    for name in ("actions", "checks", "statuses")):
                 return httpx.Response(422, json={"message": "The permissions requested are not granted to this installation."})

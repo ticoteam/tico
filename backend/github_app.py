@@ -59,6 +59,8 @@ TURN_READS = {"actions": "read", "checks": "read", "statuses": "read"}
 WORKFLOW_PERMISSIONS = {**TURN_PERMISSIONS, "actions": "write"}
 WORKFLOWS_WITHHELD = ("Running workflows needs the GitHub App's Actions permission set to Read and write, accepted on "
                       "the installation; until then these repositories get the ordinary write token.")
+WORKFLOWS_REFUSED = ("GitHub refused a token with Actions: write although the installation reports it, so these "
+                     "repositories get the ordinary write token; it is asked again on the next token.")
 READS_RETRY = 6 * 3600     # until the installation webhook or Check permissions says it changed
 CREATE_PERMISSIONS = {"administration": "write", "contents": "read"}
 PRODUCT_CREATE_PERMISSIONS = {"administration": "write", "metadata": "read"}
@@ -1119,20 +1121,37 @@ def install_github_app(app, settings, store):
                 except Problem as problem:
                     if problem.code != "github_app_permissions":
                         raise
+                    run_actions = {}
                     # Either Actions: write went away within LIVE_TTL, or a read (Checks, Commit statuses) the
                     # installation lacks: GitHub says which now.
+                    reason = WORKFLOWS_WITHHELD
                     if (service.live_permissions(refresh=True) or {}).get("actions") == "write":
-                        run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
-                            workflow_repos, WORKFLOW_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
-                            include_cache_status=True, missing=missing)
-                        run_actions = {'actions': 'write'}
-                    else:
-                        R.workflow_health(service, False)
-                        withheld = {"repositories": workflow_repos, "reason": WORKFLOWS_WITHHELD}
+                        with service.lock:
+                            narrowed = service.live.get("turn-reads")
+                        try:
+                            run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                                workflow_repos, WORKFLOW_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
+                                include_cache_status=True, missing=missing)
+                            run_actions = {'actions': 'write'}
+                        except Problem as again:
+                            if again.code != "github_app_permissions":
+                                raise
+                            # The installation reports Actions: write yet refuses it: not the setting Health
+                            # names, so these repositories fall back without its warning, and the reads it narrowed
+                            # away on the way stay for the other tokens.
+                            with service.lock:
+                                if narrowed:
+                                    service.live["turn-reads"] = narrowed
+                                else:
+                                    service.live.pop("turn-reads", None)
+                            reason = WORKFLOWS_REFUSED
+                    if not run_actions:
+                        if reason == WORKFLOWS_WITHHELD:
+                            R.workflow_health(service, False)
+                        withheld = {"repositories": workflow_repos, "reason": reason}
                         run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
                             workflow_repos, TURN_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
                             include_cache_status=True, missing=missing)
-                        run_actions = {}
                 if run_value:
                     tokens.append({'token': run_value, 'expires_at': run_expires, 'repositories': workflow_repos,
                                    'access': 'write', **run_actions, 'cached': cached,
