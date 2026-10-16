@@ -73,6 +73,7 @@ const {html, uiFile} = require('./support/page.cjs');
     await refused;
     await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]'); return !el.checked && !el.disabled; });
     assert.equal(writes.length, 3);
+    assert.deepEqual(writes[2], {harness: 'grok', enabled: true});
     // An older server: no bot_runtimes, so only what its bots run on (needed_runtimes) is locked.
     delete computer.bot_runtimes;
     await page.evaluate(() => loadSettings());
