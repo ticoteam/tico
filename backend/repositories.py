@@ -395,10 +395,13 @@ def repository_health(service):
 
 def workflow_health(service, accepted, refused=False):
     """Remember whether the installation lets flagged repositories run workflows (Actions: write), and whether GitHub
-    refused that token although it does, for Health; written only when it changes."""
-    state = {'accepted': accepted, 'refused': refused}
+    refused that token although it does, for Health; written only when it changes. `refused=None` keeps what was
+    learned about the refusal while the installation still reports Actions: write."""
     with service.store.read() as c:
         saved = metadata(c, WORKFLOWS + ':accepted')
+        if refused is None:
+            refused = bool(accepted and saved.get('accepted') is True and saved.get('refused'))
+        state = {'accepted': accepted, 'refused': refused}
         if {'accepted': saved.get('accepted'), 'refused': bool(saved.get('refused'))} == state:
             return
     with service.store.transaction() as c:

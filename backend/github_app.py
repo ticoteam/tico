@@ -1099,8 +1099,10 @@ def install_github_app(app, settings, store):
         withheld = None
         if workflow_repos:
             live = service.live_permissions()
-            if live is not None and live.get("actions") != "write":
-                R.workflow_health(service, False)
+            if live is not None:
+                # Accepted clears the setting warning at once, whatever the mint below does; whether GitHub refuses
+                # the token is learned there.
+                R.workflow_health(service, live.get("actions") == "write", refused=None)
             if (live or {}).get("actions") == "write":
                 write_repos = [name for name in write_repos if name.lower() not in flagged]
             else:

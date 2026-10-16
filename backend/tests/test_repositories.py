@@ -279,6 +279,14 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     assert token['workflows_withheld']['repositories'] == ['Acme/product']
     assert all(t.get('actions') is None for t in token['tokens'])
     assert 'github_workflows' in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    # Set right again, the setting warning clears with the live read, even if the mint then fails for another reason.
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.live.clear()
+    gh.refuse = (500, 'GitHub is down')
+    assert turn_token(api).status_code >= 400
+    gh.refuse = None
+    assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
     # An installation without Checks: the refusal is the reads', not Actions'; the flagged repository still gets it.
     gh.permissions = {'actions': 'write', 'statuses': 'read'}
     api.app_state.github_app.cache.clear()
