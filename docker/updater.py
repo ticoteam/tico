@@ -169,8 +169,19 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
         raise Unsettled(message) if args[0] in MUTATING else RuntimeError(message)
     if result.returncode:
         lines = (result.stderr or result.stdout).strip().splitlines()
-        raise RuntimeError(lines[-1] if lines else "docker compose failed")
+        raise RuntimeError(compose_error(lines[-1] if lines else "docker compose failed"))
     return result.stdout
+
+
+EDGE_SETTINGS = "TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS"
+
+
+def compose_error(line):
+    """Docker's own words for a subnet clash name no setting; say which .env settings move the edge network."""
+    if "overlaps" in line.lower():
+        return ("%s. The edge network's subnet clashes with another Docker network: set %s in .env to a free range, "
+                "then run 'docker compose down' and 'docker compose up -d'." % (line.rstrip("."), EDGE_SETTINGS))
+    return line
 
 
 def running_image():

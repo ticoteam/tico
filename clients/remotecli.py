@@ -352,7 +352,7 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
-            for field in ("type", "step", "number"):
+            for field in ("type", "step", "number", "visibility", "public_title", "public_summary"):
                 if getattr(args, field, None) is not None:
                     payload[field] = getattr(args, field)
             if args.label:
@@ -967,6 +967,9 @@ def main(args, who=None):
             print(json.dumps(result, indent=2))
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
+        if args.fn == "task create" and isinstance(result, dict):     # created, but not as asked: say what to do next
+            for warning in result.get("warnings") or ():
+                print("hub: " + str(warning), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):

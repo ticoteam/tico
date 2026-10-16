@@ -152,6 +152,10 @@ class Stub(BaseHTTPRequestHandler):
         self.seen.append(("POST", self.path, self.headers.get("Authorization"), body))
         if self.path == "/api/v2/tasks/T1":
             return self.reply(200, {"task": {"id": "T1", "status": body.get("status"), "version": 4}})
+        if self.path == "/api/v2/tasks" and body.get("visibility") == "public":
+            return self.reply(200, {"task": {"id": "T3", "visibility": "private", "public_title": ""},
+                                    "warnings": ["created private without public text: a bot publishes through an "
+                                                 "approval. Run `hub task publication-preview T3` ..."]})
         if self.path == "/api/v2/tasks" and body.get("check_model"):
             return self.reply(200, {"task": {"id": "T2", "owner": body["owner"], "title": body["title"]}})
         if self.path == "/api/v2/bots/writer/tools":
@@ -263,6 +267,18 @@ class AgainstAStub(unittest.TestCase):
         settings = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/roadmaps/settings"]
         self.assertEqual(settings, [{"labels": ["roadmap"], "suggestion_limit": 5, "bot_public_approval": False},
                                     {"labels": []}])
+
+    def test_a_bot_create_made_private_says_how_to_publish(self):
+        base = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+        done = subprocess.run([sys.executable, str(HUB), "task", "create", "--owner", "coo", "--title", "Exports",
+                               "--visibility", "public", "--public-title", "Exports"],
+                              env={**base, **self.env}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(json.loads(done.stdout)["task"]["visibility"], "private")
+        self.assertIn("hub: created private without public text", done.stderr)
+        self.assertIn("hub task publication-preview T3", done.stderr)
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
+        self.assertEqual((posted["visibility"], posted["public_title"]), ("public", "Exports"))
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)

@@ -192,6 +192,8 @@ def test_bot_creation_and_label_publication_require_review(api):
         created = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research requested exports',
                                     'body': 'customer@acme.example', 'type': 'Product roadmap',
                                     'visibility': 'public', 'labels': ['roadmap']}, token=identity)
+        assert any('publication-preview' in warning for warning in created['warnings'])
+        created = created['task']
         assert created['visibility'] == 'private'
         assert api.get('/public/roadmaps/roadmap/tasks/' + created['id']).status_code == 404
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'labels': []})
@@ -264,19 +266,48 @@ def test_internal_text_never_becomes_public_text(api):
 def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api):
     from backend import roadmaps as R
     hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old idea', 'body': 'Internal notes', 'type': 'Product roadmap'})
+    edited = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old idea 2', 'body': 'Old notes', 'type': 'Product roadmap'})
+    born = post(api, 'tasks', {'owner': 'cpo', 'title': 'Born public', 'body': 'Acme internal notes', 'type': 'Product roadmap'})
     shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
-                               'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
+                               'visibility': 'public', 'public_title': 'Exports', 'public_summary': 'Export your data'})
     with api.app.state.store.transaction() as c:
+        # the first version: no marker, the type public, every task's title and body copied into its public text
         c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_explicit_public_text'")
         c.execute("UPDATE task_types SET default_visibility='public' WHERE id='product-roadmap'")
-        c.execute("UPDATE tasks SET public_title=title,public_summary=body WHERE id=?", (hidden['id'],))
+        c.execute("UPDATE tasks SET public_title=title,public_summary=body WHERE id IN (?,?)", (hidden['id'], edited['id']))
+        c.execute("UPDATE tasks SET visibility='public',public_title=title,public_summary=body WHERE id=?", (born['id'],))
+        c.execute("UPDATE tasks SET body='Acme jane@x.example churn $40k' WHERE id=?", (edited['id'],))   # edited after the copy
         R.migrate(c)
+        text = lambda task: tuple(c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?', (task['id'],)).fetchone())
         assert H.type_get(c, 'product-roadmap')['default_visibility'] == 'private'
-        assert tuple(c.execute('SELECT public_title,public_summary FROM tasks WHERE id=?', (hidden['id'],)).fetchone()) == ('', '')
-        assert tuple(c.execute('SELECT visibility,public_title FROM tasks WHERE id=?', (shown['id'],)).fetchone()) == ('public', 'Shown idea')
+        assert text(hidden) == text(edited) == text(born) == ('private', '', '')
+        assert text(shown) == ('public', 'Exports', 'Export your data')
         c.execute("UPDATE task_types SET default_visibility='public' WHERE id='product-roadmap'")
         R.migrate(c)                                                  # once only: a later choice stays
         assert H.type_get(c, 'product-roadmap')['default_visibility'] == 'public'
+    listed = api.get('/public/roadmaps/roadmap')
+    assert 'Born public' not in listed.text and 'Acme' not in listed.text
+
+
+def test_the_first_version_clean_up_leaves_a_database_that_never_ran_it(api):
+    from backend import roadmaps as R
+    same = post(api, 'tasks', {'owner': 'cpo', 'title': 'Exports', 'body': 'Export your data', 'type': 'Product roadmap',
+                              'visibility': 'public', 'public_title': 'Exports', 'public_summary': 'Export your data'})
+    draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Search', 'body': 'Internal', 'type': 'Product roadmap'})
+    draft = post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'public_title': 'Better search'})
+    with api.app.state.store.transaction() as c:
+        R.migrate(c)
+        assert tuple(c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?', (same['id'],)).fetchone()) == \
+            ('public', 'Exports', 'Export your data')
+        assert c.execute('SELECT public_title FROM tasks WHERE id=?', (draft['id'],)).fetchone()[0] == 'Better search'
+        # a database from before roadmaps gets the columns and the marker, and its tasks keep their visibility
+        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_explicit_public_text'")
+        c.execute('ALTER TABLE tasks DROP COLUMN public_title')
+        c.execute('ALTER TABLE tasks DROP COLUMN public_summary')
+        c.execute("UPDATE tasks SET title='',body='' WHERE id=?", (same['id'],))   # equal to its new, empty public text
+        R.migrate(c)
+        assert tuple(c.execute('SELECT visibility,public_title FROM tasks WHERE id=?', (same['id'],)).fetchone()) == ('public', '')
+        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='roadmaps_explicit_public_text'").fetchone()
 
 
 def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
@@ -319,6 +350,17 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
     assert hashlib.sha256(staying.encode()).hexdigest() in snapshot
     post(api, 'tasks/' + trashed['id'] + '/restore', {})
     assert count(trashed['id']) == 1
+    purged = post(api, 'tasks', {'owner': 'ben', 'title': 'Old exports', 'body': 'Internal', 'type': 'Product roadmap',
+                                'labels': ['roadmap'], 'visibility': 'public', 'public_title': 'Old exports'})
+    path = '/public/roadmaps/roadmap/tasks/' + purged['id']
+    kept = follow(path)
+    post(api, 'tasks/' + purged['id'] + '/delete', {})
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE task_trash SET purged_at=? WHERE task_id=?', (H.now(), purged['id']))
+    assert api.delete(path + '/requesters/' + kept, headers=ORIGIN).status_code == 404   # a purged snapshot is not read
+    with api.app.state.store.read() as c:
+        snapshot = c.execute('SELECT rows_json FROM task_trash WHERE task_id=?', (purged['id'],)).fetchone()[0]
+    assert hashlib.sha256(kept.encode()).hexdigest() in snapshot
 
 
 def test_suggestions_have_an_overall_cap_and_spam_checks(api):
@@ -340,8 +382,57 @@ def test_suggestions_have_an_overall_cap_and_spam_checks(api):
         assert c.execute('SELECT count(*) FROM tasks WHERE requester=?', (H.KEEPER,)).fetchone()[0] == 2
     waiting = get(api, 'tasks/' + first.json()['id'])['task']
     post(api, 'tasks/' + waiting['id'], {'version': waiting['version'], 'step': 'Exploring'})
-    assert suggest({'title': 'Webhooks'}).status_code == 200
+    webhooks = suggest({'title': 'Webhooks'})
+    assert webhooks.status_code == 200
+    assert suggest({'title': 'Audit log'}).status_code == 429
+    for status in ('declined', 'closed', 'done'):          # an ended suggestion left at Suggested frees its place
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE tasks SET status=? WHERE id=?', (status, webhooks.json()['id']))
+        assert suggest({'title': 'Audit log ' + status}).status_code == 200
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET status='open' WHERE title=?", ('Audit log ' + status,))
+            c.execute("UPDATE tasks SET status='closed' WHERE title=?", ('Audit log ' + status,))
     post(api, 'roadmaps/settings', {'suggestion_limit': 0}, expected=422)
+
+
+def test_a_full_suggestion_box_tells_the_product_managers_operator_once_a_day(api):
+    public_setup(api, limit=100)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager'),operator='ana' "
+                  "WHERE bot='cpo'")
+    post(api, 'roadmaps/settings', {'suggestion_limit': 1})
+    suggest = lambda title: api.post('/public/roadmaps/roadmap/suggest', json={'title': title}, headers=ORIGIN)
+
+    def told():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND to_actor=? AND kind='notice' "
+                             "AND body LIKE 'The public roadmap is refusing new suggestions%'",
+                             (H.KEEPER, H.human_actor('ana'))).fetchone()[0]
+
+    assert suggest('Exports').status_code == 200
+    assert told() == 0
+    assert suggest('Imports').status_code == 429 and told() == 1
+    assert suggest('Webhooks').status_code == 429 and told() == 1    # once a day
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value_json='\"2000-01-01\"' WHERE key='roadmap_suggestions_full_told'")
+    assert suggest('Webhooks').status_code == 429 and told() == 2
+
+
+def test_a_bot_create_keeps_no_public_text_and_says_how_to_publish(api):
+    from backend.tests.test_tasks_board import bot_token
+    token = bot_token(api, 'cpo')
+    response = post(api, 'tasks', {'owner': 'ops', 'title': 'Improve exports', 'body': 'Internal notes',
+                                   'type': 'Product roadmap', 'visibility': 'public', 'public_title': 'Exports',
+                                   'public_summary': 'Export your data'}, token=token)
+    task = response['task']
+    assert (task['visibility'], task['public_title'], task['public_summary']) == ('private', '', '')
+    with api.app.state.store.read() as c:
+        stored = c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?', (task['id'],)).fetchone()
+    assert tuple(stored) == ('private', '', '')
+    assert any('publication-preview ' + task['id'] in warning for warning in response['warnings'])
+    quiet = post(api, 'tasks', {'owner': 'ops', 'title': 'Improve imports', 'body': 'Internal', 'type': 'Product roadmap'},
+                 token=token)
+    assert not any('publication-preview' in warning for warning in (quiet.get('warnings') or []))
 
 
 def test_guard_refusals_carry_cors_headers_for_allowed_origins(api):

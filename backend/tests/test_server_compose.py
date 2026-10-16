@@ -91,3 +91,28 @@ def test_front_doors_have_fixed_edge_addresses_the_server_trusts_and_nothing_wid
     trusted = services["server"]["environment"]["TICO_TRUSTED_PROXIES"]
     resolved = re.sub(r"\$\{\w+:-([^}$]*)\}", r"\1", trusted[len("${TICO_TRUSTED_PROXIES:-"):-1])
     assert resolved.split(",") == ["127.0.0.1/32", "::1/128", f"{doors['caddy']}/32", f"{doors['cloudflared']}/32"]
+
+
+def test_a_subnet_clash_names_the_edge_settings_and_other_failures_pass_through(monkeypatch, tmp_path):
+    import subprocess
+    import pytest
+    for key, value in {"TICO_UPDATER_MODE": "", "TICO_PROJECT_DIR": str(tmp_path), "TICO_COMPOSE_FILE": "", "TICO_UPDATER_BUNDLE": "never"}.items():
+        monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location("tico_updater_overlap", ROOT / "docker/updater.py")
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    stderr = {"text": ""}
+    monkeypatch.setattr(updater, "docker_run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", stderr["text"]))
+    stderr["text"] = ("Network tico_edge  Creating\n"
+                      "Error response from daemon: invalid pool request: Pool overlaps with other one on this address space\n")
+    with pytest.raises(RuntimeError) as clash:
+        updater.compose("up", "-d", "server")
+    message = str(clash.value)
+    assert message.startswith("Error response from daemon: invalid pool request: Pool overlaps")
+    for setting in ("TICO_EDGE_SUBNET", "TICO_EDGE_DYNAMIC_RANGE", "TICO_CADDY_ADDRESS", "TICO_CLOUDFLARED_ADDRESS"):
+        assert setting in message
+    assert "docker compose down" in message
+    stderr["text"] = "Error response from daemon: no such image\n"
+    with pytest.raises(RuntimeError) as other:
+        updater.compose("up", "-d", "server")
+    assert str(other.value) == "Error response from daemon: no such image"

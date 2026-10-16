@@ -3884,6 +3884,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, 'kind', 'visibility is public or private')
     if bot_review:
         # Public text from a bot goes through an approved publication, never in with the task.
+        if visibility == 'public' or public_title or public_summary:
+            plain = plain + ["created private without public text: a bot publishes through an approval. Run "
+                             f"`hub task publication-preview {row['id']}` with the visibility and public text, "
+                             "ask for a publish approval with its payload, then update the task with the approval id"]
         public, public_title, public_summary = 'private', '', ''
     if private:
         public = 'private'

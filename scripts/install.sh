@@ -395,7 +395,13 @@ start_stack() {
   step "Starting Tico"
   installed_port=$(as_root sed -n 's/^TICO_PORT=//p' "$DIR/.env" | head -n 1 | tr -d '\"\047')
   HEALTH_URL=${TICO_INSTALL_HEALTH_URL:-http://127.0.0.1:${installed_port:-8765}/healthz}
-  ( cd "$DIR" && as_root docker compose pull --quiet && as_root docker compose up -d ) || die 6 "docker compose failed in $DIR. Run 'docker compose logs' there."
+  if ! up_out=$( cd "$DIR" && as_root docker compose pull --quiet 2>&1 && as_root docker compose up -d 2>&1 ); then
+    printf '%s\n' "$up_out" >&2
+    case "$up_out" in
+      *[Oo]verlaps*) die 6 "docker compose failed in $DIR: the edge network's subnet clashes with another Docker network. Set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS in $DIR/.env to a free range, then run 'docker compose down' and 'docker compose up -d' there." ;;
+      *) die 6 "docker compose failed in $DIR. Run 'docker compose logs' there." ;;
+    esac
+  fi
   i=0
   while [ "$i" -lt "$HEALTH_TRIES" ]; do
     if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then say "ok: the server answers on $HEALTH_URL"; return 0; fi

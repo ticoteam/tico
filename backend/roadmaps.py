@@ -19,6 +19,7 @@ VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','pri
 
 
 def migrate(c):
+    had_public_text = 'public_title' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
     H.add_column(c, 'tasks', 'visibility', VISIBILITY)
     H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
@@ -33,13 +34,19 @@ def migrate(c):
     c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs_json,'$.task'),created,id) "
               "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs_json,'$.comment')=1")
     # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
-    # default and every task's internal title and body copied into its public text. The type becomes private, and
-    # those copies go from tasks that are not public, so publishing one later needs public text written for it.
+    # default and every task's internal title and body copied into its public text. The type becomes private.
+    # That version had public text columns but no marker, and its editor showed public text only on public tasks,
+    # so any public text on a private task is such a copy, even when the title or body changed since. A public task
+    # whose public text still equals its internal title and body was published by the copy, not by a person, so it
+    # goes private with no public text. Publishing any of them later needs public text written for it.
     c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
         c.execute("UPDATE task_types SET default_visibility='private' WHERE manager='product-manager'")
-        c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
-                  "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
+        if had_public_text:
+            c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
+                      "AND (public_title<>'' OR public_summary<>'')")
+            c.execute("UPDATE tasks SET visibility='private',public_title='',public_summary='' WHERE visibility='public' "
+                      "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
               "name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',"
