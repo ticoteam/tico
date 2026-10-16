@@ -921,13 +921,15 @@ async fn inspect_inner(workspace: &Path, row: &Value, env: &Env, cache: Option<&
 
 const BUILD: &[&str] = &[
     "node_modules", ".venv", "venv", "dist", "build", "target", ".next", "__pycache__", ".cache", "coverage", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".gradle",
-    ".turbo", ".parcel-cache", ".DS_Store", ".idea", ".vscode", "out",
+    ".turbo", ".parcel-cache", ".DS_Store", ".idea", ".vscode", "out", ".build", ".swiftpm", "DerivedData",
 ];
 
 pub fn build_file(name: &str) -> bool {
     let parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
     parts.iter().any(|p| BUILD.contains(p) || p.ends_with(".egg-info") || p.ends_with(".pyc"))
         || parts.windows(2).any(|w| w[0] == ".terraform" && (w[1] == "providers" || w[1] == "plugin-cache"))
+        // Tauri regenerates `gen/schemas`; `gen/apple` and `gen/android` hold mobile projects and signing files, and a bare `gen` may be source.
+        || parts.windows(2).any(|w| w[0] == "gen" && w[1] == "schemas")
 }
 
 /// fnmatch of a lowercased file name against `.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.p12`.
@@ -1640,6 +1642,10 @@ mod tests {
         assert_eq!(safe_path(&root, "link").unwrap_err(), "Use a worktree inside the team workspace");
         assert_eq!(safe_path(&root, "link/inner").unwrap_err(), "Worktree path must not contain symlinks");
         assert!(build_file("web/node_modules/x.js") && build_file("a/.terraform/providers/p") && !build_file("src/main.rs"));
+        assert!(build_file("app/.build/arm64-apple-macosx/debug/App.o") && build_file("app/.swiftpm/xcode/package.xcworkspace/x"));
+        assert!(build_file("ios/DerivedData/Build/Products/x") && build_file("app/gen/schemas/desktop-schema.json"));
+        assert!(!build_file("app/gen/handwritten.rs") && !build_file("gen/main.go") && !build_file(".env.local"));
+        assert!(!build_file("app/gen/android/keystore.properties") && !build_file("app/gen/apple/ExportOptions.plist"));
         assert!(secret_name(".env.local") && secret_name("server.pem") && !secret_name("main.rs"));
         assert_eq!(wip_branch(&json!({"task_id": "0123456789", "id": "abcdefgh"})), "wip/01234567-abcdef");
         let _ = std::fs::remove_dir_all(&root);
