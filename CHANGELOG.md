@@ -135,6 +135,7 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - Another bot's turn in a task's room (the requester answering there, say) no longer ends the task owner's goal:
   each one used to clear the goal, start a "/goal clear" run for the owner and set the goal again on its next turn.
+  Handing a task to someone else now ends the goal Tico set for its old bot owner, including when a person takes it.
 - Desktop app: a link that opens a new tab (every link in chat and Markdown) did nothing; it now opens in the default
   browser, and a Markdown email link opens the mail app. The team's own files and run logs open in an app window,
   which keeps the app's sign-in; a file the app cannot show (Word, Excel, zip) downloads to Downloads instead

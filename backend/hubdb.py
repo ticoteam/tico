@@ -4157,6 +4157,13 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("owner=:owner")
         args["owner"] = new_owner
         _task_event(conn, task_id, actor, "owner", row["owner"], new_owner, note or "")
+        if new_owner != row["owner"] and is_bot(row["owner"]) and row.get("conversation_id"):
+            # The goal Tico set for the old owner ends with its ownership: only the owner's turns end a task goal,
+            # and a person owner has none to end it. A new bot owner's first turn sets its own.
+            from .chat_goals import clear_task_goal
+            room = conversation(conn, row["conversation_id"])
+            if room:
+                clear_task_goal(conn, room)
         if new_owner != row["owner"] and rank is None:
             rank = _queue_end(conn, new_owner)      # the bottom of the new queue
     if rank is not None:

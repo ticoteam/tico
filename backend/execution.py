@@ -1356,6 +1356,9 @@ class Execution:
         from . import worktrees
         # A runner from before task goals would treat a task room's goal as running without ever setting it.
         chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
+        if chat_goal and chat_goal["bot"] != row["bot"]:
+            # Another bot's turn in the room (the requester answering) works without the owner's goal.
+            chat_goal = None
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid,
                             "profile": effective(c, row["bot"])[0],
                             "computer_label": runner["label"],
