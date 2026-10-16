@@ -494,7 +494,7 @@ impl Follower {
             (None, Err(why)) => Some(Err(why.clone())),
         };
         let unknown = |why: &str| {
-            format!("holding work: the saved hold for a Docker update at {} cannot be read ({why}); it holds until it is removed and the runner restarted, once Docker shows one runner container", path.display())
+            format!("holding work: the saved Docker update hold cannot be read ({why}); end it by hand once Docker shows one runner container (docs/updates.md)")
         };
         if self.sidecar.url.is_empty() {
             return held.map(|h| match h {
@@ -533,7 +533,7 @@ impl Follower {
         let held = if held.is_empty() { "an unknown release".to_string() } else { held };
         Some(match answer {
             // An updater that lost its status never says: the way out is by hand (docs/updates.md).
-            Ok(_) => format!("holding work: the updater was changing containers for {held} and has not said how that ended (it says {}); if it lost its status, remove {} and restart the runner once Docker shows one runner container", if state.is_empty() { "nothing" } else { &state }, path.display()),
+            Ok(_) => format!("holding work: the updater was changing containers for {held} and has not said how that ended (it says {}); if it lost its status, end the hold by hand (docs/updates.md)", if state.is_empty() { "nothing" } else { &state }),
             Err(code) if code == "unreachable" => format!("holding work: the updater was changing containers for {held} and does not answer"),
             Err(code) => format!("holding work: the updater was changing containers for {held} and answered {code}"),
         })
