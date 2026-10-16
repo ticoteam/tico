@@ -46,6 +46,7 @@ class FakeGitHub:
         self.history = set()                     # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
         self.refuse_actions_write = False        # refuse Actions: write whatever the live permissions say
+        self.on_token = None                     # called with each token request's body before it is answered
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
@@ -83,6 +84,8 @@ class FakeGitHub:
                 return httpx.Response(self.delete_status)
             return httpx.Response(404 if path.split("/")[3] in self.missing else 200, json={})
         if path.endswith("/access_tokens"):
+            if self.on_token:
+                self.on_token(body)
             if self.refuse:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
             if self.refuse_actions_write and body.get("permissions", {}).get("actions") == "write" or any(

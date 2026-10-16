@@ -1,5 +1,6 @@
 """Repository contracts: migrations, sync, scoped grants and mixed computers."""
 import json
+import time
 import uuid
 
 import pytest
@@ -306,11 +307,54 @@ def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token(ap
     assert 'although the installation reports it' in token['workflows_withheld']['reason']
     assert all(t.get('actions') is None for t in token['tokens'])
     assert 'Acme/product' in token['repositories']
-    # The refusal was Actions', not the reads': the fallback keeps them, and Health blames neither.
+    # The refusal was Actions', not the reads': the fallback keeps them, and Health names the refusal without
+    # blaming the Actions setting or the GitHub connection.
     fallback = gh.of('/access_tokens')[-1][2]['permissions']
     assert fallback['actions'] == 'read' and fallback['checks'] == 'read'
     checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
-    assert 'github_workflows' not in checks
+    refused = checks['github_workflows']
+    assert refused['label'] == 'GitHub refused workflow tokens' and 'cpo: Acme/product' in refused['summary']
+    assert 'not Read and write' not in refused['summary']
+    assert "Change the App's permissions" not in {f['label'] for f in refused.get('fixes', [])}
     with api.app_state.store.read() as c:
         row = c.execute("SELECT last_error FROM service_health WHERE service='github:token'").fetchone()
     assert row is None or row['last_error'] is None
+    # Remembered for LIVE_TTL: the next token (each git call asks) falls back without asking GitHub again.
+    asked = len(gh.calls)
+    again = api.post('/api/v2/github/token', json={'bot': 'cpo', 'repository': 'Acme/product', 'purpose': 'git'},
+                     headers=auth('runner-test')).json()
+    assert again['workflows_withheld']['reason'] == token['workflows_withheld']['reason']
+    assert again['tokens'][0].get('actions') is None
+    assert gh.calls[asked:] == []
+    # Once it lapses, GitHub is asked again; still refused, so the reply and Health stay the same.
+    api.app_state.github_app.live['workflows-refused'] = 0
+    api.app_state.github_app.cache.clear()
+    assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
+    assert any(r[1].endswith('/access_tokens') and r[2]['permissions'].get('actions') == 'write' for r in gh.calls[asked:])
+    # Check permissions forgets it, and the accepted mint clears Health.
+    gh.refuse_actions_write = False
+    assert api.post('/api/v2/github/app/check-permissions', headers=auth()).status_code == 200
+    api.app_state.github_app.cache.clear()
+    token = turn_token(api).json()
+    assert 'workflows_withheld' not in token and token['tokens'][-1]['actions'] == 'write'
+    assert 'github_workflows' not in {x['id'] for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+
+
+def test_a_refused_workflow_mint_keeps_a_webhook_reset_of_the_turn_reads(api, gh):
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    put(api, 'repositories/Acme/product', {'enabled': True})
+    put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [
+        {'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]})
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    gh.refuse_actions_write = True
+    service = api.app_state.github_app
+    service.live['turn-reads'] = (time.time() + 3600, {'actions': 'read', 'checks': 'read'})
+
+    def webhook(body):
+        # The installation webhook arrives while the narrowed retry's last mint is in flight.
+        if body['permissions'].get('actions') == 'write' and 'checks' not in body['permissions']:
+            service.live.pop('turn-reads', None)
+    gh.on_token = webhook
+    assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
+    assert 'turn-reads' not in service.live

@@ -762,17 +762,26 @@ def _github_workflows(c, github):
     """A write grant an Owner or admin let run workflows gets a token with Actions: write only once the installation
     has accepted it. The token request records what the installation last said, so this reads no network."""
     from .repo_waits import permissions_url
-    from .repositories import workflows_waiting
-    waiting = workflows_waiting(c) if github and github.row(c) else []
-    if not waiting:
-        return None
-    return _check("github_workflows", "Bots can't run workflows yet", "warn",
-                  "These bots may run workflows but get only the ordinary write token: the GitHub App's Actions "
-                  "permission is not Read and write on the installation. Set it in the App's permissions, then accept "
-                  "it for the organisation. Waiting: " + ", ".join(waiting[:3])
-                  + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
-                  [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
-                   _fix("Open GitHub settings", "#/integrations")])
+    from .repositories import workflows_refused, workflows_waiting
+    connected = bool(github and github.row(c))
+    if waiting := workflows_waiting(c) if connected else []:
+        return _check("github_workflows", "Bots can't run workflows yet", "warn",
+                      "These bots may run workflows but get only the ordinary write token: the GitHub App's Actions "
+                      "permission is not Read and write on the installation. Set it in the App's permissions, then "
+                      "accept it for the organisation. Waiting: " + ", ".join(waiting[:3])
+                      + ("." if len(waiting) <= 3 else f"; and {len(waiting) - 3} more."),
+                      [_fix("Change the App's permissions", permissions_url(c, github.row(c))),
+                       _fix("Open GitHub settings", "#/integrations")])
+    if refused := workflows_refused(c) if connected else []:
+        # The installation reports Actions: Read and write, so the setting is not the cause and is not offered.
+        return _check("github_workflows", "GitHub refused workflow tokens", "warn",
+                      "These bots may run workflows but get only the ordinary write token: GitHub refused a token "
+                      "with Actions: write although the installation reports it. Tico asks again after a minute; "
+                      "if this stays, check the installation's repository access and the organisation's Actions "
+                      "policy on GitHub. Refused: " + ", ".join(refused[:3])
+                      + ("." if len(refused) <= 3 else f"; and {len(refused) - 3} more."),
+                      [_fix("Open GitHub settings", "#/integrations")])
+    return None
 
 
 def _slack(c):

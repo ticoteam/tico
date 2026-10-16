@@ -41,7 +41,11 @@ The bot then gets a separate token for those repositories, with its write permis
 repositories keep their own tokens, since GitHub permissions apply to a whole token. Tico asks GitHub for the
 installation's live permissions first: until it reports Actions as read and write, the flagged repositories get the
 ordinary write token, the token answer says why in `workflows_withheld`, and Health shows **Bots can't run workflows
-yet**. Workflows: write is never added, so the bot still cannot edit `.github/workflows` files.
+yet**. If the installation reports Actions as read and write but GitHub still refuses the token, the setting is not
+the cause: the repositories get the ordinary write token, `workflows_withheld` says GitHub refused it, and Health shows
+**GitHub refused workflow tokens**. Tico remembers the refusal for a minute, so a bot's git calls in that time don't
+ask GitHub again; accepting new permissions or **Check permissions** asks at once. Workflows: write is never added,
+so the bot still cannot edit `.github/workflows` files.
 
 ## Set up
 

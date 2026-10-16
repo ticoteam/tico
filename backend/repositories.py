@@ -393,14 +393,20 @@ def repository_health(service):
                       'Refresh Settings > Repositories or check the GitHub App installation.')
 
 
-def workflow_health(service, accepted):
-    """Remember whether the installation lets flagged repositories run workflows (Actions: write), for Health;
-    written only when it changes."""
+def workflow_health(service, accepted, refused=False):
+    """Remember whether the installation lets flagged repositories run workflows (Actions: write), and whether GitHub
+    refused that token although it does, for Health; written only when it changes."""
+    state = {'accepted': accepted, 'refused': refused}
     with service.store.read() as c:
-        if metadata(c, WORKFLOWS + ':accepted').get('accepted') is accepted:
+        saved = metadata(c, WORKFLOWS + ':accepted')
+        if {'accepted': saved.get('accepted'), 'refused': bool(saved.get('refused'))} == state:
             return
     with service.store.transaction() as c:
-        save_metadata(c, WORKFLOWS + ':accepted', {'accepted': accepted, 'at': H.now()})
+        save_metadata(c, WORKFLOWS + ':accepted', {**state, 'at': H.now()})
+
+
+def _workflow_grants(c):
+    return [bot + ': ' + name for bot, names in sorted(metadata(c, WORKFLOWS).items()) for name in names or ()]
 
 
 def workflows_waiting(c):
@@ -408,7 +414,15 @@ def workflows_waiting(c):
     lacks Actions: write; empty when it has it, nothing is flagged, or no token was asked for since."""
     if metadata(c, WORKFLOWS + ':accepted').get('accepted') is not False:
         return []
-    return [bot + ': ' + name for bot, names in sorted(metadata(c, WORKFLOWS).items()) for name in names or ()]
+    return _workflow_grants(c)
+
+
+def workflows_refused(c):
+    """The grants whose last token GitHub refused Actions: write although the installation reports it."""
+    saved = metadata(c, WORKFLOWS + ':accepted')
+    if saved.get('accepted') is not True or not saved.get('refused'):
+        return []
+    return _workflow_grants(c)
 
 
 def queue_sync(service, refresh=False):
