@@ -11,6 +11,8 @@
 #stale-banner:not([hidden])~#app-update{bottom:72px}
 #usage-notice{position:fixed;left:16px;bottom:16px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
 #usage-notice[hidden]{display:none}
+#version-message{position:fixed;left:16px;bottom:72px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
+#version-message[hidden],#version-message a[hidden]{display:none}
 /* Fixed over the bottom-left of every page, which is where a bot's composer sits: a click on the box must reach the box, so only the bar's own link and button take clicks. */
 #usage-notice{pointer-events:none}
 #usage-notice a,#usage-notice button{pointer-events:auto}

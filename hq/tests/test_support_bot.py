@@ -259,6 +259,15 @@ def test_close_signature_replies_and_closes_every_ticket_with_it(rig, hq, tmp_pa
     assert code == 1 and "HUB_BOT" in text
 
 
+def test_link_names_the_fix_a_release_will_announce(rig, hq):
+    tid, _ = rig.file("The board will not load")
+    code, text = rig.cli("link", tid, "#712")
+    assert code == 0 and text.strip() == f"{tid} gets the fixed-in notice when a release ships #712", text
+    code, text = rig.cli("link", tid, "712")
+    assert code == 0 and text.strip().endswith("#712")
+    assert rig.cli("link", tid, "PR-712")[0] == 2
+
+
 @pytest.mark.parametrize("manifest", ["outbound_send: true\n", "outbound_send: false\n", "[invalid", None])
 def test_the_person_set_switch_posts_without_a_separate_approval_whatever_bot_yaml_says(rig, hq, tmp_path, manifest):
     if manifest is None:

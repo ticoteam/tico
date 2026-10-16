@@ -416,7 +416,8 @@ async def read_json(request, limit):
 
 def install(app, tickets, address, staff_key="", judge=None):
     """Add the routes. `address(request)` is who is asking, for the rate limits only. `judge(text) -> (verdict, reason)`
-    classifies what arrives (judge.py); it never raises, and without one every verdict is `unchecked`."""
+    classifies what arrives (judge.py); it never raises, and without one every verdict is `unchecked`. Returns the
+    staff key check, for the other staff routes (notices.py)."""
     key_digest = digest(staff_key) if staff_key else ""
     judge = judge or (lambda text: ("unchecked", "no judge"))
 
@@ -623,3 +624,5 @@ def install(app, tickets, address, staff_key="", judge=None):
             return no_store({"verdict": "unchecked", "reason": "the daily judge limit is reached"})
         verdict, reason = await run_in_threadpool(judge, data["text"][:MAX_JUDGED])
         return no_store({"verdict": verdict if verdict in VERDICTS else "unchecked", "reason": reason})
+
+    return staff_only

@@ -59,7 +59,8 @@ a human sends on purpose, are in two other tables (`tickets`, `ticket_replies`; 
 
 - `GET /v1/latest?install_id=&version=&active_people=&active_bots=` records the ping and returns the latest release,
   cached from GitHub for 15 minutes. Any of the four fields present but invalid, missing or repeated: `422`, nothing
-  stored. No fields: the release only, nothing recorded. Over 60 requests an hour from one address: `429`.
+  stored. No fields: the release only, nothing recorded. Over 60 requests an hour from one address: `429`. The answer also carries Tico's per-version messages and known issues, the same for every install
+  ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)); nothing more is sent or stored for them.
 - `GET /v1/stats`, public: `tried` (IDs whose two flags have both been true at some time), `active_7d` (heard from in the
   last 7 days), `retained_30d` (first seen at least 30 days ago and a bot active in the last 7 days) and `by_version`
   (active installs by major version; before 1.0 by `0.minor`). The totals are exact. A version count under 5 is folded into

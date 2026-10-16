@@ -312,6 +312,14 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 
 ## Coming from an older version
 
+### You're on 0.2: update to get one-tap support
+
+Tico 0.3 can reach the Tico team from anywhere in the app, with what went wrong attached, and shows replies, fixed-in notices
+and **Known issues in your version** under Help. On 0.2, open **New version** in the sidebar and press **Update now** (the
+owner), or follow the steps for your version below. Help > Contact support keeps working on 0.2 until you do.
+
+Tico HQ can also show a short message for a version once in the app ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)).
+
 - **v0.2.5 or older:** the updaters of these versions cannot replace themselves or install new configuration files, so
   run the release's install command once more on each computer (server, then each runner computer). From then on, Update
   in the app does everything.

@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Tico HQ's update check carries a short message for given versions, shown once to each person in the app, and the known
+  issues by version, which Help lists as **Known issues in your version** (or says it could not check). Nothing more is sent
+  or collected. An install too old to show a message gets its link as the **View changelog** link instead: on 0.2,
+  "You're on 0.2: update to get one-tap support". A request linked to the issue or pull request that fixes it
+  (`hq-tickets link`) gets "Fixed in vX, update here" by itself when the release ships.
 - A bot waiting on a linked pull request can end its turn instead of polling: `hub task link <task> <pr url>
   --wake-once` (or `wake_once` on `hub_task_link`) wakes the task once, in its conversation, when the PR's checks
   finish (pass or fail), it is approved or gets changes requested, or a release ships it (or it merges in a

@@ -107,6 +107,30 @@ document.addEventListener('click', ev => {
   S.config.usage_count_notice = false; renderUsageNotice();
   post('/v2/system/usage-count/notice', {state: 'dismissed'}).catch(() => {});
 });
+// A short message Tico HQ has for this version (backend/releases.py), shown once to each person in this browser: it is
+// marked seen as it appears, so a reload or another tab does not bring it back.
+const VM_KEY = 'tico.version-message.seen';
+const vmSeenKey = () => VM_KEY + ':' + (S.me?.id || S.me?.email || '');
+let vmShowing = 0;
+function renderVersionMessage() {
+  const bar = $('#version-message'), m = S.config.update?.message;
+  if (!bar) return;
+  if (vmShowing) { bar.hidden = vmShowing === -1; return; }
+  let seen = [];
+  try { seen = JSON.parse(localStorage.getItem(vmSeenKey()) || '[]'); } catch {}
+  if (!m || !m.id || !S.me || seen.includes(m.id)) { bar.hidden = true; return; }
+  $('#version-message-text').textContent = m.body;
+  const link = $('#version-message-link');
+  link.hidden = !/^https:\/\//.test(m.url || '');
+  if (!link.hidden) link.href = m.url;
+  bar.hidden = false;
+  vmShowing = m.id;
+  try { localStorage.setItem(vmSeenKey(), JSON.stringify([...seen, m.id].slice(-20))); } catch {}
+}
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('#version-message-x')) return;
+  vmShowing = -1; $('#version-message').hidden = true;
+});
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
 // moment the server stops asking for one. Everyone else never sees it.
 function renderOnboardingNav() {

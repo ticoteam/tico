@@ -33,7 +33,9 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `hub doc ask`. Also:
 
 - **Bug:** one task for engineering (`hub task create --owner issue-triage`, or whoever `knowledge/escalation.md` names)
   with the version, what the human did and what they saw, the diagnostics finding, and nothing personal (the labels stay labels). Search `software/hq-tickets list --status all`
-  and `knowledge/known-issues.md` first; a repeat is a count on the existing entry.
+  and `knowledge/known-issues.md` first; a repeat is a count on the existing entry. Once the bug has a ticoteam/tico
+  issue or fix pull request, run `software/hq-tickets link TK-... '#123'` for each ticket it covers: the release that
+  ships it posts "Fixed in vX, update here" on those tickets by itself, so no fixed-in reply is written by hand.
 - **Health Monitor report:** a ticket that starts `[Health Monitor]` and has a `Signature: hm-...` line came from an
   install's Health Monitor, not a person: there is no one to reply to beyond a short "thanks, tracked". Every install sends
   the same signature for the same problem, so group by it: one engineering task per signature, titled with the signature,

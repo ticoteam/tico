@@ -106,6 +106,44 @@ def test_when_on_hq_gets_the_four_fields_and_a_dead_hq_falls_back_silently(envir
     assert checker.view("0.2.13")["latest"] == "0.2.0"
 
 
+
+def test_hq_messages_and_known_issues_for_this_version_ride_the_check(environment, monkeypatch):
+    api = environment()
+    counting(api)
+    answer = {**RELEASE, "notices": [
+        {"id": 3, "versions": "0.3", "body": "Not for this install.", "url": ""},
+        {"id": 2, "versions": "0.2", "body": "You're on 0.2: update to get one-tap support.",
+         "url": "https://github.com/ticoteam/tico/blob/main/docs/updates.md"},
+        {"id": 1, "versions": "0.2", "body": "<b>" * 100, "url": "javascript:alert(1)"}],
+        "known_issues": [
+        {"id": 5, "title": "Board stays empty after a restart", "since": "0.2.10", "fixed_in": "0.2.14", "url": ""},
+        {"id": 4, "title": "Fixed already", "since": "0.2.1", "fixed_in": "0.2.12", "url": ""},
+        {"id": 6, "title": "Later only", "since": "0.2.14", "fixed_in": "", "url": "http://plain.example"},
+        {"id": "7", "title": "Malformed", "since": "0.2.1"}]}
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=answer if request.url.host == "updates.tico.team" else RELEASE)
+    monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(handler))
+    checker = releases.Checker()
+    checker.bind(api.app.state.census)
+    checker.refresh()
+    assert set(seen[0].url.params) == ALLOWED                  # nothing more is sent for them
+    view = checker.view("0.2.13")
+    assert view["message"] == {"id": 2, "versions": "0.2", "body": "You're on 0.2: update to get one-tap support.",
+                               "url": "https://github.com/ticoteam/tico/blob/main/docs/updates.md"}
+    assert [i["id"] for i in view["known_issues"]] == [5] and view["known_issues_checked"] is True
+    assert checker.view("0.2.14")["known_issues"] == [{"id": 6, "title": "Later only", "since": "0.2.14",
+                                                       "fixed_in": "", "url": ""}]
+    # An answer from GitHub has none, and says it could not check.
+    checker, _ = wire(monkeypatch, api, hq=False)
+    checker.refresh()
+    view = checker.view("0.2.13")
+    assert view["message"] is None and view["known_issues"] == [] and view["known_issues_checked"] is False
+    assert "known_issues_checked" in api.get("/api/v2/config", headers=signed_in()).json()["update"]
+
+
 def test_the_owner_alone_sees_and_changes_it_and_can_reset_the_id(environment):
     api = environment()
     person = as_person(api, "riley")

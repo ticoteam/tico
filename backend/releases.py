@@ -11,6 +11,10 @@ never restarts itself. Without one the owner is told the command to run by hand.
 The check asks Tico HQ first (`GET <TICO_HQ_URL>/v1/latest`), which is also how an install is counted anonymously
 (backend/census.py, PRIVACY.md). With counting off, with `TICO_RELEASES_URL` set (a mirror), or when HQ does not
 answer, it asks GitHub directly and sends no id.
+
+HQ's answer also carries short messages for given versions and the known issues by version (hq/notices.py). The
+install keeps them with the release and shows its own version's: a message once in the app, and the known issues in
+Help. Nothing more is sent for them; an answer from GitHub has none, and then Help says it could not check.
 """
 import logging
 import json
@@ -36,6 +40,8 @@ RETRY = 15 * 60          # after a failed check; a rate-limited or offline box s
 MANUAL_COMMAND = "docker compose pull && docker compose up -d"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
 HQ_WAIT = 3              # HQ is a convenience: when it is slow the check goes to GitHub instead
+MAX_LISTED = 50
+VERSIONS = re.compile(r"^[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?$")
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
 
@@ -87,6 +93,40 @@ def newer(latest, current):
     return bool(a and b and a > b)
 
 
+def covers(versions, current):
+    """Whether HQ's message for `versions` ("0.2", or one release "0.3.50") is for `current`."""
+    have = parse(current)
+    want = [int(p) for p in versions.split(".")]
+    return bool(have) and list(have[:len(want)]) == want
+
+
+def affected(issue, current):
+    """Whether a known issue is in `current`: from its `since` release until the one that fixed it."""
+    have, since, fixed = parse(current), parse(issue["since"]), parse(issue["fixed_in"])
+    return bool(have and since) and since[:3] <= have[:3] and not (fixed and have[:3] >= fixed[:3])
+
+
+def _https(value):
+    value = str(value or "")
+    return value if re.fullmatch(r"https://[^\s<>\"']{1,490}", value) else ""
+
+
+def extras(body):
+    """HQ's messages and known issues from its answer, checked field by field; anything malformed is left out."""
+    notices, issues = [], []
+    for n in (body.get("notices") or [])[:MAX_LISTED] if isinstance(body.get("notices"), list) else []:
+        if isinstance(n, dict) and isinstance(n.get("id"), int) and VERSIONS.match(str(n.get("versions") or "")) \
+                and isinstance(n.get("body"), str) and 0 < len(n["body"].strip()) <= 280:
+            notices.append({"id": n["id"], "versions": n["versions"], "body": n["body"].strip(), "url": _https(n.get("url"))})
+    for i in (body.get("known_issues") or [])[:MAX_LISTED] if isinstance(body.get("known_issues"), list) else []:
+        if isinstance(i, dict) and isinstance(i.get("id"), int) and isinstance(i.get("title"), str) \
+                and 0 < len(i["title"].strip()) <= 200 and parse(i.get("since")):
+            fixed = str(i.get("fixed_in") or "")
+            issues.append({"id": i["id"], "title": i["title"].strip(), "since": i["since"],
+                           "fixed_in": fixed if parse(fixed) else "", "url": _https(i.get("url"))})
+    return {"notices": notices, "known_issues": issues}
+
+
 def _client(timeout=5):
     return httpx.Client(timeout=timeout, transport=TRANSPORT, follow_redirects=False)
 
@@ -97,6 +137,7 @@ class Checker:
         self.lock = threading.Lock()
         self.etag = ""
         self.release = None
+        self.extras = None   # HQ's messages and known issues, or None when the last answer was GitHub's
         self.checked = 0.0
         self.retry_at = 0.0
         self.running = False
@@ -123,6 +164,7 @@ class Checker:
         try:
             with _client(CHECK_WAIT if force else 5) as http:
                 r = self._ask_hq(http) if not mirror else None
+                from_hq = r is not None
                 if r is None:
                     r = http.get(url, headers=headers)
             if r.status_code == 304:
@@ -132,6 +174,7 @@ class Checker:
                 self.release = {"tag": str(body.get("tag_name") or ""), "url": str(body.get("html_url") or ""),
                                 "published_at": str(body.get("published_at") or ""),
                                 "name": str(body.get("name") or body.get("tag_name") or "")}
+                self.extras = extras(body) if from_hq else None
                 self.etag = r.headers.get("etag", "")
             else:
                 raise httpx.HTTPError("status %s" % r.status_code)
@@ -195,16 +238,22 @@ class Checker:
         threading.Thread(target=self.refresh, daemon=True, name="release-check").start()
 
     def view(self, current):
-        """The notice payload. Returns at once with whatever is cached."""
-        out = {"current": current, "latest": "", "available": False, "url": "", "published_at": "", "name": ""}
+        """The notice payload. Returns at once with whatever is cached. `message` is HQ's newest message for this
+        version (or None), `known_issues` the issues HQ lists for it, and `known_issues_checked` whether HQ answered."""
+        out = {"current": current, "latest": "", "available": False, "url": "", "published_at": "", "name": "",
+               "message": None, "known_issues": [], "known_issues_checked": False}
         if not self.enabled() or parse(current) is None:
             return out
         self._refresh_if_stale()
-        release = self.release
+        release, more = self.release, self.extras
         if release:
             latest = release["tag"].lstrip("v")
             out.update(latest=latest, url=release["url"], published_at=release["published_at"], name=release["name"],
                        available=newer(latest, current))
+        if more is not None:
+            out["message"] = next((n for n in more["notices"] if covers(n["versions"], current)), None)
+            out["known_issues"] = [i for i in more["known_issues"] if affected(i, current)]
+            out["known_issues_checked"] = True
         return out
 
 

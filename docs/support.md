@@ -156,6 +156,10 @@ Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repos
 
 ### By hand
 
+**Fixed in.** Link a ticket to the ticoteam/tico issue or pull request that will fix it (`software/hq-tickets link TK-XXXXXXXX
+'#712'`). When a release ships it, HQ posts "Fixed in vX, update here" on the ticket by itself ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)),
+and the human sees it in Help under Your requests. HQ also keeps the known issues by version that Help shows.
+
 `software/hq-tickets list`, `show TK-XXXXXXXX`; or with curl and the key in a header (`Authorization: Bearer $HQ_STAFF_KEY`):
 `GET /v1/staff/tickets?status=open`, `POST /v1/staff/tickets/{id}/reply` with `{"body": "..."}`, `POST .../status` with
 `{"status": "closed"}`, `DELETE /v1/staff/tickets/{id}` to delete on request, `GET /v1/staff/tickets?status=held` for what the

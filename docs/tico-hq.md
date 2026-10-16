@@ -10,6 +10,7 @@ has its own image, database and compose file. An install reaches it only through
 |---|---|---|
 | `GET /v1/latest` | The release check. With the anonymous usage count on, it carries four fields (a random install id, the version and two yes/no activity flags) and answers the latest release, as GitHub would | One row per install id: first and last day seen, last version, last active days |
 | `GET /v1/stats` | The public aggregate of that count | Nothing |
+| (in `GET /v1/latest`) | Tico's short messages for given versions and its known issues by version, the same lists for every install ([Messages, known issues and fixed-in notices](#messages-known-issues-and-fixed-in-notices)) | Nothing from installs |
 | `POST /v1/recruit` | Bot suggestions for one group while a team builds its team chart ([Finish setup](onboarding.md#the-team-builder)) | Nothing |
 | `GET /healthz` | Liveness | Nothing |
 
@@ -51,3 +52,33 @@ either copy is stale.
 `hq/app.py` adds the route with `recruit.install(app, address=address)`, so the client address comes from the same header as the
 collector's. Set `OPENAI_API_KEY` (without it every answer is local), and optionally `HQ_RECRUIT_DAILY_CAP` and `HQ_RECRUIT_MODEL`, in
 `hq/.env`; `hq/compose.yaml` passes them to the container. The tests are `hq/tests/test_recruit.py`, with the model mocked.
+
+## Messages, known issues and fixed-in notices
+
+`hq/notices.py`. The answer to `GET /v1/latest` also carries `notices` (`{id, versions, body, url}`: a message for a release such
+as `0.3.50` or a whole line such as `0.2`) and `known_issues` (`{id, title, since, fixed_in, url}`: in `since` and later, until
+`fixed_in`). Every install gets the same lists and picks its own version's, so nothing more is sent or stored for them. An install
+shows its version's newest message once to each person, and Help lists **Known issues in your version** (or says it could not
+check, when its update check goes to GitHub instead: usage counting off, or a release mirror).
+
+A release before v0.3.52 keeps only the release fields. When one of those names its version (usage counting on), HQ puts its
+message's `url` in place of the release link, which is what its **New version · View changelog** opens. A v0.2 install with
+counting off asks GitHub and cannot be reached this way.
+
+The team writes them with the staff key (`Authorization: Bearer $HQ_STAFF_KEY`):
+
+- `POST /v1/staff/notices` `{"versions": "0.2", "body": "You're on 0.2: update to get one-tap support.", "url": "https://..."}`
+  (body at most 280 characters, an https link optional); `GET` lists them, `DELETE /v1/staff/notices/{id}` stops one.
+- `POST /v1/staff/known-issues` `{"title": "...", "since": "0.3.50", "ref": "#712", "url": "https://..."}`;
+  `POST /v1/staff/known-issues/{id}` `{"fixed_in": "0.3.52"}`; `GET` and `DELETE` as above.
+- `POST /v1/staff/tickets/{id}/fix` `{"ref": "#712"}` links a request to the ticoteam/tico issue or pull request that will fix it
+  (`software/hq-tickets link` in the Support Agent).
+
+**Fixed-in, by itself.** Every 15 minutes a staffed HQ looks at the latest release. When the tag changes it reads the commits since
+the tag it last saw (GitHub's compare API; `GITHUB_TOKEN` raises the rate limit, `HQ_COMPARE_URL` points elsewhere), collects
+every `#123` they name (a merge commit names its pull request; a commit can say `Fixes #700`), and on every open or answered request
+linked to one of them posts `Fixed in vX, update here: <release page>`. A known issue with that `ref` gets `fixed_in`. A request
+gets the notice once; a closed or held one gets none. The first tag an HQ sees is only remembered, and GitHub not answering means
+the next look tries again. `POST /v1/staff/releases` `{"tag": "v0.3.52", "refs": [712]}` does the same by hand (without `refs`, from
+the commits).
+

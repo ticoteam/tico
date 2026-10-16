@@ -28,6 +28,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
     const [emps, me, people] = await roster;
     applyConfig(me?.config);           // team-facing names before the first render
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {
     $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico server start</code> in the Tico repo, or install it with <code>scripts/tico server install</code> so it runs at login.</p><p class="err">${esc(e.message)}</p></section>`;
     return;

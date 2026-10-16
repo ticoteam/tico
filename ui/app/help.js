@@ -101,6 +101,14 @@ function helpVersionHTML() {
     (window.ticoNativeFeatures || []).includes('showLog') && '<button class="help-log" type="button" id="help-app-log">Show the app\'s log</button>'];
   return parts.filter(Boolean).join(' · ');
 }
+// Known issues in the running version, as Tico HQ lists them with the update check (backend/releases.py).
+function helpKnownIssuesHTML() {
+  const u = S.config.update || {}, v = S.config.version ? ' ' + nvVersion(S.config.version) : '';
+  const issue = i => `<li>${/^https:\/\//.test(i.url || '') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}${i.fixed_in ? ` <span class="help-ki-fixed">Fixed in ${esc(nvVersion(i.fixed_in))}</span>` : ''}</li>`;
+  const body = !u.known_issues_checked ? '<p class="help-ki-none">Could not check: the list comes from Tico HQ with the update check, which this server does not reach (usage counting off, or a release mirror).</p>'
+    : (u.known_issues || []).length ? `<ul>${u.known_issues.map(issue).join('')}</ul>` : `<p class="help-ki-none">None known in${esc(v)}.</p>`;
+  return `<section class="help-known-issues" id="help-known-issues" aria-labelledby="help-ki-h"><h2 id="help-ki-h">Known issues in your version</h2>${body}</section>`;
+}
 function pageHelp() {
   $('#main').innerHTML = `<article class="help-page" id="help-page">
     <header class="help-hero">
@@ -128,6 +136,7 @@ function pageHelp() {
       <dl>${HELP_GLOSSARY.map(([term, meaning]) => `<dt>${esc(term)}</dt><dd>${esc(meaning)}</dd>`).join('')}</dl>
       <p><a href="${GH}/blob/main/docs/glossary.md" target="_blank" rel="noopener noreferrer">Full glossary</a> · <a href="${GH}/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer">MCP and CLI reference</a></p>
     </details>
+    ${helpKnownIssuesHTML()}
     <p class="help-foot">${helpVersionHTML()}</p>
   </article>`;
   $('#help-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
