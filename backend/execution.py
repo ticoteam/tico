@@ -1673,9 +1673,12 @@ class Execution:
                     {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason})
         if body.fallback:
             # The runner ran this turn on the bot's fallback harness: countable here, and
-            # named in Runs, so a primary that keeps failing is noticed.
+            # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is
+            # set to and did not do the work; `model` is what did, when the runner counted it.
+            ran = (body.usage.segments or [body.usage])[-1] if body.usage else None
             H.event(c, H.KEEPER, "attempt.fallback", aid,
-                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "fallback": body.fallback,
+                    {"bot": row["bot"], "job_id": row["job_id"], "primary_runtime": runtime, "fallback": body.fallback,
+                     "model": (ran.model or None) if ran else None,
                      "outcome": body.outcome, **({"primary_limited": True} if body.primary_limited else {})})
         if stopped:
             person = row["stop_requested"]

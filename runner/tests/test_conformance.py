@@ -354,6 +354,11 @@ def test_a_usage_limit_hops_the_turn_to_the_fallback_harness(api, computer):
     diagnostics = [e["payload"].get("text", "") for e in computer.events(computer.attempts()[-1]["id"]) if e["kind"] == "diagnostic"]
     assert "codex hit its usage limit; running this turn on claude" in diagnostics
     assert not result.get("primary_limited")          # the bot's own fallback: an older server never sees the field
+    # The fallback turn is told which model is doing the work, so its own records do not name the configured one.
+    note = "This turn runs on the fallback claude with model claude-sonnet-5 because codex hit its usage limit"
+    assert [note in str(p["prompt"]) for p in computer.prompts()] == [False, True]
+    made = next(r["ran_on"] for r in get(api, "bots/ops/turns") if r["id"] == computer.attempts()[-1]["id"])
+    assert made["fallback"] == "claude" and [s["runtime"] for s in made["segments"]][-1:] == ["claude"]
 
 
 # A bot out of quota that names no fallback runs the turn once on another provider signed in here (#504).

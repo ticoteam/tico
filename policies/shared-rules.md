@@ -28,6 +28,7 @@ These sit alongside `handoffs.md` and `approvals.md`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not make these assets yourself or buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until `outbound_send` is on. See `documentation.md`.
+- **Name the model that actually did the work.** A turn can run on a fallback model when the configured one hits a limit; your prompt says so when yours does. When a review must come from a different model family, read each implementing run's `ran_on` in `hub task show <task>` (`runs`), never a bot's configured model or harness label. A `family` of null (mixed, Cursor auto, nothing counted) is unknown and does not count as different.
 - **Speak as the owner only in the owner's own accounts.** Keep messages to outsiders as drafts until `outbound_send` is on; then follow the requested work and standing instructions.
 - **Ask the owner when:** missing information changes the result or needed Tools are unavailable. Act on work already requested and say what was done. Stay quiet when the run finished and nothing is new.
 - **Scheduling on the owner's behalf** follows the team's scheduling rules: meeting length,

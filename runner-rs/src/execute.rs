@@ -906,7 +906,8 @@ impl Runner {
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
                 let names = self.names().await;
-                let t = h.start_turn(&th, &crate::prompt::prompt(&attempt, &names, None, false), hop.reasoning_effort.as_deref()).await?;
+                let text = format!("{}\n\n{}", crate::prompt::prompt(&attempt, &names, None, false), crate::fallback::prompt_note(&primary, &hop, hit_limit));
+                let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
                 let limit = Instant::now() + Duration::from_secs_f64(60.0 * minutes);

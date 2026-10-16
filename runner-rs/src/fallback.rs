@@ -78,6 +78,16 @@ pub fn diagnostic(primary: &str, hop: &Hop, hit_limit: bool) -> String {
     format!("{primary} {why}; running this turn on {}{auto}", hop.harness)
 }
 
+/// What the agent is told on a fallback turn: its configured model is not doing this work, so whatever it records
+/// about who did it (a review's provenance, a pull request, a task note) names the model that is.
+pub fn prompt_note(primary: &str, hop: &Hop, hit_limit: bool) -> String {
+    let why = if hit_limit { "hit its usage limit" } else { "was unavailable" };
+    format!(
+        "This turn runs on the fallback {} with model {} because {primary} {why}; your configured model is not doing this work. Wherever you record which model did it (a review's provenance, a pull request, a task note), name {}, not {primary}.",
+        hop.harness, hop.model, hop.model
+    )
+}
+
 /// The company's fallback models from the last GET /api/v2/config, and when they were read. Empty from an older
 /// server or when the owner turned automatic fallback off (Settings > AI providers).
 static CHOICES: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
@@ -164,6 +174,9 @@ mod tests {
                    "claude hit its usage limit; running this turn on codex (no fallback set; another provider signed in here)");
         assert_eq!(diagnostic("codex", &configured(&json!({"fallback": {"harness": "claude", "model": "m"}})).unwrap(), false),
                    "codex unavailable; running this turn on claude");
+        let note = prompt_note("claude", &Hop { runtime: "codex".into(), harness: "codex".into(), model: "gpt-test".into(), ..hop }, true);
+        assert!(note.starts_with("This turn runs on the fallback codex with model gpt-test because claude hit its usage limit"));
+        assert!(note.contains("name gpt-test, not claude"));
     }
 
     #[test]

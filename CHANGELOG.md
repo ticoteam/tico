@@ -22,6 +22,11 @@ All notable changes to Tico are recorded here. The format follows
   (docs/mail.md).
 
 ### Fixed
+- A turn that ran on a fallback model no longer passes as its configured model's work. The agent's prompt names the
+  fallback model it is running on; `hub task show` lists each run on the task with `ran_on` (the models that spent
+  tokens and their maker, null when mixed, Cursor auto or uncounted); Runs and `hub run list` show it too; and the
+  `attempt.fallback` event names the configured runtime as `primary_runtime` beside the model that ran. A shared rule
+  tells reviewers to check a different-family review against `ran_on`, never a configured model.
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential
   as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
   BotOps' requests refused every `Authorization` key, so the documented declaration failed with `secret_in_request`

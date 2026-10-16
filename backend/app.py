@@ -2560,7 +2560,20 @@ def create_app(settings=None):
                     "comments": H.task_comments(c, tid, actor=privacy.actor(request.state.identity)),
                     "mover": mover(c, request.state.identity),
                     "waiting_for": task_wait(c, tid, settings),
+                    "runs": task_runs(c, who, tid),
                     **privacy.page(c, who, row["conversation_id"], task_id=tid)}
+
+    def task_runs(c, who, tid, limit=50):
+        """The runs that worked this task, each with the model that actually ran it (`ran_on`). A review that
+        weighs who built what reads this, never the bot's configured model: a fallback turn ran elsewhere."""
+        from .usage_records import ran_on
+        actor = privacy.actor(who)
+        rows = [r for r in H._rows(c.execute("SELECT id,bot,started,finished,exit FROM turns WHERE task_id=? "
+                                             "ORDER BY started DESC LIMIT ?", (tid, limit)))
+                if privacy.attempt_readable(c, actor, r["id"])]
+        made = ran_on(c, [r["id"] for r in rows])
+        return [{"run": r["id"], "bot": r["bot"], "started": r["started"], "finished": r["finished"],
+                 "outcome": r["exit"], "ran_on": made[r["id"]]} for r in rows]
 
     def task_create(c, who, body, lint=True, asked=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
@@ -3809,7 +3822,9 @@ def create_app(settings=None):
                 result.append({**turn, **views.attempt_details(c, turn)})
             result.extend(views.failed_attempts(c, who, auth, bot, views.since_time(since)))
             result.sort(key=lambda row: row.get("started") or "", reverse=True)
-            return result
+            from .usage_records import ran_on
+            made = ran_on(c, [row["id"] for row in result])
+            return [{**row, "ran_on": made[row["id"]]} for row in result]
 
     @app.post("/api/v2/enrollments")
     def issue_enrollment(request: Request, body: M.EnrollmentRequest):

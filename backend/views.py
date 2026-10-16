@@ -23,6 +23,7 @@ from pathlib import Path
 from . import read_cache
 from .store import H, P, SNAPSHOT_BACKUP_ROWS, Problem, bot_readiness, encode, message_page, readiness_document, repo_url
 from . import task_privacy as privacy
+from .usage_records import ran_on
 from . import task_relations as TR
 
 
@@ -1292,20 +1293,20 @@ def install_views(app, store, auth, mutate, task_view):
         rows.sort(key=lambda item: item[0].get("started") or "", reverse=True)
         return rows[:limit]
 
-    def run_view(turn, c=None):
+    def run_view(turn, c=None, made=None):
         turn = {**turn, **attempt_details(c, turn)} if c else turn
         started, finished = H.parse_ts(turn.get("started")), H.parse_ts(turn.get("finished"))
         duration = max(0, round((finished - started).total_seconds())) if started and finished else None
         success = turn.get("exit") == "completed"
-        fallback = c.execute("SELECT json_extract(result_json,'$.fallback') FROM attempts WHERE id=?",
-                             (turn["id"],)).fetchone() if c is not None else None
+        if made is None and c is not None:
+            made = ran_on(c, [turn["id"]])[turn["id"]]
         return {"run": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
                 "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
                 "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
                 "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
-                "resumed": False, "fallback": fallback[0] if fallback else None}
+                "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made}
 
     def employee_rows(c, who):
         people, configs = roster(c), entries(c, store.settings.github_owner)
@@ -1579,7 +1580,9 @@ def install_views(app, store, auth, mutate, task_view):
     def runs(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
-            return [run_view(turn, c) for turn, _ in visible_turns(c, request.state.identity)]
+            rows = [turn for turn, _ in visible_turns(c, request.state.identity)]
+            made = ran_on(c, [turn["id"] for turn in rows])
+            return [run_view(turn, c, made[turn["id"]]) for turn in rows]
 
     @app.get("/api/runs/{run_id}/log", response_class=PlainTextResponse)
     def run_log(request: Request, run_id: str):
