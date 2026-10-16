@@ -1,9 +1,12 @@
 # Public roadmaps
 
-Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type starts
-public: Suggested → Exploring → Spec → Approved → Building → Shipped (or Declined). Engineering (or an existing Dev tickets type)
-starts private and uses the development flow. A type default applies only when a task is created;
-existing tasks and tasks moved to another type keep their visibility. Older tasks start private.
+Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
+Suggested → Exploring → Spec → Approved → Building → Shipped (or Declined); Engineering (or an existing Dev tickets
+type) uses the development flow. Every type starts private. A task is public only once someone publishes it with a
+public title written for it: the internal title and body are never copied into the public text. A type set to
+default public publishes a new task only when its public title is given at creation; without one the task starts
+private. A type default applies only when a task is created; existing tasks and tasks moved to another type keep
+their visibility. Older tasks start private.
 
 In Settings → Tasks, create a label such as `roadmap`. In Public roadmap, select that label, add
 an exact website origin such as `https://acme.example`, and save. Empty labels disables roadmaps.
@@ -36,8 +39,10 @@ curl https://tico.acme.example/public/roadmaps/roadmap/tasks/TASK_ID/requesters 
 
 The add response returns `requester_token` once. Save it privately for that visitor and remove their
 request with `DELETE /public/roadmaps/roadmap/tasks/TASK_ID/requesters/TOKEN`. Tokens are random,
-stored only as hashes, bound to one task, and unusable after removal. A token can also remove the
-request while its task is private. Contact details are unverified and only for manual follow-up.
+stored only as hashes, bound to one task, and unusable after removal. A token removes its request whatever became
+of the task: private, no longer labelled, on a roadmap since disabled, or deleted (the requester also leaves the
+deleted task's trash copy, so a restore does not bring them back). An unknown token gets the same 404 as an
+unknown task. Contact details are unverified and only for manual follow-up.
 
 | Method | Path after `/public/roadmaps/{label}` | Body / result |
 | --- | --- | --- |
@@ -54,15 +59,18 @@ Lists accept `limit` (up to 100) and `offset`; follow `next_offset` until null. 
 name (`public_name` on its step, initially copied from the internal name), requester count and `parts: {done, total}`. Public comments contain only id, text, creation
 time and `author: Team|Visitor`. Nothing returns requester names, contacts, internal discussions,
 attachments, assignees, bot work, labels or child identities. Render public text as text or sanitized
-Markdown. Comments allow at most two links and no embedded link/script/iframe HTML.
+Markdown. Comments, suggestion titles and suggestion summaries allow at most two links and no embedded
+link/script/iframe HTML.
 
 Suggestions create private Product roadmap tasks at Suggested for the configured Product Manager,
 with the label and submitter's request. They queue quietly for the PM's next run and need team
-review before publication. Successful suggest, add, remove and comment actions share one limit
+review before publication. At most 20 visitor suggestions wait at Suggested at once across every visitor
+(`suggestion_limit` in settings, 1 to 1000); while that many wait, a new suggestion gets 429 until the team moves
+some on. Successful suggest, add, remove and comment actions share one limit
 per IP per UTC day across every roadmap (default 10, configurable in settings); exhaustion returns
 429. Failed writes roll back their charge. The server uses the connection IP, with forwarded IPs
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
-a /64 bucket.
+a /64 bucket; an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as its IPv4 address.
 
 ## Internal work
 
@@ -75,8 +83,10 @@ Use `/api/v2/roadmaps/settings`, `/api/v2/roadmap-tasks`, and `/api/v2/tasks/{id
 (GET/POST), `/requesters/{requester_id}` (POST partial update), and `/requesters/{requester_id}/delete`
 (POST). Internal writes require the usual Idempotency-Key. Requester lists are paged and do not
 return tokens; an internal add shows its token once and an idempotent retry returns only its id. Task updates accept `visibility`, `public_title`, `public_summary`, `size`, and
-`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. Public title and summary begin as copies
-of the internal title/body (summary capped at 8,000 characters) and then stay independent.
+`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. Public title and summary
+start empty and are only what someone writes for them; task creation accepts `public_title` and `public_summary`
+beside `visibility`. Publishing (`visibility: public`, at creation or later) needs a public title, and is refused
+with a clear error without one.
 
 A bot proposes exact public changes through `POST /api/v2/tasks/{id}/publication-preview` with
 `public_title`, `public_summary`, `visibility`, `comment`, or a separate `labels` list. Request a `publish` approval with its
@@ -101,14 +111,21 @@ unchanged. Done, closed and declined children count as finished. Requesters rema
 
 ## Client addresses behind a proxy
 
-Set `TICO_TRUSTED_PROXIES` to comma-separated IP addresses or CIDRs for your actual ingress proxies,
-including `127.0.0.1/32,::1/128` for the supervised Rust relay. The default trusts only loopback;
-remote clients cannot choose their IP with forwarding headers. Pin your proxy container addresses
-or configure their dedicated network range, and restrict that network to trusted ingress services.
+`TICO_TRUSTED_PROXIES` lists the IP addresses or CIDRs whose forwarding headers are believed, including
+`127.0.0.1/32,::1/128` for the supervised Rust relay. A native install's default trusts only loopback; remote
+clients cannot choose their IP with forwarding headers.
 
-Use `TICO_CLIENT_IP_HEADER=x-forwarded-for` (default) behind Caddy. The relay appends its peer to the
-chain, and the API chooses the rightmost untrusted address. With cloudflared as the configured trusted
-ingress, use `TICO_CLIENT_IP_HEADER=cf-connecting-ip`; only that deployment should trust Cloudflare’s
-visitor header. Both processes receive `TICO_TRUSTED_PROXIES` through the standard server command
-and Docker Compose. Restart after changing these environment settings. Roadmap settings and requester
-updates are partial: omitted fields keep their current values, and an empty update is rejected.
+The standard Docker Compose file needs no change: Caddy and cloudflared reach the server only over a dedicated
+`edge` network (`172.30.254.0/28`) from fixed addresses (`172.30.254.2` and `172.30.254.3`), and the server's
+default `TICO_TRUSTED_PROXIES` is loopback plus exactly those two addresses. Other containers on that network draw
+addresses from its upper half (`172.30.254.8/29`), so they never take a front door's. If that subnet clashes with a
+network on your computer, set `TICO_EDGE_SUBNET`, `TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and
+`TICO_CLOUDFLARED_ADDRESS` together in `.env`; the trusted list follows the two addresses. Setting
+`TICO_TRUSTED_PROXIES` in `.env` replaces the whole list. With your own proxy in front of a native install, list its
+addresses, never a range shared with untrusted machines.
+
+`TICO_CLIENT_IP_HEADER=x-forwarded-for` (default) works behind both Caddy and cloudflared: the relay appends its
+peer to the chain, and the API chooses the rightmost untrusted address. `TICO_CLIENT_IP_HEADER=cf-connecting-ip` is
+for a deployment whose only trusted ingress is cloudflared. Both processes receive `TICO_TRUSTED_PROXIES` through
+the standard server command and Docker Compose. Restart after changing these environment settings. Roadmap settings
+and requester updates are partial: omitted fields keep their current values, and an empty update is rejected.

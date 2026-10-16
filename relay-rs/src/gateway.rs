@@ -13,9 +13,17 @@ use std::net::{IpAddr, SocketAddr};
 #[derive(Clone)]
 pub(super) struct Network { address: IpAddr, prefix: u8 }
 
+/// An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, a dual-stack socket's IPv4 peer) as the IPv4 address it is.
+fn canonical(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        IpAddr::V4(_) => ip,
+    }
+}
+
 impl Network {
     fn contains(&self, ip: IpAddr) -> bool {
-        match (self.address, ip) {
+        match (self.address, canonical(ip)) {
             (IpAddr::V4(net), IpAddr::V4(ip)) => {
                 let mask = u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0);
                 u32::from(net) & mask == u32::from(ip) & mask
@@ -32,15 +40,22 @@ impl Network {
 pub(super) fn trusted_proxies(value: &str) -> Result<Vec<Network>, String> {
     value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(|v| {
         let (address, prefix) = v.split_once('/').map(|(a, p)| (a, Some(p))).unwrap_or((v, None));
-        let address: IpAddr = address.parse().map_err(|_| "Invalid TICO_TRUSTED_PROXIES")?;
-        let max = if address.is_ipv4() { 32 } else { 128 };
+        let parsed: IpAddr = address.parse().map_err(|_| "Invalid TICO_TRUSTED_PROXIES")?;
+        let max = if parsed.is_ipv4() { 32 } else { 128 };
         let prefix = prefix.map(|p| p.parse::<u8>()).transpose().map_err(|_| "Invalid proxy prefix")?.unwrap_or(max);
         if prefix > max { return Err("Invalid proxy prefix".into()); }
+        // A mapped range (::ffff:a.b.c.d/96 or longer) is the IPv4 range it maps, as peers are compared unwrapped.
+        let address = canonical(parsed);
+        let prefix = if address != parsed {
+            if prefix < 96 { return Ok(Network { address: parsed, prefix }); }
+            prefix - 96
+        } else { prefix };
         Ok(Network { address, prefix })
     }).collect()
 }
 
 fn client_headers(headers: &mut HeaderMap, peer: IpAddr, trusted: &[Network]) {
+    let peer = canonical(peer);
     if trusted.iter().any(|network| network.contains(peer)) {
         let chain = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).unwrap_or("");
         let forwarded = if chain.is_empty() { peer.to_string() } else { format!("{chain}, {peer}") };
@@ -123,5 +138,19 @@ mod tests {
         client_headers(&mut headers, "203.0.113.8".parse().unwrap(), &trusted);
         assert_eq!(headers["x-forwarded-for"], "203.0.113.8");
         assert!(!headers.contains_key("cf-connecting-ip"));
+    }
+
+    #[test]
+    fn ipv4_mapped_peers_are_their_ipv4_addresses() {
+        let trusted = trusted_proxies("172.20.0.2/32,::ffff:10.1.0.0/112").unwrap();
+        assert!(trusted[0].contains("::ffff:172.20.0.2".parse().unwrap()));
+        assert!(!trusted[0].contains("::ffff:172.20.0.3".parse().unwrap()));
+        assert!(trusted[1].contains("10.1.200.7".parse().unwrap()));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.9".parse().unwrap());
+        client_headers(&mut headers, "::ffff:172.20.0.2".parse().unwrap(), &trusted);
+        assert_eq!(headers["x-forwarded-for"], "198.51.100.9, 172.20.0.2");
+        client_headers(&mut headers, "::ffff:203.0.113.8".parse().unwrap(), &trusted);
+        assert_eq!(headers["x-forwarded-for"], "203.0.113.8");
     }
 }

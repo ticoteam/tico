@@ -19,6 +19,8 @@ button.requester-row:hover,button.requester-row:focus-visible{background:var(--h
 .requester-contacts{color:var(--muted);font-size:var(--t-sm)}
 .requester-note{white-space:pre-wrap;font-size:var(--t-sm)}
 .requester-editor{max-width:560px}
+.roadmap-publication>small{display:block;color:var(--muted);font-size:var(--t-xs)}
+.roadmap-create-public{display:flex;flex-direction:column;gap:8px}
 .roadmap-publication>label{margin-top:10px;font-size:var(--t-sm);color:var(--muted)}
 .roadmap-publication input,.roadmap-publication textarea{color:var(--ink)}
 .roadmap-moderation{display:inline-flex;gap:8px;opacity:0}

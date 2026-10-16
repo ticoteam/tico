@@ -23264,6 +23264,19 @@
             ],
             "title": "Action Limit"
           },
+          "suggestion_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Limit"
+          },
           "bot_public_approval": {
             "anyOf": [
               {
@@ -24770,6 +24783,30 @@
               }
             ],
             "title": "Visibility"
+          },
+          "public_title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Title"
+          },
+          "public_summary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Summary"
           },
           "private": {
             "anyOf": [

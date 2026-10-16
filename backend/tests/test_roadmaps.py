@@ -21,19 +21,30 @@ def test_engineering_children_drive_approved_roadmap_and_reopen(api):
 
 
 def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(api):
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
-                              'type': 'Product roadmap'})
-    assert task['visibility'] == 'public' and task['public_summary'] == 'Internal draft'
+    draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
+                               'type': 'Product roadmap'})
+    assert draft['visibility'] == 'private' and draft['public_title'] == '' and draft['public_summary'] == ''
+    refused = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research filters', 'body': 'Internal draft',
+                                 'type': 'Product roadmap', 'visibility': 'public'}, expected=422)
+    assert 'public title' in refused['error']['detail']
+    post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'visibility': 'public'}, expected=422)
+    post(api, 'task-types/product-roadmap', {'default_visibility': 'public'})
+    unwritten = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research sorting', 'body': 'Internal draft',
+                                   'type': 'Product roadmap'})
+    assert unwritten['visibility'] == 'private' and unwritten['public_summary'] == ''
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search again', 'body': 'Internal draft',
+                              'type': 'Product roadmap', 'public_title': 'Better search', 'public_summary': 'Find more'})
+    assert (task['visibility'], task['public_title'], task['public_summary']) == ('public', 'Better search', 'Find more')
     post(api, 'task-types/product-roadmap', {'default_visibility': 'private'})
     task = get(api, 'tasks/' + task['id'])['task']
     assert task['visibility'] == 'public'
     changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'body': 'Internal revision'})
-    assert changed['public_summary'] == 'Internal draft'
+    assert changed['public_summary'] == 'Find more'
     private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Sensitive research', 'body': 'Secret',
                                  'type': 'Product roadmap', 'private': True})
     post(api, 'tasks/' + private['id'], {'version': private['version'], 'visibility': 'public'}, expected=422)
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review a part', 'body': 'Part', 'visibility': 'public',
-                               'relations': [{'task': task['id'], 'kind': 'parent'}]})
+                               'public_title': 'A part', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     post(api, 'tasks/' + child['id'] + '/relations', {'task': private['id'], 'kind': 'parent'})
     assert get(api, 'tasks/' + task['id'])['task']['visibility'] == 'public'
     assert not get(api, 'tasks/' + task['id'])['task']['private']
@@ -44,7 +55,7 @@ def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
     from backend.tests.test_tasks_board import bot_token
     token = bot_token(api, 'cpo')
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve search', 'body': 'Draft', 'type': 'Product roadmap'})
-    changes = {'public_summary': 'Search improvements'}
+    changes = {'visibility': 'public', 'public_title': 'Search', 'public_summary': 'Search improvements'}
     post(api, 'tasks/' + task['id'], {'version': task['version'], **changes}, token=token, expected=422)
     preview = post(api, 'tasks/' + task['id'] + '/publication-preview', changes, token=token)
     approval = post(api, 'approvals', {'kind': 'publish', 'task_id': task['id'], 'payload': preview['payload']}, token=token)
@@ -68,7 +79,8 @@ def public_setup(api, limit=10):
     post(api, 'roadmaps/settings', {'labels': ['roadmap'], 'cors_origins': ['https://acme.example'],
                                   'action_limit': limit})
     return post(api, 'tasks', {'owner': 'cpo', 'title': 'Internal title', 'body': 'Internal summary',
-                               'type': 'Product roadmap', 'labels': ['roadmap']})
+                               'type': 'Product roadmap', 'labels': ['roadmap'], 'visibility': 'public',
+                               'public_title': 'Roadmap item', 'public_summary': 'What it does'})
 
 
 ORIGIN = {'Origin': 'https://acme.example'}
@@ -82,7 +94,7 @@ def test_public_projection_moderation_and_no_label_enumeration(api):
     public = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Team update', 'public': True})['comment']
     post(api, 'tasks/' + task['id'] + '/requesters', {'email': 'private@acme.example', 'name': 'Private Name'})
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Secret child', 'body': 'Internal work',
-                              'visibility': 'public', 'labels': ['roadmap'],
+                              'visibility': 'public', 'public_title': 'Child part', 'labels': ['roadmap'],
                               'relations': [{'task': task['id'], 'kind': 'parent'}]})
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE task_steps SET public_name=? WHERE id=?', ('Under consideration', task['step_id']))
@@ -226,3 +238,120 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Building'
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'declined'})
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Approved'
+
+
+def test_internal_text_never_becomes_public_text(api):
+    post(api, 'tags', {'key': 'roadmap'})
+    post(api, 'roadmaps/settings', {'labels': ['roadmap'], 'cors_origins': ['https://acme.example']})
+    secret = 'Acme (jane@acme.example) threatens to churn; contract $40k'
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep Acme happy', 'body': secret,
+                              'type': 'Product roadmap', 'labels': ['roadmap']})
+    assert task['visibility'] == 'private' and task['public_summary'] == ''
+    listed = api.get('/public/roadmaps/roadmap')
+    assert listed.status_code == 200 and listed.json()['tasks'] == []
+    assert 'jane@' not in listed.text and '$40k' not in listed.text
+    refused = post(api, 'tasks/' + task['id'], {'version': task['version'], 'visibility': 'public'}, expected=422)
+    assert 'public title' in refused['error']['detail']
+    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'visibility': 'public',
+                                          'public_title': 'Faster exports'})
+    listed = api.get('/public/roadmaps/roadmap')
+    assert [t['title'] for t in listed.json()['tasks']] == ['Faster exports']
+    assert listed.json()['tasks'][0]['summary'] == ''
+    shown = api.get('/public/roadmaps/roadmap/tasks/' + task['id']).text
+    assert all(text not in listed.text + shown for text in ('jane@', '$40k', 'Keep Acme happy'))
+
+
+def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api):
+    from backend import roadmaps as R
+    hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old idea', 'body': 'Internal notes', 'type': 'Product roadmap'})
+    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
+                               'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_explicit_public_text'")
+        c.execute("UPDATE task_types SET default_visibility='public' WHERE id='product-roadmap'")
+        c.execute("UPDATE tasks SET public_title=title,public_summary=body WHERE id=?", (hidden['id'],))
+        R.migrate(c)
+        assert H.type_get(c, 'product-roadmap')['default_visibility'] == 'private'
+        assert tuple(c.execute('SELECT public_title,public_summary FROM tasks WHERE id=?', (hidden['id'],)).fetchone()) == ('', '')
+        assert tuple(c.execute('SELECT visibility,public_title FROM tasks WHERE id=?', (shown['id'],)).fetchone()) == ('public', 'Shown idea')
+        c.execute("UPDATE task_types SET default_visibility='public' WHERE id='product-roadmap'")
+        R.migrate(c)                                                  # once only: a later choice stays
+        assert H.type_get(c, 'product-roadmap')['default_visibility'] == 'public'
+
+
+def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
+    task = public_setup(api, limit=50)
+    base = '/public/roadmaps/roadmap/tasks/' + task['id']
+
+    def follow(path=base):
+        response = api.post(path + '/requesters', json={'email': 'customer@acme.example', 'phone': '555-0100'}, headers=ORIGIN)
+        assert response.status_code == 200, response.text
+        return response.json()['requester_token']
+
+    def count(tid):
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT count(*) FROM task_requesters WHERE task_id=?', (tid,)).fetchone()[0]
+
+    unlabelled, disabled = follow(), follow()
+    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'labels': []})
+    assert api.delete(base + '/requesters/' + unlabelled, headers=ORIGIN).status_code == 200
+    assert count(task['id']) == 1
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'labels': ['roadmap']})
+    post(api, 'roadmaps/settings', {'labels': []})
+    assert api.delete(base + '/requesters/' + disabled, headers=ORIGIN).status_code == 200
+    assert count(task['id']) == 0
+    unknown = api.delete(base + '/requesters/' + disabled, headers=ORIGIN)
+    missing = api.delete('/public/roadmaps/roadmap/tasks/not-a-task/requesters/' + disabled, headers=ORIGIN)
+    assert unknown.status_code == missing.status_code == 404 and unknown.json() == missing.json()
+
+    post(api, 'roadmaps/settings', {'labels': ['roadmap']})
+    trashed = post(api, 'tasks', {'owner': 'ben', 'title': 'Bulk exports', 'body': 'Internal', 'type': 'Product roadmap',
+                                 'labels': ['roadmap'], 'visibility': 'public', 'public_title': 'Bulk exports'})
+    path = '/public/roadmaps/roadmap/tasks/' + trashed['id']
+    leaving, staying = follow(path), follow(path)
+    assert post(api, 'tasks/' + trashed['id'] + '/delete', {}) == {'deleted': trashed['id']}
+    assert api.delete(path + '/requesters/' + leaving, headers=ORIGIN).status_code == 200
+    assert api.delete(path + '/requesters/' + leaving, headers=ORIGIN).status_code == 404
+    import hashlib
+    with api.app.state.store.read() as c:
+        snapshot = c.execute('SELECT rows_json FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0]
+    assert hashlib.sha256(leaving.encode()).hexdigest() not in snapshot
+    assert hashlib.sha256(staying.encode()).hexdigest() in snapshot
+    post(api, 'tasks/' + trashed['id'] + '/restore', {})
+    assert count(trashed['id']) == 1
+
+
+def test_suggestions_have_an_overall_cap_and_spam_checks(api):
+    public_setup(api, limit=100)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+    post(api, 'roadmaps/settings', {'suggestion_limit': 2})
+    assert get(api, 'roadmaps/settings')['suggestion_limit'] == 2
+    suggest = lambda body: api.post('/public/roadmaps/roadmap/suggest', json=body, headers=ORIGIN)
+    assert suggest({'title': 'See <script>alert(1)</script>'}).status_code == 422
+    links = 'https://a.example https://b.example https://c.example'
+    assert suggest({'title': 'Exports', 'summary': links}).status_code == 422
+    first = suggest({'title': 'Exports', 'summary': 'CSV please'})
+    assert first.status_code == 200, first.text
+    assert suggest({'title': 'Imports', 'summary': 'From CSV'}).status_code == 200
+    capped = suggest({'title': 'Webhooks'})
+    assert capped.status_code == 429 and 'waiting' in capped.json()['error']['detail']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM tasks WHERE requester=?', (H.KEEPER,)).fetchone()[0] == 2
+    waiting = get(api, 'tasks/' + first.json()['id'])['task']
+    post(api, 'tasks/' + waiting['id'], {'version': waiting['version'], 'step': 'Exploring'})
+    assert suggest({'title': 'Webhooks'}).status_code == 200
+    post(api, 'roadmaps/settings', {'suggestion_limit': 0}, expected=422)
+
+
+def test_guard_refusals_carry_cors_headers_for_allowed_origins(api):
+    task = public_setup(api)
+    base = '/public/roadmaps/roadmap/tasks/' + task['id']
+    big = api.post(base + '/comments', content=b'{"text":"' + b'x' * 70000 + b'"}',
+                   headers={**ORIGIN, 'Content-Type': 'application/json'})
+    assert big.status_code == 413 and big.json()['error']['code'] == 'too_large'
+    assert big.headers['access-control-allow-origin'] == ORIGIN['Origin'] and big.headers['vary'] == 'Origin'
+    preflight = api.options(base + '/requesters', headers={**ORIGIN, 'Access-Control-Request-Method': 'PUT'})
+    assert preflight.status_code == 400 and preflight.headers['access-control-allow-origin'] == ORIGIN['Origin']
+    other = api.options(base + '/requesters', headers={'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'POST'})
+    assert other.status_code == 403 and 'access-control-allow-origin' not in other.headers

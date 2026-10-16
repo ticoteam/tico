@@ -12,11 +12,13 @@ from . import hubdb as H
 from .models import Contract
 from .store import Problem
 
+# Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
+# addresses queue unbounded work for the Product Manager (the same overall cap as waiting pairings).
+SUGGESTIONS_WAITING_MAX = 20
 VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
 
 
 def migrate(c):
-    fresh = 'public_title' not in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
     H.add_column(c, 'tasks', 'visibility', VISIBILITY)
     H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
@@ -30,10 +32,14 @@ def migrate(c):
     H.add_column(c, 'messages', 'hidden_at', 'TEXT')
     c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs_json,'$.task'),created,id) "
               "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs_json,'$.comment')=1")
-    if fresh:
-        c.execute("UPDATE tasks SET public_title=substr(coalesce(title,''),1,300), "
-                  "public_summary=substr(coalesce(body,''),1,8000)")
-        c.execute("UPDATE task_types SET default_visibility='public' WHERE manager='product-manager'")
+    # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
+    # default and every task's internal title and body copied into its public text. The type becomes private, and
+    # those copies go from tasks that are not public, so publishing one later needs public text written for it.
+    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
+        c.execute("UPDATE task_types SET default_visibility='private' WHERE manager='product-manager'")
+        c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
+                  "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
               "name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',"
@@ -46,7 +52,8 @@ def migrate(c):
 
 def settings(c):
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
-    return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'bot_public_approval': True,
+    return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'suggestion_limit': SUGGESTIONS_WAITING_MAX,
+            'bot_public_approval': True,
             **(json.loads(row[0]) if row else {})}
 
 
@@ -83,6 +90,8 @@ def publication(c, actor, row, visibility=None, public_title=None, public_summar
         H.refuse(c, actor, 'lint', 'Public summary is at most 8000 characters')
     if fields.get('visibility', row['visibility']) == 'public' and H.task_private(c, row):
         H.refuse(c, actor, 'private', 'A two-party private task cannot be published')
+    if fields.get('visibility', row['visibility']) == 'public' and not fields.get('public_title', row['public_title']).strip():
+        H.refuse(c, actor, 'lint', 'Write a public title before publishing; the internal title and body stay private')
     changed = {k: v for k, v in fields.items() if v != row[k]}
     if changed and (any(k.startswith('public_') for k in changed) or changed.get('visibility') == 'public'):
         approve(c, actor, row['id'], 'text', changed, approval_id)
@@ -91,9 +100,9 @@ def publication(c, actor, row, visibility=None, public_title=None, public_summar
         H._task_event(c, row['id'], actor, key, row[key], value, '')
 
 
-def spam_check(text):
-    if not text.strip() or len(text) > 4000:
-        raise Problem('comment', 'Comment is 1 to 4000 characters', 422)
+def spam_check(text, what='Comment', limit=4000, required=True):
+    if required and not text.strip() or len(text) > limit:
+        raise Problem(what.lower(), f'{what} is 1 to {limit} characters', 422)
     if len(re.findall(r'https?://|www\.', text, re.I)) > 2 or re.search(r'<\s*(?:a|script|iframe)\b', text, re.I):
         raise Problem('spam', 'Too many links or embedded HTML', 422)
 
@@ -142,6 +151,25 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
         raise Problem('not_found', 'Requester not found', 404)
     c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), task_id))
     H.event(c, actor or H.KEEPER, 'task.requester.remove', task_id, {})
+    return {'removed': True}
+
+
+def withdraw(c, task_id, token):
+    """A visitor's token removes their request whatever became of the task since: unlabelled, off every
+    enabled roadmap, private, or in the trash (where its snapshot would otherwise bring them back)."""
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
+        return remove_requester(c, task_id, token=token)
+    trash = c.execute('SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL',
+                      (task_id,)).fetchone() if H._has_table(c, 'task_trash') else None
+    snapshot = json.loads(trash[0]) if trash else {}
+    rows = snapshot.get('rows', {}).get('task_requesters') or []
+    kept = [r for r in rows if r.get('token_hash') != digest]
+    if len(kept) == len(rows):
+        raise Problem('not_found', 'Requester not found', 404)
+    snapshot['rows']['task_requesters'] = kept
+    c.execute('UPDATE task_trash SET rows_json=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
+    H.event(c, H.KEEPER, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
 
 

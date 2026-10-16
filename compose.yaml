@@ -45,7 +45,9 @@ services:
       TICO_OIDC_ALLOWED_DOMAINS:
       TICO_CORS_ORIGINS:
       TICO_CLIENT_IP_HEADER:
-      TICO_TRUSTED_PROXIES:
+      # Forwarded client addresses are believed only from loopback (the server's own relay) and the two front doors'
+      # fixed addresses on the edge network below, so each visitor keeps their own rate-limit bucket.
+      TICO_TRUSTED_PROXIES: ${TICO_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,${TICO_CADDY_ADDRESS:-172.30.254.2}/32,${TICO_CLOUDFLARED_ADDRESS:-172.30.254.3}/32}
       TICO_GOOGLE_OAUTH_CLIENT_ID:
       TICO_GOOGLE_OAUTH_CLIENT_SECRET:
       TICO_ACCESS_ISSUER:
@@ -109,6 +111,7 @@ services:
       - tico-tunnel:/tunnel
     # Loopback only: for health checks and TICO_AUTH_PROXY=none test installs.
     ports: ["127.0.0.1:${TICO_PORT:-8765}:8765"]
+    networks: [default, edge]
 
   # Slack: DMs and @mentions reach your bots. Same image, its own process, an outbound websocket only
   # (Socket Mode), so no port and no public URL. Off unless COMPOSE_PROFILES includes slack. The tokens
@@ -191,6 +194,8 @@ services:
     command: caddy reverse-proxy --from ${TICO_DOMAIN:-} --to server:8765
     cap_add: [NET_BIND_SERVICE]
     ports: ["80:80", "443:443", "443:443/udp"]
+    networks:
+      edge: {ipv4_address: "${TICO_CADDY_ADDRESS:-172.30.254.2}"}
     volumes:
       - caddy-data:/data
       - caddy-config:/config
@@ -208,6 +213,8 @@ services:
     command: tunnel --no-autoupdate --config /tunnel/cloudflared.yml run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks:
+      edge: {ipv4_address: "${TICO_CLOUDFLARED_ADDRESS:-172.30.254.3}"}
     volumes:
       - tico-tunnel:/tunnel:ro
     depends_on:
@@ -236,6 +243,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - tico-control:/control:ro
       - ./:/project
+
+# The front doors reach the server only over this network, from fixed addresses the server trusts for forwarded
+# client addresses (TICO_TRUSTED_PROXIES above). Nothing else joins it. Containers given no fixed address draw from
+# the upper half of the range, so they never take a front door's. If the subnet clashes with a network on this
+# computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS in .env.
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${TICO_EDGE_SUBNET:-172.30.254.0/28}
+          ip_range: ${TICO_EDGE_DYNAMIC_RANGE:-172.30.254.8/29}
 
 volumes:
   tico-data:

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 
 from fastapi import Request
 from pydantic import Field
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import cors
@@ -31,6 +31,7 @@ class RoadmapSettings(Contract):
     labels: list[str] | None = Field(default=None, max_length=100)
     cors_origins: list[str] | None = Field(default=None, max_length=100)
     action_limit: int | None = Field(default=None, ge=1, le=10000)
+    suggestion_limit: int | None = Field(default=None, ge=1, le=1000)
     bot_public_approval: bool | None = None
 
 
@@ -58,26 +59,33 @@ async def guard(request, call_next, store):
             return R.settings(c)['cors_origins']
     allowed = await run_in_threadpool(origins)
     origin = request.headers.get('origin')
-    if request.method not in ('GET', 'HEAD') and origin not in allowed:
-        raise Problem('origin', 'Origin is not allowed', 403)
-    if request.method == 'OPTIONS':
-        method = request.headers.get('access-control-request-method', '')
-        headers = {v.strip().lower() for v in request.headers.get('access-control-request-headers', '').split(',') if v.strip()}
-        if method not in ('GET', 'HEAD', 'POST', 'DELETE') or not headers <= {'content-type'}:
-            raise Problem('cors', 'Disallowed CORS request', 400)
-        response = Response(status_code=204, headers={'Access-Control-Allow-Methods': 'GET, HEAD, POST, DELETE',
-                            'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600'})
-    else:
-        if request.method not in ('GET', 'HEAD', 'POST', 'DELETE'):
-            raise Problem('method', 'Method not allowed', 405)
-        if request.method == 'POST':
-            chunks, size = [], 0
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > 65536:
-                    raise Problem('too_large', 'Request exceeds 64 KB', 413)
-                chunks.append(chunk)
-            request._body = b''.join(chunks)
+    response = None
+    try:
+        if request.method not in ('GET', 'HEAD') and origin not in allowed:
+            raise Problem('origin', 'Origin is not allowed', 403)
+        if request.method == 'OPTIONS':
+            method = request.headers.get('access-control-request-method', '')
+            headers = {v.strip().lower() for v in request.headers.get('access-control-request-headers', '').split(',') if v.strip()}
+            if method not in ('GET', 'HEAD', 'POST', 'DELETE') or not headers <= {'content-type'}:
+                raise Problem('cors', 'Disallowed CORS request', 400)
+            response = Response(status_code=204, headers={'Access-Control-Allow-Methods': 'GET, HEAD, POST, DELETE',
+                                'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600'})
+        else:
+            if request.method not in ('GET', 'HEAD', 'POST', 'DELETE'):
+                raise Problem('method', 'Method not allowed', 405)
+            if request.method == 'POST':
+                chunks, size = [], 0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 65536:
+                        raise Problem('too_large', 'Request exceeds 64 KB', 413)
+                    chunks.append(chunk)
+                request._body = b''.join(chunks)
+    except Problem as exc:
+        # Answered here rather than by the app's handler, so an allowed website's browser can read the refusal.
+        response = JSONResponse({'error': {'code': exc.code, 'detail': exc.detail, 'retryable': exc.retryable}},
+                                status_code=exc.status)
+    if response is None:
         response = await call_next(request)
     if origin in allowed:
         response.headers['Access-Control-Allow-Origin'] = origin
@@ -118,6 +126,15 @@ def charge(c, request):
         raise Problem('rate_limit', 'Daily roadmap action limit reached', 429)
     c.execute('INSERT INTO roadmap_actions(day,ip_hash,actions) VALUES(?,?,1) '
               'ON CONFLICT(day,ip_hash) DO UPDATE SET actions=actions+1', (day, digest))
+
+
+def waiting_suggestions(c):
+    """Refuse a new suggestion while the overall number of visitor suggestions waiting at Suggested is at its cap."""
+    waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
+                        "JOIN task_types ty ON ty.id=t.type_id WHERE ty.manager='product-manager' AND s.name='Suggested' "
+                        "AND t.requester=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
+    if waiting >= R.settings(c)['suggestion_limit']:
+        raise Problem('rate_limit', 'Too many suggestions are waiting for review; try again later', 429)
 
 
 def output(c, row):
@@ -207,8 +224,11 @@ def install(app, store, auth, mutate):
 
     @app.post('/public/roadmaps/{label}/suggest')
     def suggest(request: Request, label: str, body: Suggestion):
+        R.spam_check(body.title, 'Title', 300)
+        R.spam_check(body.summary, 'Summary', 8000, required=False)
         with public_write(store) as c:
             require_label(c, label)
+            waiting_suggestions(c)
             charge(c, request)
             manager = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                                 "WHERE json_extract(bc.config_json,'$.template')='product-manager' "
@@ -242,16 +262,12 @@ def install(app, store, auth, mutate):
     def remove(request: Request, label: str, tid: str, token: str):
         if len(token) > 100:
             raise Problem('not_found', 'Requester not found', 404)
-        try:
-            with public_write(store) as c:
-                row = task(c, label, tid, public=False)
-                result = R.remove_requester(c, row['id'], token=token)
-                charge(c, request)
-                return result
-        except Problem as exc:
-            if exc.status == 404:
-                raise Problem('not_found', 'Requester not found', 404) from None
-            raise
+        # The token is bound to its task, so withdrawal needs neither the label nor the roadmap setting:
+        # a visitor can always take back their contact details.
+        with public_write(store) as c:
+            result = R.withdraw(c, tid, token)
+            charge(c, request)
+            return result
 
     @app.head('/public/roadmaps/{label}/tasks/{tid}/comments')
     @app.get('/public/roadmaps/{label}/tasks/{tid}/comments')

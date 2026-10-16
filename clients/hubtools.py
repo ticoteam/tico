@@ -484,7 +484,9 @@ def tag_update(api, args):
       {"owner": _s("Who does it: a bot slug, a person id, or `me`"),
        "title": _s("Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"),
        "body": _s("The details", default=""),
-       "visibility": _s("Roadmap visibility at creation", enum=["public", "private"]),
+       "visibility": _s("Roadmap visibility at creation; public needs public_title", enum=["public", "private"]),
+       "public_title": _s("Public title for a public roadmap task; the internal title is never published"),
+       "public_summary": _s("Public summary; the internal body is never published"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "parent": _s("Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
@@ -516,7 +518,8 @@ def task_create(api, args):
             "due": args.get("due"), "goal_id": args.get("goal_id") or None}
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
-    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility"):
+    for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
+                  "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     if args.get("private") is not None:
@@ -3404,7 +3407,9 @@ def roadmap_tasks(api, args):
       {"settings": {"type": "object", "properties": {
            "labels": {"type": "array", "items": {"type": "string"}},
            "cors_origins": {"type": "array", "items": {"type": "string"}},
-           "action_limit": {"type": "integer", "minimum": 1}, "bot_public_approval": {"type": "boolean"}},
+           "action_limit": {"type": "integer", "minimum": 1},
+           "suggestion_limit": {"type": "integer", "minimum": 1, "description": "Visitor suggestions waiting at Suggested, overall"},
+           "bot_public_approval": {"type": "boolean"}},
            "additionalProperties": False}}, writes=True)
 def roadmap_settings(api, args):
     if args.get('settings') is not None:

@@ -108,6 +108,12 @@ async function taskPipelineCreate(form, selected = '') {
   const visibility = document.createElement('label'); visibility.className = 'prop-check roadmap-check';
   const flag = document.createElement('input'); flag.type = 'checkbox'; flag.name = 'public'; flag.setAttribute('aria-label', 'Public');
   visibility.append(flag, 'Public');
+  // Public text is written here, never copied from the internal title and body.
+  const publicText = document.createElement('div'); publicText.className = 'roadmap-publication roadmap-create-public';
+  publicText.innerHTML = '<label>Public title<input name="publicTitle" aria-label="Public title" maxlength="300" placeholder="Needed to publish"></label>'
+    + '<label>Public summary<textarea name="publicSummary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="Optional"></textarea></label>';
+  const showPublicText = () => { publicText.hidden = visibility.hidden || !flag.checked; publicText.querySelector('input').required = !publicText.hidden; };
+  flag.addEventListener('change', showPublicText);
   let ownerTouched = !!form.elements.owner.value && !TASK_TYPES.find(t => t.id === select.value)?.manager;
   form.elements.owner.addEventListener('change', () => { ownerTouched = true; });
   const defaults = () => {
@@ -115,15 +121,20 @@ async function taskPipelineCreate(form, selected = '') {
     visibility.hidden = type?.manager !== 'product-manager';
     flag.checked = type?.default_visibility === 'public' && !form.elements.private?.checked;
     flag.disabled = !!form.elements.private?.checked;
+    showPublicText();
     const manager = S.emps.find(e => e.name === type?.manager || type?.manager && e.template === type.manager);
     const value = manager && [...form.elements.owner.options].find(o => o.value === manager.name || o.value === 'bot:' + manager.name)?.value;
     if (value && !ownerTouched) form.elements.owner.value = value;
   };
-  select.addEventListener('change', defaults); form.elements.private?.addEventListener('change', defaults); defaults(); row.after(visibility);
+  select.addEventListener('change', defaults); form.elements.private?.addEventListener('change', defaults); defaults(); row.after(visibility); visibility.after(publicText);
 }
 function taskPipelineCreatePayload(form, payload) {
   payload.type = form.elements.type?.value || form.dataset.taskType || 'general';
   if (form.elements.public && !form.elements.public.closest('label').hidden) payload.visibility = form.elements.public.checked ? 'public' : 'private';
+  if (payload.visibility === 'public') {
+    payload.public_title = form.elements.publicTitle?.value.trim() || '';
+    payload.public_summary = form.elements.publicSummary?.value.trim() || '';
+  }
 }
 
 function taskTypesSettingsMount() {

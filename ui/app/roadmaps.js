@@ -12,10 +12,11 @@ function roadmapTaskHTML(t) {
       <button class="requester-chip" type="button" data-requester-self aria-pressed="false">I want this</button>
       ${edit ? `<button type="button" class="prop-add" data-requester-add aria-label="Add requester" title="Add requester">${TL_ICON.plus}</button>` : ''}</h3>
       <div data-requester-list></div></section>
-    ${t.visibility === 'public' ? `<section class="tsec roadmap-publication"><h3 class="rail-h">Public</h3>
-      <label>Title<input data-public-field="public_title" aria-label="Public title" maxlength="300" value="${esc(t.public_title ?? '')}" placeholder="${esc(t.title)}" ${edit ? '' : 'readonly'}></label>
-      <label>Summary<textarea data-public-field="public_summary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="${esc(t.body || '')}" ${edit ? '' : 'readonly'}>${esc(t.public_summary ?? '')}</textarea></label>
-    </section>` : ''}`;
+    <section class="tsec roadmap-publication"><h3 class="rail-h">Public text</h3>
+      <small>${t.visibility === 'public' ? 'Shown on the public roadmap.' : 'Written separately from the internal title and body; a public title is needed to publish.'}</small>
+      <label>Title<input data-public-field="public_title" aria-label="Public title" maxlength="300" value="${esc(t.public_title ?? '')}" placeholder="Needed to publish" ${edit ? '' : 'readonly'}></label>
+      <label>Summary<textarea data-public-field="public_summary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="Optional" ${edit ? '' : 'readonly'}>${esc(t.public_summary ?? '')}</textarea></label>
+    </section>`;
 }
 function roadmapTaskBind(d, task, change) {
   if (!roadmapTask(task)) return;
@@ -161,11 +162,12 @@ async function roadmapSettingsMount() {
     host.innerHTML = `<header><h2>Public roadmap</h2></header><form class="roadmap-form"><div><span>Tags shown publicly</span><div class="roadmap-labels">${(tags.tags || []).filter(t => !t.is_template).map(t => `<label class="roadmap-check"><input type="checkbox" name="label" value="${esc(t.key)}"${settings.labels.includes(t.key) ? ' checked' : ''}>${esc(t.label || t.key)}</label>`).join('')}</div></div>
       <label>Websites that can show it<textarea name="cors_origins" rows="2" placeholder="https://acme.example">${esc(settings.cors_origins.join('\n'))}</textarea></label>
       <label>Requests per visitor per day<input class="roadmap-limit" type="number" name="action_limit" min="1" max="10000" required value="${settings.action_limit}"></label>
+      <label>Visitor suggestions waiting for review<input class="roadmap-limit" type="number" name="suggestion_limit" min="1" max="1000" required value="${settings.suggestion_limit ?? 20}"></label>
       <label class="roadmap-check">${peopleSwitch('name="bot_public_approval"', settings.bot_public_approval, false, 'Bots need approval to post publicly')}Bots need approval to post publicly</label>
       <div class="row"><button class="primary" type="submit">Save</button><span class="muted" data-status role="status"></span></div></form>`;
     $('form', host).onsubmit = async ev => {
       ev.preventDefault(); const form = ev.currentTarget, values = new FormData(form), button = $('[type=submit]', form), status = $('[data-status]', form);
-      const body = {labels: values.getAll('label'), cors_origins: String(values.get('cors_origins')).split(/[\n,]/).map(s => s.trim()).filter(Boolean), action_limit: Number(values.get('action_limit')), bot_public_approval: form.elements.bot_public_approval.checked};
+      const body = {labels: values.getAll('label'), cors_origins: String(values.get('cors_origins')).split(/[\n,]/).map(s => s.trim()).filter(Boolean), action_limit: Number(values.get('action_limit')), suggestion_limit: Number(values.get('suggestion_limit')), bot_public_approval: form.elements.bot_public_approval.checked};
       button.disabled = true; status.textContent = '';
       try { await post('/v2/roadmaps/settings', body); status.textContent = 'Saved'; } catch (error) { status.textContent = error.message; } finally { button.disabled = false; }
     };

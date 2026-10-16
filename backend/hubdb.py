@@ -3758,7 +3758,7 @@ def task_comment_delete(conn, actor, task_id, message_id):
 def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, deduplicate=True,
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
-                requester_actor=None, own_room=True, visibility=None):
+                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -3774,6 +3774,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `number` keeps an imported task's number: a mover's (`mover`, as in `task_update`), and free.
     """
     _writer(conn, actor)
+    # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
+    public_title = str(public_title or "").strip()
+    public_summary = str(public_summary or "").strip()
+    if len(public_title) > 300 or len(public_summary) > 8000:
+        refuse(conn, actor, 'lint', 'Public title is at most 300 characters and public summary at most 8000')
     from .shared_bots import route
     owner = route(conn, actor, owner)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
@@ -3788,6 +3793,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                    or parent and task_private(conn, parent))
     if private:
         requester = actor
+    from .roadmaps import settings as roadmap_settings
+    # Bots (and Assistant/BotOps acting for a person) publish only through an approved publication.
+    bot_review = (is_bot(actor) or VIA.get()) and roadmap_settings(conn)['bot_public_approval']
+    if visibility == 'public' and not public_title and not private and not bot_review:
+        refuse(conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private')
     if requester_actor is not None:
         # Only the server supplies a verified human origin for a bot's own work.
         if not is_human(requester_actor) or target != actor or not human(conn, requester_actor):
@@ -3872,11 +3882,16 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     public = visibility or type_get(conn, task(conn, row['id'])['type_id'])['default_visibility']
     if public not in ('public', 'private'):
         refuse(conn, actor, 'kind', 'visibility is public or private')
-    from .roadmaps import settings as roadmap_settings
-    if private or (is_bot(actor) or VIA.get()) and roadmap_settings(conn)['bot_public_approval']:
+    if bot_review:
+        # Public text from a bot goes through an approved publication, never in with the task.
+        public, public_title, public_summary = 'private', '', ''
+    if private:
+        public = 'private'
+    if not public_title:
+        # A type that defaults to public publishes only tasks created with public text.
         public = 'private'
     conn.execute('UPDATE tasks SET visibility=?,public_title=?,public_summary=? WHERE id=?',
-                 (public, title[:300], body[:8000], row['id']))
+                 (public, public_title, public_summary, row['id']))
     if step is not None:
         task_update(conn, actor, row["id"], step=step)
     if top:

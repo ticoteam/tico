@@ -132,6 +132,9 @@ class TaskRelationRef(Contract):
 
 class TaskCreate(Contract):
     visibility: Literal['public', 'private'] | None = None
+    # Publishing at creation needs explicit public text; the internal title and body are never copied.
+    public_title: str | None = Field(default=None, max_length=300)
+    public_summary: str | None = Field(default=None, max_length=8000)
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
     body: Text

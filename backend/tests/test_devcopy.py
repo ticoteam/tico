@@ -124,3 +124,29 @@ def test_server_env_sources_whole_with_spaces(tmp_path):
     out = subprocess.run(["sh", "-c", 'TICO_DB=/live.sqlite; set -a; . "$1"; set +a; printf %s "$TICO_DB"', "sh", str(env)],
                          capture_output=True, text=True, check=True)
     assert out.stdout == str(dest)
+
+
+def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secret(tmp_path):
+    import json
+    from backend import roadmaps
+    from backend.task_delete import delete_tasks
+    store = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
+        task = H.task_create(c, "human:morgan", "Faster exports", "Customer asks", "human:morgan")
+        roadmaps.add_requester(c, task["id"], {"email": "jane@customer.example", "phone": "555-0100", "source": "public_form"})
+        assert delete_tasks(c, [task["id"]], apply=True)["applied"]
+        secret = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        assert "jane@customer.example" in c.execute("SELECT rows_json FROM task_trash").fetchone()[0]
+    for c in store.pool:
+        c.close()
+    store.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    devcopy.build(store.settings.db_path, dest, days=30)
+    with closing(sqlite3.connect(dest)) as c:
+        rows = json.loads(c.execute("SELECT rows_json FROM task_trash").fetchone()[0])["rows"]
+        assert "task_requesters" not in rows and rows["tasks"][0]["title"] == "Faster exports"
+        assert "jane@customer.example" not in json.dumps(rows) and "555-0100" not in json.dumps(rows)
+        copied = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        assert copied != secret and len(json.loads(copied)) == 64

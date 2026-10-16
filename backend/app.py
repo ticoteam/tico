@@ -2700,6 +2700,7 @@ def create_app(settings=None):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
+                            public_title=body.public_title, public_summary=body.public_summary,
                             private=private, conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
