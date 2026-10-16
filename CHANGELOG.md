@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-10-16
+
 ### Added
 - Settings > Computers shows Claude's and Codex's weekly and 5-hour usage as percentages on the computer's own login,
   not only on named subscriptions. Claude's come from its turns (Claude Code 2.1.30x reports both windows); before a
@@ -2804,7 +2806,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.50...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.51...HEAD
+[0.3.51]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
