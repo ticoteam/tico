@@ -16,8 +16,9 @@ bot's own work is tasks, never issues.
 included, run `npm ci && npx playwright install chromium` and install `backend/requirements-dev.txt` in a venv
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
-the parallel suite is the release check's job on a full-size machine. Tests run
-locally; GitHub Actions does not run tests. The default Python suite stays under about 60 seconds and the whole
+the parallel suite is the release check's job on a full-size machine. PR tests run
+locally. The manually dispatched Release validation workflow runs the full release gate on an isolated
+GitHub-hosted Linux VM for an explicit immutable candidate SHA; no push or PR triggers run tests. The default Python suite stays under about 60 seconds and the whole
 default run (pytest plus core UI) under 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. A PR runs only the tests for what it changed; the full suite runs once, right before a release. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
