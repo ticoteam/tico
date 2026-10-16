@@ -267,7 +267,8 @@ def test_only_a_computer_holding_a_grant_from_this_server_may_refresh(app, monke
     assert refresh(app, "cara-test").status_code == 403
     assert refresh(app, "inbox-test").status_code == 403
     # The secret is added only to the grant this server issued, for its own mailbox: never to a token from elsewhere.
-    assert refresh(app, machine["token"], refresh_token="1//someone-elses").status_code == 403
+    r = refresh(app, machine["token"], refresh_token="1//someone-elses")
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"   # the CLI reads it as reconnect
     assert refresh(app, machine["token"], mailbox="ben@acme.example").status_code == 403
     assert refresh(app, machine["token"], mailbox="Cara@Acme.example").status_code == 200
     assert len(google.calls) == 1
