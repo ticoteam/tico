@@ -7,12 +7,16 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-10-16
+
 ### Added
 - A bot waiting on a linked pull request can end its turn instead of polling: `hub task link <task> <pr url>
   --wake-once` (or `wake_once` on `hub_task_link`) wakes the task once, in its conversation, when the PR's checks
   finish (pass or fail), it is approved or gets changes requested, or a release ships it (or it merges in a
   repository Tico does not release), with the result and link. It needs the connected GitHub App.
   It is off unless armed, disarms after one wake, creates no task and never changes the task's status.
+  A check run or commit status that reports after the others still counts, a re-run is followed as its own run, and
+  the wake names every failing check.
 - The desktop app keeps a log file (`~/Library/Logs/<bundle ID>/tico.log` on macOS, two files of 1 MB at most) with each
   start and update check, so an app opened from the Dock no longer loses its update failures. Help shows the app's
   version beside the server's and a **Show the app's log** button; a Support request from the app carries the app's
@@ -89,6 +93,11 @@ All notable changes to Tico are recorded here. The format follows
   stores and logs no token. The grant on the computer keeps no secret.
 
 ### Fixed
+- Health no longer warns about a runner's event stream when the stream drops and is back within 30 seconds; a
+  runner that reconnects starts again at a 1-second wait once its stream has stayed up for 30 seconds.
+- Health warns that queued work is idle only when nothing explains the wait. Work held for a reason the runner's
+  claim already gives shows that reason instead, and the report says where the work is waiting (which bot on which
+  computer).
 - Linking a pull request whose URL differs only in owner or repository case (or a trailing slash) reuses
   the task's existing link for it, so arming or disarming `--wake-once` acts on that one link instead of adding a second.
 - A company's desktop app installs its updates again. The server signed the update download for S3 in an older
@@ -2885,7 +2894,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.50...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.51...HEAD
+[0.3.51]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
