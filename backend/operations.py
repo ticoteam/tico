@@ -15,6 +15,7 @@ import uuid
 
 from .backup import restore_bundle, upload_bundle
 from .blobs import Blobs
+from .company_storage import CompanyStorage
 from .config import Settings
 from .store import H, Store, encode
 
@@ -93,8 +94,10 @@ def backup(store, s3, cloudwatch, bucket):
     try:
         # The key files beside the database go with it, as with `manage.py backup`: a database restored without them
         # cannot open the credentials, GitHub App, directory sync or Slack secrets (backend/backup.py).
-        report = upload_bundle(store.settings.db_path, bucket, key, s3, Blobs(store.settings, s3),
-                               key_dir=store.settings.db_path.parent)
+        # Bytes in the company's own bucket are read through it, so the bundle stays a complete recovery point.
+        blobs = Blobs(store.settings, s3)
+        blobs.company = CompanyStorage(store)
+        report = upload_bundle(store.settings.db_path, bucket, key, s3, blobs, key_dir=store.settings.db_path.parent)
     except Exception as error:
         report_health(store, "backup", error=type(error).__name__)
         try:

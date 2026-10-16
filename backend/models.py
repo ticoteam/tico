@@ -852,6 +852,24 @@ class MailRequest(Contract):
     forward_to: list[Annotated[str, Field(max_length=320)]] = Field(default_factory=list, max_length=20)
 
 
+class CompanyStorageTest(Contract):
+    """A bucket to test (backend/company_storage.py), or nothing to test the saved one. A secret not sent is the saved
+    one for the same bucket, folder, endpoint and key ID. `mode` is accepted so a form sends one body to both."""
+    mode: Literal["builtin", "s3"] = "s3"
+    bucket: str = Field(default="", max_length=63)
+    region: str = Field(default="", max_length=32)
+    prefix: str = Field(default="", max_length=200)
+    endpoint: str = Field(default="", max_length=300)
+    credentials: Literal["keys", "role"] = "keys"
+    access_key_id: str = Field(default="", max_length=128)
+    secret_access_key: str = Field(default="", max_length=256, repr=False)
+
+
+class CompanyStorageChoice(CompanyStorageTest):
+    """Where new company files go: the built-in store, or the company's own S3 or S3-compatible bucket."""
+    mode: Literal["builtin", "s3"]
+
+
 class MailSettingsUpdate(Contract):
     """A person's change to a bot's mail sending (backend/mail_settings.py). Only what is sent changes.
     `from_request` takes what the bot's bot.yaml asks, as its computer last reported it."""

@@ -12,7 +12,7 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import access, blob_s3, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, watchers
+from . import access, blob_s3, company_storage, inbox_isolation, model_login, providers, releases, runner_versions, setup_stuck, watchers
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -1105,7 +1105,13 @@ def view(c, who, settings, auth, github, config):
             if detail.get("error"):
                 summary += ". " + detail["error"]
             checks.append(_check("blob_storage", "File storage", "bad" if detail.get("error") else "info", summary))
-    if full and not settings.blob_bucket and not settings.loopback and not settings.demo and not settings.rehearsal:
+    if full and (problem := company_storage.health_check(c)):
+        checks.append(_check("company_storage", "Company file storage", "warn", problem,
+                             [_fix("Storage settings", "#/settings", "storage"),
+                              _fix("Storage", "https://github.com/ticoteam/tico/blob/main/docs/files.md#your-companys-own-bucket")]))
+    company_bucket = c.execute("SELECT 1 FROM storage_targets WHERE active=1").fetchone() if full else None
+    if full and not settings.blob_bucket and not company_bucket and not settings.loopback and not settings.demo \
+            and not settings.rehearsal:
         checks.append(_check("blob_storage", "File storage", "info",
                              "Files are on this computer's disk. A file store (S3) is recommended.",
                              [_fix("Storage", "https://github.com/ticoteam/tico/blob/main/docs/files.md#storage")]))

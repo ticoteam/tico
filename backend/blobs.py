@@ -36,6 +36,9 @@ class Blobs:
         self._probe_task = None
         self._s3_failed = set()
         self.copy_status = {"done": 0, "total": 0, "running": False, "error": "", "failed": 0}
+        # The company's own bucket (backend/company_storage.py), when the app attaches one: new bytes go there while
+        # it is chosen, and bytes recorded there are read from it.
+        self.company = None
 
     @property
     def s3(self):
@@ -65,8 +68,14 @@ class Blobs:
     def location(self):
         return self.bucket + ("/" + self.settings.blob_prefix if self.settings.blob_prefix else "")
 
+    def _company_target(self):
+        return self.company.active() if self.company is not None else None
+
     def put_staged(self, stream, digest, size, content_type="application/octet-stream"):
         """The multipart parser already hashed and spooled this stream."""
+        if target := self._company_target():
+            self.company.upload(target, stream, digest, size, content_type)
+            return digest
         if self.bucket and self.rehearsal:
             raise Problem("rehearsal", "Uploads are off in a rehearsal: attachments live in the company's bucket", 409)
         stream.seek(0)
@@ -80,6 +89,10 @@ class Blobs:
         return digest
 
     def put(self, data, content_type="application/octet-stream"):
+        if target := self._company_target():
+            digest = hashlib.sha256(data).hexdigest()
+            self.company.upload(target, io.BytesIO(data), digest, len(data), content_type)
+            return digest
         if self.bucket and not self.rehearsal:
             digest = hashlib.sha256(data).hexdigest()
             self._upload(io.BytesIO(data), digest, len(data), content_type, small_body=data)
@@ -88,7 +101,8 @@ class Blobs:
 
     def put_stream(self, fileobj, content_type="application/octet-stream", max_bytes=None, rate_limit=0, stop=None):
         """Stage and hash in bounded chunks; staging files always leave with the request."""
-        if self.bucket and self.rehearsal:
+        target = self._company_target()
+        if target is None and self.bucket and self.rehearsal:
             raise Problem("rehearsal", "Uploads are off in a rehearsal: attachments live in the company's bucket", 409)
         try:
             self.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -102,7 +116,9 @@ class Blobs:
                     stream.write(chunk)
                 digest = sha.hexdigest()
                 stream.seek(0)
-                if self.bucket:
+                if target is not None:
+                    self.company.upload(target, stream, digest, size, content_type)
+                elif self.bucket:
                     self._upload(stream, digest, size, content_type, rate_limit=rate_limit, stop=stop)
                 else:
                     self._local(stream, digest)
@@ -206,17 +222,15 @@ class Blobs:
     def open_range(self, digest, start=0, end=None):
         """Open now (so failures precede headers); iterator closes even on disconnect."""
         key = self.key(digest)
-        if self.bucket and digest not in self._s3_failed:
+        stream = self._open_company(digest, start, end)
+        if stream is None:
             try:
-                args = dict(Bucket=self.bucket, Key=self.s3_key(digest))
-                if start or end is not None:
-                    args["Range"] = f"bytes={start}-{end if end is not None else ''}"
-                response, _ = self.read_s3("get_object", **args)
-                stream = response["Body"]
-            except Exception:
-                stream = self._open_local(key, start)
-        else:
-            stream = self._open_local(key, start)
+                stream = self._open_builtin(digest, key, start, end)
+            except Problem:
+                # Not in the built-in store: bytes a company bucket took before their record was written.
+                stream = self._open_company(digest, start, end, unrecorded=True)
+                if stream is None:
+                    raise
         def chunks():
             remaining = None if end is None else end - start + 1
             try:
@@ -230,6 +244,40 @@ class Blobs:
             finally:
                 stream.close()
         return chunks()
+
+    def _open_builtin(self, digest, key, start, end):
+        if self.bucket and digest not in self._s3_failed:
+            try:
+                args = dict(Bucket=self.bucket, Key=self.s3_key(digest))
+                if start or end is not None:
+                    args["Range"] = f"bytes={start}-{end if end is not None else ''}"
+                response, _ = self.read_s3("get_object", **args)
+                return response["Body"]
+            except Exception:
+                pass
+        return self._open_local(key, start)
+
+    def _open_company(self, digest, start, end, unrecorded=False):
+        """The bytes from the company bucket recorded for this digest (or, `unrecorded`, from any company bucket);
+        None when there is none, so the built-in store is read as before."""
+        if self.company is None:
+            return None
+        targets = self.company.candidates() if unrecorded else self.company.located(digest)
+        failure = None
+        for target in targets:
+            try:
+                return self.company.open(target, digest, start, end)
+            except Exception as exc:
+                failure = failure or (target, exc)
+        if failure and not unrecorded:
+            # Recorded there and not readable: say why, unless a retained built-in copy still answers.
+            target, exc = failure
+            if (self.directory / self.key(digest)).is_file():
+                return None
+            from .company_storage import plain_error
+            raise Problem("company_storage", "This file is in your company's storage, which can't be read: "
+                          + plain_error(exc, target["bucket"], "reading"), 503, True) from exc
+        return None
 
     def _open_local(self, key, start):
         try:
@@ -416,6 +464,8 @@ def register(c, who, digest, size, name, content_type="application/octet-stream"
     row = {"id": H.new_id(), "owner": who.actor, "digest": digest, "size": size,
            "name": name, "content_type": content_type, "created": H.now()}
     c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(:id,:owner,:digest,:size,:name,:content_type,:created)", row)
+    from . import company_storage
+    company_storage.record(c, digest)
     return brief(row)
 
 

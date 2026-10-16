@@ -645,6 +645,8 @@ class Store:
             c.executescript(_bot_tools.SCHEMA)
             from . import mail_settings as _mail_settings
             c.executescript(_mail_settings.SCHEMA)
+            from . import company_storage as _company_storage
+            c.executescript(_company_storage.SCHEMA)
             from . import google_connect as _google_connect
             _google_connect.ensure_schema(c)
             from . import support as _support

@@ -209,6 +209,8 @@ def create_app(settings=None):
         import threading
         copy_stop = threading.Event()
         copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
+        from .company_storage import install_lifespan as check_company_storage
+        check_company_storage(app)
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
         demo_task = None
         if settings.demo:
@@ -4929,6 +4931,11 @@ def create_app(settings=None):
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
+    # The company's own bucket for new files (Settings > Storage); its keys are sealed with the vault's data key.
+    from . import company_storage
+    app.state.company_storage = company_storage.CompanyStorage(store, app.state.vault.cipher)
+    app.state.blobs.company = app.state.company_storage
+    company_storage.install(app, store, auth)
     from .sql import install_sql
     install_sql(app, store, auth)
     from .judge import install_judge

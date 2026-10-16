@@ -9,7 +9,7 @@ from fastapi import Request
 from fastapi.responses import Response
 from PIL import Image, UnidentifiedImageError
 
-from . import blobs
+from . import blobs, company_storage
 from .store import H, Problem, encode
 
 LIMIT = 1024 * 1024
@@ -95,6 +95,7 @@ def install_team_icon(app, store):
             if icon:
                 c.execute("UPDATE blobs SET digest=?,size=?,created=? WHERE id=?",
                           (digest, len(data), H.now(), icon["id"]))
+                company_storage.record(c, digest)
             else:
                 icon = blobs.register(c, who, digest, len(data), "team-icon.png", "image/png")
             value = {"id": icon["id"], "digest": digest}

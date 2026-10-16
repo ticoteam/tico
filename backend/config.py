@@ -169,6 +169,9 @@ class Settings:
     blob_endpoint: str = ""
     blob_credentials: str = "auto"
     blob_prefix: str = field(default="", init=False)
+    # TICO_COMPANY_STORAGE_ROLE=1: the operator lets a company's own bucket (Settings > Storage) be reached with this
+    # server's AWS role. Off by default, since the role may reach buckets the company should not choose.
+    company_storage_role: bool = False
     upload_max_bytes: int = 2 * 1024 ** 3
     # {bucket: https base} from TICO_S3_VIEW_URLS (clients/s3links.py): where people open a bucket's objects.
     s3_view_urls: dict = field(default_factory=dict)
@@ -387,6 +390,7 @@ class Settings:
             blob_region=os.environ.get("TICO_BLOB_REGION", ""),
             blob_endpoint=os.environ.get("TICO_BLOB_ENDPOINT", ""),
             blob_credentials=os.environ.get("TICO_BLOB_CREDENTIALS", "auto"),
+            company_storage_role=os.environ.get("TICO_COMPANY_STORAGE_ROLE", "").strip().lower() in ("1", "true", "yes", "on"),
             upload_max_bytes=int(os.environ.get("TICO_UPLOAD_MAX_BYTES") or 2 * 1024 ** 3),
             s3_view_urls=os.environ.get("TICO_S3_VIEW_URLS", ""),
             processing_operators=tuple(filter(None, os.environ.get("TICO_PROCESSING_OPERATORS", "").split(","))),

@@ -280,7 +280,11 @@ def main(argv=None):
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
         # A hand-run bundle carries the key files beside the database (credential.key, github-app.key, slack.key):
         # restore_bundle (python -m backend.backup) puts them back beside the restored database.
-        report = upload_bundle(args.database, args.bucket, args.key, s3, Blobs(settings, s3),
+        # Bytes in the company's own bucket are read through it (its keys open with the key files beside the database).
+        from .company_storage import CompanyStorage
+        blobs = Blobs(settings, s3)
+        blobs.company = CompanyStorage(Store(settings))
+        report = upload_bundle(args.database, args.bucket, args.key, s3, blobs,
                                key_dir=Path(args.database).resolve().parent)
     print(json.dumps(report, indent=2))
 

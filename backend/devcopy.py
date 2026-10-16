@@ -44,7 +44,7 @@ EMPTY = (
     "service_key_tasks",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
-    "directory_credentials",
+    "directory_credentials", "storage_targets",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -59,7 +59,7 @@ HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "eve
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events",
-    "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
+    "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blob_targets", "blobs",
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "changes", "chat_goals",
