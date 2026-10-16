@@ -110,6 +110,23 @@ def test_a_killed_snapshot_restore_ends_before_the_server_is_started_again(monke
     assert len([i for i in waits if i < recreate]) > 2               # it waited, asking more than once
 
 
+def test_a_server_stop_that_runs_over_is_not_called_a_restore(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: "stop" in argv)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+    original = docker.run
+
+    def run(argv, env=None, timeout=None, **kw):
+        if "stop" in argv:
+            docker.calls.append((argv, None, updater.status["state"]))
+            raise docker.expired(argv, timeout)
+        return original(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", run)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back" and "Could not restore the database snapshot" in updater.status["message"]
+    assert not any("run" in argv for argv, _, _ in docker.calls)
+
+
 def test_settling_removes_a_restore_that_never_started_and_leaves_an_ended_one(monkeypatch, tmp_path):
     """A one-off created but never started cannot act unless started, and Docker will not remove it without force
     once it is: removing it lets the settle finish instead of holding forever. One that exited can do nothing more."""

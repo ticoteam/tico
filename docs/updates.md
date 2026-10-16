@@ -186,7 +186,13 @@ the old image. Changes made between the snapshot and the rollback are not in it.
 was taken and whether it was restored (`snapshot`, `restored`, and the message). If the snapshot cannot be taken the
 update does not go ahead. The restore runs in a one-off container (`docker compose run`); if it runs over its time limit,
 stopping the command does not stop that container, so the updater says `uncertain` and starts the old server only once
-no one-off container of the server is still running (one that was created but never started is removed).
+no one-off container of the server is still running (one that was created but never started is removed). Until then the
+server stays stopped and the status message says it is waiting for the one-off. Any running one-off server container
+holds it, a restore you started by hand included. A restore normally takes seconds; if one has run for many minutes,
+`docker ps --filter label=com.docker.compose.oneoff=True` shows it, `docker logs <id>` shows where it is, and stopping
+it (`docker stop <id>`) lets the updater go on. The restore copies the migrated database into a
+`hub.sqlite.failed-update-*` folder before it removes anything and puts the snapshot in place with one rename at the
+end, so check which one `/data/hub.sqlite` is before the server is used.
 
 After a successful update the updater replaces itself, so updater fixes reach existing installs. It pulls the new updater
 image and starts a short-lived container (`tico-updater-swap`) from it, which recreates the `updater` service,

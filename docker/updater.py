@@ -528,8 +528,12 @@ def restore_snapshot(name, previous):
     """Server stopped (and Litestream with it, which runs inside the server container), the old image's own container
     puts the snapshot back in place of the migrated database and clears Litestream's tracking directory."""
     compose("stop", SERVICE)
-    compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "python", SERVICE, "-c", RESTORE_SCRIPT,
-            SNAPSHOTS + "/" + name, tag=previous)
+    try:
+        compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "python", SERVICE, "-c", RESTORE_SCRIPT,
+                SNAPSHOTS + "/" + name, tag=previous)
+    except Unsettled as exc:   # the one-off may still be putting the snapshot back
+        exc.restoring = True
+        raise
 
 
 def save_status():
@@ -852,14 +856,15 @@ def update(version, running=""):
                         restored = " Restored the database from the snapshot taken before the update (%s); changes made since then are not in it." % snapshot
                         set_status(restored=True)
                     except (RuntimeError, OSError, subprocess.SubprocessError) as snap_exc:
-                        restoring = isinstance(snap_exc, Unsettled)   # a killed restore may still run
+                        restoring = isinstance(snap_exc, Unsettled)   # a killed stop or restore may still act
                         unsettled = unsettled or restoring
-                        restored = (" The database snapshot restore did not report back (%s), so it may or may not have put %s back; it is in %s." if restoring
+                        restored = (" The database snapshot restore did not report back (%s), so it may or may not have put %s back; it is in %s."
+                                    if getattr(snap_exc, "restoring", False)
                                     else " Could not restore the database snapshot %s (%s); it is in %s.") % (
-                            (snap_exc, snapshot, SNAPSHOTS) if restoring else (snapshot, snap_exc, SNAPSHOTS))
+                            (snap_exc, snapshot, SNAPSHOTS) if getattr(snap_exc, "restoring", False) else (snapshot, snap_exc, SNAPSHOTS))
                     print("tico-updater: rollback:" + restored, flush=True)
                 back = False
-                if not restoring:   # else settle() starts the old server once the restore has ended
+                if not restoring:   # else settle() starts the old server once no restore can still act
                     compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=previous)
                     back = healthy(HEALTH_SECONDS)
             except (RuntimeError, OSError, subprocess.SubprocessError) as rollback_exc:
