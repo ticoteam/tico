@@ -750,9 +750,7 @@ SCHEMAS = {
                   stuck={"type": "array", "items": {"type": "object"}, "description":
                          "Bots with queued work that is not starting, or left in setup for over a day (the caller may "
                          "read them): bot, name, queued, oldest, computer, reason (not_ready, computer_offline, no_computer, "
-                         "slow, limit, updating, setup), why, since (setup only: when the bot was added), turns (updating only: "
-                         "the running turns the computer waits for, oldest first: run, bot, name, since, task and "
-                         "task_title, both empty for a private task), and fix (label plus "
+                         "slow, limit, updating, setup), why, since (setup only: when the bot was added), and fix (label plus "
                          "href/tab, login, move or finish; null unless the caller administers bots, or for setup may "
                          "manage the bot: finish is POST /api/v2/bots/{bot}/onboarded)"},
                   on_fallback={"type": "array", "items": {"type": "object"}, "description":

@@ -418,6 +418,12 @@ def _waiting(c, online_ids):
             documents[where[0]] = readiness_document(where[2]).get("bots") or {}
         report = documents[where[0]].get(slug)
         return report if isinstance(report, dict) else {}
+    holding = {}
+
+    def held(runner_id):     # one read per computer, however many of its bots wait on its update
+        if runner_id not in holding:
+            holding[runner_id] = holding_turns(c, turns.get(runner_id, []))
+        return holding[runner_id]
     waiting, slow, stuck = [], [], []
     for bot in c.execute("SELECT slug,display_name FROM bots WHERE state='active' ORDER BY slug"):
         slug = bot["slug"]
@@ -449,7 +455,7 @@ def _waiting(c, online_ids):
             if idle:
                 stuck.append({**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                              | ({"target": updating[where[0]], "running": running.get(where[0], 0),
-                                  "turns": holding_turns(c, turns.get(where[0], []))} if reason == "updating" else {}))
+                                  "turns": held(where[0])} if reason == "updating" else {}))
     return waiting, slow, stuck
 
 
@@ -555,7 +561,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = "Over its spending limit"
             fix = _fix("Raise limit", "#/usage")
         elif reason == "updating":
-            text = updating_words(row)
+            text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
@@ -582,10 +588,26 @@ def holding_turns(c, attempts):
     return out
 
 
+def visible_turns(c, turns, who, auth):
+    """`turns` as this caller may see them: a bot whose activity they may not read is "another bot", and a task they
+    may not read (private, or hidden by a bot's activity controls: auth.task_sql) is not named. Without `auth`,
+    neither is named."""
+    hidden = auth.unreadable_bots(c, who) if auth is not None else None
+    out = []
+    for turn in turns:
+        named = hidden is not None and turn["bot"] not in hidden
+        readable = bool(named and turn["task"] and c.execute(
+            f"SELECT 1 FROM tasks WHERE id=? AND ({auth.task_sql(c, who)})", (turn["task"],)).fetchone())
+        out.append({**turn, "name": turn["name"] if named else "",
+                    **({} if readable else {"task": "", "task_title": ""})})
+    return out
+
+
 def _turn_words(turn, titled=True):
     title = turn["task_title"] if titled else ""
     on = f" on \u201c{title[:47] + '...' if len(title) > 50 else title}\u201d" if title else ""
-    return f"{turn['name']}'s turn{on} (running since {(turn['since'] or '')[11:16]} UTC)"
+    whose = f"{turn['name']}'s turn" if turn["name"] else "another bot's turn"
+    return f"{whose}{on} (running since {(turn['since'] or '')[11:16]} UTC)"
 
 
 # A turn that only watches something elsewhere holds this computer's update for nothing. Stopping it stays a person's

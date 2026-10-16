@@ -178,7 +178,8 @@ def _runner_checks(c, settings):
                                 f"Computer {machine['label']} reports release {update['release'] or 'unknown'}, state "
                                 f"{update['state']}" + (f"; last update error: {update['error']}" if update["error"] else "")
                                 + "." + holds,
-                                _holding_fix(machine["label"]) if rows and update["state"] != "incompatible"
+                                _holding_fix(machine["label"]) if rows and rows[0]["running"]
+                                and update["state"] != "incompatible"
                                 and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
                                 "`scripts/tico install` once on that computer so it updates itself)."))

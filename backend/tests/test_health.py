@@ -700,6 +700,23 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     assert stuck["reason"] == "updating" and stuck["why"].startswith("Team box is holding new work to update")
     assert stuck["why"].endswith(health.OUTSIDE_WAIT)
     assert checks["queue"]["status"] == "warn"
+    # Anything else wrong with the update still asks BotOps to update it: an error, an incompatible release, or an
+    # update under way with no running turn to wait for (the updater itself may be stuck).
+    store = api.app.state.store
+
+    def fix(**change):
+        with store.transaction() as c:
+            c.execute("UPDATE runner_versions SET " + ",".join(f"{k}=?" for k in change) + " WHERE runner_id=?",
+                      (*change.values(), runner))
+            found = {f["check_id"]: f for f in health_monitor.findings(c, store.settings)}["runner_outdated"]["fix"]
+            c.execute("UPDATE runner_versions SET release='0.3.46',update_state='waiting',update_error='' WHERE runner_id=?",
+                      (runner,))
+        return found
+    assert fix(update_error="could not start the update: OSError").startswith("BotOps: update the runner on Team box")
+    assert fix(release="0.0.1").startswith("BotOps: update the runner on Team box")
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET state='finished' WHERE id='a-dev'")
+    assert fix(update_state="updating").startswith("BotOps: update the runner on Team box")
 
 
 def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_private_task(environment):
@@ -709,29 +726,30 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner)
-    for bot in ("ops", "botops", "qa"):
+    for bot in ("ops", "botops", "audit"):
         add_bot(api, bot)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET label='Mac' WHERE id=?", (runner,))
         c.execute("UPDATE bots SET display_name='BotOps' WHERE slug='botops'")
-        for bot in ("ops", "botops", "qa"):
+        for bot in ("ops", "botops", "audit"):
             c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')",
                       (bot, runner, H.now()))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
-        for bot in ("ops", "botops", "qa"):
+        for bot in ("ops", "botops", "audit"):
             chat = H.open_conversation(c, owner, [owner, "bot:" + bot], kind="chat")
             H._write_message(c, owner, "bot:" + bot, "hello?", chat, "say", {}, None, None)
-        started = {"botops": H.shift(H.now(), minutes=-28), "qa": H.shift(H.now(), minutes=-5)}
+        started = {"audit": H.shift(H.now(), minutes=-5), "botops": H.shift(H.now(), minutes=-28)}   # newest first
+        run = {"audit": "a-audit", "botops": "b-botops"}   # ids and slugs sort newest first too: only `since` orders
         for bot, since in started.items():
             job = c.execute("SELECT id FROM jobs WHERE bot=?", (bot,)).fetchone()["id"]
             c.execute("UPDATE jobs SET state='leased' WHERE id=?", (job,))
             c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
                       "started) VALUES(?,?,?,?,1,?,'running',?,?,?)",
-                      ("a-" + bot, job, bot, runner, "x" + bot, H.shift(H.now(), hours=1), since, since))
+                      (run[bot], job, bot, runner, "x" + bot, H.shift(H.now(), hours=1), since, since))
         watch = H.task_create(c, "bot:botops", "Watch HotMic's update to 0.3.48", "x", "bot:botops", lint=False)
-        secret = H.task_create(c, "bot:qa", "Private release gate", "x", "bot:qa", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by='a-botops' WHERE id=?", (watch["id"],))
-        c.execute("UPDATE tasks SET carried_by='a-qa' WHERE id=?", (secret["id"],))
+        secret = H.task_create(c, "bot:audit", "Private release gate", "x", "bot:audit", lint=False, private=True)
+        c.execute("UPDATE tasks SET carried_by='b-botops' WHERE id=?", (watch["id"],))
+        c.execute("UPDATE tasks SET carried_by='a-audit' WHERE id=?", (secret["id"],))
         c.execute("UPDATE jobs SET created=? WHERE bot='ops'", (H.shift(H.now(), minutes=-30),))
         c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported) "
                   "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)", (runner, H.now()))
@@ -740,12 +758,34 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         assert row["reason"] == "updating" and row["running"] == 2
         botops, qa = row["turns"]                                       # oldest first
         assert (botops["bot"], botops["run"], botops["task"], botops["task_title"]) == (
-            "botops", "a-botops", watch["id"], "Watch HotMic's update to 0.3.48")
-        assert (qa["bot"], qa["task"], qa["task_title"]) == ("qa", "", "")   # its only task is private
+            "botops", "b-botops", watch["id"], "Watch HotMic's update to 0.3.48")
+        assert (qa["bot"], qa["task"], qa["task_title"]) == ("audit", "", "")   # its only task is private
         words = health.updating_words(row)
         assert words.startswith("Mac is holding new work to update to Tico 0.3.48: it starts once 2 running turns "
-                                f"end: BotOps's turn (running since {started['botops'][11:16]} UTC); qa's turn")
+                                f"end: BotOps's turn (running since {started['botops'][11:16]} UTC); audit's turn")
         assert "Private release gate" not in words and words.endswith(health.OUTSIDE_WAIT)
-        row["turns"], row["running"] = row["turns"][:1], 1
+        one = {**row, "turns": row["turns"][:1], "running": 1}
         assert (f"it starts once BotOps's turn on \u201cWatch HotMic's update to 0.3.48\u201d (running since "
-                f"{started['botops'][11:16]} UTC) ends. {health.OUTSIDE_WAIT}") in health.updating_words(row)
+                f"{started['botops'][11:16]} UTC) ends. {health.OUTSIDE_WAIT}") in health.updating_words(one)
+
+        # Health says it to each caller as they may read it: a bot whose activity they may not read is "another
+        # bot", and a task hidden from them (auth.task_sql) is not named (Senior review of PR 638).
+        class Access:
+            def __init__(self, unreadable, tasks):
+                self.unreadable, self.tasks = unreadable, tasks
+
+            def unreadable_bots(self, c, who):
+                return self.unreadable
+
+            def task_sql(self, c, who):
+                return self.tasks
+
+        def why(auth):
+            [out] = health._stuck(c, [{**one, "runtime": ""}], online, None, False, auth)
+            return out["why"]
+        since = started["botops"][11:16]
+        assert f"BotOps's turn on \u201cWatch HotMic" in why(Access(set(), "1"))
+        assert f"once another bot's turn (running since {since} UTC) ends" in why(Access({"botops"}, "1"))
+        assert f"once BotOps's turn (running since {since} UTC) ends" in why(Access(set(), "0"))
+        assert f"once another bot's turn (running since {since} UTC) ends" in why(None)
+        assert "Watch HotMic" not in why(Access({"botops"}, "1")) + why(Access(set(), "0")) + why(None)
