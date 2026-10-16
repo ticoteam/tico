@@ -475,6 +475,20 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     assert r.status_code >= 400 and 'shipped' in r.text
 
 
+def test_a_pr_linked_again_in_another_case_is_the_same_link(api):
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
+    for url in ('https://github.com/TicoTeam/Tico/pull/412', PR + '/'):
+        links = _arm(api, task['id'], url=url)
+        assert [link['url'] for link in links] == [PR]
+        assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
+        links = _arm(api, task['id'], armed=False, url=url)
+        assert len(links) == 1 and 'wake_once' not in json.loads(links[0]['detail_json'])
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Another task on it', 'body': 'x',
+                                'links': ['https://github.com/TICOTEAM/TICO/pull/412']})
+    assert len(get(api, 'tasks/' + other['id'] + '/links')['links']) == 1
+
+
 def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on GitHub', 'body': 'x', 'links': [PR]})
     post(api, 'tasks/' + task['id'] + '/links', {'url': PR, 'wake_once': True}, expected=422)   # no App
