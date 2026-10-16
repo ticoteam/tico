@@ -128,6 +128,8 @@ All notable changes to Tico are recorded here. The format follows
   stores and logs no token. The grant on the computer keeps no secret.
 
 ### Fixed
+- **Desktop app:** a link that opens a new tab (most links in chat, tasks and docs) did nothing when clicked; it
+  now opens in the default browser. Sign-in pop-ups stay in the app.
 - Linking a pull request whose URL differs only in owner or repository case (or a trailing slash) reuses
   the task's existing link for it, so arming or disarming `--wake-once` acts on that one link instead of adding a second.
 - A company's desktop app installs its updates again. The server signed the update download for S3 in an older

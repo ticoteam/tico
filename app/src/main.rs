@@ -253,6 +253,7 @@ fn build_window(app: &App) -> tauri::Result<()> {
     let Some(config) = connection(app) else { return build_server_window(app) };
     let start = config.start_url();
     let opener = app.clone();
+    let popups = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
@@ -264,7 +265,8 @@ fn build_window(app: &App) -> tauri::Result<()> {
         // Anything that is not the hub opens in the default browser. Cloudflare's provider
         // choice is itself a clicked link: the whole authentication redirect chain stays in this
         // web view so the resulting CF_Authorization cookie belongs to the app, not the browser.
-        .on_navigation(move |url| stays_in_app(&opener, url));
+        .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_new_window(move |url, _| new_window(&popups, url));
     #[cfg(target_os = "macos")]
     {
         // The native title bar drags the window on every page, including sign-in pages that are
@@ -284,11 +286,29 @@ fn stays_in_app(opener: &App, url: &url::Url) -> bool {
     if target.is_empty() || target == host || url.scheme() == "tauri" {
         return true;
     }
-    if target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com" {
+    if signs_in(target) {
         return true;
     }
     let _ = opener.opener().open_url(url.as_str(), None::<&str>);
     false
+}
+
+/// The sign-in pages whose cookies must belong to the app, not the browser.
+fn signs_in(host: &str) -> bool {
+    host.ends_with(".cloudflareaccess.com") || host == "accounts.google.com"
+}
+
+/// A link that asks for a new tab (`target="_blank"`, `window.open`), which the web view would
+/// otherwise drop: it opens in the default browser, as a new tab there. A sign-in pop-up stays in
+/// the app for the same reason as in `stays_in_app`.
+fn new_window(opener: &App, url: url::Url) -> tauri::webview::NewWindowResponse<tauri::Wry> {
+    if signs_in(url.host_str().unwrap_or("")) {
+        return tauri::webview::NewWindowResponse::Allow;
+    }
+    if matches!(url.scheme(), "http" | "https" | "mailto") {
+        let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+    }
+    tauri::webview::NewWindowResponse::Deny
 }
 
 /// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking
@@ -308,6 +328,7 @@ fn open_meeting_window(app: &App, id: &str) {
     let mut url = config.hub.clone();
     url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
     let opener = app.clone();
+    let popups = app.clone();
     let _ = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("Meeting")
         .inner_size(1100.0, 820.0)
@@ -315,6 +336,7 @@ fn open_meeting_window(app: &App, id: &str) {
         .resizable(true)
         .user_agent(USER_AGENT)
         .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_new_window(move |url, _| new_window(&popups, url))
         .build();
 }
 
@@ -450,6 +472,20 @@ fn restore_frame(app: &App) {
         }
     }
     state.applying_frame.store(false, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::signs_in;
+
+    #[test]
+    fn only_sign_in_pages_stay_in_the_app() {
+        assert!(signs_in("acme.cloudflareaccess.com"));
+        assert!(signs_in("accounts.google.com"));
+        assert!(!signs_in("github.com"));
+        assert!(!signs_in("cloudflareaccess.com.evil.example"));
+        assert!(!signs_in(""));
+    }
 }
 
 #[cfg(test)]
