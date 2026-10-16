@@ -1,14 +1,97 @@
-# Retained as a disabled workflow placeholder; no test commands belong in Actions.
-name: Local checks only
+# One explicitly requested release check, on an isolated native VM. No PR/push tests or publication.
+name: Release validation
+run-name: Validate ${{ inputs.candidate_sha }} from ${{ inputs.previous_release }}
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full immutable candidate commit (40 lowercase hex characters)
+        required: true
+        type: string
+      previous_release:
+        description: Published stable release for install/upgrade/rollback
+        required: true
+        default: v0.3.48
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: manual-release-validation
+  cancel-in-progress: false
+
 jobs:
-  local-checks:
-    runs-on: ubuntu-latest
+  release-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      PREVIOUS_RELEASE: ${{ inputs.previous_release }}
+      TICO_VALIDATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      TICO_PYTHON_WORKERS: '2'
+      TICO_UI_JOBS: '2'
+      TICO_UI_SLOWDOWN: '2'
+      TICO_BROWSER_CHANNEL: ''
+      PYTHONUNBUFFERED: '1'
     steps:
-      - run: echo "Run python scripts/release_checks.py locally before release."
+      - name: Validate inputs before checkout
+        env:
+          TICO_HOSTED_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['CANDIDATE_SHA']), 'A full lowercase commit SHA is required'
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', os.environ['PREVIOUS_RELEASE']), 'A stable previous release is required'
+          assert os.environ['TICO_HOSTED_ENVIRONMENT'] == 'github-hosted', 'A GitHub-hosted VM is required'
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('TICO_HOSTED_ENVIRONMENT=github-hosted\n')
+          PY
+      # Controls come from the reviewed workflow commit; builds/tests come only from the candidate.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: validation-control
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Runtime and disposable capacity preflight
+        run: python3 validation-control/scripts/hosted_release_check.py prepare
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install prerequisites and build matching native binaries
+        working-directory: candidate
+        run: |
+          python3 -m venv "$RUNNER_TEMP/release-venv"
+          "$RUNNER_TEMP/release-venv/bin/python" -m pip install -r backend/requirements-dev.txt
+          npm ci
+          npx playwright install --with-deps chromium webkit
+          "$RUNNER_TEMP/release-venv/bin/python" -m playwright install --with-deps chromium
+          rustup toolchain install 1.92 --profile minimal
+          rustup default 1.92
+          cargo build --release --locked --manifest-path runner-rs/Cargo.toml
+          cargo build --release --locked --manifest-path relay-rs/Cargo.toml
+      - name: Run the candidate's unchanged full release gate
+        run: '"$RUNNER_TEMP/release-venv/bin/python" validation-control/scripts/hosted_release_check.py run'
+      - name: Collect only bounded validation logs
+        if: always()
+        run: |
+          if [ -f validation-control/scripts/hosted_release_check.py ]; then
+            python3 validation-control/scripts/hosted_release_check.py collect
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-validation-report
+          retention-days: 3
+          if-no-files-found: warn

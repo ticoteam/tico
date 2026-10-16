@@ -8,6 +8,8 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Maintainers can manually validate an exact release candidate on an isolated GitHub-hosted Linux computer, with
+  native prerequisites, capacity checks and retained results, without changing or publishing the candidate.
 - A person can connect their own Google account for their inbox and calendar from Settings > Inbox > Connect
   Google: sign in, approve, done. No service account, no domain-wide delegation, no Workspace admin and no Google Cloud
   project of their own; Tico supplies the Google app (docs/mail.md, Connect your Google account). The grant is read
@@ -16,7 +18,8 @@ All notable changes to Tico are recorded here. The format follows
   other account is refused and revoked. The computer that syncs mail keeps the grant, out of bots' reach; a bot's run
   still gets only an hour-long token for its own mailbox. A Workspace policy that blocks Tico is named as the admin's
   ("has a policy that blocks Tico"), a revoked or expired grant says to reconnect, and neither falls back to a service
-  account. Disconnect revokes the grant at Google. Each server names its own Google app: a private one for a few known
+  account. Disconnect revokes the grant at Google; if the computer holding it stays offline, Settings says so and
+  points to Google's own permissions page. Each server names its own Google app: a private one for a few known
   people (Google's personal-use exemption, with its unverified-app screen and 100-user cap), or Tico's public app,
   which needs Google's verification for lasting grants; in Google's Testing state grants end after 7 days
   (docs/mail.md).
@@ -29,6 +32,15 @@ All notable changes to Tico are recorded here. The format follows
   Stopping a turn stays a person's choice; the 20-minute update drain is unchanged.
 
 ### Fixed
+- A Docker runner's updater can no longer leave the runner holding new work for ever. Each Docker command it
+  runs has a time limit and is stopped when it runs over; a switch that runs over is rolled back like any failed
+  update, and the updater reports the outcome only after its last command. Stopping a command does not undo what
+  Docker already accepted, so when one that changes containers runs over, the updater says `uncertain` and the runner
+  keeps holding work until Docker confirms the runner was recreated on the old version (it retries every minute,
+  also after the updater restarts, including one stopped mid-switch). The runner keeps that hold on disk: an updater
+  that stops answering, loses its status or reports an older update's outcome does not end it, and neither does a
+  runner restart; only the updater's outcome for that update does. A hold the runner could not save still holds
+  while it runs (and says the save failed), and a saved hold that cannot be read holds until it is removed. A runner whose image cannot be read is reported "Not updated" instead.
 - BotOps can register a remote MCP server for the person who asked when the server's header names its credential
   as a placeholder (`Authorization: Bearer ${VAR}` for the entry's own `env`). The guard that keeps secrets out of
   BotOps' requests refused every `Authorization` key, so the documented declaration failed with `secret_in_request`
@@ -37,6 +49,10 @@ All notable changes to Tico are recorded here. The format follows
   the request is still refused.
 - A chat file a person shares to a task in a comment now shows in the task's activity as a file added, is
   recorded in the audit log, and gets its preview straight away, as an uploaded file does.
+
+## [0.3.49] - 2026-10-15
+
+### Fixed
 - A message bot reads only its person's mailbox unless its `gmail` entry sets `org_read: true`, as the mail manual
   says. Being a person's `inbox_bot` used to add the mailboxes of everyone below that person too: in the mailboxes
   its runs could ask the runner for a token for, in the routine's and bot page's mail sources, and in the mail
@@ -125,18 +141,18 @@ All notable changes to Tico are recorded here. The format follows
   and `setup` no longer fail on them (for example "Worktree initialization marker cannot be read"). Files, modes
   and contents stay, a held lock stays held, and a symlink or hard link in either folder changes nothing outside it.
 
-### Changed
-- Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,
-  retains the same public listener, and no longer offers a Python relay or an opt-in overlay.
-- `hub task worktree add`, `setup` and `attach` refusing a repository for missing write access now say
-  whether Tico listed it read-only or not at all for this run, and which repositories the run can write to.
-
-### Fixed
 - A runner whose event stream drops now logs `event stream back after N s` when it reconnects, so a support
   bundle shows the outage ended, and names why the stream ended: no data from the server within the read
   timeout, or the connection and its cause, instead of calling every body error a `TimeoutError`.
 - Runtime and development Python locks share the same dependency pins. The desktop uses rustls 0.23.46,
   with compatible AWS, cryptography, JWT and browser telemetry SDK updates.
+
+### Changed
+- Computer-screen WebSockets use Rust exclusively. The standard server includes and supervises the relay,
+  retains the same public listener, and no longer offers a Python relay or an opt-in overlay. Single-use tickets,
+  leased permissions, bounded buffering, cancellation and duplicate-safe audit reporting are retained.
+- `hub task worktree add`, `setup` and `attach` refusing a repository for missing write access now say
+  whether Tico listed it read-only or not at all for this run, and which repositories the run can write to.
 
 ### Added
 - Settings → Computers lists each AI tool on its own row: installed version, enabled, sign-in and the account it
@@ -144,9 +160,6 @@ All notable changes to Tico are recorded here. The format follows
   windows as bars with the reading's age (#610). Tools without an account or usage source read "unavailable".
   Accounts come from the tools' own status answers, never credential files, and are shown only to owners,
   admins and the computer's operator; see PRIVACY.md.
-- An opt-in Rust relay for computer-screen WebSockets, with single-use tickets, leased permissions,
-  bounded buffering and cancellation, and duplicate-safe audit reporting. Python remains the default;
-  the explicit installation overlay and rollback are documented in docs/install.md.
 
 ## [0.3.48] - 2026-10-15
 
@@ -2756,7 +2769,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.48...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.49...HEAD
+[0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ticoteam/tico/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/ticoteam/tico/compare/v0.3.46...v0.3.47
 [0.3.21]: https://github.com/ticoteam/tico/compare/v0.3.20...v0.3.21

@@ -28,7 +28,9 @@ window.mountGoogleConnect = async function (host) {
       <div class="row"><button type="button" class="primary" data-google-connect>Connect Google again</button></div>`;
   } else if (busy) {
     body = `<p>${state.status.startsWith('dis') || state.status === 'revoking' ? 'Disconnecting' : 'Finishing the connection for'} ${box}…</p>
-      <p class="muted">The computer that syncs your mail finishes this, usually within two minutes.</p>`;
+      ${state.stalled ? `<p role="alert"><strong>${text(state.message)}</strong></p>
+      <p class="muted">Remove Tico now at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. The computer finishes the disconnect when it is back online.</p>`
+        : '<p class="muted">The computer that syncs your mail finishes this, usually within two minutes.</p>'}`;
   } else {
     const failed = state.status === 'failed' ? `<p role="alert"><strong>${text(state.message)}</strong></p><p class="muted">${text(state.hint)}</p>` : '';
     body = `${failed}<p>Connect ${box} so your message bot can read your inbox and calendar. You sign in to Google and approve; no administrator or setup is needed.</p>

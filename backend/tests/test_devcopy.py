@@ -45,6 +45,11 @@ def source_db(tmp_path):
         c.execute("INSERT INTO schedules(id,bot,cron) VALUES('s1','sales','* * * * *')")
     for name in ("credential.key", "slack.key"):
         (store.settings.db_path.parent / name).write_bytes(b"k" * 32)
+    # Close the store's idle connections now: the last one to close checkpoints the WAL into the file, which would
+    # otherwise land whenever the garbage collector runs, possibly after the test has taken its "before" bytes.
+    for c in store.pool:
+        c.close()
+    store.pool.clear()
     return store.settings.db_path
 
 
