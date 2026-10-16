@@ -259,17 +259,21 @@ def pr_signal(c, event, payload):
             name = str("suite:" + str((signal.get("app") or {}).get("slug") or signal.get("id") or "Checks")
                        if event == "check_suite" else signal.get("name") or signal.get("context") or "Checks")[:200]
             wake = state == "failing" and checks.get(name) != "failing"
+            left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             detail["checks"] = dict(list(checks.items())[-100:])
             fields["checks"] = "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
             item = f"Checks {state} on {label}: {name}"
             # A suite completes once all of its runs have; a single run or commit status may be one of many.
-            if (event == "check_suite" and signal.get("status") == "completed" and state != "pending"
+            # A run or status that finishes after a suite already has can be the last one, so it counts too.
+            suite_done = any(k.startswith("suite:") and v != "pending" for k, v in checks.items())
+            if ((event == "check_suite" and signal.get("status") == "completed" and state != "pending"
+                    or event != "check_suite" and left_pending and suite_done)
                     and "pending" not in checks.values()):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
-                sha = str(signal.get("head_sha") or detail.get("head_sha") or "")[:12]
-                failed = [k[6:] for k, v in checks.items() if k.startswith("suite:") and v == "failing"]
+                sha = str(signal.get("head_sha") or payload.get("sha") or detail.get("head_sha") or "")[:12]
+                failed = [k[6:] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing"]
                 done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
                         f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                 if fire_once(detail, done):

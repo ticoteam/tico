@@ -427,16 +427,36 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
         'pull_requests': [{'number': 412}]}})
     _suite(api, 'github-actions', 'completed', 'failure')    # the usual failing-check notice, not the one wake
     assert _burst(api, task['id']) == ['Checks failing on tico#412: suite:github-actions']
+    # The last pending run finishing after the suites have is the end of the checks.
     hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
         'name': 'Deploy preview', 'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40,
         'pull_requests': [{'number': 412}]}})
-    _suite(api, 'github-actions', 'completed', 'failure')
     _suite(api, 'github-actions', 'completed', 'failure')     # a redelivery
     assert _burst(api, task['id'])[1:] == [
         f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
     assert get(api, 'tasks/' + task['id'])['task']['status'] == task['status']
+
+
+def _status(api, context, state, sha='a' * 40):
+    hook(api, 'status', {'repository': {'full_name': 'ticoteam/tico'}, 'sha': sha, 'context': context, 'state': state})
+
+
+def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(api):
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _arm(api, task['id'])
+    _status(api, 'ci/legacy', 'pending')
+    _suite(api, 'github-actions', 'completed', 'success')     # a status is still pending: not finished
+    _status(api, 'ci/other', 'success')                       # never seen pending: one of many, not the last
+    assert _burst(api, task['id']) == []
+    _status(api, 'ci/legacy', 'failure')
+    _status(api, 'ci/legacy', 'failure')                      # a redelivery
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: failed (ci/legacy) {PR}/checks at {'a' * 12}"]
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
+    assert 'wake_once' not in detail
 
 
 def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
@@ -452,15 +472,19 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     # Armed again: a merge in the release repository waits for the release that ships it.
     assert 'wake_once' not in json.loads(_arm(api, task['id'], armed=False)[0]['detail_json'])
     shipping = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release', 'body': 'x', 'links': [PR]})
+    late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release too', 'body': 'x', 'links': [PR]})
     _arm(api, shipping['id'])
     hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='b' * 40))
     assert _burst(api, shipping['id']) == []
+    # Merged in the release repository and waiting to ship: arming it now is still allowed.
+    assert json.loads(_arm(api, late['id'])[0]['detail_json'])['wake_once']['by'] == 'human:ana'
     api.app.state.store.settings.release_commit = 'b' * 40
     with api.app.state.store.transaction() as c:
         assert shipping['id'] in G.ship_deployed(c, api.app.state.store.settings)
         assert G.ship_deployed(c, api.app.state.store.settings) == []
         assert H.task(c, shipping['id'])['status'] == shipping['status']
     assert _burst(api, shipping['id']) == [f"Shipped: tico#412 is in the running release {'b' * 12} {PR}"]
+    assert _burst(api, late['id']) == _burst(api, shipping['id'])
     # A merge anywhere else never ships, so it is the last result.
     other = 'https://github.com/ticoteam/site/pull/9'
     elsewhere = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the site', 'body': 'x', 'links': [other]})
