@@ -928,8 +928,8 @@ pub fn build_file(name: &str) -> bool {
     let parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
     parts.iter().any(|p| BUILD.contains(p) || p.ends_with(".egg-info") || p.ends_with(".pyc"))
         || parts.windows(2).any(|w| w[0] == ".terraform" && (w[1] == "providers" || w[1] == "plugin-cache"))
-        // Tauri regenerates `gen/schemas`, `gen/apple` and `gen/android` next to tauri.conf.json; a bare `gen` may be source.
-        || parts.windows(2).any(|w| w[0] == "gen" && matches!(w[1], "schemas" | "apple" | "android"))
+        // Tauri regenerates `gen/schemas`; `gen/apple` and `gen/android` hold mobile projects and signing files, and a bare `gen` may be source.
+        || parts.windows(2).any(|w| w[0] == "gen" && w[1] == "schemas")
 }
 
 /// fnmatch of a lowercased file name against `.env*`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.p12`.
@@ -1645,6 +1645,7 @@ mod tests {
         assert!(build_file("app/.build/arm64-apple-macosx/debug/App.o") && build_file("app/.swiftpm/xcode/package.xcworkspace/x"));
         assert!(build_file("ios/DerivedData/Build/Products/x") && build_file("app/gen/schemas/desktop-schema.json"));
         assert!(!build_file("app/gen/handwritten.rs") && !build_file("gen/main.go") && !build_file(".env.local"));
+        assert!(!build_file("app/gen/android/keystore.properties") && !build_file("app/gen/apple/ExportOptions.plist"));
         assert!(secret_name(".env.local") && secret_name("server.pem") && !secret_name("main.rs"));
         assert_eq!(wip_branch(&json!({"task_id": "0123456789", "id": "abcdefgh"})), "wip/01234567-abcdef");
         let _ = std::fs::remove_dir_all(&root);
