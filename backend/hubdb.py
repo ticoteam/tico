@@ -2280,9 +2280,9 @@ LIBRARIAN_LITERAL = re.compile(
     r"|^[ \t]*>[^\n]*", re.M)                                   # blockquotes
 JARGON = ((r"\bthrough the runner\b", "through Tico"), (r"\bstanding instructions\b", "Instructions"),
           (r"\bHub docs\b", "Tico docs"))
-# "the runner pulls/syncs" is the Computer only when Tico context follows in the same sentence, even inside code
-# or a link ("syncs `AGENT.md`"); an athlete who pulls a hamstring stays one.
-RUNNER = re.compile(r"\bthe runner(?=\s+(?:pulls?|syncs?)\b[^.!?\n]*?(?:\b(?:updates?|releases?|changes|instructions|"
+# "the runner pulls/syncs" is the Computer only when Tico context follows in the same clause, even inside code
+# or a link ("syncs `AGENT.md`"); an athlete who pulls a hamstring stays one, whatever the next clause says.
+RUNNER = re.compile(r"\bthe runner(?=\s+(?:pulls?|syncs?)\b[^.!?;\n]*?(?:\b(?:updates?|releases?|changes|instructions|"
                     r"repository|repo|next run|Tico)\b|AGENT\.md))", re.I)
 
 
