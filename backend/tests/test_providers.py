@@ -48,17 +48,22 @@ def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime
 
 
 def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none(api):
-    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"); a bot with
-    no effort of its own sends none, so the hover stops at the model."""
+    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"): the bot's
+    reasoning_effort, else an older config `effort`, else its stored row; none, or no runtime, sends none."""
     from backend.store import encode
     from backend.tests.test_api import put
     put(api, "providers", {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "expected_revision": 0})
+    configs = {"ops": ({"runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high", "effort": "low"}, "max"),
+               "cpo": ({}, ""), "coo": ({"effort": "xhigh"}, "low"), "inbox": ({}, "medium")}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(
-            {"name": "ops", "status": "active", "runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high"}),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "status": "active"}),))
-        c.execute("UPDATE bots SET effort='' WHERE slug='cpo'")
+        for bot, (config, stored) in configs.items():
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({"name": bot, "status": "active", **config}), bot))
+            c.execute("UPDATE bots SET effort=? WHERE slug=?", (stored, bot))
     rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
-    ops, cpo = rows["ops"], rows["cpo"]
-    assert (ops["resolved_runtime"], ops["resolved_model"], ops["resolved_effort"]) == ("codex", "gpt-6.1-sol", "high")
-    assert (cpo["resolved_runtime"], cpo["resolved_model"], cpo["resolved_effort"]) == ("claude", "claude-opus-5-5", "")
+    said = {bot: (rows[bot]["resolved_runtime"], rows[bot]["resolved_model"], rows[bot]["resolved_effort"]) for bot in configs}
+    assert said == {"ops": ("codex", "gpt-6.1-sol", "high"), "cpo": ("claude", "claude-opus-5-5", ""),
+                    "coo": ("claude", "claude-opus-5-5", "xhigh"), "inbox": ("claude", "claude-opus-5-5", "medium")}
+    # A team with no provider: nothing resolves, so no effort is said either.
+    put(api, "providers", {"enabled": [], "runtime": "", "model": "", "expected_revision": 1})
+    rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
+    assert (rows["cpo"]["resolved_runtime"], rows["cpo"]["resolved_effort"], rows["inbox"]["resolved_effort"]) == ("", "", "")
