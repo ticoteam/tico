@@ -8,7 +8,7 @@ const {html, uiFile} = require('./support/page.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({role = 'owner', notice = true, hash = '#/help'} = {}) => {
+    const visit = async ({role = 'owner', notice = true, hash = '#/tasks'} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
       const errors = [], calls = [];
