@@ -9,8 +9,10 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -683,3 +685,100 @@ def test_a_grok_turn_gets_only_its_declared_mcp_servers_never_the_operators(api,
     assert {k: env[k] for k in ("GROK_CLAUDE_MCPS_ENABLED", "GROK_CURSOR_MCPS_ENABLED", "GROK_MANAGED_MCPS_ENABLED")} == \
         {"GROK_CLAUDE_MCPS_ENABLED": "false", "GROK_CURSOR_MCPS_ENABLED": "false", "GROK_MANAGED_MCPS_ENABLED": "false"}
     assert [c["mcpServers"] for c in computer.calls() if c.get("method") == "session/new"] == [[]]
+
+
+# What Cloudflare's bot protection refuses before a request reaches Tico: no user agent, or a library's default one.
+DEFAULT_AGENTS = ("python-requests", "python-urllib", "python-httpx", "aiohttp", "go-http-client", "curl/", "wget/",
+                  "okhttp", "java/", "node", "undici", "axios", "libwww-perl")
+
+
+class RefusingProxy:
+    """A proxy in front of the test API that answers 403 to a default user agent, as a real install behind Cloudflare
+    does; CI talks to Tico directly and never sees it. One request per connection (it forwards `Connection: close`),
+    so every request is judged: `refused` keeps (method, path, user agent) and `passed` adds the server's status."""
+
+    def __init__(self, upstream):
+        host, port = upstream.removeprefix("http://").rsplit(":", 1)
+        self.upstream = (host, int(port))
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.url = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
+        self.refused, self.passed = [], []
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def close(self):
+        self.listener.close()
+
+    def accept(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.serve, args=(client,), daemon=True).start()
+
+    def serve(self, client):
+        with client:
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = client.recv(65536)
+                if not chunk:
+                    return
+                head += chunk
+            head, rest = head.split(b"\r\n\r\n", 1)
+            start, *fields = head.decode("latin-1").split("\r\n")
+            method, target = start.split(" ")[:2]
+            fields = [f for f in fields if f.split(":", 1)[0].strip().lower() not in ("connection", "keep-alive")]
+            agent = next((f.split(":", 1)[1].strip() for f in fields if f.lower().startswith("user-agent:")), "")
+            path = target.split("?", 1)[0]
+            if not agent or agent.lower().startswith(DEFAULT_AGENTS):
+                self.refused.append((method, path, agent))
+                client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                return
+            with socket.create_connection(self.upstream) as upstream:
+                forwarded = "\r\n".join([start, *fields, "Connection: close"]).encode("latin-1")
+                upstream.sendall(forwarded + b"\r\n\r\n" + rest)
+                # The rest of a request body, and the client hanging up.
+                threading.Thread(target=self.pump, args=(client, upstream), daemon=True).start()
+                try:
+                    first = upstream.recv(65536)
+                    self.passed.append((method, path, agent, int(first.split(b" ", 2)[1]) if first else 0))
+                    while first:
+                        client.sendall(first)
+                        first = upstream.recv(65536)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def pump(client, upstream):
+        try:
+            while chunk := client.recv(65536):
+                upstream.sendall(chunk)
+        except OSError:
+            pass
+        try:
+            upstream.shutdown(socket.SHUT_RDWR)   # the client hung up: so does the server's side of a held stream
+        except OSError:
+            pass
+
+
+def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_through(api, live, tmp_path,
+                                                                                        rust_binary):
+    """A real install sits behind Cloudflare, which refuses a library's default user agent: v0.3.28's runners silently
+    stopped receiving events when the stream request went out without Tico's own. Here the runner and the `hub` CLI
+    reach the server only through such a proxy: the event stream opens, a turn runs, and no request is refused."""
+    proxy = RefusingProxy(live)
+    machine = Computer(api, live, tmp_path, "claude", rust_binary, registration={"url": proxy.url})
+    try:
+        machine.start()
+        msg = post(api, "chat/ops", {"text": "Please answer locally"})
+        assert until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply")["body"] == "Acme reply."
+        events = "/api/v2/runners/me/events"
+        until(lambda: any(r[1] == events for r in proxy.passed + proxy.refused), "the event stream request")
+        hub = subprocess.run([sys.executable, str(ROOT / "scripts" / "hub"), "whoami"], capture_output=True, text=True,
+                             timeout=60, env={**machine.env, "HUB_API_URL": proxy.url, "HUB_TOKEN": "ana-test"})
+        assert proxy.refused == [], f"refused for its user agent: {proxy.refused}"
+        assert [r[3] for r in proxy.passed if r[1] == events][:1] == [200], proxy.passed
+        assert hub.returncode == 0, hub.stderr[-2000:]
+    finally:
+        machine.stop()
+        proxy.close()
