@@ -115,7 +115,14 @@ LANE_TEAMS = ("product", "engineering")     # store.py's one-time lane migration
 # parent. Keyed on the roster team in
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
 MOVER_TEAMS = ("leadership", "product", "engineering")
-MOVER_FIELDS = ("lane", "labels")   # what only a mover changes (a parent or blocker: task_relations)
+MOVER_FIELDS = ("lane", "number")   # what only a mover changes (a parent or blocker: task_relations)
+# Labels are a mover's too, except that a bot may change a classification label on a task it manages
+# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
+WORKFLOW_LABELS = ("goal:on", "goal:off")
+# ...and a label on a public roadmap (roadmaps.settings) needs the bot's approved publish approval.
+# A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
+# retrying a refusal it already had cannot quarantine itself in seconds.
+LABEL_REFUSAL_WINDOW_S = 3600
 LINK_KINDS = ("pr", "issue", "url", "doc", "worktree", "session")
 TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # Rule 7's writing checks on an item for a person and the shape of an update: warned about with
@@ -679,11 +686,12 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
 class Refused(Exception):
     """A write the rules do not allow. `rule` names the rule; `detail` says what to fix."""
 
-    def __init__(self, rule, detail="", severity="normal"):
+    def __init__(self, rule, detail="", severity="normal", task=None):
         super().__init__(f"{rule}: {detail}" if detail else str(rule))
         self.rule = rule
         self.detail = detail
         self.severity = severity
+        self.task = task            # the task a `label` refusal was about (refuse)
 
 
 # ----------------------------------------------------------------------------- basics
@@ -1106,14 +1114,16 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
-    reviewing the refusal reads; a private task write keeps only what was refused."""
+    reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
+    a `label` refusal was about, which _escalate counts it by."""
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
-           "detail_json": _dump({"detail": recorded, **({"context": context} if context else {})}), "severity": severity}
+           "detail_json": _dump({"detail": recorded, **({"context": context} if context else {}),
+                                 **({"task": task} if task else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
@@ -1124,7 +1134,7 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None):
             pass
     if writing_refusal(rule, detail):
         detail += ". Rewrite the title/body to fix these writing errors and retry. Do not ask the human to waive formatting rules."
-    raise Refused(rule, detail, severity)
+    raise Refused(rule, detail, severity, task)
 
 
 # ----------------------------------------------------------------------------- lint (rule 7)
@@ -1657,8 +1667,18 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
-    count, distinct = conn.execute("SELECT COUNT(*), COUNT(DISTINCT rule || char(31) || detail_json) FROM refusals "
-                                   "WHERE actor=? AND ts>=? AND rule<>'lint'", (actor, since)).fetchone()
+    counted, last = [], {}
+    for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
+                                      "AND rule<>'lint' ORDER BY ts, id", (actor, since))):
+        if refused["rule"] == "label":
+            # A label refusal says who may make the change instead; retrying it is not reaching further, so
+            # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
+            about = (_json(refused["detail_json"], {}) or {}).get("task")
+            if about in last and parse_ts(refused["ts"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
+                continue
+            last[about] = parse_ts(refused["ts"])
+        counted.append((refused["rule"], refused["detail_json"]))
+    count, distinct = len(counted), len(set(counted))
     # Only a refusal the bot has already had (same rule, same words) counts toward the quarantine: retrying a
     # refused action is what the limit stops. A first try at something new that is refused is recorded, not counted.
     repeats = count - distinct
@@ -2868,7 +2888,8 @@ def hydrate_task_tags(conn, rows):
             by_id[value.pop("task_id")]["tags"].append(value)
 
 
-def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
+def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, approved=False):
+    """`approved`: _label_writer already used this change's publish approval."""
     keys, resolved = _labels(labels), []
     for key in keys:
         row = tag_by_key(conn, key)
@@ -2878,7 +2899,7 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
     task_row = task(conn, task_id)
     old = task_labels(task_row)
     from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-    if task_row['visibility'] == 'public' and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels']):
+    if not approved and task_row['visibility'] == 'public' and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels']):
         approve_roadmap(conn, actor, task_id, 'labels', {'labels': keys}, approval_id)
     old_ids = {r[0] for r in conn.execute("SELECT tag_id FROM task_tags WHERE task_id=?", (task_id,))}
     wanted, ordered = set(), []
@@ -2896,6 +2917,48 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
         event(conn, actor, "tag.detach", ident, {"task_id": task_id})
     if old != keys:
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
+
+
+def _label_writer(conn, actor, row, labels, approval_id=None):
+    """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
+    on a task it manages, one it owns or asked for or whose type it manages (task_types.manager), and nothing
+    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
+    there once it is public, so adding or removing one takes the bot's exact approved publish approval
+    (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
+    counts once per task an hour (_escalate). Returns whether the approval was used."""
+    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
+    keys = _labels(labels)
+    changed = sorted(set(keys) ^ set(task_labels(row)))
+    if not changed:
+        return False
+    slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
+    manager = (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
+    if actor not in (row["owner"], row["requester"]) and manager != slug:
+        refuse(conn, actor, "label",
+               f"{slug} changes labels only on a task it owns, asked for or whose type it manages; labels on "
+               f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
+    settings = roadmap_settings(conn)
+    public = [k for k in changed if k in settings["labels"]]
+    flow = [k for k in changed if k in WORKFLOW_LABELS]
+    if public and settings["bot_public_approval"] and approval_id and not flow:
+        approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
+        return True
+    held = []
+    if flow:
+        held.append(f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
+                    f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}")
+    if public:
+        held.append(f"{', '.join(public)} {'is a public roadmap label' if len(public) == 1 else 'are public roadmap labels'}"
+                    f" (adding or removing one puts the task on a roadmap or takes it off), so "
+                    + (f"it needs an approved publish approval: get the payload with `hub task publication-preview "
+                       f"{row['id']}` and a --label for each label the task keeps, request the approval, then retry "
+                       f"with its id (--approval-id), or ask a person on the {teams} teams"
+                       if settings["bot_public_approval"] else f"a person on the {teams} teams changes it"))
+    if held:
+        rest = [k for k in changed if k not in public and k not in flow]
+        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
+               task=row["id"])
+    return False
 
 
 def _lane_for(conn, lane, owner, actor):
@@ -4163,11 +4226,14 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         note, waiting_on = BLOCKED_ON.format(name=person_name(conn, waiting_on), ask=said), ""
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
-    wanted = {k: v for k, v in (("lane", lane), ("labels", labels), ("number", number)) if v is not None}
+    wanted = [k for k, v in (("lane", lane), ("number", number)) if v is not None]
+    if not is_bot(actor) and labels is not None:
+        wanted.insert(1, "labels")  # a person who is not a mover changes no label, as before
     if wanted and not mover:
         refuse(conn, actor, "identity",
                f"{', '.join(wanted)} on a task {'is' if len(wanted) == 1 else 'are'} changed by a person on "
                f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_id(actor)}")
+    approved = labels is not None and not mover and _label_writer(conn, actor, row, labels, approval_id)
     if lane is not None:
         lane = _lane_for(conn, lane, row["owner"], actor)    # a task moves only onto company
     if title is not None:
@@ -4223,7 +4289,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         args[field] = value
         _task_event(conn, task_id, actor, field, row.get(field), value, note or "")
     if labels is not None:
-        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id)
+        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
         sets.append("updated=:updated")
     if owner is not None:
         new_owner = _reach(conn, actor, owner)

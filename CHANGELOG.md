@@ -46,6 +46,12 @@ All notable changes to Tico are recorded here. The format follows
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
 
 ### Changed
+- A bot may now add and remove classification labels (`qa`, an area, a priority) on a task it manages: one it
+  owns, asked for, or whose type it manages, such as Head of Product on its roadmap items or Head of Engineering on
+  Dev tickets. Before, only a person on the leadership, product or engineering teams could, and bots trying it were
+  quarantined. A public roadmap label still needs an approved publish approval (`hub task label --approval-id`), both
+  to add and to remove, and `goal:on`/`goal:off` still need a person; the refusal says which label and why, and
+  counts toward a quarantine once per task an hour. Lane and number are unchanged: a person's.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
