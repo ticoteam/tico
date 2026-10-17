@@ -56,8 +56,6 @@ fastapi==0.141.1
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-greenlet==3.5.5
-    # via playwright
 h11==0.16.0
     # via
     #   -c backend/requirements.txt
@@ -97,8 +95,6 @@ pillow==12.3.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-playwright==1.62.0
-    # via -r backend/requirements-dev.in
 pluggy==1.6.0
     # via pytest
 psycopg==3.3.6
@@ -121,8 +117,6 @@ pydantic-core==2.46.5
     # via
     #   -c backend/requirements.txt
     #   pydantic
-pyee==13.0.1
-    # via playwright
 pygments==2.21.0
     # via pytest
 pyjwt==2.15.1
@@ -188,7 +182,6 @@ typing-extensions==4.16.0
     #   psycopg
     #   pydantic
     #   pydantic-core
-    #   pyee
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
