@@ -1,0 +1,1 @@
+https://acme-files.s3.amazonaws.com/releases/app/0.3.49/Acme%20Tico.app.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20261017%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20261017T143947Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=2cc88da1d88ebb8a111498be1390493498505e38c5b9c38dc8def737a4ac4c2c
