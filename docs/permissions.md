@@ -460,7 +460,18 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 ## Tags
 
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
-and remove tags. Creating and editing a tag is for those movers or that tag's owner, including
+and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
+priority) on a task it manages: one it owns, one it asked for, or one of a type it manages (the
+type's manager, such as Head of Product on the Product roadmap or Head of Engineering on Dev
+tickets), and only when it can already read the task. Two kinds of tag keep their gate for a bot,
+both to add and to remove: a tag on a public roadmap (Settings → Public roadmap) needs the bot's
+exact approved publish approval, as public text does ([Roadmaps](roadmaps.md)), or a mover when the
+team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the task, so only a
+mover changes them. A refusal says which tags need a person or an approval and why; an approval that is
+not decided yet, already used or for other tags is the same refusal. It counts
+toward the bot's quarantine once per task an hour, so retrying it cannot quarantine the bot; any
+other refusal counts as before. Lane and number stay a mover's, and nothing here makes a bot a
+mover. Creating and editing a tag is for those movers or that tag's owner, including
 a bot owner. A teammate may create a tag they own. Owner rights on a tag do not grant mover
 rights on its tasks. Tags and templates are readable by signed-in teammates; their task lists
 show only tasks each caller may read. Every edit requires the current tag version.

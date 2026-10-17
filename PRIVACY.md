@@ -272,13 +272,27 @@ diagnostics rules and the install's own names, an email only if you type one, an
 diagnostics bundle. It prints a link to the request whose secret is in the part after `#`, which browsers do not send to
 HQ. `--no-support` or `TICO_SUPPORT=off` turns the question off.
 
+**From tico.team/setup (Talk to a person):** a visitor planning their team on the public setup page, with no Tico yet, can
+ask for a person. The page sends only these, from that page's own address (HQ refuses the kind from anywhere else): `kind:
+setup-website`, the email they type (required, so the team can answer), the tab they were on, whether the page's assistant
+was connected (`mode`), how many messages they had sent, a random id for that visit, a note if they wrote one (up to 1,000
+characters), and their plan (tico.company.yaml, up to 32 KB) only if they ticked to send it. Never the chat: HQ has no field
+for it. Key-shaped strings (API keys, tokens, passwords) are removed from the note and the plan before anything is checked
+or kept, and the page says so when one was. HQ keeps the email, the tab, the mode and the count as the ticket's text, and
+the note and plan apart from it as an attachment marked Untrusted public input. The visit's id is used in memory only, as a
+salted hash, to allow one ticket per visit (an id shaped like a key is refused, never hashed); HQ also allows 3 a day per address and per email address, and a daily total
+(`HQ_SETUP_TICKETS_DAILY_CAP`, 50 by default). It is a support ticket like the others: kept until someone deletes it, as
+below, not with the setup page's 7-day conversation log. The answer is a link to the request's page, with its secret after
+the `#`, where the team's reply shows and where the visitor can answer or delete it.
+
 **What HQ keeps**, per ticket: those fields (the diagnostics with the ticket, to a limit of 256 KB, shown to the Tico team only), a hash of a secret that only your Tico holds (it lets your Tico read this ticket's replies
 and no other), the status (open, answered, closed), the times, the team's replies and any message you write back. No IP address is
 stored or logged, and HQ's access log is off. The address is used in memory to rate limit (5 tickets an hour per address, 10 a day per
 install).
 
 **The spam and injection check:** when the Tico team has set a decision-model key on HQ (`HQ_JUDGE_KEY`), the text of each new ticket's `message`
-(and only that: no email, install ID or diagnostics) is sent once to TypeSafe (api.typesafe.ai, the provider of the Jev decision
+(and only that: no email, install ID or diagnostics; for a setup-website ticket, its note and plan instead, after key-shaped
+strings are removed, a long plan in parts) is sent once to TypeSafe (api.typesafe.ai, the provider of the Jev decision
 model) to classify it as real, spam or an attempt to instruct a bot. HQ keeps the answer (one word and a short reason) with the
 ticket and logs the same, never the text. With no key set, nothing is sent and the ticket is filed as usual. The same check runs, by the
 Tico team's own bots, on GitHub issues and on email the team receives; it does not run in your Tico.

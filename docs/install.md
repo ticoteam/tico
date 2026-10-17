@@ -433,6 +433,11 @@ A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
+To change the account a computer uses, choose **Switch account** next to it in Settings > Computers: the new account is
+signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
+that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
+given to every computer until you sign in or choose **Use the shared key**. See [subscriptions](subscriptions.md#signing-out-and-switching-accounts).
+
 ### Linux or cloud server (Docker)
 
 On any Linux computer, run the line the app shows. It downloads the installer of the release your server runs, so the
@@ -525,6 +530,7 @@ that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Se
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 
 Use **Settings > Computers > Sign in** on the Computer you registered. The login stays in its volume.
+**Switch account** and **Sign out** there change or remove it without a terminal or a restart.
 For terminal recovery, replace `<container-name>` in every command below with the name from that Computer's
 Docker sign-in command in **Add computer**, or find it with `docker ps`. An installer command with
 `--name build` creates `tico-runner-build`; use the full container name, including `tico-runner-`.
