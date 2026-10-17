@@ -9,7 +9,7 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - Beta features carry a small **Beta** pill where they appear: Market, Message bots, Listening, Live meetings, chat
-  goals and steering, the Slack gateway, a computer's Screen, Behaviour replay and the computer Performance page,
+  goals, the Slack gateway, a computer's Screen, Behaviour replay and the computer Performance page,
   Windows through WSL 2, external agents (Hermes, OpenClaw, Grok Bot, Dots, Muse sync) and the Mac app. Help lists
   them under **Beta features**, each manual page says so, and a support request's diagnostics name the ones your team
   has on. The pills arrived in 0.3.52; that release's notes left them out.
