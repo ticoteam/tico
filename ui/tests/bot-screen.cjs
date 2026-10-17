@@ -86,8 +86,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(row.text, /^This computer's screen isn't turned on\. Docker: .* turn it on live\. Nothing restarts, so no running turn is cut off:/);
     assert.match(row.text, /If the runner is too old for that command, or its \.env says TICO_SCREEN=0 \(which wins over it\), .*once the computer is idle: this restarts the runner and cuts off a running turn\./);
     assert.deepEqual(await admin.page.locator('#bot-screen-row [data-screen-copy]').evaluateAll(els => els.map(el => el.dataset.screenCopy)),
-      ['sudo docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on',
-       "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml up -d runner",
+      ['sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on',
+       "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) up -d runner",
        'scripts/tico screen on']);
     assert.equal(await admin.page.locator('#bot-screen-row a[href$="docs/install.md#screen"]').count(), 1);
     await admin.page.evaluate(() => { window.__copied = []; navigator.clipboard.writeText = async value => { window.__copied.push(value); }; });
