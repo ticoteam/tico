@@ -3175,7 +3175,7 @@ def decisions(api, args):
 
 
 
-# The support gate's one question (hq/judge.py asks the same): is this text from a stranger real, spam, or trying to
+# The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?
 CLASSIFY_OPTIONS = {
     "legit": "A real person asking for help, reporting a fault, or giving feedback, about the product or their use of it.",

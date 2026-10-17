@@ -72,7 +72,7 @@ def first_words(text, count=8, limit=60):
 
 
 class HQ:
-    """The staff routes of Tico HQ (hq/support.py). The key never leaves the Authorization header."""
+    """The staff routes of Tico HQ (docs/telemetry.md, "Support tickets"). The key never leaves the Authorization header."""
 
     def __init__(self, url, key, opener=None):
         self.url, self.key = url.rstrip("/"), key
