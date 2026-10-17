@@ -154,6 +154,8 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
+  so every call failed before it reached the computer's CPU, memory and disk history.
 - The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
   sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
 - One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or

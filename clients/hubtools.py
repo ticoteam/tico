@@ -2335,7 +2335,7 @@ def computers(api, args):
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
     wanted = str(args["computer"]).strip()
-    rows = api.get("computers") or []
+    rows = (api.get("computers") or {}).get("computers") or []
     match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
     if not match:
         raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
