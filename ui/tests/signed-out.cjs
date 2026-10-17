@@ -13,6 +13,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const path = require('node:path');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
@@ -74,7 +75,7 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
     if (one) return json({task: task(one[1]), comments: [], events: [], can_comment: true, children: []});
     if (/^\/api\/v2\/tasks\/t-[ab]\/files$/.test(p)) return json({files: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});
-    return json({});
+    return json(unrouted(p));
   });
   try {
     await page.goto('https://tico-ui.test/#/bot/ops/chat');

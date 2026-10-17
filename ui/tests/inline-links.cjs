@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex');
 // The cases clients/s3links.py is held to as well: the UI links each URI to the same view URL.
 const VECTORS = JSON.parse(fs.readFileSync(path.join(__dirname, 'support', 's3-link-vectors.json'), 'utf8'));
@@ -47,7 +48,7 @@ const BODY = ['Two drafts for review.', '',
       if(p==='/api/v2/conversations/c-finance/snapshot')return json({messages:[{id:'m1',from_actor:'bot:finance',body:`Please review [the drafts](https://tico-ui.test/tasks/${TASK}).`,created:new Date().toISOString()}],execution:null});
       if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner:'human:ana',requester:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks')return json({tasks:[]});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/finance/chat');
     await page.getByRole('link',{name:'the drafts'}).click();

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 // Offline stand-in for marked (a CDN script): headings, lists, bold and [text](url) links.
 const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\n+/).map(block => {
   const inline = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -71,7 +72,7 @@ const markedStub = () => { window.marked = {parse: src => String(src).split(/\n\
         if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
         return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created:new Date().toISOString()}});
       }
-      return json({});
+      return json(unrouted(p));
     });
     await page.setViewportSize({width:1200,height:800});
     await page.goto('https://tico-ui.test/#/bot/legal/chat');

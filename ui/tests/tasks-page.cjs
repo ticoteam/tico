@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.TASKS_SHOTS || '';
 
@@ -183,7 +184,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/messages')) return json({messages: []});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
