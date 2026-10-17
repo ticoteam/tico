@@ -1,5 +1,5 @@
 # Standalone relay utility. Normal installations use the main Dockerfile server target.
-FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS build
+FROM rust:1.92.0-slim-bookworm@sha256:f1f73538ebe623fd3673a35aff3df358ae1084c64c55646516e5b17b321b6c9b AS build
 WORKDIR /build
 COPY LICENSE /LICENSE
 COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
