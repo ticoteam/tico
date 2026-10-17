@@ -252,7 +252,6 @@ mod capability_tests {
 fn build_window(app: &App) -> tauri::Result<()> {
     let Some(config) = connection(app) else { return build_server_window(app) };
     let start = config.start_url();
-    let opener = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
@@ -261,10 +260,9 @@ fn build_window(app: &App) -> tauri::Result<()> {
         .devtools(true)
         .visible(false)
         .initialization_script(&bridge_script(app))
-        // Anything that is not the hub opens in the default browser. Cloudflare's provider
-        // choice is itself a clicked link: the whole authentication redirect chain stays in this
-        // web view so the resulting CF_Authorization cookie belongs to the app, not the browser.
-        .on_navigation(move |url| stays_in_app(&opener, url))
+        // A sign-in's whole redirect chain stays in this web view, so the resulting cookie belongs to
+        // the app, not the browser; see `navigation_handler`.
+        .on_navigation(navigation_handler(app))
         .on_new_window(new_window_handler(app));
     #[cfg(target_os = "macos")]
     {
@@ -276,26 +274,68 @@ fn build_window(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Anything that is not the hub opens in the default browser. Cloudflare's provider choice is
-/// itself a clicked link: the whole authentication redirect chain stays in this web view so the
-/// resulting CF_Authorization cookie belongs to the app, not the browser.
-fn stays_in_app(opener: &App, url: &url::Url) -> bool {
-    let host = connection(opener).map(|c| c.host()).unwrap_or_default();
-    if navigation_stays(&host, url) {
-        return true;
-    }
-    let _ = opener.opener().open_url(url.as_str(), None::<&str>);
-    false
+/// Anything that is not the hub opens in the default browser, except during a sign-in. Each window
+/// keeps its own `signing_in`: set when it leaves for Cloudflare Access, the hub's own sign-in or
+/// Google, cleared when it comes back to the hub. Reload (Cmd+R) goes back to the hub, so it also
+/// ends a sign-in someone wandered off from.
+fn navigation_handler(app: &App) -> impl Fn(&url::Url) -> bool + Send + 'static {
+    let opener = app.clone();
+    let signing_in = AtomicBool::new(false);
+    move |url| stays_in_app(&opener, &signing_in, url)
 }
 
-fn navigation_stays(host: &str, url: &url::Url) -> bool {
+fn stays_in_app(opener: &App, signing_in: &AtomicBool, url: &url::Url) -> bool {
+    let host = connection(opener).map(|c| c.host()).unwrap_or_default();
+    let stays = follow(&host, signing_in, url);
+    if !stays {
+        let _ = opener.opener().open_url(url.as_str(), None::<&str>);
+    }
+    stays
+}
+
+/// Whether the window follows a navigation, keeping its `signing_in` up to date.
+fn follow(host: &str, signing_in: &AtomicBool, url: &url::Url) -> bool {
+    match navigation(host, signing_in.load(Ordering::Relaxed), url) {
+        Navigation::Hub => signing_in.store(false, Ordering::Relaxed),
+        Navigation::SignIn => signing_in.store(true, Ordering::Relaxed),
+        Navigation::Page => {}
+        Navigation::Browser => return false,
+    }
+    true
+}
+
+/// Where a navigation in an app window goes.
+#[derive(Debug, PartialEq)]
+enum Navigation {
+    /// The hub: stays, and ends a sign-in.
+    Hub,
+    /// A sign-in page: stays, and so does every page after it until the hub comes back. Cloudflare's
+    /// provider choice is itself a clicked link, and the provider may be anyone's (Google, Microsoft,
+    /// Okta, GitHub), so no list of provider hosts would do.
+    SignIn,
+    /// Not a site (`about:blank`, the app's own `tauri:` pages): stays, and changes nothing.
+    Page,
+    /// Anything else opens in the default browser.
+    Browser,
+}
+
+fn navigation(host: &str, signing_in: bool, url: &url::Url) -> Navigation {
     // A Markdown mailto (or tel, sms) link has no target, so it arrives here rather than as a new window.
     if matches!(url.scheme(), "mailto" | "tel" | "sms") {
-        return false;
+        return Navigation::Browser;
     }
     let target = url.host_str().unwrap_or("");
-    target.is_empty() || target == host || url.scheme() == "tauri"
-        || target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com"
+    if target.is_empty() || url.scheme() == "tauri" {
+        Navigation::Page
+    } else if target == host {
+        // The hub's own sign-in (TICO_AUTH_PROXY=oidc) starts here and redirects to the provider.
+        if url.path().ends_with("/auth/login") { Navigation::SignIn } else { Navigation::Hub }
+    } else if target.ends_with(".cloudflareaccess.com") || target == "accounts.google.com"
+        || (signing_in && matches!(url.scheme(), "http" | "https")) {
+        Navigation::SignIn
+    } else {
+        Navigation::Browser
+    }
 }
 
 /// Where a request for a new window (a `target="_blank"` link, `window.open`) goes. The web view has
@@ -341,7 +381,6 @@ fn new_window_handler(app: &App) -> impl Fn(url::Url, tauri::webview::NewWindowF
 fn open_hub_window(app: &App, url: url::Url) {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let label = format!("hub-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-    let opener = app.clone();
     #[cfg(not(target_os = "linux"))]
     let opened = url.clone();
     #[allow(unused_mut)]
@@ -350,7 +389,7 @@ fn open_hub_window(app: &App, url: url::Url) {
         .inner_size(1000.0, 800.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
-        .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_navigation(navigation_handler(app))
         .on_new_window(new_window_handler(app));
     // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
     // it to Downloads, show it there and close the window. Only the file this window opened on
@@ -421,16 +460,68 @@ mod new_window_tests {
         assert_eq!(new_window_target(None, &url::Url::parse("https://team.example.com/api/x").unwrap()), NewWindow::Browser);
     }
 
+    fn go(signing_in: bool, address: &str) -> Navigation {
+        navigation("team.example.com", signing_in, &url::Url::parse(address).unwrap())
+    }
+
     #[test]
     fn mailto_navigation_leaves_the_app() {
-        let stays = |address: &str| navigation_stays("team.example.com", &url::Url::parse(address).unwrap());
-        assert!(!stays("mailto:support@example.com"));
-        assert!(!stays("tel:+15550100"));
-        assert!(!stays("sms:+15550100"));
-        assert!(!stays("https://example.com/"));
-        assert!(stays("https://team.example.com/#/tasks"));
-        assert!(stays("https://team.cloudflareaccess.com/cdn-cgi/access/login"));
-        assert!(stays("about:blank"));
+        for signing_in in [false, true] {
+            assert_eq!(go(signing_in, "mailto:support@example.com"), Navigation::Browser);
+            assert_eq!(go(signing_in, "tel:+15550100"), Navigation::Browser);
+            assert_eq!(go(signing_in, "sms:+15550100"), Navigation::Browser);
+            assert_eq!(go(signing_in, "about:blank"), Navigation::Page);
+        }
+        assert_eq!(go(false, "https://example.com/"), Navigation::Browser);
+        assert_eq!(go(false, "https://team.example.com/#/tasks"), Navigation::Hub);
+    }
+
+    #[test]
+    fn a_sign_in_keeps_any_provider_in_the_app_until_the_hub_comes_back() {
+        // Cloudflare Access, the hub's own sign-in and Google start one, from the hub or the browser's start page.
+        for signing_in in [false, true] {
+            for address in ["https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com",
+                            "https://team.example.com/auth/login?next=/", "https://team.example.com/tico/auth/login",
+                            "https://accounts.google.com/o/oauth2/auth"] {
+                assert_eq!(go(signing_in, address), Navigation::SignIn, "{address}");
+            }
+        }
+        // During one, any provider and its own pages stay; outside one, they open in the browser.
+        for address in ["https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+                        "https://acme.okta.com/oauth2/v1/authorize", "https://github.com/login/oauth/authorize",
+                        "https://github.com/login", "http://sso.acme.example/"] {
+            assert_eq!(go(true, address), Navigation::SignIn, "{address}");
+            assert_eq!(go(false, address), Navigation::Browser, "{address}");
+        }
+        // Coming back to the hub ends it: Access's callback on the hub, or the hub's own callback.
+        for address in ["https://team.example.com/cdn-cgi/access/authorized?token=x", "https://team.example.com/auth/callback?code=x",
+                        "https://team.example.com/"] {
+            assert_eq!(go(true, address), Navigation::Hub, "{address}");
+        }
+        // Not http(s): never kept, even during a sign-in.
+        assert_eq!(go(true, "ftp://files.example.com/"), Navigation::Browser);
+        // A look-alike of the hub or of Access is someone else's site.
+        assert_eq!(go(false, "https://team.example.com.evil.example/"), Navigation::Browser);
+        assert_eq!(go(false, "https://cloudflareaccess.com.evil.example/"), Navigation::Browser);
+        assert_eq!(go(false, "https://team.example.com@evil.example/auth/login"), Navigation::Browser);
+    }
+
+    #[test]
+    fn each_step_of_a_sign_in_updates_the_window() {
+        // Access with Microsoft, back to the hub, then the same provider as an ordinary link.
+        let signing_in = AtomicBool::new(false);
+        let stays: Vec<bool> = ["https://team.example.com/", "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com",
+                                "https://login.microsoftonline.com/common/oauth2/v2.0/authorize", "https://login.live.com/ppsecure",
+                                "about:blank", "https://team.cloudflareaccess.com/cdn-cgi/access/callback",
+                                "https://team.example.com/cdn-cgi/access/authorized", "https://team.example.com/",
+                                "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"]
+            .iter().map(|address| follow("team.example.com", &signing_in, &url::Url::parse(address).unwrap())).collect();
+        assert_eq!(stays, [true, true, true, true, true, true, true, true, false]);
+        assert!(!signing_in.load(Ordering::Relaxed));
+        // Each window has its own: a sign-in in one does not keep another window's links.
+        let other = AtomicBool::new(false);
+        assert!(follow("team.example.com", &signing_in, &url::Url::parse("https://team.cloudflareaccess.com/").unwrap()));
+        assert!(!follow("team.example.com", &other, &url::Url::parse("https://github.com/login").unwrap()));
     }
 
     #[test]
@@ -461,14 +552,13 @@ fn open_meeting_window(app: &App, id: &str) {
     let Some(config) = connection(app) else { return };
     let mut url = config.hub.clone();
     url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
-    let opener = app.clone();
     let _ = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
         .title("Meeting")
         .inner_size(1100.0, 820.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .resizable(true)
         .user_agent(USER_AGENT)
-        .on_navigation(move |url| stays_in_app(&opener, url))
+        .on_navigation(navigation_handler(app))
         .on_new_window(new_window_handler(app))
         .build();
 }
