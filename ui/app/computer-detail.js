@@ -37,9 +37,10 @@ function machineConnections(machine) {
     if (!(auth === 'ready' || auth === 'rejected' || bots.length)) continue;
     const reading = {signed_in: auth === 'ready' ? true : ['missing', 'rejected'].includes(auth) ? false : null,
       account: value.account, weekly: value.weekly, five_hour: value.five_hour};
-    // The same provider account as a named subscription here: one line, one reading (the newer one).
-    const email = auth === 'ready' && machineEmail(value.account);
-    const same = email && rows.find(r => !r.own && r.runtime === runtime && machineEmail(r.state.account) === email);
+    // The same provider account as a named subscription here: one line, one reading (the newer one). The server
+    // names it in `same_account`, since only an admin or the operator receives the accounts themselves.
+    const email = auth === 'ready' && machineEmail(value.account), match = auth === 'ready' && machine.same_account?.[runtime];
+    const same = (email || match) && rows.find(r => !r.own && r.runtime === runtime && (match ? r.profile?.name === match : machineEmail(r.state.account) === email));
     if (same) {
       Object.assign(same, {own: true, auth, value, bots: [...new Set([...same.bots, ...bots])].sort()});
       if (machineNewer(value.weekly, same.state.weekly)) Object.assign(same.state, {weekly: value.weekly, five_hour: value.five_hour});

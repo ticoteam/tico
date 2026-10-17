@@ -75,14 +75,25 @@ def test_assignment_permissions_and_named_login(api):
     put(api, 'subscriptions', {'scope': 'bot', 'target': 'missing', 'profile': 'one'}, expected=404)
     r = runner(api)
     ready(api, r, [])
-    # Neither an administrator nor its operator: no sign-in, inbox-only or revoke on someone else's computer.
-    post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'x'}, token='cara-test', expected=403)
-    post(api, f"runners/{r['runner_id']}/inbox-only", {'enabled': True}, token='cara-test', expected=403)
-    post(api, f"runners/{r['runner_id']}/revoke", {}, token='cara-test', expected=403)
+    # Neither an administrator nor its operator: sees the computer on Computers, but changes nothing on it.
+    rid = r['runner_id']
+    seen = next(m for m in get(api, 'operations', 'cara-test')['computers'] if m['id'] == rid)
+    assert seen['may_manage'] is False
+    post(api, f"runners/{rid}/logins", {'runtime': 'codex', 'profile': 'x'}, token='cara-test', expected=403)
+    put(api, 'subscriptions/name', {'runner_id': rid, 'profile': 'x', 'display_name': 'X'}, token='cara-test', expected=403)
+    put(api, 'subscriptions/weekly', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex', 'used_percent': 10},
+        token='cara-test', expected=403)
+    post(api, 'subscriptions/refresh', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex'}, token='cara-test', expected=403)
+    for path, body in [('inbox-only', {'enabled': True}), ('screen', {'mode': 'view'}), ('performance', {'mode': 'on'}),
+                       ('harness-choices', {'harness': 'codex', 'enabled': True}), ('restart', {}), ('revoke', {})]:
+        post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
     login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'})
     assert login['profile'] == 'engineering'
     pending = get(api, 'runner-logins', r['token'])['logins']
     assert pending[0]['profile'] == 'engineering'
+    post(api, f"runners/{rid}/revoke", {})
+    assert all(m['id'] != rid for m in get(api, 'operations', 'cara-test')['computers'])
+    assert any(m['id'] == rid for m in get(api, 'operations')['computers'])
 
 
 def test_botops_assignment_and_signin_use_requester_rights_by_default():

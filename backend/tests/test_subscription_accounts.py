@@ -54,11 +54,19 @@ def test_other_members_and_bots_never_see_an_account(api):
     r = runner(api, operator='ana')
     assign(api, r, 'ops')
     ready(api, r, ['ops'])
-    beat(api, r)
+    beat(api, r, own={'weekly': {'used_percent': 20, 'resets_at': iso(timedelta(days=1)), 'reported_at': iso()}})
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE runners SET accepts_member_bots=1 WHERE id=?', (r['runner_id'],))
-    # Cara can see the computer (it takes members' bots) but it is not hers.
-    assert all(m['id'] != r['runner_id'] for m in get(api, 'operations', 'cara-test')['computers'])
+    # Cara sees the computer on Computers, as every member does, but it is not hers: no accounts, no usage of its own
+    # login, and nothing to change.
+    seen = machine(api, r, 'cara-test')
+    assert seen['may_manage'] is False and seen['bots'] == ['ops']
+    own = seen['readiness']['runtimes']['claude']
+    assert own['authenticated'] == 'ready' and not {'account', 'weekly', 'five_hour'} & set(own)
+    assert machine(api, r, 'ana-test')['readiness']['runtimes']['claude']['weekly']['used_percent'] == 20
+    assert all('account' not in state for p in seen['profiles'] for state in p['runtimes'].values())
+    assert {p['name']: p['runtimes']['codex']['signed_in'] for p in seen['profiles']} == {'acme': True, 'beta': False}
+    assert machine(api, r, 'ana-test')['may_manage'] is True
     computer = next(c for c in get(api, 'computers', 'cara-test')['computers'] if c['id'] == r['runner_id'])
     assert 'account' not in computer['readiness']['runtimes']['claude']
     assert computer['readiness']['runtimes']['claude']['authenticated'] == 'ready'
@@ -74,6 +82,20 @@ def test_other_members_and_bots_never_see_an_account(api):
     rows = get(api, 'subscriptions', token)['profiles_by_computer']
     assert rows and rows[0]['profiles'][0]['runtimes']['codex']['signed_in'] is True
     assert all('account' not in state for row in rows for p in row['profiles'] for state in p['runtimes'].values())
+
+
+def test_own_login_on_a_subscriptions_account_is_named_without_the_account(api):
+    # The computer's own Codex login is the acme subscription's account: everyone's page shows one line for both.
+    r = runner(api, operator='ana')
+    readiness = {'schema_version': 1, 'bots': {}, 'runtimes': {
+        'codex': {'installed': True, 'authenticated': 'ready', 'account': {'email': 'dev@acme.example'}},
+        'claude': {'installed': True, 'authenticated': 'ready', 'account': {'email': 'other@acme.example'}}}}
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': readiness, 'profiles': [
+        {'name': 'acme', 'runtimes': {'codex': {'signed_in': True, 'account': {'email': 'Dev@acme.example'}}}}]},
+        token=r['token'])
+    for token in ('ana-test', 'cara-test'):
+        assert machine(api, r, token)['same_account'] == {'codex': 'acme'}
+    assert 'account' not in machine(api, r, 'cara-test')['readiness']['runtimes']['codex']
 
 
 def test_nothing_token_like_is_stored_or_shown(api):

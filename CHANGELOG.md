@@ -85,7 +85,8 @@ All notable changes to Tico are recorded here. The format follows
   computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
   connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
   and **Revoke computer**. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
-  everywhere.
+  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
+  accounts and changes anything on it.
 - Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
   The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
   are not moved to the bots; choose one per bot where it is needed.

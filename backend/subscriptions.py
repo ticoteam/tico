@@ -73,6 +73,19 @@ def may_see_accounts(auth, who, runner):
     return who.role in ('human', 'owner') and (auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor))
 
 
+def same_account(own, profiles):
+    """{runtime: profile}: the named subscription signed in to the same account as the computer's own login."""
+    def email(state):
+        return str(((state or {}).get('account') or {}).get('email') or '').strip().lower() if isinstance(state, dict) else ''
+    out = {}
+    for runtime, state in own.items():
+        mine = isinstance(state, dict) and state.get('authenticated') == 'ready' and email(state)
+        match = mine and next((p['name'] for p in profiles if email(p['runtimes'].get(runtime)) == mine), None)
+        if match:
+            out[runtime] = match
+    return out
+
+
 def without_accounts(runtimes, windows=False):
     """Take the accounts out; with `windows`, the own login's usage windows on readiness runtime rows too."""
     for state in runtimes.values():

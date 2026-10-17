@@ -189,13 +189,20 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.equal((await cells(row('old')))[5], 'revoked');
     assert.equal(await page.locator('#set-machines table [data-computer-remove]').count(), 0);
 
-    // 22. A member who is neither admin nor operator sees everything and can change nothing.
+    // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no
+    // accounts and no usage of the computer's own login, and names the subscription that login shares instead.
     box.last_seen = at(-2000);
+    for (const state of Object.values(box.readiness.runtimes)) { delete state.account; delete state.weekly; }
+    for (const p of box.profiles) for (const state of Object.values(p.runtimes)) delete state.account;
+    Object.assign(box, {may_manage: false, same_account: {codex: 'acme'}});
     await page.evaluate(() => { S.me = {...S.me, id: 'cara', role: 'member', bot_admin: false}; return loadSettings(); });
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-connection]').first().waitFor();
-    assert.equal(await dialog.locator('[data-connection]').count(), 4);
-    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots]').count(), 0);
+    assert.deepEqual(await dialog.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
+      ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
+    assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
+    assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
+    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
