@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
+  Usage estimates its cost at Anthropic's list price for prompts up to 100,000 tokens ($0.10 in, $0.01 cached, $0.50
+  out per million tokens); a prompt over that costs five times as much, which the estimate does not show.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
@@ -81,6 +84,10 @@ All notable changes to Tico are recorded here. The format follows
   default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
   Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
   Engineering did.
+- A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
+  once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
+  stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can
+  sign it in again; one taken out of the computer's `runner.json` goes from the list within 15 seconds.
 - A Linux computer's screen now comes up when another X server (say a headless IDE's own `Xvfb :99`) already holds
   display `:99`. The runner takes the first free display from `:99` to `:120`, and bots get that `DISPLAY`. Set
   `TICO_SCREEN_DISPLAY` (like `:101`) to use one display exactly. When the display it needs is taken, the computer's
