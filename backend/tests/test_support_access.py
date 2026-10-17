@@ -183,7 +183,8 @@ def test_full_access_is_the_owners_reach_but_not_the_session_or_tokens(environme
     token = bearer(start(api, tier="full").json())
     assert api.put("/api/v2/access/rules", json={"admin_sql": False}, headers=token).status_code == 200
     for method, path in (("GET", "/api/v2/support/access"), ("POST", "/api/v2/me/tokens"),
-                         ("POST", "/api/v2/service-keys"), ("POST", "/api/v2/access/owner")):
+                         ("POST", "/api/v2/service-keys"), ("POST", "/api/v2/access/owner"),
+                         ("POST", "/api/v2/access/owner/email")):
         assert api.request(method, path, json={}, headers=token).status_code == 403, path
 
 

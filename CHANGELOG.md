@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- The owner can change their own sign-in email and stay the same person, with every task, approval, bot and role:
+  **Settings > Humans**, the ⋯ menu on their own row, **Change my sign-in email**, typed twice. One step moves the
+  address everywhere Tico keeps it (the roster, the owner record with the old address in its history, the allow list,
+  the Admins, meetings filed for them) and writes an `owner.email_changed` audit event. The old address stops signing
+  in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
+  out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
+  sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
   subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if

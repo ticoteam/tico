@@ -193,6 +193,7 @@ class Auth:
         self.acl = yaml.safe_load(acl_path.read_text()) if acl_path.exists() else {}
         self.bot_admins = set()
         self.allowed_emails, self.allowed_domains = set(), set()
+        self.retired_emails = set()
         self.owner_email = self.settings.owner_email
         self._owner_id = ""
         self._access_seen = None
@@ -214,6 +215,7 @@ class Auth:
         self._owner_id = ""
         self.bot_admins = set(lists["admins"])
         self.allowed_emails, self.allowed_domains = set(lists["allowed"]), set(lists["allowed_domains"])
+        self.retired_emails = set(access.retired_emails(c))
         # Everything that still reads the settings sees the owner in force.
         previous, self.settings.owner_email = self.settings.owner_email, self.owner_email
         # Unless the server names its own list (TICO_CREDENTIAL_ADMINS), the credential administrators are the owner
@@ -449,6 +451,10 @@ class Auth:
                 if not email:
                     raise Problem("identity", "This sign-in carries no email address", 401)
                 row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
+                # The owner's old address after an email change joins no one: it would be a second owner-to-be.
+                if not row and email in self.retired_emails:
+                    raise Problem("identity", "This address no longer signs in to " + self.settings.app_name
+                                  + ". Sign in with your new address, or ask the owner to add this one", 403)
                 if not row and self.admits(email):
                     row = {"id": self.join(email)}
                 # The people roster is the approved internal-user list; the allow list adds to it.

@@ -1432,6 +1432,27 @@ def create_app(settings=None):
             auth.sync_access(c)
         return result
 
+    @app.post("/api/v2/access/owner/email")
+    def access_owner_email(request: Request, body: M.OwnerEmailChange):
+        """The owner changes their own sign-in address in place: the same person, every copy of the address at once.
+        Signed in as themselves only: not through an API token, BotOps or the Assistant. From this commit on, the old
+        address no longer signs in (docs/people.md, Change the owner's sign-in email)."""
+        who = request.state.identity
+        owner_only(who, "changes the owner's sign-in email")
+        if who.via_token or who.via:
+            raise Problem("forbidden", "Change the owner's sign-in email from a signed-in browser, as yourself", 403)
+        if body.email.strip().lower() != body.confirm_email.strip().lower():
+            raise Problem("email", "The two addresses do not match", 422)
+
+        def work(c):
+            record = Access.change_owner_email(c, who.actor, views.roster(c), Access.load_owner(c, settings), body.email,
+                                               expected_revision=body.expected_revision, now=H.now(), settings=settings)
+            return {"owner": record["email"], "revision": record["revision"], "person": H.actor_id(who.actor)}
+        result = mutate(request, body, work)
+        with store.read() as c:
+            auth.sync_access(c)
+        return result
+
     @app.get("/api/v2/catalog")
     def catalog():
         """The bot templates this company may pick from, named for this company. Every signed-in

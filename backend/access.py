@@ -522,8 +522,11 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
     if target["email"] == owner["email"]:
         raise Problem("conflict", "That person is already the owner", 409)
     previous = P.person_by_email(owner["email"], roster)
+    stored = _load_json(c, OWNER) or {}
+    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
     after = {"email": target["email"], "revision": owner["revision"] + 1, "updated": now,
-             "updated_by": actor, "source": "transfer", "previous": owner["email"]}
+             "updated_by": actor, "source": "transfer", "previous": owner["email"], "history": history[-OWNER_HISTORY:],
+             "retired": emails(stored.get("retired"))}
     _store(c, OWNER, after)
     access = load_access(c, settings)
     if previous_bot_admin and owner["email"]:
@@ -533,6 +536,64 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
     H.event(c, actor, "owner.transferred", target["id"],
             {"from": owner["email"], "from_person": (previous or {}).get("id", ""),
              "to": target["email"], "previous_owner_bot_admin": bool(previous_bot_admin)})
+    return load_owner(c, settings)
+
+
+OWNER_HISTORY = 20
+
+
+def retired_emails(c):
+    """Addresses the owner moved off with an email change: they never auto-join as a new person, even at an allowed
+    domain, so a sign-in with the old address cannot split the owner into two people. The People tab can still add one."""
+    return emails((_load_json(c, OWNER) or {}).get("retired"))
+
+
+def change_owner_email(c, actor, roster, owner, new_email, *, expected_revision, now, settings, via="app"):
+    """The owner's own sign-in address, changed in place in the caller's transaction: the same person keeps every task,
+    approval, grant and conversation, and every copy of the address moves at once (the roster, `humans`, the owner
+    record with the old one kept in its history, the allow list and the Admins). Returns the new owner record."""
+    if owner["revision"] != expected_revision:
+        raise Problem("conflict", "Ownership changed since you opened this page; reload and try again", 409)
+    new = _valid_email(new_email)
+    old = owner["email"]
+    if new == old:
+        raise Problem("conflict", "That is already the owner's sign-in email", 409)
+    person = P.person_by_email(old, roster) if old else None
+    if not person:
+        raise Problem("not_found", "The owner (" + (old or "unset") + ") is not on the roster", 404)
+    other = P.person_by_email(new, roster)
+    if (other and other["id"] != person["id"]) or _email_taken(c, new, person["id"]):
+        raise Problem("conflict", new + " already belongs to someone else on the roster. Change or remove their "
+                      "email first; nothing was changed", 409)
+    row = P._person({**person, "email": new})
+    _save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
+    _sync_human(c, row)
+    stored = _load_json(c, OWNER) or {}
+    history = [*(stored.get("history") or []), {k: owner[k] for k in ("email", "revision", "updated", "updated_by", "source")}]
+    after = {"email": new, "revision": owner["revision"] + 1, "updated": now, "updated_by": actor,
+             "source": "email_change", "previous": old, "history": history[-OWNER_HISTORY:],
+             "retired": [e for e in emails([*(stored.get("retired") or []), old]) if e != new]}
+    _store(c, OWNER, after)
+    # The old address leaves the lists rather than staying beside the new one: left on `allowed`, it would join a
+    # second person on its next sign-in.
+    access = _load_json(c, ACCESS)
+    if access is not None:
+        before = load_access(c, settings)
+
+        def swap(values):
+            return emails(new if e == old else e for e in values)
+        allowed, admins = swap(before["allowed"]), swap(before["admins"])
+        if allowed != before["allowed"] or admins != before["admins"]:
+            _store(c, ACCESS, {**access, "allowed": allowed, "admins": admins,
+                               "revision": before["revision"] + 1, "updated": now, "updated_by": actor, "source": "owner"})
+    # Meetings are filed for a person by address (backend/meetings.py filed_for), and a Granola sync acts as the address
+    # it was connected with: both follow the person.
+    c.execute("UPDATE meetings SET owner=?, metadata_json=CASE WHEN lower(json_extract(metadata_json,'$.owner'))=? "
+              "THEN json_set(metadata_json,'$.owner',?) ELSE metadata_json END WHERE lower(owner)=?", (new, old, new, old))
+    c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
+    c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + person["id"]))
+    H.event(c, actor, "owner.email_changed", person["id"],
+            {"from": old, "to": new, "revision": after["revision"], "via": via})
     return load_owner(c, settings)
 
 

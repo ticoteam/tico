@@ -28,7 +28,7 @@ The page answers three things: how humans get here, who is here, and what each h
   email domain such as gmail.com. Narrowing the list stops new humans; it does not remove anyone on the roster.
 - **Each human** is one row: the role (**Owner** is fixed; the owner switches **Admin** and **Member**), a **Can sign in** switch
   (see [permissions](permissions.md)), and a ⋯ menu: **Can add bots** and **Can add humans** for a member, **Make owner** and
-  **Mark as left** for the owner. Everything saves when it changes. Title and group are kept on the human but edited on
+  **Mark as left** for the owner, and **Change my sign-in email** on the owner's own row ([below](#change-the-owners-sign-in-email)). Everything saves when it changes. Title and group are kept on the human but edited on
   their profile, not here.
 - **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. **Restore** (under
   **Left**) brings them back (their old tokens stay revoked).
@@ -45,13 +45,70 @@ the credential administrators (the owner and the Admins, when `TICO_CREDENTIAL_A
 all read the owner in force. A computer stays with the human who enrolled it: if a bot the new
 owner owns was placed on the old owner's computer, reassign it in Settings > Computers.
 
+## Change the owner's sign-in email
+
+The owner can move to another sign-in address (a new Google account, say) and stay the same person: every task,
+comment, approval, conversation, bot and role stays theirs. It is not a transfer, and no second person is made.
+
+**First, set up the new address in Cloudflare Access.** Tico doesn't sign anyone in itself: Cloudflare Access (or
+Cognito, or your OIDC provider) checks who you are, then tells Tico your address. Add the new address, or its Google
+login method, to the Access application's policy. Then check it: in a private window, sign in to Tico with the new
+address. Tico's "not on the roster" page means Cloudflare let the address through; that is what you want for now.
+Don't add the new address on this page or to the allow list first: it would join as a second person, and Tico then
+refuses the change because the address belongs to someone else.
+
+**Then change it.** Signed in with your current address, open **Settings > Humans**, open the ⋯ menu on your own row
+and pick **Change my sign-in email**. Type the new address twice and confirm. Only the owner sees this, signed in as
+themselves: not through an API token, BotOps or the Assistant. Behind Cloudflare Access you are signed out at once;
+sign in again with the new address.
+
+One transaction changes every copy of the address, or none of them if any step fails:
+
+- the person's email on the roster and in `humans`, with the same id;
+- the `owner` record: a new revision whose `history` keeps the old address;
+- the allow list and the Admins, where the old address was on them;
+- meetings filed for you, a meeting delivery you asked for, and your Granola connection.
+
+The `owner.email_changed` audit event records who did it, when, the old and new addresses and the new revision.
+
+**The old address stops signing in when you confirm. There is no grace window.** A window where both addresses sign
+in as the owner would be a second key to the owner's account for as long as it lasts. The old address keeps working
+right up to the change, and checking the new address first (above) is what stops a lockout. If something goes wrong
+anyway, the command below gets you back in. The old address never joins as a new person, not even at an allowed
+domain or from a directory sync or SCIM, so a stray sign-in with it can't split you in two. To give the old address to
+someone else, add it on this page.
+
+Things Tico doesn't change:
+
+- **Mail.** A mailbox is a mail account, not a sign-in. Your archived mail stays under the old mailbox; the owner still
+  sees every mailbox. If your mail also moved, reconnect Google mail. A message bot that reads the old mailbox keeps
+  reading it until you change its mailbox.
+- **Slack.** The Slack gateway matches the email on your Slack profile. Change it there to the new address too, or
+  your Slack messages to bots are refused.
+- **Server settings.** If `api.env` sets `TICO_CREDENTIAL_ADMINS` or `TICO_LOCAL_OWNER_EMAIL` to the old address,
+  change it and restart. Restart a computer that imports meetings for you, so it posts under the new address.
+
+**To change it back,** do the same with the old address (it must still be allowed in Cloudflare Access).
+
+**Locked out?** On the server, run this. It needs no sign-in, prints what it would change, and changes nothing until you
+add `--apply`. The running server picks it up on its next request, with no restart:
+
+```sh
+python -m backend.manage owner-email /data/hub.sqlite --to old@company.com           # shows the change
+python -m backend.manage owner-email /data/hub.sqlite --to old@company.com --apply   # makes it
+# Docker: docker compose exec server python -m backend.manage owner-email /data/hub.sqlite --to old@company.com
+```
+
+It runs the same checks and writes the same audit event as the app, with actor `host`. Don't edit the database by
+hand.
+
 ## Where it is stored
 
 Two revisioned records in `registry_metadata`, like the AI provider choice:
 
 | Key | Holds |
 | --- | --- |
-| `owner` | the owner's email, revision, who changed it |
+| `owner` | the owner's email, revision, who changed it, earlier revisions (`history`), and the old addresses an email change retired (`retired`) |
 | `access` | `allowed`, `allowed_domains`, `admins` (also as `bot_admins`), `member_bot_limit`, revision |
 
 `TICO_OWNER_EMAIL` and `registry/hub-access.yaml` only seed them on the first boot (or when
@@ -78,7 +135,8 @@ so when either proxy is on.
 `GET /api/v2/access` (owners and admins; it includes `home_domain`, `domain_sign_in` and `directory`, the saved sync
 source), `POST /api/v2/access/humans`, `POST /api/v2/access/humans/{id}` (`role` owner only; `sign_in`, `create_bots`,
 `add_people`, `left: false`), `PUT /api/v2/access/limits` (owners and admins), and owner only `PUT /api/v2/access/allow` (with
-`expected_revision`), `POST /api/v2/access/owner` (with `expected_revision` and `confirm: true`). Marking someone as left
+`expected_revision`), `POST /api/v2/access/owner` (with `expected_revision` and `confirm: true`), `POST /api/v2/access/owner/email`
+(`email`, `confirm_email`, `expected_revision` and `confirm: true`; signed in as the owner, not with a token). Marking someone as left
 uses `POST /api/v2/humans/{id}` with `left: true` (owner only).
 
 ## Directory sync
