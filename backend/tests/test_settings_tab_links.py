@@ -22,8 +22,11 @@ def ui_links():
         rel = path.relative_to(ROOT).as_posix()
         if "/tests/" in rel or "/vendor/" in rel or "node_modules" in rel or "/assets/" in rel:
             continue
-        for tab in re.findall(r'data-gs-tab="([a-z]+)"', path.read_text()):
-            yield rel, tab
+        # The whole value, so a name the tabs can't have (a hyphen, a capital, empty) fails rather than goes unseen.
+        # A value built at run time (health.js draws the server's fix.tab) is checked on the server side below.
+        for tab in re.findall(r'data-gs-tab="([^"]*)"', path.read_text()):
+            if "${" not in tab:
+                yield rel, tab
 
 
 def strings(node):
