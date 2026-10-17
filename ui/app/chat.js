@@ -490,7 +490,8 @@ const REPLY_WAIT_MS = 20 * 60000;
 function v2PendingText(state) {
   const x = state.execution, name = botDisplayName(state.slug);
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
-  if (state.live?.interrupted) return {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
+  if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
+    : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
     if (x.label && x.label !== 'Saved — queued') return {word: x.label, tip: x.label, mode: 'wait'};   // the server's reason

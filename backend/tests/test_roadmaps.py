@@ -1,6 +1,12 @@
 """Roadmap privacy boundaries and the existing parent/child flow."""
 
+import json
+
+import pytest
+
 from backend import hubdb as H
+from backend import roadmaps as R
+from backend import models as M
 from backend.tests.test_tasks_board import api, get, headers, post
 
 
@@ -336,6 +342,79 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Approved'
 
 
+def test_roadmap_types_go_by_role_after_their_managers_change(api):
+    from backend import roadmap_flow as F
+    public_setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager='ops' WHERE id IN ('product-roadmap','engineering')")
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        F.ensure(c)     # as at a restart: a manager someone chose stays
+        managers = "SELECT DISTINCT manager FROM task_types WHERE id IN ('product-roadmap','engineering')"
+        assert [r[0] for r in c.execute(managers)] == ['ops']
+    # A Dev tickets type made after the upgrade, beside Engineering, is a development flow too.
+    dev = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [{'name': 'On Deck', 'status': 'open'},
+                                                                    {'name': 'Done', 'status': 'done'}]})['type']
+    assert (dev['role'], dev['manager']) == ('engineering', None)
+    roadmap = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve imports', 'body': 'Research imports.',
+                                 'type': 'Product roadmap', 'step': 'Approved'})
+    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build imports', 'body': 'Implement imports.',
+                               'type': dev['id'], 'relations': [{'task': roadmap['id'], 'kind': 'parent'}]})
+    assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Building'
+    post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
+    assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Shipped'
+    assert roadmap['id'] in [t['id'] for t in get(api, 'roadmap-tasks')['tasks']]
+    suggested = api.post('/public/roadmaps/roadmap/suggest', json={'title': 'New idea', 'summary': 'Details'}, headers=ORIGIN)
+    assert suggested.status_code == 200, suggested.text
+    task = get(api, 'tasks/' + suggested.json()['id'])['task']
+    assert (task['type']['id'], task['step']['name']) == ('product-roadmap', 'Suggested')
+
+
+def test_role_migration_survives_a_stopped_start_and_backfills_renamed_types(tmp_path):
+    from backend import roadmap_flow as F
+    path = tmp_path / 'hub.db'
+    c = H.connect(path)
+    H.sync_registry(c, {'cmo': {'name': 'cmo', 'runtime': 'fake', 'status': 'active'}},
+                    {'people': [{'id': 'ana', 'email': 'ana@acme.example'}]})
+    # Today's shape after renames: generated ids and names no fallback recognises; only the legacy managers tell.
+    c.execute("DELETE FROM task_steps WHERE type_id IN ('product-roadmap','engineering')")
+    c.execute("DELETE FROM task_types WHERE id IN ('product-roadmap','engineering')")
+    made = {name: H.type_create(c, 'human:ana', name, steps=[{'name': 'Todo', 'status': 'open'}], mover=True)['id']
+            for name in ('Ideas', 'Builds', 'Platform work', 'Errands')}
+    for type_id in made.values():
+        H.task_create(c, 'human:ana', 'Plan the launch on ' + type_id, 'Details', 'bot:cmo', type=type_id, lint=False)
+    c.execute('DROP INDEX task_types_product_role')
+    c.execute('ALTER TABLE task_types DROP COLUMN role')
+    for name, manager in (('Ideas', 'product-manager'), ('Builds', 'engineering-lead'),
+                          ('Platform work', 'engineering-lead')):
+        c.execute('UPDATE task_types SET manager=? WHERE id=?', (manager, made[name]))
+    tasks = c.execute('SELECT * FROM tasks ORDER BY id').fetchall()
+    managers = dict(c.execute('SELECT id,manager FROM task_types').fetchall())
+
+    class StopsMidBackfill:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith('UPDATE task_types SET role'):
+                raise KeyboardInterrupt('the start is stopped here')
+            return self.conn.execute(sql, *args)
+
+    with pytest.raises(KeyboardInterrupt):
+        F.migrate(StopsMidBackfill(c))
+    assert 'role' not in {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
+    c.close()
+    c = H.connect(path)
+    roles = {made[name]: role for name, role in (('Ideas', 'product-roadmap'), ('Builds', 'engineering'),
+                                                 ('Platform work', 'engineering'), ('Errands', None))}
+    assert {k: v for k, v in c.execute('SELECT id,role FROM task_types') if k in roles} == roles
+    assert dict(c.execute('SELECT id,manager FROM task_types').fetchall()) == managers
+    assert [tuple(r) for r in c.execute('SELECT * FROM tasks ORDER BY id')] == [tuple(r) for r in tasks]
+    H.migrate(c)
+    assert dict(c.execute('SELECT id,role FROM task_types WHERE role IS NOT NULL').fetchall()) == {
+        k: v for k, v in roles.items() if v}
+    c.close()
+
+
 def test_internal_text_never_becomes_public_text(api):
     post(api, 'tags', {'key': 'roadmap'})
     post(api, 'roadmaps/settings', {'labels': ['roadmap'], 'cors_origins': ['https://acme.example']})
@@ -539,3 +618,111 @@ def test_guard_refusals_carry_cors_headers_for_allowed_origins(api):
     assert preflight.status_code == 400 and preflight.headers['access-control-allow-origin'] == ORIGIN['Origin']
     other = api.options(base + '/requesters', headers={'Origin': 'https://evil.example', 'Access-Control-Request-Method': 'POST'})
     assert other.status_code == 403 and 'access-control-allow-origin' not in other.headers
+
+
+def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_one(api):
+    public_setup(api, limit=100)
+    suggest = lambda title: api.post('/public/roadmaps/roadmap/suggest', json={'title': title}, headers=ORIGIN)
+    def template(bot, name):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template',?) WHERE bot=?", (name, bot))
+    def owner(response):
+        assert response.status_code == 200, response.text
+        return get(api, 'tasks/' + response.json()['id'])['task']['owner']
+    def actions():
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT coalesce(sum(actions),0) FROM roadmap_actions').fetchone()[0]
+    def state(bot, value):
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE bots SET state=? WHERE slug=?', (value, bot))
+    def turned_away():
+        with api.app.state.store.read() as c:
+            before = c.execute("SELECT (SELECT count(*) FROM tasks),(SELECT count(*) FROM task_requesters),"
+                               "(SELECT count(*) FROM messages WHERE kind='notice')").fetchone()
+        spent, refused = actions(), suggest('Turned away')
+        assert refused.status_code == 409 and refused.json()['error']['detail'] == "Suggestions aren't being accepted right now."
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT (SELECT count(*) FROM tasks),(SELECT count(*) FROM task_requesters),"
+                             "(SELECT count(*) FROM messages WHERE kind='notice')").fetchone() == before
+        assert actions() == spent
+    # No bot can take them: a plain refusal, nothing stored, the visitor's allowance unused.
+    spent = actions()
+    refused = suggest('Exports')
+    assert refused.status_code == 409 and refused.json()['error']['detail'] == "Suggestions aren't being accepted right now."
+    assert 'Product Manager' not in refused.text and actions() == spent
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT count(*) FROM tasks WHERE requester=?', (H.KEEPER,)).fetchone()[0]
+    receiver = get(api, 'roadmaps/settings')['suggestions_receiver']
+    assert receiver == {'bot': None, 'name': None, 'source': 'automatic'}
+    # Automatic: a Head of Product when there is no Product Manager, the Product Manager when there is, and the
+    # Head of Product again once the Product Manager is archived.
+    template('cmo', 'product-lead')
+    assert owner(suggest('Imports')) == 'bot:cmo'
+    template('cpo', 'product-manager')
+    assert owner(suggest('Webhooks')) == 'bot:cpo'
+    state('cpo', 'archived')
+    assert owner(suggest('SSO')) == 'bot:cmo'
+    state('cpo', 'active')
+    # A chosen bot wins over the Product Manager, and the full notice goes to it.
+    post(api, 'roadmaps/settings', {'suggestions_bot': 'ops'})
+    assert owner(suggest('Audit log')) == 'bot:ops'
+    post(api, 'roadmaps/settings', {'suggestion_limit': 3})
+    assert suggest('Billing').status_code == 429
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT to_actor FROM messages WHERE kind='notice' "
+                                        "AND body LIKE '%refusing new suggestions%'")] == ['bot:ops']
+    post(api, 'roadmaps/settings', {'suggestion_limit': 100})
+    # Archived, the chosen bot is passed over for Automatic, and the settings say so.
+    state('ops', 'archived')
+    assert owner(suggest('Billing')) == 'bot:cpo'
+    assert get(api, 'roadmaps/settings')['suggestions_receiver'] == {'bot': 'cpo', 'name': 'cpo', 'source': 'chosen_archived'}
+    # With no receiver, the visitor hears that rather than a limit, even with the queue full or their allowance spent.
+    state('cpo', 'archived')
+    state('cmo', 'archived')
+    post(api, 'roadmaps/settings', {'suggestion_limit': 1})
+    turned_away()
+    post(api, 'roadmaps/settings', {'suggestion_limit': 100, 'action_limit': actions()})
+    turned_away()
+
+
+def test_suggestions_receiver_order_and_states(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-lead') WHERE bot='cmo'")
+    def receiver(chosen, **states):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo','ops')")
+            for bot, value in states.items():
+                c.execute('UPDATE bots SET state=? WHERE slug=?', (value, bot))
+            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) ON CONFLICT(key) "
+                      'DO UPDATE SET value_json=excluded.value_json', (json.dumps({'suggestions_bot': chosen}),))
+            return R.suggestions_receiver(c)
+    assert receiver(None) == ('cpo', 'automatic')
+    assert receiver(None, cpo='planned') == ('cpo', 'automatic')   # today's Product Manager rule, unchanged
+    assert receiver(None, cpo='archived') == ('cmo', 'automatic')
+    assert receiver(None, cpo='archived', cmo='planned') == (None, 'automatic')
+    assert receiver(None, cpo='archived', cmo='archived') == (None, 'automatic')
+    assert receiver('ops') == ('ops', 'chosen')
+    assert receiver('ops', ops='planned') == ('cpo', 'chosen_inactive')
+    assert receiver('ops', ops='paused', cpo='archived') == ('cmo', 'chosen_inactive')
+    assert receiver('ops', ops='archived', cpo='archived', cmo='archived') == (None, 'chosen_archived')
+
+
+def test_only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api):
+    post(api, 'roadmaps/settings', {'suggestions_bot': 'cpo'}, token='ben-test', expected=403)
+    assert get(api, 'roadmaps/settings', token='ben-test')['suggestions_bot'] is None
+    assert 'No active bot' in post(api, 'roadmaps/settings', {'suggestions_bot': 'nobody'}, expected=422)['error']['detail']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='archived' WHERE slug='cmo'")
+    post(api, 'roadmaps/settings', {'suggestions_bot': 'cmo'}, expected=422)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='planned' WHERE slug='ops'")
+    post(api, 'roadmaps/settings', {'suggestions_bot': 'ops'}, expected=422)
+    chosen = post(api, 'roadmaps/settings', {'suggestions_bot': 'bot:cpo'})
+    assert chosen['suggestions_bot'] == 'cpo' and chosen['suggestions_receiver']['source'] == 'chosen'
+    automatic = post(api, 'roadmaps/settings', {'suggestions_bot': None})
+    assert automatic['suggestions_bot'] is None and automatic['suggestions_receiver']['source'] == 'automatic'
+    refused = post(api, 'task-types/product-roadmap', {'manager': 'cpo'}, expected=422)['error']['detail']
+    assert refused == 'body.manager: ' + M.MANAGER_FIXED
+    other = post(api, 'task-types/product-roadmap', {'colour': 'red'}, expected=422)['error']['detail']
+    assert other == 'body.colour: Extra inputs are not permitted'

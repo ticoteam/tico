@@ -23438,6 +23438,18 @@
               }
             ],
             "title": "Bot Public Approval"
+          },
+          "suggestions_bot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Bot"
           }
         },
         "additionalProperties": false,
@@ -25786,6 +25798,18 @@
               "string",
               "null"
             ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "product-roadmap",
+              "engineering",
+              null
+            ],
+            "description": "The Product roadmap or Dev tickets type, whoever manages it"
           }
         },
         "required": [
@@ -26825,12 +26849,17 @@
           "unpriced_runs": {
             "type": "integer",
             "description": "Runs with tokens on a model with no list price"
+          },
+          "low_estimate_runs": {
+            "type": "integer",
+            "description": "Priced runs whose estimate may be low: the model charges more for long prompts and the runner did not report every request's tokens"
           }
         },
         "required": [
           "cached_tokens",
           "est_cost_usd",
           "input_tokens",
+          "low_estimate_runs",
           "output_tokens",
           "runs",
           "subscription_equiv_usd",

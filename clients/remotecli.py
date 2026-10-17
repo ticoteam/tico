@@ -153,6 +153,8 @@ def run(args, who=None):
         for k in ("labels", "cors_origins"):
             if k in changes:
                 changes[k] = [v for v in changes[k] if v]
+        if args.suggestions_bot is not None or args.automatic:
+            changes["suggestions_bot"] = args.suggestions_bot
         from clients import hubtools
         return hubtools.roadmap_settings(client, {"settings": changes or None,
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
