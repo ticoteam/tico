@@ -625,7 +625,6 @@ function renderTree() {
       (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||
       (a.dataset.nav === 'tasks' && (isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap')) ||
       (a.dataset.nav === 'settings' && S.route === SETTINGS) ||
-      (a.dataset.nav === 'help' && S.route === HELP) ||
       (a.dataset.nav === 'credentials' && S.route === CREDENTIALS) ||
       (a.dataset.nav === 'docs' && (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?'))) ||
       (a.dataset.nav === 'market' && (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/'))) ||
