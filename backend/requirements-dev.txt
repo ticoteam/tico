@@ -137,7 +137,7 @@ pymysql==1.2.3
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-pypdf==6.21.0
+pypdf==6.21.1
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
