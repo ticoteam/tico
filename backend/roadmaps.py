@@ -41,8 +41,10 @@ def migrate(c):
         c.execute("UPDATE task_types SET default_visibility='private' WHERE manager='product-manager'")
         c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
                   "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
-    # Marked on every database, so a fresh one does not take its own second start for a first-version one.
-    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_copies_cleared','true')").rowcount \
+    # Marked on every database, so a fresh one does not take its own second start for a first-version one. The first
+    # clearing decided per task; a database it already ran on takes the per-field one under its own marker.
+    c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_copies_cleared','true')")
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_copies_cleared_per_field','true')").rowcount \
             and ran_before and H._has_table(c, 'task_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
@@ -55,32 +57,39 @@ def migrate(c):
               'WHERE actor IS NOT NULL')
 
 
-# Public text someone wrote leaves a task event (publication(), task_create); the first version's copies left none.
-WRITTEN = ("EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=tasks.id "
-           "AND e.field IN ('public_title','public_summary'))")
+# Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's
+# copies left none.
+def written(c, task_id, field):
+    return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field=? LIMIT 1", (task_id, field)).fetchone())
 
 
 def clear_copies(c):
     """Once, on a database that ran roadmaps before: the first version copied internal titles and bodies into public
     text at creation and never updated them, so the check above misses a task edited since, and a Product roadmap
-    task it published at creation stayed public. Public text nobody wrote goes; a public task showing its internal
-    title and body is unpublished, with an event saying why so its owner can publish it again with public text.
-    Text written at creation before creation left an event is cleared too, so each clearing leaves one."""
-    cleared = c.execute(f"SELECT id,public_title,public_summary FROM tasks WHERE visibility='private' "
-                        f"AND (public_title!='' OR public_summary!='') AND NOT {WRITTEN}").fetchall()
-    for tid, title, summary in cleared:
-        c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE id=?", (tid,))
-        for field, value in (('public_title', title), ('public_summary', summary)):
-            if value:
-                H._task_event(c, tid, H.KEEPER, field, value, '',
-                              'Cleared: public text with no record of being written, likely a copy of the internal text.')
-    copied = [r[0] for r in c.execute(
-        f"SELECT id FROM tasks WHERE visibility='public' AND NOT {WRITTEN} "
-        "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")]
-    for tid in copied:
-        c.execute("UPDATE tasks SET visibility='private',public_title='',public_summary='' WHERE id=?", (tid,))
-        H._task_event(c, tid, H.KEEPER, 'visibility', 'public', 'private',
-                      'Unpublished: its public text was a copy of the internal title and body. Write public text to publish it again.')
+    task it published at creation stayed public. Each field is decided alone, since an owner may have rewritten one
+    and left the other a copy. On a private task, public text nobody wrote goes. On a public task, an unwritten field
+    that still copies the internal text goes, and without its public title the task is unpublished. Text written at
+    creation before creation left an event is cleared too. Each clearing leaves an event with the old text."""
+    rows = c.execute("SELECT id,visibility,title,body,public_title,public_summary FROM tasks "
+                     "WHERE public_title!='' OR public_summary!=''").fetchall()
+    for tid, visibility, title, body, public_title, public_summary in rows:
+        unwritten = {f: v for f, v in (('public_title', public_title), ('public_summary', public_summary))
+                     if v and not written(c, tid, f)}
+        copies = {'public_title': (title or '')[:300], 'public_summary': (body or '')[:8000]}
+        clear = unwritten if visibility == 'private' else {f: v for f, v in unwritten.items() if v == copies[f]}
+        unpublish = 'public_title' in clear
+        if unpublish:
+            clear = unwritten
+        if not clear:
+            continue
+        c.execute("UPDATE tasks SET " + ",".join(f"{f}=''" for f in clear)
+                  + (",visibility='private'" if unpublish else "") + " WHERE id=?", (tid,))
+        for field, value in clear.items():
+            H._task_event(c, tid, H.KEEPER, field, value, '',
+                          'Cleared: public text with no record of being written, likely a copy of the internal text.')
+        if unpublish:
+            H._task_event(c, tid, H.KEEPER, 'visibility', 'public', 'private',
+                          'Unpublished: its public title was a copy of the internal title. Write public text to publish it again.')
 
 
 def settings(c):
