@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Beta features carry a small **Beta** pill where they appear: Market, Message bots, Listening, Live meetings, chat
+  goals and steering, the Slack gateway, a computer's Screen, Behaviour replay and the computer Performance page,
+  Windows through WSL 2, external agents (Hermes, OpenClaw, Grok Bot, Dots, Muse sync) and the Mac app. Help lists
+  them under **Beta features**, each manual page says so, and a support request's diagnostics name the ones your team
+  has on. The pills arrived in 0.3.52; that release's notes left them out.
 - Letting Tico support in, off until its security review (`TICO_SUPPORT_ACCESS=on`): from one of their open support
   requests, an owner or admin gives the Tico team **App only** access (an admin's reads and setup changes) or, the owner
   only, **Full access**, for a time they choose (24 hours by default). A banner shows on every screen while it lasts, Stop
@@ -22,6 +27,8 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
+  section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
   once and answers it. It used to stop taking messages after its answer: the run stayed Working until that work
   ended or someone pressed Stop, and the follow-up showed only "follow-up added". Every bot's instructions also say
