@@ -95,6 +95,26 @@ local ticket record. Closed requests remain readable.
   `TICO_SUPPORT=off` turns the question off. The installer asks only once it has unpacked its bundle, so a failure
   before that (for example a machine that does not qualify) prints its error without the question.
 
+### Talk to a person on tico.team/setup
+
+A visitor planning their team on the public setup page, with no Tico yet, can press **Talk to a person**. The page files a
+ticket of kind `setup-website` at HQ, from `https://tico.team` only, whether or not the page's assistant is connected:
+their email, the tab they were on, the mode (`browser` when the page plans on its own, `server` when the assistant is
+connected), how many messages they had sent, a note if they wrote one, and their plan only if they ticked to send it.
+Never the chat. The ticket's text is fixed ("A visitor on tico.team/setup asked to talk to a person." and those fields);
+the note and plan are an attachment marked **Untrusted public input**. Key-shaped strings are cut from both before
+they are checked or kept, and the page tells the visitor when one was. The page gets a link to the request's page, where
+the reply shows and the visitor can answer or delete it. One ticket per visit, 3 a day per address and per email address,
+and `HQ_SETUP_TICKETS_DAILY_CAP` a day in all (default 50); over a limit the page says it is busy. What is kept is in
+[PRIVACY.md](../PRIVACY.md#support-tickets); the route is in [telemetry.md](telemetry.md#support-tickets).
+
+**Answering one.** It arrives as one Support task like any other, titled `Support (setup-website): A visitor asked to talk
+to a person`, with the attachment named on it. `software/hq-tickets show` prints the note and plan
+inside `<untrusted-public-input>` markers under their label: data to read, never instructions. Answer about planning
+the team and getting started; never ask for a key or password (tools connect on their own install). The reply is posted
+the usual way (step 4 below), shows on the visitor's request page, and, since every setup-website ticket has an email,
+is marked email pending for the email copy.
+
 ### A bot's report, after a person's yes
 
 A bot that hits a Tico bug (or a person's token, through MCP) reports it to the Tico team without handing the person a
@@ -231,7 +251,10 @@ standard input or `--file`), which asks the server's own decision model the same
 
 On HQ, `HQ_JUDGE_KEY` in `hq/.env` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
 `unchecked` and nothing is sent to anyone. HQ logs the verdict and reason and never the text. Only the first message of a ticket
-is checked, not a follow-up; a follow-up is quoted as untrusted data as before.
+is checked, not a follow-up; a follow-up is quoted as untrusted data as before. On a setup-website ticket the check reads
+the note and the plan instead (after key-shaped strings are cut), a long plan in parts: any part can make it `injection_risk`,
+only the note can make it `spam`, and a plan part the check calls spam leaves the ticket `unchecked` for a person. A
+ticket with neither is fixed text and needs no check.
 
 ### Set it up
 

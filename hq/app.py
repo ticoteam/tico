@@ -14,13 +14,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import notices as notices_module, onboarding, recruit
+from . import cors, notices as notices_module, onboarding, recruit
 from .db import Database
 from .limits import Limiter
 from .releases import Latest
 from .judge import from_env as judge_from_env
 from .notices import Notices, Watch
-from .support import Tickets, install as install_support
+from .support import PUBLIC_URL, SETUP_DAILY_CAP, Tickets, install as install_support
 from .support_access import install as install_support_access
 
 INSTALL_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
@@ -55,9 +55,10 @@ def parse(params):
 
 
 def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tickets=None, judge=None, watch=None,
-               watch_args=None, watch_every=WATCH_EVERY, counts=None):
+               watch_args=None, watch_every=WATCH_EVERY, counts=None, setup_daily_cap=SETUP_DAILY_CAP,
+               public_url=PUBLIC_URL):
     limiter = limiter or Limiter()
-    tickets = tickets or Tickets(db)
+    tickets = tickets or Tickets(db, setup_daily_cap=setup_daily_cap)
     counts = counts or onboarding.Counts(db)
     notices = Notices(db)
     tickets.on_release = notices.catch_up
@@ -109,6 +110,10 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "3600"})
         return await call_next(request)
 
+    # The routes the tico.team pages call from a visitor's browser (cors.py), outside the limit above so a refusal is
+    # readable too: Talk to a person on tico.team/setup files a support ticket.
+    cors.allow(app, {"/v1/support": ("POST",)})
+
     @app.get("/healthz")
     def healthz():
         return {"ok": True}
@@ -135,7 +140,7 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
 
     # POST /v1/recruit, the org builder's suggestions (recruit.py): stores nothing, and the limit above applies too.
     recruit.install(app, address=address)
-    staff_only = install_support(app, tickets, address, staff_key, judge if judge is not None else judge_from_env())
+    staff_only = install_support(app, tickets, address, staff_key, judge if judge is not None else judge_from_env(), public_url)
     notices_module.install(app, notices, staff_only, watch)
     install_support_access(app, tickets, address, staff_only)
     # Last, so its browser rules sit outside the request limit above: a preflight is not counted, and a 429 is readable.

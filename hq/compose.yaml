@@ -37,6 +37,8 @@ services:
       HQ_STAFF_KEY: ${HQ_STAFF_KEY:-}
       HQ_JUDGE_KEY: ${HQ_JUDGE_KEY:-}
       HQ_JUDGE_URL: ${HQ_JUDGE_URL:-}
+      # Talk to a person on tico.team/setup (kind setup-website): tickets a day in all. Empty: 50; 0 turns it off.
+      HQ_SETUP_TICKETS_DAILY_CAP: ${HQ_SETUP_TICKETS_DAILY_CAP:-}
       # The public hostname: the tunnel's route (cloudflared) and the certificate (caddy).
       HQ_DOMAIN: ${HQ_DOMAIN:-}
       # POST /v1/recruit (hq/recruit.py): without a key, suggestions come from the local recommender only.
