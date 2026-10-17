@@ -9,7 +9,13 @@ The runner adds up the `tokens` events a run's runtime reports (`runner-rs/src/e
 `usage`: uncached input, cached input and output tokens, the model that ran, and how the run was billed. The server keeps them on the run
 (`turns.input_tokens`, `cached_tokens`, `output_tokens`, `model`, `provider`, `est_cost_usd`, `billing`; migration 12) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
-regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost. A runtime that reports no
+regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
+
+Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku
+5.5 over 100,000 tokens, counting cache reads and writes). For those, the Claude runner sends each model request's tokens as `requests`
+and the server prices each request at its own rate. Tokens no request accounts for (an older runner, another runtime, a run of more
+than 2,000 requests) are priced at the lower rate, and the run is counted in `low_estimate_runs`: the page says **estimate, may be
+low**. A runtime that reports no
 tokens (Grok today) shows runs and no tokens.
 
 A run on a ChatGPT or Claude sign-in (Codex "Signed in with ChatGPT", Claude with `claude.ai` or a long-lived OAuth token, a Cursor
@@ -39,7 +45,7 @@ Default limit). The owner of a bot may set its limit, no higher than the team de
 
 `GET /api/v2/usage?from=&to=&department=&group=bot|day|routine` (UTC dates, default the last 7 days, at most 366) returns `rows` and
 `totals` with `runs`, `input_tokens`, `cached_tokens`, `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
-model), `subscription_equiv_usd`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
+model), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `group` selects how rows are aggregated. See `docs/openapi/v2.json`.
 
 ## Filter by the settings used for a run

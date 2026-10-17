@@ -1605,11 +1605,17 @@ class AuthRejected(Contract):
     reason: str = Field(default="", max_length=300)
 
 
+RequestTokens = Annotated[int, Field(ge=0, le=10**9)]
+
+
 class RunUsagePart(Contract):
-    """What a run spent, as its runner counted it: uncached input, cached input and output tokens."""
+    """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
+    `requests` is the same three per model request, sent when the runner saw every request, so a model whose
+    long prompts cost more (providers.LONG_PROMPT) is priced request by request."""
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
+    requests: list[tuple[RequestTokens, RequestTokens, RequestTokens]] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)
     runtime: str = Field(default="", max_length=60)
     profile_used: str | None = Field(default=None, max_length=80)

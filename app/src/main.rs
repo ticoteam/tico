@@ -943,15 +943,27 @@ fn menu_event(app: &App, id: &str) {
 }
 
 // ----------------------------------------------------------------------------- Dock badge
-/// The Needs you count on the Dock icon (macOS), cleared at zero or when the hub cannot be read.
+/// The Needs you count on the Dock icon (macOS), cleared at zero or when the hub cannot be read. Signed out of
+/// Cloudflare Access, it shows "!" instead: the count is unknown, and the window says to sign in again.
 fn render_badge(app: &App) {
-    let needs = app.state::<AppState>().status.lock().unwrap().needs;
+    let HubStatus { needs, signed_out, .. } = app.state::<AppState>().status.lock().unwrap().clone();
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = main_window(&handle) {
-            let _ = window.set_badge_count(badge_count(needs));
+            if signed_out { badge_signed_out(&window) } else { let _ = window.set_badge_count(badge_count(needs)); }
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+fn badge_signed_out(window: &WebviewWindow) {
+    let _ = window.set_badge_label(Some("!".into()));
+}
+
+// A label is macOS only; elsewhere the unknown count is cleared.
+#[cfg(not(target_os = "macos"))]
+fn badge_signed_out(window: &WebviewWindow) {
+    let _ = window.set_badge_count(None);
 }
 
 fn badge_count(needs: usize) -> Option<i64> {

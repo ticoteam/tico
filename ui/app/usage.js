@@ -32,11 +32,14 @@ function useCount(n) {
 const useTokens = r => (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.output_tokens || 0);
 const useSpend = r => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
 const useRuns = n => `${n} run${n === 1 ? '' : 's'}`;
+// Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
+const useLowWhy = n => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
+const useLow = r => r.low_estimate_runs > 0 ? `<span class="use-sub use-low" title="${esc(useLowWhy(r.low_estimate_runs))}">estimate, may be low</span>` : '';
 // The estimate, or a dash for tokens on a model with no list price; a subscription's figure beside it, never in it.
 function useCost(r) {
   const sub = r.subscription_equiv_usd > 0 ? `<span class="use-sub">≈ ${useMoney(r.subscription_equiv_usd)} API-equivalent</span>` : '';
   const est = r.est_cost_usd == null ? '—' : r.est_cost_usd > 0 || !sub ? useMoney(r.est_cost_usd) : '';
-  return (est ? `<span class="use-est">${est}</span>` : '') + sub;
+  return (est ? `<span class="use-est">${est}</span>` : '') + sub + useLow(r);
 }
 function useSaved() {
   try { return JSON.parse(localStorage.getItem('tico.usage') || '{}') || {}; } catch { return {}; }
@@ -149,7 +152,8 @@ function usePaint() {
   const top = Math.max(...rows.map(useSpend), 0);
   body.innerHTML = `<div class="use-total"><span class="use-note">Estimated</span>
       <strong id="use-total">${t.est_cost_usd == null ? '—' : useMoney(t.est_cost_usd)}</strong> · ${useRuns(t.runs)}
-      ${t.subscription_equiv_usd > 0 ? `<div class="use-sub">≈ ${useMoney(t.subscription_equiv_usd)} API-equivalent on subscriptions</div>` : ''}</div>
+      ${t.subscription_equiv_usd > 0 ? `<div class="use-sub">≈ ${useMoney(t.subscription_equiv_usd)} API-equivalent on subscriptions</div>` : ''}
+      ${t.low_estimate_runs > 0 ? `<div class="use-sub use-low">Estimate, may be low: ${esc(useLowWhy(t.low_estimate_runs))}.</div>` : ''}</div>
     <ul class="use-list">${rows.map(r => `<li class="use-row" data-bot="${esc(r.bot)}">
       ${state.group === 'bot' ? useLimitButton(r.bot, r.name, r.limit) : '<span class="use-limit"></span>'}
       <${state.group === 'bot' ? 'button type="button"' : 'div'} class="use-line"${state.group === 'bot' ? ` aria-expanded="${state.open === r.bot}"` : ''}>

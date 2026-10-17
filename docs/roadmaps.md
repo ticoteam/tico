@@ -17,6 +17,10 @@ their visibility. Older tasks start private.
 
 In Settings → Tasks, create a label such as `roadmap`. In Public roadmap, select that label, add
 an exact website origin such as `https://acme.example`, and save. Empty labels disables roadmaps.
+**Suggestions go to** picks the bot that receives visitor suggestions: **Automatic** (the field says which bot
+that means now, or that no bot can take them) or any active bot. A chosen bot that has since been archived or paused
+shows as such, with the bot suggestions go to instead. Owners and admins change these settings; everyone else sees
+them read-only.
 A public task carrying that label appears through the API. Several labels can be enabled and a
 task can appear on several roadmaps. Publication is separate from the existing two-party Private
 setting: a two-party private task can never appear publicly. Child tasks are excluded; only their
@@ -86,6 +90,17 @@ per IP per UTC day across every roadmap (default 10, configurable in settings); 
 429. Failed writes roll back their charge. The server uses the connection IP, with forwarded IPs
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
 a /64 bucket; an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as its IPv4 address.
+
+While at least one public label is enabled, **Settings > Health** tells owners and admins when suggestions don't reach
+the bot they expect, from the same rule that routes them:
+- **No bot receives roadmap suggestions**: visitors are being turned away. Choose an active bot, or make a Product
+  Manager or Head of Product bot active for Automatic.
+- **The bot chosen for roadmap suggestions is archived; suggestions now go to *name***, or **isn't active** when it is
+  paused, quarantined or planned. Make the chosen bot active again, or choose another bot or Automatic.
+
+Each links to Settings > Tasks > Public roadmap and clears by itself: the first once any bot receives suggestions,
+the second once the chosen bot is active again or another choice is saved. With no
+enabled label neither shows, and when the fallback finds no bot either, only the first one shows.
 
 ## Internal work
 
