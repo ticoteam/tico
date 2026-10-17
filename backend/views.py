@@ -1515,6 +1515,9 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from . import subscriptions, inbox_isolation
+            subscription_context = subscriptions.context(c, store.settings)
+            kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
@@ -1542,11 +1545,14 @@ def install_views(app, store, auth, mutate, task_view):
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                from .subscriptions import computer_profiles
                 # Each named subscription on it, with its sign-in, account and usage windows: this list is already
                 # limited to an administrator or the computer's operator, who may read its accounts.
+                # `bot_connections`: the connection each of its bots actually runs on.
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "profiles": computer_profiles(c, row, True),
+                                 "profiles": subscriptions.computer_profiles(c, row, True),
+                                 "bot_connections": subscriptions.connections(c, row["id"], store.settings,
+                                                                              subscription_context),
+                                 "inbox_only": row["id"] in kept_for_inbox,
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

@@ -1,4 +1,4 @@
-// Settings > Computers > Model CLIs: the owner's On box per model CLI. What the computer's bots run on, their fallback
+// Settings > Computers, a computer's pop-up > Versions and updates > Installation and updates: the owner's On box per model CLI. What the computer's bots run on, their fallback
 // included (`bot_runtimes`), is checked and locked; any other one turns on and off with a POST and the page reloads; a
 // refused change puts the box back. An older server sends no bot_runtimes: its bots' own runtimes stay locked.
 // Every request is intercepted.
@@ -49,6 +49,7 @@ const {html, uiFile} = require('./support/page.cjs');
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
     await page.locator('#set-machines details[data-machine-details] > summary').click();
     const box = id => page.locator(`#set-machines [data-harness-choice="${id}"]`);
     const state = async id => [await box(id).isChecked(), await box(id).isDisabled()];

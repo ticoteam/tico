@@ -1,9 +1,9 @@
-// Settings > Computers > AI tools (#610): one aligned row per tool with its installed version, enabled, sign-in and
-// account, and usage; a line per named subscription. Covers each sign-in state (signed in as <email> · <plan>, signed
-// out, login expired or rejected, checking, couldn't check with the time), real usage against unavailable usage (never
-// 0% or a full allowance), an account reading older than its refresh marked with when it was last checked, the 5-hour
-// window label, the computer's own login's windows (and Claude's before its first turn here), several profiles, a long version kept to its cell, revoked computers hidden by default, and no account
-// where the server sent none. Every request is intercepted.
+// Settings > Computers: one compact row per computer (name, Tico version, operator, bots, AI tool chips, status) and the
+// pop-up a row opens (Connections, Screen, Bots on this computer, Versions and updates, Settings). A chip only for a
+// connection that was added, usage as "% left" with the reset and age on hover, a red dot only when bots depend on a
+// broken one; the computer's own login merged with a subscription on the same account; each bot's actual connection,
+// read-only; the Installed and Enabled headers apart at 1024 px; no connection, offline, waiting, revoked, and a
+// member who may change nothing. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,41 +15,43 @@ const {html, uiFile} = require('./support/page.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
-    const chip = (name, runtime, version, extra = {}) => ({name, runtime, installed: !!version, version: version || '', managed: true, state: 'idle',
-      wanted: !!version, pinned: false, update_available: false, detail: '', ...extra});
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper'], platform: 'linux', last_seen: at(-3000),
-      needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
+    const tool = (name, runtime, version) => ({name, runtime, installed: true, version, managed: true, state: 'idle',
+      wanted: true, pinned: false, update_available: false, detail: ''});
+    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
+      last_seen: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
+      update: {state: 'needs_update', label: 'Needs update', target: '0.3.53'}, inbox_only: false,
       readiness: {
         runtimes: {
-          claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', org: 'Acme', checked_at: at(-60000)}},
-          // The computer's own Codex login, read while idle (runner-rs/src/accounts.rs): both windows with percentages.
-          codex: {installed: true, authenticated: 'ready',
-                  weekly: {used_percent: 12, resets_at: at(3 * 86400000), reported_at: at(-120000), status: null},
-                  five_hour: {used_percent: 40, resets_at: at(2 * 3600000), reported_at: at(-120000), status: null}},
-          cursor: {installed: true, authenticated: 'missing', detail: 'Cursor login required'},
+          claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', checked_at: at(-60000)}},
+          // The computer's own Codex login is the same account as the subscription Acme Pro, with an older reading.
+          codex: {installed: true, authenticated: 'ready', account: {email: 'Dev@acme.example', plan: 'pro', checked_at: at(-60000)},
+                  weekly: {used_percent: 70, resets_at: at(3 * 86400000), reported_at: at(-3600000), status: null}},
           musecode: {installed: true, authenticated: 'rejected', rejected_at: at(-600000), rejected_reason: 'The provider refused the login', credential_source: 'computer'},
+          cursor: {installed: true, authenticated: 'missing'},
           grok: {installed: true, authenticated: 'unknown'},
-          gemini: {installed: true, authenticated: 'failed', detail: 'Gemini sign-in could not be checked'},
         },
-        harnesses: {
-          'claude': chip('Claude Code', 'claude', '2.1.300'), 'codex': chip('Codex', 'codex', '0.162.1'),
-          'cursor': chip('Cursor Agent', 'cursor', '2026.10.14-941492e-long-build-suffix'), 'musecode': chip('Muse Code', 'musecode', '1.4.9'),
-          'grok': chip('Grok Build', 'grok', '1.0.52'), 'gemini': chip('Gemini CLI', 'gemini', '0.59.0'),
-        }},
+        harnesses: {claude: tool('Claude Code', 'claude', '2.1.300'), codex: tool('Codex', 'codex', '0.162.1'),
+          musecode: tool('Muse Code', 'musecode', '1.4.9'), cursor: tool('Cursor Agent', 'cursor', '2026.10.14-941492e-long-build-suffix'),
+          grok: tool('Grok Build', 'grok', '1.0.52')}},
       profiles: [
-        {name: 'acme', display_name: 'Acme Max', runtimes: {
-          claude: {signed_in: true, account: {email: 'ops@acme.example', plan: 'max'},
-                   weekly: {used_percent: null, resets_at: at(2 * 86400000), reported_at: at(-3600000), status: 'allowed', source: 'provider'},
-                   five_hour: {used_percent: null, resets_at: at(3 * 3600000), reported_at: at(-60000), status: 'allowed', source: 'provider'}},
-          codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro', kind: 'subscription', checked_at: at(-14 * 60000)},
-                  weekly: {used_percent: 38, resets_at: at(2 * 86400000), reported_at: at(-3600000), status: null, source: 'provider'},
-                  five_hour: {used_percent: 90, resets_at: at(3600000), reported_at: at(-60000), status: null, source: 'provider'}}}},
-        {name: 'beta', display_name: 'beta', runtimes: {
-          claude: {signed_in: false},
-          codex: {signed_in: null, weekly: null}}},
-      ]};
+        // A login folder has a slot for every tool; only Codex was signed in here.
+        {name: 'acme', display_name: 'Acme Pro', runtimes: {
+          codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'},
+                  weekly: {used_percent: 67, resets_at: at(2 * 86400000), reported_at: at(-120000), status: null, source: 'provider'}},
+          claude: {signed_in: false}, musecode: {signed_in: null}}},
+        {name: 'beta', display_name: 'beta', runtimes: {codex: {signed_in: false}}},
+      ],
+      bot_connections: [
+        {bot: 'helper', profile: null, source: 'computer', runtime: 'claude', harness: 'claude', signed_in: true, problem: ''},
+        {bot: 'ops', profile: 'acme', display_name: 'Acme Pro', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
+        {bot: 'writer', profile: 'beta', display_name: 'beta', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: false, problem: ''}]};
+    const empty = {id: 'empty', label: 'Spare server', operator: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen: at(-2000),
+      readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
+    const fresh = {id: 'fresh', label: 'Fresh Mac', operator: 'ana', bots: [], version: '', last_seen: at(-2000), readiness: null};
     const revoked = {id: 'old', label: 'Old laptop', operator: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen: at(-86400000),
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
+    const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
+    const writes = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -58,124 +60,144 @@ const {html, uiFile} = require('./support/page.cjs');
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (req.method() !== 'GET') { writes.push({p, body: req.postDataJSON?.()}); return json({}); }
       const config = {version: '0.1.0', app_name: 'Tico'};
-      if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
+      if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: []}]);
+      if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0].toUpperCase() + name.slice(1),
+        status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}})));
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
-      if (p === '/api/v2/operations') return json({machines: [box, revoked], services: []});
-      // The manifests' capabilities this page reads (runner/harnesses/*.toml): where an account and usage come from.
+      if (p === '/api/v2/operations') return json({machines: [box, empty, fresh, revoked], services: []});
+      // The manifests' capabilities this page reads (runner/harnesses/*.toml).
       if (p === '/api/v2/models') return json({models: [], harnesses: [
-        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', terminal_login: ['auth', 'login']}},
-        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh'}},
-        {id: 'gemini', runtime: 'gemini', name: 'Gemini CLI', capabilities: {account: '', weekly_usage: 'manual'}},
+        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, subscription_profiles: true}},
+        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, subscription_profiles: true}},
         {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: ['login']}},
         {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: ''}},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
+      if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json({});
     });
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
-    const table = page.locator('#set-machines [role=table][aria-label="AI tools on Team box"]');
-    await table.waitFor();
-    const own = name => table.locator(`[data-machine-tool="${name}"]:not([data-machine-profile])`);
-    const cells = async row => (await row.locator('[role=cell]').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
+    const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
+    await row('box').waitFor();
+    const cells = async locator => (await locator.locator('td').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim());
 
-    // Installed, enabled and sign-in are separate cells; the header names them.
-    assert.deepEqual(await table.locator('[role=columnheader]').allInnerTexts().then(a => a.map(t => t.toLowerCase())), ['tool', 'installed', 'enabled', 'sign-in', 'usage']);
-    const claude = await cells(own('claude'));
-    assert.deepEqual(claude.slice(0, 4), ['Claude Code', '2.1.300', 'Enabled', 'Signed in as chris@acme.example · Max']);
+    // 1. Six facts per row, and nothing else inline: no tool table, sign-in rows or menu.
+    assert.deepEqual(await page.locator('#set-machines thead th').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
+      ['computer', 'tico', 'operator', 'bots', 'ai tools', 'status']);
+    const boxCells = await cells(row('box'));
+    assert.deepEqual([boxCells[0], boxCells[1], boxCells[2], boxCells[3], boxCells[5]],
+      ['Team box', '0.3.52 Update', 'Ana', '3 bots · Helper, Ops, Writer', 'online']);
+    assert.equal((await cells(row('empty')))[1], '0.3.53', 'Update only when one waits');
+    assert.equal(await page.locator('#set-machines table [role=table], #set-machines table .people-more, #set-machines table [data-model-login]').count(), 0);
 
-    // Each sign-in state.
-    assert.equal((await cells(own('codex')))[3], 'Signed in · account not reported yet', 'a supported account not read yet');
-    assert.match((await cells(own('cursor')))[3], /^Signed out/);
-    assert.match((await cells(own('musecode')))[3], /^Login expired or rejected/);
-    assert.match((await cells(own('musecode')))[3], /10m ago\. The provider refused the login\./);
-    assert.match((await cells(own('grok')))[3], /^Checking…/);
-    assert.match((await cells(own('gemini')))[3], /^Couldn't check last checked \ds ago/);
-    // Grok is off here; its bots' tools are on and say why.
-    assert.equal((await cells(own('grok')))[2], 'Off');
-    assert.equal(await own('codex').locator('.machine-tool-enabled').getAttribute('title'), 'Its bots use it');
+    // 4, 5, 8, 9. A chip per connection: tool, thin bar and % left; hover says the rest; a red dot only where bots are stuck.
+    const chips = row('box').locator('.machine-chip');
+    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 33%', 'Codex', 'Muse Code']);
+    assert.deepEqual(await chips.evaluateAll(list => list.map(c => [c.querySelector('meter')?.value ?? null, !!c.querySelector('.machine-chip-dot')])),
+      [[null, false], [33, false], [null, true], [null, true]]);
+    assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Acme Pro \(Computer's login\) · 33% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M · as of 2m ago$/);
+    assert.match(await chips.nth(2).getAttribute('title'), /^Codex · beta · Signed out; bots use it · No usage reading yet$/);
+    assert.match(await chips.nth(3).getAttribute('title'), /Login expired or rejected/);
+    // Nothing for a tool a login was never meant for (Acme's Claude Code and Muse Code slots), nor for an unused tool.
+    assert.doesNotMatch(await row('box').innerText(), /Cursor|Grok|signed out/i);
 
-    // A long version stays in its cell, the full value in the title.
-    const version = own('cursor').locator('.machine-tool-version');
-    assert.equal(await version.getAttribute('title'), '2026.10.14-941492e-long-build-suffix');
-    assert.ok(await version.evaluate(el => el.scrollWidth > el.clientWidth), 'the long version is cut off, not widening the row');
+    // 24. No connection; never reported yet; revoked hidden.
+    assert.equal((await cells(row('empty')))[4], 'No AI connection');
+    assert.equal(await row('empty').locator('.machine-chip.attention .machine-chip-dot').count(), 1);
+    assert.equal((await cells(row('fresh')))[4], 'Waiting for Fresh Mac');
+    assert.equal(await row('old').count(), 0);
 
-    // Usage: tools without provider data read unavailable. Claude's own login has no reading before a turn here, and
-    // says where one will come from; never 0% or a full allowance.
-    assert.equal((await cells(own('cursor')))[4], 'Usage unavailable');
-    assert.equal((await cells(own('claude')))[4], 'Weekly usage unavailable · reported after a Claude Code turn on this computer');
-    assert.equal(await own('claude').locator('meter').count(), 0);
-    // The computer's own login reports its windows too: percentages and bars on its own row.
-    assert.match((await cells(own('codex')))[4], /^Weekly 88% left resets .* · as of 2m ago 5-hour window 60% left resets/);
-    assert.deepEqual(await own('codex').locator('meter').evaluateAll(m => m.map(x => [x.value, x.getAttribute('aria-label')])),
-      [[88, 'Codex Weekly: 88% left'], [60, 'Codex 5-hour window: 60% left']]);
+    // 10. A click on the row opens the pop-up, sections in order.
+    await row('box').locator('td[data-label=Operator]').click();
+    const dialog = page.locator('#set-machines dialog.computer-detail[open]');
+    await dialog.waitFor();
+    assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
+      ['connections', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
+    // 7. The computer's own Codex login and Acme Pro are one account: one line, one (newer) reading, marked.
+    const conns = dialog.locator('[data-connection]');
+    assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)),
+      ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
+    const acme = dialog.locator('[data-connection="profile:acme:codex"]');
+    assert.match(await acme.innerText(), /Codex\s+Subscription · Acme Pro\s+Computer's login/);
+    assert.match(await acme.innerText(), /Weekly 33% left/);
+    assert.match(await acme.innerText(), /Bots: Ops/);
+    assert.equal(await acme.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '33');
+    // 9. The signed-out one names the bots on it and offers Sign in.
+    const beta = dialog.locator('[data-connection="profile:beta:codex"]');
+    assert.match(await beta.innerText(), /Signed out[\s\S]*Bots: Writer/);
+    assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
+    assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
+    assert.equal(await dialog.locator('[data-add-connection] [data-subs-add]').count(), 1, 'Add a named subscription at the end');
+    // Usage reads as what is left, everywhere in the pop-up and the list.
+    assert.doesNotMatch(await page.locator('#set-machines').innerText(), /% used/);
 
-    // Several profiles: one line each under the tool, with its own account and usage.
-    const acmeCodex = table.locator('[data-machine-profile="acme"][data-machine-tool="codex"]');
-    const acme = await cells(acmeCodex);
-    assert.equal(acme[0], 'Acme Max');
-    assert.equal(acme[3], 'Signed in as dev@acme.example · Pro');
-    assert.match(acme[4], /Weekly 62% left resets \w+ .* · as of 1h ago/);
-    assert.match(acme[4], /5-hour window 10% left resets/);
-    assert.deepEqual(await acmeCodex.locator('meter').evaluateAll(m => m.map(x => [x.value, x.getAttribute('aria-label')])),
-      [[62, 'Codex Acme Max Weekly: 62% left'], [10, 'Codex Acme Max 5-hour window: 10% left']]);
-    // Claude's turns give resets, never a percentage: it reads unavailable, with no bar.
-    const acmeClaude = table.locator('[data-machine-profile="acme"][data-machine-tool="claude"]');
-    assert.match((await cells(acmeClaude))[4], /^Weekly percentage unavailable resets .*5-hour window percentage unavailable resets/);
-    assert.equal(await acmeClaude.locator('meter').count(), 0);
-    // An account reading that missed its refresh says when it was last checked; a fresh one says nothing more.
-    assert.equal(await table.locator('[data-account-checked]').count(), 0, 'readings within the refresh interval carry no note');
-    box.profiles[0].runtimes.codex.account.checked_at = at(-25 * 60000);
-    await page.evaluate(() => loadSettings());
-    await acmeCodex.locator('[data-account-checked]').waitFor();
-    assert.equal((await cells(acmeCodex))[3], 'Signed in as dev@acme.example · Pro account last checked 25m ago');
-    assert.equal(await own('claude').locator('[data-account-checked]').count(), 0);
-    // A signed-out profile and one that could not be checked: no account, no usage numbers.
-    const beta = async tool => cells(table.locator(`[data-machine-profile="beta"][data-machine-tool="${tool}"]`));
-    assert.deepEqual((await beta('claude')).slice(3), ['Signed out', '—']);
-    assert.deepEqual((await beta('codex')).slice(3), ["Couldn't check", 'Weekly usage unavailable']);
-    const text = await table.innerText();
-    assert.doesNotMatch(text, /\b0% left\b|\b100% left\b|\b0% used\b/, 'missing usage never reads as none or all left');
+    // 13. Each bot's actual connection, read-only, with the way to change it.
+    const bots = dialog.locator('[data-detail-section=bots]');
+    assert.deepEqual(await bots.locator('li').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
+      ["Helper Runs on Claude Code · Computer's login", 'Ops Runs on Codex · Acme Pro', 'Writer Runs on Codex · beta Signed out']);
+    assert.equal(await bots.locator('select, input').count(), 0);
+    assert.equal(await bots.locator('a[data-computer-bots=box]').innerText(), 'Assign on the Bots page');
 
-    // After a Claude turn on this computer: its own login's windows, as Claude Code reports them (53% of five hours,
-    // 17% of the week used).
-    box.readiness.runtimes.claude.weekly = {used_percent: 17, resets_at: at(3 * 86400000), reported_at: at(-60000), status: null};
-    box.readiness.runtimes.claude.five_hour = {used_percent: 53, resets_at: at(3 * 3600000), reported_at: at(-60000), status: 'allowed'};
-    await page.evaluate(() => loadSettings());
-    await own('claude').locator('meter').first().waitFor();
-    assert.deepEqual(await own('claude').locator('meter').evaluateAll(m => m.map(x => x.value)), [83, 47]);
-    assert.doesNotMatch((await cells(own('claude')))[4], /reported after/);
+    // 12. Installed and Enabled have their own room at 1024 px and wide.
+    for (const width of [1440, 1024]) {
+      await page.setViewportSize({width, height: 900});
+      const [first, installed, enabled] = await dialog.locator('[role=columnheader]').evaluateAll(list => list.map(h => h.getBoundingClientRect()).map(r => [r.left, r.right]));
+      assert.ok(first[1] <= installed[0] && installed[1] <= enabled[0], `headers apart at ${width}px: ${JSON.stringify([first, installed, enabled])}`);
+    }
+    const version = dialog.locator('[data-machine-tool=cursor] .machine-tool-version');
+    assert.ok(await version.evaluate(el => el.scrollWidth > el.clientWidth), 'a long version is cut off, the full one in its title');
+    assert.equal(await dialog.locator('[data-machine-tool=grok] .machine-tool-enabled').innerText(), 'Off');
 
-    // Nothing the server did not send: without an account there is no email, only that it is not reported.
-    box.readiness.runtimes.claude = {installed: true, authenticated: 'ready'};
-    box.profiles = [];
-    await page.evaluate(() => loadSettings());
-    await page.locator('#set-machines [data-machine-tool="claude"]').first().waitFor();
-    assert.equal((await cells(page.locator('#set-machines [data-machine-tool="claude"]').first()))[3], 'Signed in · account not reported yet');
-    assert.doesNotMatch(await page.locator('#set-machines').innerText(), /@acme\.example/);
+    // Settings: inbox-only saves; Revoke is here and not on the row.
+    await dialog.locator('[data-inbox-only=box]').check();
+    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/runners/box/inbox-only'); i++) await page.waitForTimeout(20);
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/runners/box/inbox-only').body, {enabled: true});
+    assert.equal(await dialog.locator('[data-detail-section=settings] [data-computer-remove=box]').innerText(), 'Revoke computer');
+    await dialog.locator('[data-detail-close]').click();
+    assert.equal(await page.locator('#set-machines dialog.computer-detail[open]').count(), 0);
 
-    // Offline: what the computer last said, with when.
+    // 24. The pop-up of a computer with no connection.
+    await row('empty').locator('[data-no-connection]').click();
+    assert.match(await dialog.locator('[data-detail-section=connections]').innerText(), /Bots here can't run until a connection is added/);
+    assert.equal(await dialog.locator('[data-add-connection] [data-model-login][data-runtime=codex]').count(), 1);
+    await page.keyboard.press('Escape');
+
+    // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
-    await page.locator('#set-machines [data-machine-tool="grok"]', {hasText: "Couldn't check"}).waitFor();
-    assert.match((await cells(page.locator('#set-machines [data-machine-tool="grok"]').first()))[3], /^Couldn't check last checked 3h ago/);
+    await row('box').locator('td[data-label=Status]', {hasText: 'offline'}).waitFor();
+    assert.equal((await cells(row('box')))[5], 'offline · last seen 3h ago');
+    assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 33);
+    await row('box').locator('.machine-name').click();
+    await dialog.locator('[data-computer-offline]').waitFor();
+    assert.match(await dialog.locator('[data-computer-offline]').innerText(), /Computer is offline/);
+    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-subs-add] button:enabled').count(), 0);
+    await page.keyboard.press('Escape');
 
-    // Revoked computers stay hidden until asked for.
-    assert.equal(await page.locator('#set-machines [aria-label="AI tools on Old laptop"]').count(), 0);
+    // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
-    await page.locator('#set-machines [aria-label="AI tools on Old laptop"]').waitFor();
-    assert.equal(await page.locator('#set-machines [aria-label="AI tools on Old laptop"] .machine-signin').count(), 0, 'no sign-in on a revoked computer');
+    await row('old').waitFor();
+    assert.equal((await cells(row('old')))[5], 'revoked');
+    assert.equal(await page.locator('#set-machines table [data-computer-remove]').count(), 0);
 
-    // The install, pin and update controls stay in their own disclosure.
-    assert.equal(await page.locator('#set-machines details[data-machine-details="box:tools"] > summary').innerText(), 'Installation and updates');
+    // 22. A member who is neither admin nor operator sees everything and can change nothing.
+    box.last_seen = at(-2000);
+    await page.evaluate(() => { S.me = {...S.me, id: 'cara', role: 'member', bot_admin: false}; return loadSettings(); });
+    await row('box').locator('.machine-name').click();
+    await dialog.locator('[data-connection]').first().waitFor();
+    assert.equal(await dialog.locator('[data-connection]').count(), 4);
+    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots]').count(), 0);
+    await page.keyboard.press('Escape');
+
     assert.deepEqual(errors, []);
-    console.log('PASS: AI tools rows, sign-in states, usage windows, profiles, long versions, revoked hidden');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

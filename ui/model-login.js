@@ -9,36 +9,24 @@
   const text = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const active = state => ['requested', 'starting', 'waiting'].includes(state);
 
-  // The computer only reports readiness on its next heartbeat, so look again for a little while.
-  function refreshUntilReady(runnerId, runtime) {
+  // The computer only reports a sign-in on its next heartbeat, so look again for a little while; until then its row
+  // and pop-up say "Waiting for <computer>" (ui/app/computer-detail.js). `profile`: a named subscription's sign-in.
+  const pending = window.machineLoginPending = window.machineLoginPending || new Map();
+  function refreshUntilReady(runnerId, runtime, profile = '') {
     let tries = 0;
+    pending.set(runnerId, Date.now() + 50000);
     const look = async () => {
       tries += 1;
-      try { if (typeof loadSettings === 'function') await loadSettings(); } catch { /* the next try asks again */ }
-      try { if (typeof gsRefresh === 'function') await gsRefresh(); } catch { /* same */ }
       let ready = false;
       try {
         const machine = SETTINGS_DATA.machines.find(row => row.id === runnerId);
-        ready = machine?.readiness?.runtimes?.[runtime]?.authenticated === 'ready';
+        ready = profile ? machine?.profiles?.find(p => p.name === profile)?.runtimes?.[runtime]?.signed_in === true
+          : machine?.readiness?.runtimes?.[runtime]?.authenticated === 'ready';
       } catch { /* not on Settings */ }
+      if (ready || tries >= 15) pending.delete(runnerId);
+      try { if (typeof loadSettings === 'function') await loadSettings(); } catch { /* the next try asks again */ }
+      try { if (typeof gsRefresh === 'function') await gsRefresh(); } catch { /* same */ }
       if (!ready && tries < 15) setTimeout(look, 3000);
-    };
-    setTimeout(look, 1500);
-  }
-
-  // A subscription's sign-in shows on the computer's next heartbeat: redraw Subscriptions until it does (about 30s).
-  function refreshSubsUntilReady(runnerId, profile, runtime) {
-    let tries = 0;
-    const look = async () => {
-      tries += 1;
-      // Read the subscriptions here, so a redraw held back (someone typing a new name) never stops the look.
-      let ready = false;
-      try {
-        if (typeof subsLoad === 'function') await subsLoad();
-        ready = typeof subsSignedIn === 'function' && subsSignedIn(runnerId, profile, runtime) === true;
-        if (typeof renderSettingsSubs === 'function') await renderSettingsSubs(false, true);
-      } catch { /* not on Settings */ }
-      if (!ready && tries < 10) setTimeout(look, 3000);
     };
     setTimeout(look, 1500);
   }
@@ -152,8 +140,7 @@
         login = next;
         if (!closed) draw();
         if (changed && next.state === 'signed_in') {
-          if (profile) refreshSubsUntilReady(runnerId, profile, runtime);
-          else refreshUntilReady(runnerId, runtime);
+          refreshUntilReady(runnerId, runtime, profile);
         }
       } catch (error) { status.textContent = error.message; }
       if (!closed && active(login.state)) timer = setTimeout(tick, POLL_MS);

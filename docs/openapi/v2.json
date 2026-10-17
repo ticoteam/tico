@@ -20,7 +20,7 @@
     },
     {
       "name": "Subscriptions",
-      "description": "Named provider logins on Computers and defaults for groups and bots."
+      "description": "Named provider logins on Computers and the one each bot runs on."
     },
     {
       "name": "Team chart",
@@ -16271,7 +16271,10 @@
             "type": "string"
           },
           "source": {
-            "type": "string"
+            "enum": [
+              "bot",
+              "computer"
+            ]
           },
           "computer": {
             "anyOf": [
@@ -16296,6 +16299,12 @@
               }
             ]
           },
+          "runtime": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
           "signed_in": {
             "type": [
               "boolean",
@@ -16309,9 +16318,11 @@
         "required": [
           "computer",
           "display_name",
+          "harness",
           "id",
           "problem",
           "profile",
+          "runtime",
           "signed_in",
           "source"
         ],
@@ -23825,11 +23836,9 @@
         "properties": {
           "scope": {
             "type": "string",
-            "enum": [
-              "group",
-              "bot"
-            ],
-            "title": "Scope"
+            "const": "bot",
+            "title": "Scope",
+            "default": "bot"
           },
           "target": {
             "type": "string",
@@ -23854,7 +23863,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "scope",
           "target"
         ],
         "title": "SubscriptionAssignment"
@@ -23864,7 +23872,6 @@
         "properties": {
           "scope": {
             "enum": [
-              "group",
               "bot"
             ]
           },

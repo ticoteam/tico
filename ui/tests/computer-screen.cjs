@@ -57,9 +57,12 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
     // Only the computer that has a screen offers the choice.
-    const more = label => page.locator(`#set-machines [aria-label="More for ${label}"]`);
+    // In each computer's pop-up.
+    await page.locator('#set-machines .machine-name[data-computer-open=c2]').click();
+    await page.locator('#set-machines dialog[open] [data-detail-section=screen]').waitFor();
     assert.equal(await page.locator('[data-computer-screen=c2]').count(), 0);
-    await more('Build server').click();
+    await page.keyboard.press('Escape');
+    await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     await page.locator('[data-computer-screen=c1] label:has(input[value=control])').click();
     await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'control');
     assert.deepEqual(writes, [{mode: 'control'}]);

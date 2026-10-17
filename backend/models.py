@@ -999,7 +999,8 @@ class ComputerProfile(Contract):
 
 
 class SubscriptionAssignment(Contract):
-    scope: Literal["group", "bot"]
+    # Only a bot chooses a subscription; a group no longer gives its bots one.
+    scope: Literal["bot"] = "bot"
     target: str = Field(min_length=1, max_length=100)
     profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
 
