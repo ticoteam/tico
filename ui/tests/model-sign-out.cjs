@@ -80,7 +80,9 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
             if (await held) return json({detail: 'The server is busy'}, 503);
           }
           const runtime = url.searchParams.get('runtime'), profile = url.searchParams.get('profile') || '';
-          return json({runtime, profile, bots: runtime === 'codex' && !profile ? [{bot: 'writer', name: 'Writer'}, {bot: 'scout', name: 'Scout'}] : []});
+          const named = names => names.map(name => ({bot: name.toLowerCase().replace(/ /g, '-'), name}));
+          return json({runtime, profile, bots: profile ? [] : runtime === 'codex' ? named(['Writer', 'Scout'])
+            : runtime === 'claude' ? named(['Reviewer 1', 'QA', 'Scout', 'Writer']) : []});
         }
         if (p === '/api/v2/computers/box/logouts' && method === 'POST') {
           const body = req.postDataJSON(), id = `out${++seq}`; writes.push({p, body});
@@ -160,10 +162,18 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     await confirm.locator('[data-bots]', {hasText: 'Writer'}).waitFor();
     assert.equal(await confirm.locator('[data-sign-out]').isDisabled(), false, 'on once the bots are named');
     assert.equal(await confirm.locator('h2').innerText(), 'Sign out of Codex (ChatGPT) on Team box?');
-    assert.equal(await confirm.locator('[data-bots]').innerText(), 'These 2 bots stop until someone signs in again: Writer, Scout.');
+    // The spec's words: "Reviewer 1, QA and 2 more will stop running until this is signed in again".
+    assert.equal(await confirm.locator('[data-bots]').innerText(), 'Writer and Scout will stop running until this is signed in again.');
     assert.match(await confirm.innerText(), /shared key won't sign it back in by itself/);
     await confirm.getByRole('button', {name: 'Cancel'}).click();
-    assert.equal(await page.locator('dialog.model-logout').count(), 0);
+    await page.locator('dialog.model-logout').waitFor({state: 'detached'});
+    assert.deepEqual(writes, []);
+    // Four bots: the first two by name and how many more, every name on hover.
+    await own('claude').getByRole('button', {name: 'Sign out'}).click();
+    await confirm.locator('[data-bots]', {hasText: 'Reviewer 1'}).waitFor();
+    assert.equal(await confirm.locator('[data-bots]').innerText(), 'Reviewer 1, QA and 2 more will stop running until this is signed in again.');
+    assert.equal(await confirm.locator('[data-bots]').getAttribute('title'), 'Reviewer 1, QA, Scout, Writer');
+    await confirm.getByRole('button', {name: 'Cancel'}).click();
     assert.deepEqual(writes, []);
 
     // Confirmed: it asks the computer and follows it to Signed out; the row then reads Signed out, with Sign in and
@@ -177,6 +187,10 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     await confirm.locator('[data-actions] [data-close]').click();
     await own('codex').getByRole('button', {name: 'Use the shared key'}).waitFor({timeout: 15000});
     assert.deepEqual(await buttons(own('codex')), ['Sign in', 'Use the shared key']);
+    // "Signed out · Sign in", and the chip on the computer's row has the red dot.
+    assert.match((await own('codex').locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
+    assert.equal(await own('codex').locator('.computer-conn-head .machine-chip-dot').count(), 1);
+    assert.equal(await page.locator('#set-machines [data-chip="own:codex"].attention .machine-chip-dot').count(), 1);
     assert.match(await own('codex').locator('.computer-conn-signin .pill').getAttribute('title'), /shared key does not sign it back in/);
     await own('codex').getByRole('button', {name: 'Use the shared key'}).click();
     await page.locator('.toast', {hasText: 'shared key signs it in'}).waitFor();
@@ -196,6 +210,9 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     await confirm.locator('[data-actions] [data-close]').click();
     await acme.getByRole('button', {name: 'Sign in'}).waitFor({timeout: 15000});
     assert.equal(await acme.locator('.computer-conn-signin .pill').innerText(), 'Signed out');
+    // No bot runs on it, and it still gets the red dot: nothing signs it back in by itself.
+    assert.match((await acme.locator('.computer-conn-signin').textContent()).replace(/\s+/g, ' ').trim(), /^Signed out · Sign in/);
+    assert.match(await page.locator('#set-machines [data-chip="profile:acme:codex"].attention').getAttribute('title'), /^Codex · Acme · Signed out · /);
     assert.deepEqual(await buttons(acme), ['Sign in']);
     await acme.getByRole('button', {name: 'Sign in'}).click();
     const login = page.locator('dialog.model-login:not(.model-logout)');

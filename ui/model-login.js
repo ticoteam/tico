@@ -177,6 +177,13 @@
     return dialog;
   }
 
+  // "Reviewer 1", "Reviewer 1 and QA", "Reviewer 1, QA and Scout", "Reviewer 1, QA and 2 more".
+  function botsWords(names) {
+    if (names.length <= 1) return names.join('');
+    if (names.length <= 3) return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+  }
+
   // Sign a login out, after a confirmation naming the bots on it that stop. Bots and assignments stay; the login reads
   // Signed out until someone signs in again, and the company's shared key does not sign it back in by itself.
   function signOut({runnerId, runtime, machine, profile = ''}) {
@@ -207,9 +214,9 @@
       said.textContent = 'Checking which bots use it…';
       get(`${computer}/logouts/bots?${query}`).then(found => {
         const bots = (found.bots || []).map(bot => bot.name || bot.bot);
-        said.textContent = bots.length
-          ? `${bots.length === 1 ? 'This bot stops' : `These ${bots.length} bots stop`} until someone signs in again: ${bots.join(', ')}.`
+        said.textContent = bots.length ? `${botsWords(bots)} will stop running until this is signed in again.`
           : 'No bot uses this login right now.';
+        if (bots.length > 3) said.title = bots.join(', ');
         const button = actions.querySelector('[data-sign-out]');
         if (button) button.disabled = false;
       }, error => {
