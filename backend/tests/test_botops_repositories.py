@@ -131,6 +131,32 @@ def test_a_repository_card_says_in_plain_words_what_changes():
         "Ops: read-only on tico, besides its own repository.")
     assert plain_request("Ops", {"mode": "all", "all_access": "read"}) == "Ops: read-only on every repository the team uses."
     assert plain_request("Ops", {"mode": "own"}) == "Ops: only its own repository."
+    # Left out, the list and the level keep what is stored (set_access): the line never guesses "only its own".
+    assert plain_request("Ops", {"mode": "chosen"}) == "Ops: the repositories chosen for it before, again."
+    assert plain_request("Ops", {"mode": "all"}) == "Ops: the access level set before on every repository the team uses."
+
+
+def test_a_card_made_elsewhere_says_what_confirming_really_does(api, botops, repos):
+    """A carried hand-off's card (create_proposal, not bot_set): {"mode": "chosen"} with no list turns the stored grants
+    back on, and the title says so, from the change tried as the person and rolled back."""
+    from backend.repositories import preview_change
+    put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        assert preview_change(c, settings, "human:ana", "ops", {"mode": "chosen"}) == "ops: gets write on product."
+        assert preview_change(c, settings, "human:ana", "ops", {"mode": "bogus"}) is None
+    assert effective(api) == []                      # nothing kept from the try
+    # The card itself, as a carried hand-off makes it (app.py confirm_for_carried -> create_proposal).
+    from backend import rooms
+    from backend.assistant import create_proposal
+    state = api.app.state
+    with state.store.transaction() as c:
+        ana = state.auth.identity_for_actor(c, "human:ana")
+        room = rooms.chat_room(c, state.auth, ana, "botops")
+        card = create_proposal(c, settings, ana, room, "botops", "Ops asked BotOps for this for you: Tidy",
+                               "PUT", "/api/v2/bots/ops/repositories", {"mode": "chosen"})
+    assert card["action"]["description"] == "ops: gets write on product."
+    assert effective(api) == []
 
 
 def test_no_card_is_titled_with_its_method_and_path(api):

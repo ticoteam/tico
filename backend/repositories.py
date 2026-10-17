@@ -300,6 +300,27 @@ def _and(names):
     return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
 
 
+def preview_change(c, settings, actor, bot, body):
+    """`plain_change` for a card made outside `bot_set` (a carried hand-off): the change tried as the person who would
+    confirm it, then rolled back. None when the try is refused; the card then reads the request (`plain_request`)."""
+    try:
+        update = RepoAccessUpdate(**(body if isinstance(body, dict) else {}))
+    except ValueError:
+        return None
+    row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    org = row['org'] if row else getattr(settings, 'github_owner', '')
+    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    c.execute('SAVEPOINT repo_preview')
+    try:
+        before = access(c, bot, org)
+        return plain_change(name, before, set_access(c, bot, update, org, actor, team_list=True, own_click=False))
+    except Problem:
+        return None
+    finally:
+        c.execute('ROLLBACK TO repo_preview')
+        c.execute('RELEASE repo_preview')
+
+
 def plain_change(name, before, result):
     """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
     Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.` `before` is
@@ -325,17 +346,22 @@ def plain_change(name, before, result):
 
 
 def plain_request(name, body):
-    """The same card read from the request alone (a card made where nothing was tried first): what it is set to."""
+    """The same card read from the request alone, when trying it first was refused (`preview_change`): what it is set
+    to. A field the request leaves out keeps what is stored (`set_access`), so the line says so instead of guessing."""
     body = body if isinstance(body, dict) else {}
     mode = body.get('mode')
     if mode == 'own':
         what = 'only its own repository'
     elif mode == 'all':
-        what = LEVEL.get(body.get('all_access') or 'write', 'write') + ' on every repository the team uses'
+        what = ((LEVEL.get(body['all_access'], 'write') if body.get('all_access') else 'the access level set before')
+                + ' on every repository the team uses')
     elif mode == 'chosen':
-        chosen = [g for g in body.get('chosen') or [] if isinstance(g, dict)]
-        what = ('; '.join(f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}" for g in chosen)
-                + ', besides its own repository') if chosen else 'only its own repository'
+        if body.get('chosen') is None:
+            what = 'the repositories chosen for it before, again'
+        else:
+            chosen = [g for g in body['chosen'] if isinstance(g, dict)]
+            what = ('; '.join(f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}" for g in chosen)
+                    + ', besides its own repository') if chosen else 'only its own repository'
     else:
         what = 'its repository access changes'
     if body.get('create_repositories') is True:

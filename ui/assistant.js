@@ -11,6 +11,7 @@
 .asst-card code{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 8px}
 .asst-raw{margin:4px 0 8px;font-size:12.5px}
 .asst-raw>summary{cursor:pointer;color:var(--muted);width:max-content}
+.asst-said{margin:6px 0;padding:4px 10px;border-left:3px solid var(--line);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 .asst-card .asst-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .asst-state{font-size:12.5px;color:var(--muted)}
 .asst-off{padding:14px 0}
@@ -30,6 +31,7 @@
   // The title is always plain words: the server's sentence, or for a card with none (stored before its route had one)
   // a plain line saying who asks. The method, path and the fields it sends are under a closed Details.
   const RAW_TITLE = /^(GET|POST|PUT|PATCH|DELETE) \//;
+  const SENT = new Set(['message', 'body', 'text', 'comment']);
   function actionCard(action, esc, open = false) {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
     const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
@@ -48,12 +50,17 @@
       ? `<ul class="asst-body" aria-label="Changes">${action.diff.map(d => `<li><strong>${esc(d.field)}</strong>: ${'old' in d ? shown(d.old ?? '') + ' → ' : ''}${shown(d.new)}</li>`).join('')}</ul>`
       : Object.keys(action.body || {}).length
         ? `<ul class="asst-body" aria-label="Fields">${Object.entries(action.body).map(([k, v]) => `<li><strong>${esc(k)}</strong>: ${shown(v)}</li>`).join('')}</ul>` : '';
+    // The words a send carries (a message, a comment, a support request) are what the person approves: shown whole,
+    // never only under Details.
+    const sends = Object.entries(action.body || {}).filter(([k, v]) => SENT.has(k) && typeof v === 'string' && v.trim())
+      .map(([, v]) => `<blockquote class="asst-said" aria-label="What is sent">${shown(v)}</blockquote>`).join('');
     const who = {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
-    const said = String(action.summary || '').trim();
+    // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
+    const said = String(action.summary || '').trim(), repeats = said === title || said.length >= 300 && title.startsWith(said);
     return `<div class="asst-card" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <b data-what>${esc(title)}</b>
-      ${said && said !== title ? `<span class="asst-state">${esc(who)}“${esc(said)}”</span>` : ''}
-      ${readable ? fields : ''}
+      ${said && !repeats ? `<span class="asst-state">${esc(who)}“${esc(said)}”</span>` : ''}
+      ${sends}${readable ? fields : ''}
       <details class="asst-raw"${open ? ' open' : ''}><summary>Details</summary>${readable ? '' : fields}<code>${esc(action.method)} ${esc(action.path)}</code></details>
       ${action.status === 'pending'
         ? `<div class="asst-row"><button class="primary" type="button" data-confirm>Confirm</button>
@@ -71,6 +78,7 @@
   const openRaw = new Set();             // cards whose Details is open, kept open across a rebuild
   const painted = new WeakMap();         // host -> the card HTML it shows
   const UNSETTLED = new Set(['pending', 'running']);
+  const deciding = new Set();            // cards whose Confirm / Cancel is on its way: a fetch never repaints them
   async function cards(root, deps) {
     if (!root) return;
     style();
@@ -90,10 +98,12 @@
         host.querySelectorAll('button').forEach(b => { b.disabled = true; });
         // A thread rebuilt while this runs draws the card as running, not with its buttons live again.
         seenActions.set(action.id, {...action, status: 'running'});
+        deciding.add(action.id);
         let next = null;
         try { next = (await post(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {})).action; }
         catch (e) { toast?.(e.message, true); }
         if (!next) try { next = (await get(`/v2/assistant/actions/${encodeURIComponent(action.id)}`)).action; } catch { /* kept as it was */ }
+        deciding.delete(action.id);
         // Only this card is drawn again, wherever it is now; one still waiting gets its buttons back.
         for (const h of new Set([...hostsOf(action.id), host])) { painted.delete(h); paint(h, next || action); }
         reload?.();
@@ -108,7 +118,14 @@
     await Promise.all(hosts.filter(h => !seenActions.has(h.dataset.actionHost) || UNSETTLED.has(seenActions.get(h.dataset.actionHost).status))
       .map(async host => {
         const id = host.dataset.actionHost;
-        try { const action = (await get(`/v2/assistant/actions/${encodeURIComponent(id)}`)).action; if (host.isConnected) paint(host, action); }
+        try {
+          const action = (await get(`/v2/assistant/actions/${encodeURIComponent(id)}`)).action;
+          // A fetch sent before a click comes back late: it never repaints a card being decided, nor makes a decided
+          // one pending again.
+          const kept = seenActions.get(id);
+          if (!host.isConnected || deciding.has(id) || action.status === 'pending' && kept && kept.status !== 'pending') return;
+          paint(host, action);
+        }
         catch { if (!seenActions.has(id)) host.innerHTML = '<div class="asst-state">This card is not yours to see.</div>'; }
       }));
   }

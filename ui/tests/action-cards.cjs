@@ -27,6 +27,10 @@ function fixture() {
       description: 'POST /api/v2/bots/ops/go-live', body: {confirm: true}, diff: [{field: 'confirm', new: true}]}),
     act3: card('act3', {method: 'POST', path: '/api/v2/bots/ops/archive', summary: 'Archive the Ops bot', description: 'Archive bot Ops',
       body: {expected_revision: 3}, diff: [{field: 'expected_revision', new: 3}]}),
+    // A send: the words that go out are what the person approves, so they show with Details closed.
+    act4: card('act4', {method: 'POST', path: '/api/v2/messages', summary: 'Tell Ben the launch moved', description: 'Send a message to Ben',
+      body: {to: 'human:ben', body: 'Hi Ben, the launch moves to Friday.'},
+      diff: [{field: 'to', new: 'human:ben'}, {field: 'body', new: 'Hi Ben, the launch moves to Friday.'}]}),
   };
   const messages = [];
   let n = 0;
@@ -37,6 +41,7 @@ function fixture() {
   messages.push(say('c2', 'bot:botops', 'Needs your OK: ' + actions.act2.summary, n++, {assistant: true, action: 'act2'}));
   filler(4);
   messages.push(say('c3', 'bot:botops', 'Needs your OK: ' + actions.act3.summary, n++, {assistant: true, action: 'act3'}));
+  messages.push(say('c4', 'bot:botops', 'Needs your OK: ' + actions.act4.summary, n++, {assistant: true, action: 'act4'}));
   filler(8);
   return {actions, messages, n, gets: [], decided: []};
 }
@@ -63,12 +68,14 @@ async function open(browser, state) {
     const one = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)$/);
     if (one && method === 'GET') {
       state.gets.push(one[1]);
-      await new Promise(done => setTimeout(done, 120));    // a real round trip: long enough to be seen
-      return json({action: state.actions[one[1]]});
+      const then = JSON.stringify(state.actions[one[1]]);  // as it was when asked
+      await new Promise(done => setTimeout(done, state.slowGet || 120));    // a real round trip: long enough to be seen
+      return route.fulfill({contentType: 'application/json', body: `{"action":${then}}`});
     }
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
     if (act && state.refuse) return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({detail: 'It could not be reached'})});
     if (act) {
+      if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
       const action = state.actions[act[1]];
       state.decided.push([act[1], act[2]]);
       action.status = act[2] === 'confirm' ? 'done' : 'cancelled';
@@ -87,7 +94,7 @@ async function open(browser, state) {
     const state = fixture();
     const {page, errors} = await open(browser, state);
     await page.goto('https://tico-ui.test/#/bot/botops/chat');
-    await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 3);
+    await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 4);
 
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
@@ -109,6 +116,11 @@ async function open(browser, state) {
     assert.ok(!/\/api\/|^(POST|PUT|PATCH|DELETE)\b/.test(title), 'old card: no method or path as its title, got ' + title);
     assert.match(title, /^BotOps /, 'old card: a plain sentence naming who asks');
     assert.ok(!(await old.evaluate(el => el.innerText)).includes('/api/v2'), 'old card: path only behind Details');
+
+    const send = page.locator('.asst-card[data-action="act4"]');
+    assert.equal(await send.locator('details.asst-raw').evaluate(d => d.open), false, 'send: Details starts closed');
+    assert.equal(await send.locator('.asst-said').innerText(), 'Hi Ben, the launch moves to Friday.', 'send: the words sent are on the card');
+    assert.ok(!(await send.evaluate(el => el.innerText)).includes('human:ben'), 'send: the raw fields stay under Details');
 
     // Open Details on the third card, scroll so the second sits mid-thread, then Confirm the second.
     await page.locator('.asst-card[data-action="act3"] details.asst-raw summary').click();
@@ -150,6 +162,18 @@ async function open(browser, state) {
     assert.ok(frames.every(f => f.open), 'an open Details on another card stays open');
     assert.equal(await page.locator('.asst-card[data-action="act1"] [data-confirm]').count(), 1, 'the other cards are still pending');
     assert.equal(await page.locator('.asst-card[data-action="act3"] [data-confirm]').count(), 1);
+    // A refresh asked just before a click and answered while the Confirm is on its way is dropped: a rebuild after it
+    // still draws the card as running, with no live button (a second click would be refused).
+    Object.assign(state, {slowGet: 300, slowPost: 900});
+    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late', 'bot:botops', 'One more thing.', state.n++));
+    await page.locator('.asst-card[data-action="act1"] [data-confirm]').click();
+    await page.waitForTimeout(450);
+    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('later', 'bot:botops', 'And another.', state.n++));
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll('.asst-card[data-action="act1"] button')].some(b => !b.disabled)), false,
+      'no live button while the Confirm runs');
+    await page.locator('.asst-card[data-action="act1"][data-status="done"]').waitFor();
+    Object.assign(state, {slowGet: 0, slowPost: 0});
+
     // A Confirm that does not go through leaves the card waiting, its buttons usable again.
     state.refuse = true;
     await page.locator('.asst-card[data-action="act3"] [data-confirm]').click();

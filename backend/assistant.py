@@ -500,6 +500,19 @@ def describe(c, method, path, body):
     def fields(names):
         return ", ".join(spoken(n) for n in names) or "nothing"
 
+    def values(sent):
+        """Field names with their short plain values (`paused: yes`), so a title says which way a change goes."""
+        def plain(v):
+            if isinstance(v, bool):
+                return "yes" if v else "no"
+            if v is None:
+                return "none"
+            if isinstance(v, (int, float)) or isinstance(v, str) and len(v) <= 40 and "\n" not in v:
+                return str(v)
+            return ""
+        return ", ".join(spoken(k) + (f": {plain(v)}" if plain(v) else "") for k, v in sent.items()
+                         if k not in ("expected_revision", "version")) or "nothing"
+
     def computer(request):
         """The computer a placement names and whether it takes members' bots, from the database."""
         row = c.execute("SELECT label,accepts_member_bots FROM runners WHERE id=?", (str(request.get("runner_id") or ""),)).fetchone()
@@ -558,11 +571,12 @@ def describe(c, method, path, body):
             "quarantine/clear": "Let bot {} run again (clear its quarantine)",
             "limit/retry": "Let bot {} try again after its spending limit"}[g[1]].format(bot(g[0]))),
         (r"/api/v2/bots/([^/]+)/(model|fallback|tools|routines|access|github-repos|transitions|control)",
-         lambda g: f"Change bot {bot(g[0])}'s {spoken(g[1])}" + (": " + fields(body) if body else "")),
+         lambda g: f"Change bot {bot(g[0])}'s {spoken(g[1])}" + (": " + values(body) if body else "")),
         (r"/api/v2/bots/([^/]+)/agent-credential(/revoke)?",
          lambda g: ("Revoke" if g[1] else "Make a new") + f" agent credential for bot {bot(g[0])}"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
-        (r"/api/v2/credentials/[^/]+", lambda g: "Delete a stored credential"),
+        (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
+            "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
         (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
          "to the roster, and let them sign in" + "".join(f"; {k} {body[k]}" for k in ("team", "reports_to", "title") if body.get(k))),
@@ -588,7 +602,7 @@ def describe(c, method, path, body):
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
             return fn(mm.groups()), diff
-    return unnamed(c, method, path, bot), diff
+    return unnamed(c, method, path, bot) + (": " + values(body) if body else ""), diff
 
 
 def spoken(name):
@@ -697,6 +711,10 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same)), "message_id": None, "repeated": True}
     said, diff = describe(c, method, path, body)
+    if not what and (m := re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", path)) and method == "PUT":
+        # What confirming does, from the change tried as this person and rolled back, not read off the request.
+        from .repositories import preview_change
+        what = preview_change(c, settings, who.actor, m.group(1), body)
     what = what or said         # a route that tried the change first says what it does (backend/repositories.py)
     if path == BATCH_PATH:
         # One line per step: what it does to which task, and the fields it changes.
