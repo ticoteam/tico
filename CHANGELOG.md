@@ -46,6 +46,10 @@ All notable changes to Tico are recorded here. The format follows
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
 
 ### Changed
+- What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
+  button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
+  the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
+  **Changelog** page; and **Take the tour** is in the account menu.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
