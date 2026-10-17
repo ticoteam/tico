@@ -12,6 +12,7 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
+    ${settingsWakeRow(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
@@ -41,6 +42,29 @@ async function settingsSetCompact(select) {
     await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: Number(select.value), expected_revision: e.revision});
     await loadSettings();
     toast(`${e.display_name} compacts at ${select.selectedOptions[0]?.textContent || select.value}`);
+  } catch (error) {
+    select.value = select.dataset.current;
+    toast(error.message, true);
+  } finally { if (select.isConnected) select.disabled = false; }
+}
+// How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). A bot made before
+// presets shows "Current behaviour" until someone picks one; the line under it is what the server says it runs on.
+const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance'], ['current', 'Current behaviour']];
+function settingsWakeRow(e) {
+  const current = e.wake?.preset || 'current';
+  return `<div class="sb-row"><span>Wakes</span><select class="settings-inline-select" data-bot-wake="${esc(e.name)}" data-current="${esc(current)}" aria-label="Wake preset for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
+      ${SETTINGS_WAKE_PRESETS.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
+    </select><span></span></div>
+    ${e.wake?.summary ? `<div class="sb-sub muted" data-bot-wake-summary>${esc(e.wake.summary)}</div>` : ''}`;
+}
+async function settingsSetWake(select) {
+  const slug = select.dataset.botWake, e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === select.dataset.current) return;
+  select.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(slug)}/wake-preset`, {wake_preset: select.value, expected_revision: e.revision});
+    await loadSettings();
+    toast(`${e.display_name} wakes on ${select.selectedOptions[0]?.textContent || select.value}`);
   } catch (error) {
     select.value = select.dataset.current;
     toast(error.message, true);
@@ -145,6 +169,8 @@ function settingsEditBot(slug = '') {
       if (machine) { touched = true; void settingsMoveBot(machine); }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) { touched = true; void settingsSetCompact(compact); }
+      const wake = event.target.closest('[data-bot-wake]');
+      if (wake) { touched = true; void settingsSetWake(wake); }
     });
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js

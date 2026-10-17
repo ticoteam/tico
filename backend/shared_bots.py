@@ -5,6 +5,7 @@ import re
 from types import SimpleNamespace
 
 from .store import H, Problem, encode, repo_url
+from .wake_presets import NEW_BOT_PRESET
 
 # What a branch takes from its original at every claim. Everything else (its name, its person,
 # its computer) is the branch's own.
@@ -125,7 +126,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   "description": original_row["description"] or "", "reports_to": "human:" + person,
                   "status": status, "repo": repo, "repo_url": repo_url(repo, github_owner),
                   "host": "keeper", "tasks": "hub", "thread_mode": "personal",
-                  "shared_from": source, "model_managed_by": "cloud"}
+                  "shared_from": source, "model_managed_by": "cloud", "wake_preset": NEW_BOT_PRESET}
         config.update({key: original[key] for key in FOLLOWED if key in original})
         team = settings_admin._team(c, slug, config)
         now = H.now()

@@ -3342,6 +3342,16 @@ def task_tree(conn, task_id, visible_ids=None):
     return roots
 
 
+def _awaited_by(conn, row, who):
+    """Whether `who` waits on this task: it owns the parent and parked it waiting, or one of its tasks is blocked on
+    this one. Its finishing then wakes `who` at once; otherwise the news is a nonblocking completion a wake
+    preset may batch (backend/wake_presets.py)."""
+    parent = task(conn, TR.parent_of(conn, row["id"]) or "")
+    if parent and parent["owner"] == who and parent["status"] == "waiting":
+        return True
+    return any((task(conn, tid) or {}).get("owner") == who for tid in TR.blocked_ids(conn, row["id"]))
+
+
 def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
     """Wake each ancestor whose subtasks are now all finished. `parent` names the parent when the
     task has just left it; `told` is a bot `_subtask_wake` already woke on it."""
@@ -3841,7 +3851,8 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None):
 def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, deduplicate=True,
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
-                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None):
+                requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
+                wake_refs=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4018,7 +4029,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {"reconcile": reconcile} if reconcile else None, quiet_bots=next_run, quiet=next_run)
+          {**({"reconcile": reconcile} if reconcile else {}), **(wake_refs or {})} or None,
+          quiet_bots=next_run, quiet=next_run)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
@@ -4370,7 +4382,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                and is_bot(after["requester"]) else
                f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}")
               + (f"\n{note}" if note and not quiet else "")
-              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), refs=refs, quiet_bots=True)
+              + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""),
+              refs={**(refs or {}), **({"wake_batch": "completion"} if status == "done" and is_bot(actor)
+                                        and not _awaited_by(conn, after, after["requester"]) else {})} or None,
+              quiet_bots=True)
     if finishing:
         # Not only the requester: the owner that parked it waiting on this person, a bot that asked them a
         # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
@@ -4570,7 +4585,10 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     for who in told:   # everyone but whoever tapped
         if who == subtask_told or (finished and who == after["owner"] and not new_note):
             continue
-        _wake(conn, after, who, said, quiet_bots=True,
+        # Another bot closing what this one asked for is a nonblocking completion unless it waits on it; an owner
+        # told its work was closed, and anything a person said, wake at once.
+        batch = who == after["requester"] and is_bot(actor) and not _awaited_by(conn, after, who)
+        _wake(conn, after, who, said, {"wake_batch": "completion"} if batch else None, quiet_bots=True,
               quiet=accepted or bool(finished and who == after["owner"]))
     parent = task(conn, TR.parent_of(conn, after["id"]) or "")
     if parent and parent["owner"] != actor and parent["owner"] not in told and parent["owner"] != subtask_told:
