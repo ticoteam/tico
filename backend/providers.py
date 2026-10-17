@@ -165,8 +165,9 @@ MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
 # threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
 # counted as input). A bot that names a model by another id than these gets no estimate.
-# Sources, read 2026-09-29:
-#   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes")
+# Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
+#   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
+#              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
@@ -178,7 +179,7 @@ PRICES = {
     "claude-opus-5-5": (4.0, 0.20, 20.0),
     "claude-opus-5": (5.0, 0.50, 25.0),
     "claude-opus-4-8": (5.0, 0.50, 25.0),
-    "claude-sonnet-5-5": (2.0, 0.20, 10.0),
+    "claude-sonnet-5-5": (2.0, 0.10, 10.0),
     "claude-sonnet-5": (2.0, 0.20, 10.0),
     "claude-haiku-4-5": (1.0, 0.10, 5.0),
     "gpt-6-astra": (10.0, 1.0, 50.0),

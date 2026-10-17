@@ -58,6 +58,8 @@ const PAGES = [
     await page.waitForTimeout(300);
   }},
   {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook", steps: async page => {
+    // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
+    if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');
     await page.click('#account');
     await page.click('#account-tour');
     await page.locator('.gs-tour-card').waitFor();

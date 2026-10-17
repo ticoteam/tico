@@ -9,7 +9,7 @@ const {html, uiFile, beta} = require('./support/page.cjs');
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.2.15', fixed_in: '0.2.18', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.2.16', fixed_in: '', url: 'javascript:alert(1)'}];
 const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not connect to tico.acme.example:443', fix: 'Open port 443 to the server.', source: 'doctor'},
-  {name: '/healthz', status: 'ok', detail: 'ok', fix: '', source: 'doctor'}];
+  {name: '/healthz', status: 'ok', detail: 'ok', fix: 'Restart the server.', source: 'doctor'}];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -82,7 +82,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     await v.page.locator('[data-hl-setup-row="bad"]').waitFor();
     assert.equal(await v.page.locator('.hl-setup-head').innerText(), '1 of 2 checks fail.');
     assert.match(await v.page.locator('[data-hl-setup-row="bad"]').innerText(), /HTTPS certificate[\s\S]*could not connect[\s\S]*Fix: Open port 443 to the server\./);
-    assert.equal(await v.page.locator('[data-hl-setup-row="ok"] .hl-setup-fix').count(), 0);
+    assert.equal(await v.page.locator('[data-hl-setup-row="ok"] .hl-setup-fix').count(), 0, 'a passing check shows no fix, even when it has one');
     assert.equal(await v.page.locator('[data-hl-setup-check]').innerText(), 'Setup check');
     assert.equal(v.calls.filter(c => c === 'POST setup-check {}').length, 1, 'the same endpoint and payload as Help');
     // Health redraws its list every minute; the result is not part of it and stays.

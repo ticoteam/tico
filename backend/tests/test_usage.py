@@ -40,6 +40,14 @@ def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
     assert row["est_cost_usd"] == pytest.approx(price("gpt-6-sol", 1000, 2000, 500))    # 0.0074
 
 
+def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
+    """Anthropic's page prices a cache hit at 0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5."""
+    for model, ratio in (("claude-fable-5-1", 0.025), ("claude-opus-5-5", 0.05), ("claude-sonnet-5-5", 0.05),
+                         ("claude-sonnet-5", 0.1), ("claude-haiku-4-5", 0.1)):
+        inp, hit, _ = providers.PRICES[model]
+        assert hit == pytest.approx(inp * ratio), model
+
+
 def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(tmp_path):
     conn = hubdb.connect(tmp_path / "hub.db")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
