@@ -152,3 +152,15 @@ def test_the_openrouter_fallback_sends_the_openrouter_model_id_and_skips_provide
     engine({"team": "Acme"}, QUESTIONS)
     assert opener.requests[-1]["body"]["model"] == "moonshotai/kimi-k3"
     assert B.fallback_engine(cursor, env={}) is None
+
+
+def test_the_draft_writer_sends_only_its_two_texts_to_the_companys_model():
+    """A person's update draft (backend/updates.write_draft): one system prompt and one user turn, no tools."""
+    from clients import judge as J
+    opener = Captured()
+    via, key, model = B.fallback_model({"runtime": "pi", "model": "deepseek-v4.1-flash", "enabled": ["openrouter"]},
+                                       env={"OPENROUTER_API_KEY": "synthetic"})
+    write = J.llm_writer(via, key, model, opener=opener)
+    assert write("Draft it.", "Ana's facts")["bucket"]
+    body = opener.requests[-1]["body"]
+    assert [m["content"] for m in body["messages"]] == ["Draft it.", "Ana's facts"] and "tools" not in body

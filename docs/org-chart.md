@@ -10,9 +10,11 @@ the Goal Manager is reached from Goals and the Librarian from Docs and Market. S
 Message bots such as Inbox Manager follow in a separate **Message bots** section on the chart and Goals. The mailboxes and
 A message bot's mailboxes and Slack channels are listed under it in the sidebar; any other bot's Slack channels are
 under Slack in its Tools on the bot's page.
-A human's synced Grok Bots ([External agent sync](external-agent-sync.md)) sit in one framed **Grok Bot** cluster under them,
-with Grok's own sections (Pinned and the ones made there) nested inside; their Dots is an ordinary row under them. Your
-own row shows **Connect** until an external agent of yours has reached Tico ([Connect an external agent](connect-an-agent.md)).
+Synced Grok Bots, Dots and Muse ([External agent sync](external-agent-sync.md)) are ordinary rows, initially under the
+human who linked them. Move each one under a human or bot, or into a group, with the same chart controls as other bots;
+later syncs preserve that placement. Grok's own sections and pins remain source metadata and do not create nested
+groups or control chart ordering. Each row keeps its runtime mark. Your own row shows **Connect** until an external
+agent of yours has reached Tico ([Connect an external agent](connect-an-agent.md)).
 Bots read the same chart through `hub team show` / the `hub_team_show` MCP tool (`GET /api/v2/org`): the humans, and every bot the caller
 may see (see [permissions.md](permissions.md)) with its `reports_to`, its `team` (its group's id), its `department` (its group's name)
 and its `template`. `hub team show --team <group>` is that group and the groups in it. `hub human list` is the humans alone.
@@ -24,6 +26,9 @@ to their own chart. Branches keep their own reporting relationships and work.
 
 Groups and reporting are two things. `reports_to` says who a human or bot works for; a group says who is on which sub-team. Changing
 one never changes the other.
+
+Updates follow the chart: the bots lowest on it report first, and each manager, bot or person, writes its update from its
+direct reports' ([Updates](using-tico.md#updates)).
 
 ## Groups
 

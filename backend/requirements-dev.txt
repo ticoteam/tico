@@ -45,7 +45,7 @@ cryptography==50.0.2
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
     #   pyjwt
-dnspython==2.8.0
+dnspython==2.9.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
@@ -67,7 +67,7 @@ httpcore==1.0.9
     # via
     #   -c backend/requirements.txt
     #   httpx
-httptools==0.8.0
+httptools==0.9.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
@@ -75,31 +75,31 @@ httpx==0.28.1
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-idna==3.19
+idna==3.20
     # via
     #   -c backend/requirements.txt
     #   anyio
     #   httpx
-iniconfig==2.3.0
+iniconfig==2.3.1
     # via pytest
 jmespath==1.1.0
     # via
     #   -c backend/requirements.txt
     #   boto3
     #   botocore
-orjson==3.12.0
+orjson==3.13.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
 packaging==26.3
     # via pytest
-pillow==12.3.0
+pillow==13.0.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-playwright==1.62.0
+playwright==1.64.0
     # via -r backend/requirements-dev.in
-pluggy==1.6.0
+pluggy==1.7.0
     # via pytest
 psycopg==3.3.6
     # via
@@ -113,15 +113,15 @@ pycparser==3.0
     # via
     #   -c backend/requirements.txt
     #   cffi
-pydantic==2.13.5
+pydantic==2.14.1
     # via
     #   -c backend/requirements.txt
     #   fastapi
-pydantic-core==2.46.5
+pydantic-core==2.50.1
     # via
     #   -c backend/requirements.txt
     #   pydantic
-pyee==13.0.1
+pyee==14.0.0
     # via playwright
 pygments==2.21.0
     # via pytest
@@ -129,7 +129,7 @@ pyjwt==2.15.1
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-pymongo==4.18.2
+pymongo==4.19.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
@@ -137,7 +137,7 @@ pymysql==1.2.3
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-pypdf==6.19.0
+pypdf==6.21.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
@@ -164,7 +164,7 @@ s3transfer==0.19.2
     # via
     #   -c backend/requirements.txt
     #   boto3
-sentry-sdk==2.69.1
+sentry-sdk==2.69.2
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
@@ -172,11 +172,11 @@ six==1.17.0
     # via
     #   -c backend/requirements.txt
     #   python-dateutil
-slack-sdk==3.44.1
+slack-sdk==3.45.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in
-starlette==1.6.0
+starlette==1.8.0
     # via
     #   -c backend/requirements.txt
     #   fastapi
@@ -202,7 +202,7 @@ urllib3==2.8.0
     #   -r backend/requirements.in
     #   botocore
     #   sentry-sdk
-uvicorn==0.52.4
+uvicorn==0.54.0
     # via
     #   -c backend/requirements.txt
     #   -r backend/requirements.in

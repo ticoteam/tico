@@ -1,5 +1,6 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -148,10 +149,17 @@ class Scheduler:
                        encode({"failures": failures, "tick_ms": round((time.monotonic() - started) * 1000)})))
         # Updates (backend/updates.py): today's queue, one bot asked at a time. Its own short
         # transaction, so a failure here never holds back the routines above.
+        # A person's draft is written by the company's model in a background thread, so the call never
+        # holds the write lock; its row stays out until the thread posts it (or gives up on it).
         try:
             from . import updates
+            settings = self.store.settings
             with self.store.transaction() as c:
-                updates.dispatch(c, at)
+                write = updates.writer_for(c, settings)
+                sent = updates.dispatch(c, at, settings.assistant_bot if write else None)
+            if sent and updates.is_person(sent):
+                threading.Thread(target=updates.write_draft, args=(self.store, sent, write, settings.assistant_bot),
+                                 name="update-draft", daemon=True).start()
         except Exception as exc:
             failures.append({"updates": type(exc).__name__})
         # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
