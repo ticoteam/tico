@@ -278,7 +278,7 @@ EOF
 }
 
 step_replica() {
-  local data="${PROJECT}_tico-data" rows
+  local data="${PROJECT}_tico-data"
   # The rolled-back server has been replicating for a while; then the volume is lost and the same image restores from
   # the replica. The migrated copy Litestream saw before the rollback must not be the newest thing in it.
   sleep 20
