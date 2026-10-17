@@ -20,22 +20,22 @@ def minor(text):
 
 def dockerfile_python():
     image = re.search(r'^ARG PYTHON_IMAGE=(\S+)$', (ROOT / 'Dockerfile').read_text(), re.M).group(1)
-    return image, minor(re.match(r'python:(\S+)', image).group(1))
+    return image, minor(re.match(r'python:(\S+)', image).group(1))   # digest pins: test_image_pins.py
 
 
-def test_image_python_is_pinned_and_matches_the_locks_and_workflows():
-    image, python = dockerfile_python()
-    assert re.fullmatch(r'python:\d+\.\d+[\w.-]*@sha256:[0-9a-f]{64}', image), image
+def test_locks_and_release_validation_use_the_image_python():
+    _, python = dockerfile_python()
     for lock in LOCKS:
         header = re.search(r'--python-version (\S+)', (ROOT / lock).read_text())
         assert header, f'{lock} does not record which Python it was compiled for'
         assert minor(header.group(1)) == python, f'{lock} is compiled for {header.group(1)}, the image runs {python}'
-    found = 0
+    # Other workflows may add older Pythons (runner Macs); Release validation must test the one the images ship.
     for workflow in WORKFLOWS:
-        for version in re.findall(r"python-version:\s*['\"]?([\d.]+)", workflow.read_text()):
-            found += 1
-            assert minor(version) == python, f'{workflow.name} tests on Python {version}, the image runs {python}'
-    assert found, 'no workflow pins a Python version'
+        versions = [minor(v) for v in re.findall(r"python-version:\s*['\"]?([\d.]+)", workflow.read_text())]
+        if workflow.name == 'ci.yml':
+            assert versions and set(versions) == {python}, f'Release validation tests on {versions}, the image runs {python}'
+        elif versions:
+            assert python in versions, f'{workflow.name} tests on {versions}, never on the image Python {python}'
 
 
 def crate_msrv(crate):
@@ -50,7 +50,6 @@ def rust_stages():
             image = re.match(r'FROM rust:([\d.]+)\S*', block)
             if not image:
                 continue
-            assert '@sha256:' in block.split('\n', 1)[0], f'{path.name}: {block.splitlines()[0]} is not pinned by digest'
             crate = re.search(r'^COPY ([\w-]+)/Cargo\.toml ', block, re.M)
             assert crate, f'{path.name}: {block.splitlines()[0]} copies no crate'
             stages.append((path.relative_to(ROOT), block.splitlines()[0], minor(image.group(1)), crate.group(1)))
