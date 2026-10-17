@@ -48,9 +48,17 @@ def sync(c, task_id):
     current = next((s['name'] for s in typ['steps'] if s['id'] == row['step_id']), None)
     if current not in ('Approved', 'Building', 'Shipped'):
         return
+    # A child shipped when it reached a done status. Closed counts too where the type has no done step (the default
+    # Engineering type's Done is closed), or when it was closed straight from done: accepting finished work closes
+    # it. A Dev ticket closed from any other status (a duplicate, superseded, or declined first) did not ship.
     total, unfinished, shipped = c.execute(
         "SELECT count(*),coalesce(sum(t.status NOT IN ('done','closed','declined')),0),"
-        "coalesce(sum(t.status IN ('done','closed')),0) "
+        "coalesce(sum(t.status='done' OR (t.status='closed' AND (NOT EXISTS "
+        "(SELECT 1 FROM task_steps s WHERE s.type_id=t.type_id AND s.status='done') OR "
+        # The unary + keeps SQLite on the per-task index: without ANALYZE it picks task_events(field, ts) and reads
+        # every status change on the server.
+        "(SELECT e.old FROM task_events e WHERE e.task_id=t.id AND +e.field='status' "
+        "ORDER BY e.ts DESC,e.rowid DESC LIMIT 1)='done'))),0) "
         "FROM task_relations r JOIN tasks t ON t.id=r.from_task "
         "WHERE r.to_task=? AND r.kind='parent' AND t.type_id IN (SELECT id FROM task_types WHERE manager='engineering-lead')", (task_id,)).fetchone()
     if not total:
