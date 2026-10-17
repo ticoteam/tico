@@ -14,13 +14,14 @@ const figures = (runs, i, c, o, est, sub = 0) => ({runs, input_tokens: i, cached
 const limit = (daily, monthly, percent = 0, blocked = null) => ({daily_usd: daily, monthly_usd: monthly, own_daily_usd: daily, own_monthly_usd: monthly, percent, blocked, may_edit: true, source: {}});
 // Arriving in the wrong order on purpose.
 const ROWS = [
-  {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), share: 0.05, limit: limit(null, null)},
+  {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), low_estimate_runs: 2, share: 0.05, limit: limit(null, null)},
   {bot: 'support', name: 'Support', department: 'Revenue', ...figures(12, 900000, 2100000, 60000, 6.1, 1.5), share: 0.8, limit: limit(5, 50, 122, 'daily')},
   {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null), share: 0, limit: limit(null, 20, 85)},
   {bot: 'coo', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
 ];
 const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
-                                              input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0}), {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0});
+                                              input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
+                                     {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -99,6 +100,9 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     assert.match(await support.locator('.use-tok').innerText(), /3\.06M tokens/);
     assert.match(await support.locator('.use-cost').innerText(), /\$6\.10\s*≈ \$1\.50 API-equivalent/);
     assert.equal((await page.locator('.use-row[data-bot=coo] .use-cost').innerText()).trim(), '≈ $2.20 API-equivalent', 'a subscription is not spend');
+    // Runs on a model that charges more for long prompts, without each request's tokens, may read low.
+    assert.match(await page.locator('.use-row[data-bot=sales] .use-cost').innerText(), /\$0\.40\s*estimate, may be low/);
+    assert.match(await page.locator('.use-total').innerText(), /Estimate, may be low: 2 runs on a model that charges more for long prompts/);
     assert.equal((await page.locator('.use-row[data-bot=inbox] .use-cost').innerText()).trim(), '—', 'a model with no price has no cost');
     assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /450 tokens/);
     assert.equal(await page.locator('.use-row[data-bot=support] .use-share i').evaluate(e => e.style.width), '100%');

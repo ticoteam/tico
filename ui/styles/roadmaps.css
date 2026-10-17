@@ -1,5 +1,8 @@
 /* Roadmap controls share the task rails, chips and company inputs. */
 .roadmap-form{display:flex;flex-direction:column;gap:12px;min-width:0}
+.roadmap-settings-fields,.roadmap-receiver{display:flex;flex-direction:column;gap:12px;min-width:0;margin:0;padding:0;border:0}
+.roadmap-receiver{gap:5px}
+.roadmap-receiver [data-receiver]:empty{display:none}
 .roadmap-form label:not(.roadmap-check),.roadmap-publication>label{display:flex;flex-direction:column;gap:5px;min-width:0}
 .roadmap-form input:not([type=checkbox]),.roadmap-form textarea,.roadmap-form select,.roadmap-publication input,.roadmap-publication textarea{width:100%;min-width:0;box-sizing:border-box}
 .roadmap-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}

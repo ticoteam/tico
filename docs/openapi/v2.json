@@ -26856,12 +26856,17 @@
           "unpriced_runs": {
             "type": "integer",
             "description": "Runs with tokens on a model with no list price"
+          },
+          "low_estimate_runs": {
+            "type": "integer",
+            "description": "Priced runs whose estimate may be low: the model charges more for long prompts and the runner did not report every request's tokens"
           }
         },
         "required": [
           "cached_tokens",
           "est_cost_usd",
           "input_tokens",
+          "low_estimate_runs",
           "output_tokens",
           "runs",
           "subscription_equiv_usd",

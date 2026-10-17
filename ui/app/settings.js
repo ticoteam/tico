@@ -104,7 +104,7 @@ function pageSettings() {
     </section></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
-      ${settingsIsAdmin() ? '<section class="card" id="settings-roadmaps"></section>' : ''}
+      <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
