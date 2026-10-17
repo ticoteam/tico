@@ -903,10 +903,14 @@ def task_restore(api, args):
     return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
-@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",
+@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
+      "changes labels on a task it owns, asked for or whose type it manages; a public roadmap label also needs an "
+      "approved publish approval (hub_task_publication_preview with the labels the task keeps), and goal:on/goal:off "
+      "need a person.",
       {"id": TASK_ID,
        "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
-       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"}, "on_behalf_of": ASKED},
+       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"},
+       "approval_id": _s("Exact publish approval for a public roadmap label"), "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_label(api, args):
     current = api.get("tasks/" + args["id"])["task"]
@@ -917,7 +921,10 @@ def task_label(api, args):
         x = str(x).strip().lower()
         if x and x not in labels:
             labels.append(x)
-    return _asked(api, args).post("tasks/" + args["id"], {"version": current["version"], "labels": labels}, key=_key(args))
+    body = {"version": current["version"], "labels": labels}
+    if args.get("approval_id"):
+        body["approval_id"] = args["approval_id"]
+    return _asked(api, args).post("tasks/" + args["id"], body, key=_key(args))
 
 
 @tool("hub_task_link", "Attach a link to a task: the pull request you opened (this is what moves a "

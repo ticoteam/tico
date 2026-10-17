@@ -237,8 +237,15 @@ with `bots` on the task-types routes or `hub task type update "Dev ticket" --bot
 | `read` | Comment on company tasks and file subtasks |
 | `work` | Also change step, owner, due date, description, order and links |
 
-Private overrides every type permission. Closing, ready or closed steps and labels keep their
-existing human controls. Changing type cannot publish a private task.
+Private overrides every type permission. Closing, ready or closed steps keep their existing
+human controls. Changing type cannot publish a private task.
+
+Labels are a mover's, with one exception for bots: a bot adds and removes classification labels
+(`qa`, an area, a priority) on a task it owns, asked for, or whose type it manages (the type's
+`manager`), whatever the type's `bots` setting. A public roadmap label needs its exact approved
+publish approval (`hub task publication-preview <id> --label ...` for the labels the task keeps,
+then `hub task label <id> --add roadmap --approval-id <id>`), and `goal:on`/`goal:off` need a mover.
+Lane and number are a mover's alone ([Permissions](permissions.md#tags)).
 A bot's comment is a message to the people on the task, under the usual rules for reaching them.
 
 A person's comment wakes the task's bot when the bot owns the task, and is never quiet on a task

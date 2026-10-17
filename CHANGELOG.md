@@ -106,6 +106,16 @@ All notable changes to Tico are recorded here. The format follows
 - Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
   @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
   the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
+- A bot may now add and remove classification labels (`qa`, an area, a priority) on a task it manages: one it
+  owns, asked for, or whose type it manages, such as Head of Product on its roadmap items or Head of Engineering on
+  Dev tickets. Before, only a person on the leadership, product or engineering teams could, and bots trying it were
+  quarantined. A public roadmap label still needs an approved publish approval (`hub task label --approval-id`), both
+  to add and to remove, and `goal:on`/`goal:off` still need a person; the refusal says which label and why, and
+  counts toward a quarantine once per task an hour. Lane and number are unchanged: a person's.
+- A bot back from a quarantine finds a note in its next run with the refusal that stopped it and "Do not retry this
+  action; leave a note for a person if you still need it", whether the cooldown lifted it or a person cleared it.
+  While a bot is quarantined, its manager bot's messages, notes and task comments are kept for when it is back
+  instead of refused, as a person's already were (and a person's notes to a paused or quarantined bot now are too).
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
