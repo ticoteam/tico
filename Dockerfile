@@ -78,6 +78,8 @@ Path("release-manifest.json").write_text(json.dumps({"commit": commit, "reposito
                                                      "code": digest(".")}) + "\n")
 PY
 RUN chmod -R go-w,go+rX /opt/tico
+# The image's Python must be the one the locks were compiled for, and its SQLite new enough for the schema.
+RUN python scripts/runtime_check.py
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
     .venv/bin/python -c 'import backend.app, runner.connectors, runner.close_calls, runner.importers.service, clients.environments' \
