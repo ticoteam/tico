@@ -7,7 +7,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, uiFile, beta} = require('./support/page.cjs');
 
 const FULL = {see: true, read: true, write: true};
 async function shot(page, name) {
@@ -66,7 +66,7 @@ async function open(browser, me, branches = false) {
     }
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (failures.has(p)) return route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: 'Temporarily unavailable'})});
-    if (p === '/api/me') return json(me);
+    if (p === '/api/me') return json({...me, config: {beta}});
     if (p === '/api/humans') return json({people, org_groups: groupRows()});
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
@@ -192,6 +192,9 @@ async function owner(browser) {
   assert.deepEqual(await page.locator('#tree .node-sources a').evaluateAll(els => els.map(a => [a.closest('li').closest('ul').closest('li').querySelector('a.node').dataset.org, a.querySelector('span:last-child').textContent])),
     [['b:inbox', 'ana@example.test'], ['b:channel', '#support']]);
   assert.equal(await page.locator('#nav-inboxes-section').isHidden(), true);
+  // Message bots is a Beta feature: its heading carries the pill, and no other group does.
+  await row(page, 'Message bots').locator('.pill.beta').waitFor();
+  assert.equal(await page.locator('#tree .noderow[data-org^="g:"] .pill.beta').count(), 1);
   for (const name of ['Message bots']) {
     assert.equal(await row(page, name).getAttribute('draggable'), null);
     assert.equal(await row(page, name).locator('[data-group-add], [data-group-rename], [data-group-delete]').count(), 0);

@@ -545,7 +545,7 @@ function renderTree() {
       const renaming = manage && ORG_EDIT?.rename === node.id;
       return `<li class="dept org-group"><div class="noderow" data-org="${esc(key)}"${manage && !renaming ? ' draggable="true"' : ''}${node.helpers ? ' data-helper' : ''}>
         <button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.name)}">›</button>
-        ${renaming ? orgGroupFieldHTML(node.name) : `<span class="dept-label" data-toggle="${esc(key)}" role="button" tabindex="0">${esc(node.name)}</span>`}
+        ${renaming ? orgGroupFieldHTML(node.name) : `<span class="dept-label" data-toggle="${esc(key)}" role="button" tabindex="0">${esc(node.name)}</span>${node.id === MESSAGE_BOTS_GROUP ? betaPill('message_bots') : ''}`}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
         ${manage && !renaming ? `<span class="org-group-tools"><button type="button" class="org-tool" data-group-add="${esc(node.id)}" title="Add group" aria-label="Add a group in ${esc(node.name)}"><span class="org-plus" aria-hidden="true">+</span></button><button type="button" class="org-tool" data-group-rename="${esc(node.id)}" title="Rename" aria-label="Rename ${esc(node.name)}"><span class="nav-icon" aria-hidden="true">edit</span></button><button type="button" class="org-tool" data-group-delete="${esc(node.id)}" title="Delete group" aria-label="Delete group ${esc(node.name)}"${ORG_DELETING.has(node.id) ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">delete</span></button></span>` : ''}</div>
         <ul ${isCol ? 'hidden' : ''}>${adding ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : ''}${rec(key, depth + 1)}</ul></li>`;
