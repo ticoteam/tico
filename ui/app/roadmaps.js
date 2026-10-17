@@ -152,25 +152,69 @@ async function roadmapRankingLoad(state) {
     $('[data-roadmap-back]').disabled = !state.offset; $('[data-roadmap-next]').disabled = state.next == null; $('[data-roadmap-error]').textContent = '';
   } catch (error) { if (S.route === '#/roadmap' && seq === state.seq) $('[data-roadmap-error]').textContent = error.message; }
 }
+// Set by the #/settings/roadmap route (Health's fix link): bring the Public roadmap card into view once it is drawn.
+let ROADMAP_SETTINGS_REVEAL = false;
+// suggestions_receiver (backend/roadmaps.py) resolves Automatic on the server; the screen only says what it answered.
+function roadmapReceiverText(settings) {
+  const receiver = settings.suggestions_receiver || {}, to = receiver.bot ? receiver.name || receiver.bot : '';
+  if (receiver.source === 'automatic') return 'Automatic: ' + (to || 'no bot can take suggestions');
+  if (receiver.source === 'chosen') return '';
+  const why = receiver.source === 'chosen_archived' ? 'is archived' : "isn't active";
+  return `The bot chosen for roadmap suggestions ${why}; ` + (to ? `suggestions now go to ${to}` : 'no bot can take suggestions');
+}
+function roadmapReceiverOptions(settings) {
+  const chosen = settings.suggestions_bot || '', source = settings.suggestions_receiver?.source;
+  const active = (S.emps || []).filter(e => e.status === 'active' && (!isHiddenBot(e.name) || e.name === chosen))
+    .map(e => ({slug: e.name, name: botDisplayName(e.name)})).sort((a, b) => a.name.localeCompare(b.name));
+  const option = (value, text, extra = '') => `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}${extra}>${esc(text)}</option>`;
+  // A chosen bot that stopped being active stays visible as itself, never as a blank or as Automatic.
+  const gone = !chosen || active.some(bot => bot.slug === chosen) ? ''
+    : source === 'chosen' ? option(chosen, settings.suggestions_receiver.name || botDisplayName(chosen)) : (() => {
+    const state = source === 'chosen_archived' ? 'archived' : ({paused: 'paused', planned: 'setting up', quarantined: 'quarantined'})[(S.emps || []).find(e => e.name === chosen)?.status] || 'not active';
+    return option(chosen, `${botDisplayName(chosen)} (${state})`, ' disabled');
+  })();
+  return option('', chosen ? 'Automatic' : roadmapReceiverText(settings)) + gone + active.map(bot => option(bot.slug, bot.name)).join('');
+}
+function roadmapSettingsRender(host, settings, tags) {
+  const edit = settingsIsAdmin();
+  host.innerHTML = `<header><h2>Public roadmap</h2></header><form class="roadmap-form"><fieldset class="roadmap-settings-fields"${edit ? '' : ' disabled'}><div><span>Tags shown publicly</span><div class="roadmap-labels">${(tags.tags || []).filter(t => !t.is_template).map(t => `<label class="roadmap-check"><input type="checkbox" name="label" value="${esc(t.key)}"${settings.labels.includes(t.key) ? ' checked' : ''}>${esc(t.label || t.key)}</label>`).join('')}</div></div>
+      <label>Websites that can show it<textarea name="cors_origins" rows="2" placeholder="https://acme.example">${esc(settings.cors_origins.join('\n'))}</textarea></label>
+      <div class="roadmap-receiver"><label>Suggestions go to<select name="suggestions_bot" aria-describedby="roadmap-receiver-note">${roadmapReceiverOptions(settings)}</select></label><span class="muted" id="roadmap-receiver-note" data-receiver>${esc(settings.suggestions_bot ? roadmapReceiverText(settings) : '')}</span></div>
+      <label>Requests per visitor per day<input class="roadmap-limit" type="number" name="action_limit" min="1" max="10000" required value="${settings.action_limit}"></label>
+      <label>Visitor suggestions waiting for review<input class="roadmap-limit" type="number" name="suggestion_limit" min="1" max="1000" required value="${settings.suggestion_limit ?? 20}"></label>
+      <label class="roadmap-check">${peopleSwitch('name="bot_public_approval"', settings.bot_public_approval, false, 'Bots need approval to post publicly')}Bots need approval to post publicly</label></fieldset>
+      <div class="row">${edit ? '<button class="primary" type="submit">Save</button>' : '<span class="muted">Only owners and admins change these.</span>'}<span class="muted" data-status role="status"></span></div></form>`;
+  const form = $('form', host), picker = form.elements.suggestions_bot, saved = settings.suggestions_bot || '';
+  picker.onchange = () => { $('[data-receiver]', form).textContent = picker.value !== saved ? 'Takes effect for the next suggestion once you save.' : saved ? roadmapReceiverText(settings) : ''; };
+  form.onsubmit = async ev => {
+    ev.preventDefault(); const values = new FormData(form), button = $('[type=submit]', form), status = $('[data-status]', form);
+    const body = {labels: values.getAll('label'), cors_origins: String(values.get('cors_origins')).split(/[\n,]/).map(s => s.trim()).filter(Boolean), action_limit: Number(values.get('action_limit')), suggestion_limit: Number(values.get('suggestion_limit')), bot_public_approval: form.elements.bot_public_approval.checked};
+    // Sent only when changed: the server refuses an inactive bot, and an archived choice must not block saving the rest.
+    if (picker.value !== saved) body.suggestions_bot = picker.value || null;
+    button.disabled = true; status.textContent = '';
+    try {
+      const next = await post('/v2/roadmaps/settings', body);
+      if (!host.isConnected) return;
+      roadmapSettingsRender(host, next, tags); $('[data-status]', host).textContent = 'Saved'; $('[type=submit]', host).focus();
+    } catch (error) { status.textContent = error.message; button.disabled = false; }
+  };
+}
+function roadmapSettingsReveal(host) {
+  if (!ROADMAP_SETTINGS_REVEAL || host.dataset.loaded !== 'yes') return;
+  ROADMAP_SETTINGS_REVEAL = false;
+  host.scrollIntoView({block: 'start'});
+  $('select[name=suggestions_bot]', host)?.focus({preventScroll: true});
+}
 async function roadmapSettingsMount() {
   const host = $('#settings-roadmaps');
-  if (!host || host.dataset.loaded || !settingsIsAdmin()) return;
+  if (!host) return;
+  if (host.dataset.loaded) { roadmapSettingsReveal(host); return; }
   host.dataset.loaded = 'loading';
   try {
     const [settings, tags] = await Promise.all([get('/v2/roadmaps/settings'), get('/v2/tags')]);
     if (!host.isConnected) return;
-    host.innerHTML = `<header><h2>Public roadmap</h2></header><form class="roadmap-form"><div><span>Tags shown publicly</span><div class="roadmap-labels">${(tags.tags || []).filter(t => !t.is_template).map(t => `<label class="roadmap-check"><input type="checkbox" name="label" value="${esc(t.key)}"${settings.labels.includes(t.key) ? ' checked' : ''}>${esc(t.label || t.key)}</label>`).join('')}</div></div>
-      <label>Websites that can show it<textarea name="cors_origins" rows="2" placeholder="https://acme.example">${esc(settings.cors_origins.join('\n'))}</textarea></label>
-      <label>Requests per visitor per day<input class="roadmap-limit" type="number" name="action_limit" min="1" max="10000" required value="${settings.action_limit}"></label>
-      <label>Visitor suggestions waiting for review<input class="roadmap-limit" type="number" name="suggestion_limit" min="1" max="1000" required value="${settings.suggestion_limit ?? 20}"></label>
-      <label class="roadmap-check">${peopleSwitch('name="bot_public_approval"', settings.bot_public_approval, false, 'Bots need approval to post publicly')}Bots need approval to post publicly</label>
-      <div class="row"><button class="primary" type="submit">Save</button><span class="muted" data-status role="status"></span></div></form>`;
-    $('form', host).onsubmit = async ev => {
-      ev.preventDefault(); const form = ev.currentTarget, values = new FormData(form), button = $('[type=submit]', form), status = $('[data-status]', form);
-      const body = {labels: values.getAll('label'), cors_origins: String(values.get('cors_origins')).split(/[\n,]/).map(s => s.trim()).filter(Boolean), action_limit: Number(values.get('action_limit')), suggestion_limit: Number(values.get('suggestion_limit')), bot_public_approval: form.elements.bot_public_approval.checked};
-      button.disabled = true; status.textContent = '';
-      try { await post('/v2/roadmaps/settings', body); status.textContent = 'Saved'; } catch (error) { status.textContent = error.message; } finally { button.disabled = false; }
-    };
+    roadmapSettingsRender(host, settings, tags);
     host.dataset.loaded = 'yes';
+    roadmapSettingsReveal(host);
   } catch (error) { if (host.isConnected) { host.textContent = error.message; delete host.dataset.loaded; } }
 }
