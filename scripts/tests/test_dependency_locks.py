@@ -53,11 +53,8 @@ def check_satisfied(source, lock):
             f'{source.name} asks for {requirement}, {lock.name} locks {pins[name]}: recompile the lock')
 
 
-def test_runtime_lock_satisfies_requirements_in():
+def test_python_locks_satisfy_what_they_lock():
     check_satisfied(BACKEND / 'requirements.in', BACKEND / 'requirements.txt')
-
-
-def test_dev_lock_satisfies_requirements_dev_in():
     check_satisfied(BACKEND / 'requirements-dev.in', BACKEND / 'requirements-dev.txt')
 
 

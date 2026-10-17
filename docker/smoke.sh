@@ -30,6 +30,7 @@ EOF
 echo "TICO_PORT=$port" >> "$env_file"
 docker/edge-env.sh "${TICO_SMOKE_EDGE:-172.30.253}" >> "$env_file"
 dc() { docker compose -p "$project" --env-file "$env_file" "$@"; }
+. docker/compose-up.sh   # compose_up: retries only a failed network create
 cleanup() {
   status=$?
   [ "$status" = 0 ] || { dc logs --tail 60 >&2 || true; docker logs --tail 40 "$runner" >&2 || true; }
@@ -117,7 +118,7 @@ join_runner() {
 }
 
 step "server up"
-dc --profile none up -d
+compose_up dc --profile none up -d
 retry 180 healthy || fail "the server did not become healthy"
 id="$(environment_id)"
 [ -n "$id" ] || fail "the server reports no environment id"
@@ -182,7 +183,7 @@ docker exec "$runner" codex --version >/dev/null || fail "the installed Codex di
 step "down and up keeps the data"
 docker rm -f "$runner" >/dev/null
 dc down
-dc --profile none up -d
+compose_up dc --profile none up -d
 retry 180 healthy || fail "the server did not come back after down and up"
 [ "$(environment_id)" = "$id" ] || fail "the environment id changed"
 [ "$(runners)" = 1 ] || fail "the database was not kept"
@@ -215,7 +216,7 @@ TICO_UPDATER_BUNDLE=never
 TICO_HEALTH_SECONDS=60
 TICO_UPDATER_POLL=0.5
 EOF
-rc up -d
+compose_up rc up -d
 retry 300 runner_is release 9.0.2 || fail "the runner did not update to the server's release 9.0.2"
 runs_tag v9.0.2 || fail "the runner container is not on the v9.0.2 image"
 retry 120 grep -q '^TICO_TAG=v9.0.2$' "$box/.env" || fail "the update did not stay in .env"   # written once it is healthy
