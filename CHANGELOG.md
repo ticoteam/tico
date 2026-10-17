@@ -29,7 +29,8 @@ All notable changes to Tico are recorded here. The format follows
   default, and **Whole org** shows the chart from the top (the choice is kept). The badge and unread dots count only
   your direct reports, so a report's report never alerts. **List** keeps the plain newest-first feed. On Friday the
   **Weekly** tab has your week in review to write or edit as its slides (goal, done, focus, blockers, KPIs). A
-  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card;
+  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card (in
+  **List**, an older one not on the page opens under the card that links it, not the author's latest);
   `hub update show` lists them too, and you only see those you may read.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.

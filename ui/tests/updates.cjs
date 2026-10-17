@@ -41,6 +41,12 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
      created: iso(-170 * hour), updated: iso(-170 * hour), read: true, replies: 0}];
   const threads = {'u-fin': [{id: 'm1', from_actor: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created: iso(-2 * hour)},
                              {id: 'm2', from_actor: 'bot:finance', body: 'Will do.', created: iso(-hour)}]};
+  // Older updates past the feed's page: only the one-update route has them (a From: link on an older card).
+  const older = {'u-seo-old': {id: 'u-seo-old', bot: 'seo', kind: 'daily', day: day(-86400e3), headline: 'Outlined the checklist page',
+                               body: '- Outlined the checklist page', created: iso(-27 * hour), updated: iso(-27 * hour), read: true, replies: 0},
+                 'u-game-old': {id: 'u-game-old', bot: 'game', kind: 'daily', day: day(-86400e3), headline: 'Sketched a level',
+                                body: '- Sketched the first level', created: iso(-28 * hour), updated: iso(-28 * hour), read: true, replies: 0}};
+  const oneAsked = [];
   const archivedIds = new Set(), archiveRequests = [];
   let archiveFails = false, nextListGate = null, holdList = null, holdReply = null, keepUnread = null;
   const isArchived = u => archivedIds.has(u.id) || !!u.superseded;
@@ -106,7 +112,11 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         return json({message: msg, thread: threads[reply[1]]});
       }
       const one = p.match(/^\/api\/v2\/updates\/([^/]+)$/);
-      if (one) return json({update: updates.find(u => u.id === one[1]), thread: threads[one[1]] || []});
+      if (one) {
+        oneAsked.push(one[1]);
+        const u = updates.find(x => x.id === one[1]) || older[one[1]];
+        return u ? json({update: u, thread: threads[one[1]] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
+      }
       return json({});
     });
     return {page, errors};
@@ -264,6 +274,36 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     keepUnread = null;
     assert.deepEqual(errors, []);
     await page.close();
+
+    // An older manager card's From: link opens the update it was written from, even when that one is past the feed's
+    // page and its author has posted since (their page shows their latest): it loads under the card and is selected.
+    // My bots doesn't hide it; a link that can't load goes to its author as before.
+    const cmoCard = updates.find(u => u.id === 'u-cmo');
+    cmoCard.inputs = [{id: 'u-seo-old', author: 'seo'}, {id: 'u-game-old', author: 'game'}, {id: 'u-fin-gone', author: 'finance'}];
+    const linked = await open({width: 1280, height: 900});
+    const lp = linked.page;
+    await lp.goto('http://tico-ui.test/#/updates');
+    const cmoFrom = lp.locator('[data-upd="u-cmo"] .upd-from');
+    await cmoFrom.waitFor();
+    await cmoFrom.locator('[data-upd-input="u-seo-old"]').click();
+    await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').waitFor();
+    assert.match(await lp.locator('[data-upd="u-seo-old"] .upd-body').innerText(), /Outlined the checklist page/, 'the linked update, not the newer one');
+    assert.match(lp.url(), /#\/updates$/, 'the link stays on the page');
+    let order = await lp.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
+    assert.equal(order[order.indexOf('u-cmo') + 1], 'u-seo-old', 'under the card that links it: ' + order);
+    assert.equal(await lp.locator('#upd-mine').getAttribute('aria-pressed'), 'true');
+    await cmoFrom.locator('[data-upd-input="u-game-old"]').click();
+    await lp.locator('#upd-feed [data-upd="u-game-old"].sel').waitFor();
+    order = await lp.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
+    assert.equal(order.filter(id => id === 'u-seo-old').length, 1, 'shown once: ' + order);
+    await cmoFrom.locator('[data-upd-input="u-seo-old"]').click();      // already under it: selected, not loaded again
+    await lp.locator('#upd-feed [data-upd="u-seo-old"].sel').waitFor();
+    assert.deepEqual(oneAsked.filter(id => id.endsWith('-old')), ['u-seo-old', 'u-game-old']);
+    await cmoFrom.locator('[data-upd-input="u-fin-gone"]').click();
+    await lp.waitForFunction(() => location.hash === '#/bot/finance');
+    assert.deepEqual(linked.errors.filter(e => !/404/.test(e)), []);
+    await lp.close();
+    delete cmoCard.inputs;
 
     // Phone: Tasks and Updates are in the bottom bar; Tasks stays in More too (the tour points at it there).
     const phone = await open({width: 390, height: 844});
