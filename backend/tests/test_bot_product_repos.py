@@ -1,8 +1,11 @@
 """A bot with Create product repositories makes a private product repository: the Owner turns the right on, the bot
 gets write to what it made, the Owner is told, and connecting GitHub stays the Owner's."""
 import json
+import threading
 
-from backend import hubdb as H
+import httpx
+
+from backend import github_app as G, hubdb as H
 from backend.auth import Identity
 from backend.store import encode
 from backend.tests.test_github_app import api, gh, auth, botops_turn, connect, product_repo_request, runner_token  # noqa: F401
@@ -76,6 +79,31 @@ def test_bot_with_the_right_creates_a_private_repo_gets_write_and_the_owner_is_t
     with api.app_state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 1
+
+
+def test_the_inventory_refresh_creation_queues_keeps_the_new_repo_when_it_lands_after_the_grant(api, gh, monkeypatch):
+    """Creation queues a background refresh of the repository list. When its write lands after the bot's grant (held
+    here until then), the new repository is listed, so it is not marked missing and the bot keeps write to it."""
+    ready(api, gh)
+    service, listing, release = api.app_state.github_app, threading.Event(), threading.Event()
+
+    def held(request):
+        if request.url.path == "/installation/repositories" and threading.current_thread() is service.repository_worker:
+            listing.set()
+            assert release.wait(10)
+        return gh(request)
+    monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(held))
+
+    assert grant(api).status_code == 200
+    made = product_repo_request(api, BODY, actor="bot-test", key="bot-services")
+    assert made.status_code == 200 and made.json()["bot_access"] == "write", made.text
+    assert listing.wait(10), "creating the repository queued a refresh"
+    release.set()
+    service.repository_worker.join(10)
+    assert not service.repository_worker.is_alive()
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT reachable FROM repositories WHERE full_name='Acme/tico-services'").fetchone()[0] == 1
+    assert {"full_name": "Acme/tico-services", "access": "write"} in api.get(ACCESS, headers=auth()).json()["effective"]
 
 
 def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(api, gh):

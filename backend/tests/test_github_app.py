@@ -54,7 +54,11 @@ class FakeGitHub:
         path = request.url.path
         if path == "/installation/repositories":
             page = int(request.url.params.get("page", 1))
-            seen = [r for r in self.repositories if r["full_name"].split("/")[1] not in self.missing]
+            # An installation on all repositories lists one created through it, as GitHub does.
+            listed = {r["full_name"] for r in self.repositories}
+            made = [{"full_name": name} for name in sorted(self.created_repositories)
+                    if self.selection == "all" and name not in listed]
+            seen = [r for r in self.repositories + made if r["full_name"].split("/")[1] not in self.missing]
             if self.list_status != 200:
                 return httpx.Response(self.list_status)
             return httpx.Response(200, json={"total_count": len(seen), "repositories": seen[(page-1)*100:page*100]})
