@@ -245,6 +245,18 @@ def test_10_a_quoted_value_goes_whole_past_escapes_and_its_neighbours_stay(text,
     assert C.scrub(out) == (out, False)
 
 
+def test_10_a_password_in_json_inside_a_json_string_goes_whole():
+    # The page can send JSON text in a field, so a pasted credential object arrives encoded twice. Synthetic values.
+    sent = json.dumps({"about": json.dumps({"password": 'Qz"x\\ Kumquat', "name": "Ann"})})
+    gone = json.dumps({"about": json.dumps({"password": "[removed]", "name": "Ann"})})
+    assert C.scrub(sent) == (gone, True) and C.scrub(gone) == (gone, False)
+    draft = started()
+    draft["company"]["about"] = sent
+    turn = C.Turn(draft, TODAY)
+    assert turn.keys_removed and turn.finish()["company"]["about"] == gone
+    assert "Kumquat" not in C.to_yaml(draft, CREATED)
+
+
 @pytest.mark.parametrize("text", [
     "The token is optional", "the api key is set on your install", "Our secret is good coffee", "token: 5 per user",
     "Token: 120 a day", '{"token": 12}', "password:\nname: Ann", '{"password": ""}', "password: [removed]",

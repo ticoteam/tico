@@ -25,9 +25,12 @@ PATTERNS = [re.compile(p) for p in (
 # The label may be quoted, as a JSON or YAML key is: {"password": "x"}, or {\"password\": \"x\"} inside a JSON string.
 # A quoted value runs to its closing quote, past escaped (or, in YAML, doubled) ones, or to the end of the line when it
 # has none; separator and value stay on the label's line.
+# Inside a JSON string the value's own escapes are escaped again: its \" is \\\", so a backslash pair there takes the
+# token after it, and only a bare \" closes the value.
 LABELLED = re.compile(r"(?i)(\b(?:password|passwd|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|"
                       r"client[ _-]?secret|private[ _-]?key)\b(?:\\?[\"'])?[ \t]*(?:[:=]|\bis\b)[ \t]*)"
-                      r"(\\\"(?:(?!\\\").)*\\\"|\"(?:[^\"\\\n]|\\.)*(?:\"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.|'')*(?:'|(?=\n)|\Z)|"
+                      r"(\\\"(?:\\\\(?:\\.|[^\\\n])|\\[^\"\\\n]|[^\\\n])*(?:\\\"|(?=\n)|\Z)|"
+                      r"\"(?:[^\"\\\n]|\\.)*(?:\"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.|'')*(?:'|(?=\n)|\Z)|"
                       r"(?!\[removed\])[^\s,;}\]]+)")
 PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
 LABELLED_IS = re.compile(r"(?i)\bis\b")
