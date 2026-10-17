@@ -48,9 +48,11 @@ async def compress(request, response):
         return response
     response.headers.add_vary_header("Accept-Encoding")
     accepted = accepted_encodings(request.headers)
-    if zstd and 0 < accepted.get("zstd", 0) <= 1:
+    gzip_q, zstd_q = accepted.get("gzip", accepted.get("*", 0)), accepted.get("zstd", 0)
+    # zstd only when named (not via *), and not when the client ranks gzip above it.
+    if zstd and 0 < zstd_q <= 1 and not (gzip_q <= 1 and zstd_q < gzip_q):
         encoding, encode = "zstd", _zstd
-    elif 0 < accepted.get("gzip", accepted.get("*", 0)) <= 1:
+    elif 0 < gzip_q <= 1:
         encoding, encode = "gzip", _gzip
     else:
         return response
