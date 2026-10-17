@@ -51,6 +51,19 @@ def test_a_range_clash_or_any_other_failure_fails_at_once(tmp_path):
         assert code == 1 and calls == ['up -d'] and output.splitlines()[-1] in stderr, case
 
 
+def test_a_permanent_network_create_error_stops_after_the_two_retries(tmp_path):
+    # Not a range clash, and no retry fixes it: the address pools are used up, or the daemon refuses. compose_up
+    # cannot tell it from the 2026-10-17 flake, so it spends its two retries (seconds), then fails with the daemon's
+    # own message last on stderr, never hanging and never passing.
+    for case, error in (('pools', 'could not find an available, non-overlapping IPv4 address pool among the '
+                                  'defaults to assign to the network'),
+                        ('denied', 'permission denied while trying to connect to the Docker daemon socket')):
+        output = f' Network tico-rc-smoke_edge  Error\nfailed to create network tico-rc-smoke_edge: {error}'
+        code, calls, stderr = run(99, output, tmp_path / case)
+        assert code == 1 and calls == ['up -d', 'down', 'up -d', 'down', 'up -d'], case
+        assert stderr.rstrip().endswith(error) and 'attempt 2 of 3' in stderr and 'attempt 3' not in stderr, case
+
+
 def test_smoke_starts_every_stack_through_it():
     smoke = (ROOT / 'docker' / 'smoke.sh').read_text().splitlines()
     assert '. docker/compose-up.sh' in [line.split('#')[0].strip() for line in smoke]
