@@ -365,7 +365,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Talk to us', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Tasks', 'Updates', 'Support', 'More']);
     const navWidths=await p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().width));
     assert.equal(navWidths.length,6);
     assert.ok(Math.max(...navWidths)-Math.min(...navWidths)<1,'six evenly spaced navigation items');
@@ -442,6 +442,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
-    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Talk to us) that fits 360px, with Tasks also in More.');
+    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -24,7 +24,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, team_rules, usage_limits
+from . import check_models, team_rules, update_feeds, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -190,6 +190,8 @@ def create_app(settings=None):
                     # A bot left in setup for a day: its person hears once (backend/setup_stuck.py).
                     from . import setup_stuck
                     await asyncio.to_thread(setup_stuck.tick, store)
+                    # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
+                    await asyncio.to_thread(update_feeds.tick, store)
                 except Exception as exc:
                     telemetry.capture("scheduler", exc)
                     import logging
@@ -1618,6 +1620,7 @@ def create_app(settings=None):
                         "private_tasks_default": H.private_tasks_default(c, "bot:" + bot["slug"], rows.declared),
                         "template": declared.get("template") or "",
                         "template_version": declared.get("template_version") or "",
+                        "update_subscriptions": update_feeds.chosen(declared),
                         "shared": bool(declared.get("shared")),
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
@@ -1825,6 +1828,8 @@ def create_app(settings=None):
                     row = Access.leave(c, people, row)
                 people[i] = row
                 roster = {**roster, "people": people}
+                from .report_order import roster_saved
+                roster_saved(c, roster)                    # a new manager's report goes last there
                 c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
                 H.event(c, who.actor, "person.updated", pid, {"title": body.title is not None, "about": body.about is not None,
                                                               "goals": body.goals is not None, "notes": body.notes is not None,
@@ -3811,11 +3816,12 @@ def create_app(settings=None):
             return None
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary):
+    def propose_card(c, acting, method, path, body, summary, what=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
-        and the answer BotOps reports back instead of asking them to go to Settings."""
+        and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
+        route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
-        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body)
+        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}
@@ -5126,6 +5132,8 @@ def create_app(settings=None):
     install_subscriptions(app, store, auth, mutate, settings, computer_rows)
     from .groups import install as install_groups
     install_groups(app, store, auth, mutate, settings)
+    from .report_order import install as install_report_order
+    install_report_order(app, store, auth, mutate)
     from .support import install as install_support
     install_support(app, store, settings, census)
     from .support_access import install as install_support_access

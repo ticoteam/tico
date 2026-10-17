@@ -119,6 +119,8 @@ async function liveReply(browser) {
       return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot);
     if(p==='/api/v2/bots/ops/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
+    // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
+    if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json({});
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');

@@ -24,6 +24,28 @@ labeled **Your branch**, including in the recent-history view and mobile team sw
 bot's branch picker or Settings to inspect other people's branches; permission to manage a branch does not add it
 to their own chart. Branches keep their own reporting relationships and work.
 
+## The order of reports
+
+A manager's reports, humans and bots, are listed in the order someone put them in, the same for everyone who views the
+chart. Once someone has ordered a manager's reports, a new report, or one that moves in from another manager, goes
+last there, after the ones before it, whatever its name. Under a manager nobody ordered, reports follow the chart's
+own order: humans first, then bots (temporary ones last, a bot's `order` lowest first), then by name, accents and
+case aside. The Goals tree, a person's page, **Updates** and `hub org order` list reports in the same order. A
+manager's reports shown in a group keep that order there, and move up and down among the ones beside them.
+
+- **In the app**, drag a human or a bot onto the top or bottom of another report of the same manager to put it above or
+  below; dropping onto the middle of a row still makes it report there. Each report's row also has a menu with **Move
+  up** and **Move down**: Tab to it from the row, Enter opens it, the arrow keys choose and Escape closes it.
+- **Who orders them**: whoever may put reports under that manager, as for `reports_to`: the owner, the manager or
+  someone it reports up to, and for a bot manager the person who runs it. A bot orders its own reports. Everyone else
+  sees the order without the handles or the menu, and the API refuses them. A drop onto someone you may not put that
+  human or bot under says so and moves nothing.
+- **In the API and the tools**: `GET /api/v2/org/order/{manager}` lists a manager's direct reports in the chart's order
+  (`manager` is a bot's slug or a human's id; put `bot:` or `human:` in front when one could be either);
+  `PUT /api/v2/org/order/{manager}` with `{"reports": [...]}` puts them in that order. Reports left out keep their
+  places, so naming two swaps those two; a name that is not a direct report is refused. `hub org order <manager>` and
+  `hub org order <manager> --set a,b,c` (`hub_org_order`) do the same. Ordering never changes who reports to whom.
+
 Groups and reporting are two things. `reports_to` says who a human or bot works for; a group says who is on which sub-team. Changing
 one never changes the other.
 

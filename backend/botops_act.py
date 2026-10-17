@@ -182,6 +182,8 @@ DO = _routes(
     ("PUT", r"access/rules"),
     # Groups: an owner or an admin changes them (the route says so), and a delete moves what is in the group up.
     ("POST", r"groups"), ("PATCH", rf"groups/{_S}"), ("DELETE", rf"groups/{_S}"),
+    # The order of a manager's reports on the chart: whoever may put reports under that manager (the route checks).
+    ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),

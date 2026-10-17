@@ -192,6 +192,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
+                                           that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
     hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
@@ -1430,6 +1432,12 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
+    s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
+    s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
+    s.add_argument("--set", type=lambda text: [x.strip() for x in text.split(",") if x.strip()], metavar="A,B,C",
+                   help="its reports in the new order, comma-separated; the ones left out keep their places")
+    s.set_defaults(fn="org order")
     health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
     s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
     s.set_defaults(fn="health check")
@@ -1601,6 +1609,9 @@ def parser():
                         "for a reviewer bot; own (default): its own model")
     s.add_argument("--capture-stream", choices=("on", "off"),
                    help="on (owner only): keep each run's raw provider stream a week for hub run export; off (default): not")
+    s.add_argument("--subscribe-updates", metavar="templates,tico|none",
+                   help="Subscribe to updates, as quiet notes for its next run: templates (its template's changes), "
+                        "tico (Tico releases), both, or none")
     s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
     s.set_defaults(fn="bot update")
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
@@ -1968,6 +1979,8 @@ def rename_argv(argv):
     argv = list(argv)
     if argv[:1] == ["note"] and len(argv) > 1 and argv[1] not in ("create", "list", "delete") and not argv[1].startswith("-"):
         return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+    if argv[:2] == ["org", "order"]:                   # `hub org` alone is the old `hub team show`; this one is new
+        return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[:len(old)]) == old:
             rest = argv[len(old):]

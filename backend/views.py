@@ -1332,6 +1332,8 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         rows = []
         access = auth.bot_accesses(c, who)
+        from .report_order import positions
+        places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
@@ -1372,6 +1374,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                             "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
@@ -1400,6 +1403,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "team": P.team_of(slug, configs, people),
                          "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                         "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
@@ -1468,8 +1472,11 @@ def install_views(app, store, auth, mutate, task_view):
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
             access = auth.bot_accesses(c, who)
+            from .report_order import positions
+            places = positions(c)
             return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived),
+                "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
                    if people_photos.may_have(store.settings, p.get("email"), p.get("photo")) else {}),
                 "bots": [b for b in P.bots_of(p["id"], r, configs)

@@ -1224,6 +1224,12 @@ class GroupUpdate(Contract):
     remove: GroupMembers = Field(default_factory=GroupMembers)
 
 
+class ReportOrder(Contract):
+    """A manager's direct reports in the order the team chart shows them: bot slugs and human ids (`bot:` or `human:`
+    in front when one could be either). Reports left out keep their places."""
+    reports: list[ID] = Field(min_length=1, max_length=200)
+
+
 class BotDefinitionCreate(Contract):
     private_tasks_default: StrictBool = False
     slug: Slug | None = None                 # left out, picked from the display name
@@ -1285,6 +1291,8 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
+    # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
+    update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
     # BotOps applying a person's own request: the id of that person's message to BotOps. The
     # change is checked as that person, never as BotOps (backend/app.py update_bot).

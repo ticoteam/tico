@@ -632,6 +632,8 @@ class Store:
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)
+            from . import update_feeds as _update_feeds
+            c.executescript(_update_feeds.SCHEMA)
             from . import runner_versions as _runner_versions
             c.executescript(_runner_versions.SCHEMA)
             _runner_versions.ensure_schema(c)

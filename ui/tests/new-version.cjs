@@ -46,7 +46,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json({});
       });
-      await page.goto('https://tico-ui.test/#/help');
+      await page.goto('https://tico-ui.test/#/settings');
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
       page.on('framenavigated', () => reloads++);
       return {page, ctx, errors, posts, reloads: () => reloads, serve: version => { served = version; }};
@@ -55,7 +55,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     // Nothing available, nothing shown.
     let v = await visit({update: {...UPDATE, available: false}});
     assert.equal(await v.page.locator('#new-version-wrap').isVisible(), false, 'no notice when up to date');
-    assert.match(await v.page.locator('#help-version').innerText(), /^Version v0\.1\.0$/, 'help footer shows the running version');
+    assert.match(await v.page.locator('#settings-version').innerText(), /^Version v0\.1\.0$/, 'Settings shows the running version');
     await v.ctx.close();
     v = await visit({update: null});
     assert.equal(await v.page.locator('#new-version-wrap').isVisible(), false, 'no notice without update data');
