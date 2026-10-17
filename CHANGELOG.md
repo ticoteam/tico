@@ -59,6 +59,8 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
+  too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
 - What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
