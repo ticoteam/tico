@@ -52,7 +52,8 @@ All notable changes to Tico are recorded here. The format follows
   archived shows as archived, not as a blank. Members see the Public roadmap settings read-only.
 - Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
   suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
-  shows only while a public label is enabled and clears by itself.
+  shows only while a public label is enabled and clears by itself. Its **Open Public roadmap** link goes straight
+  to the Public roadmap settings.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -74,6 +75,8 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
+  too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
 - Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
   "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
   set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
@@ -94,8 +97,15 @@ All notable changes to Tico are recorded here. The format follows
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
   **Changelog** page; and **Take the tour** is in the account menu.
+- **Support** is a pop-up from the **?** at the bottom of the sidebar (the **Support** tab on a phone, where it opens
+  as a sheet): it opens on your latest request that isn't closed, keeps words you haven't sent, and lists every
+  request under **Your requests**, with **View docs** and **What's new** beside it. A reply puts a count on the **?**.
+  **Talk to us** and the Help page are gone; old Help links open the pop-up over Overview ([support](docs/support.md)).
 - Faster image handling and startup with Pillow 13, plus pydantic 2.14, pypdf 6.21, Starlette 1.8 and Uvicorn 0.54.
   Python and browser tests use one Playwright version (1.64), so they share one Chromium and WebKit.
+- Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
+  @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
+  the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -128,6 +138,10 @@ All notable changes to Tico are recorded here. The format follows
 - A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
   **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
   straight from Done still counts as shipped, as does the default Engineering type's Done step.
+- When a sign-in ends (a Cloudflare Access session expiring, or built-in sign-in), the web app and the desktop app say
+  **You've been signed out** with **Sign in again**, instead of bots looking frozen while every request fails in the
+  background. The live updates stop retrying until then; signing in brings you back to the same page with what you had
+  typed. The desktop app's Dock badge shows "!" while signed out. A dropped network still just reconnects.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
@@ -136,6 +150,10 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- The desktop app keeps a whole sign-in in its window with any identity provider: Cloudflare Access with Microsoft,
+  Okta, GitHub or another provider, and built-in sign-in with Okta or Microsoft Entra. Before, only Cloudflare's and
+  Google's pages stayed; any other provider's page opened in the default browser, the sign-in landed there and the app
+  stayed signed out. Links to other sites still open in the browser.
 - **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
   so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 

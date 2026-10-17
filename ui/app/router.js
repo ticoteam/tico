@@ -6,8 +6,7 @@ let LAST_ROUTE = '';
 function route() {
   overviewStop();
   GOAL_MANAGER_STOP?.();
-  window.supportLeave?.();
-  $('#main').classList.remove('help-layout', 'overview-layout');
+  $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = location.hash || UPDATES;
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
@@ -70,7 +69,7 @@ function route() {
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === GOALS || S.route.startsWith(GOALS + '/') || S.route.startsWith(GOALS + '?')) pageGoals();
   else if (S.route === SETTINGS) pageSettings();
-  else if (S.route === HELP) pageHelp();
+  else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
   else if (S.route === '#/triggers') { SETTINGS_TAB = 'triggers'; location.replace(SETTINGS); return; }   // Settings > Triggers

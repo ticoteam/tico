@@ -358,10 +358,19 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
-   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag.
+   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
+   provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
+   whole sign-in stays in the app's window, so the app gets the session, not the browser.
 4. In `.env`: `COMPOSE_PROFILES=cloudflared,updater`, `TICO_DOMAIN=<hostname>`, `CLOUDFLARE_TUNNEL_TOKEN=<token>`,
    `TICO_AUTH_PROXY=cloudflare`, `TICO_ACCESS_ISSUER=<team URL>`, `TICO_ACCESS_AUDIENCE=<AUD tag>`.
 5. `docker compose up -d`
+
+**How long a sign-in lasts.** The Access application's Session Duration (24 hours unless you change it) decides how
+often people sign in again; behind Access, Tico keeps no session of its own. When it ends, Cloudflare sends the app's next
+request to its login page, which a page cannot follow in the background, and Cloudflare offers no way to renew the
+session from the page. Tico then stops reconnecting and shows "You've been signed out" with **Sign in again**: Access's
+login opens in the same window, and afterwards the page comes back where it was, with any text typed in an open box. The
+desktop app's Dock badge shows "!" until then. To sign in less often, lengthen the Session Duration.
 
 **Which route wins.** cloudflared prefers the configuration Cloudflare holds for the tunnel. A tunnel you created in the
 dashboard, or that setup created through the API, is remotely managed and keeps the **Public Hostname** route you set
