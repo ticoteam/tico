@@ -142,13 +142,12 @@ function liveEventsConnect() {
     else LIVE.timer = setTimeout(liveEventsConnect, wait);
   };
 }
-// Reconnect after `wait`, unless the probe finds the person signed out (or something else reconnected meanwhile).
+// Reconnect after `wait` as usual, and meanwhile ask whether a proxy signed the person out: if it did, signedOut stops
+// the reconnect (liveSignedOut). The reconnect never waits on the answer, so a question that stalls cannot stop it.
 function liveAfterProbe(wait) {
-  void sessionProbe().then(out => {
-    if (out || SESSION.out || LIVE.es) return;
-    clearTimeout(LIVE.timer);
-    LIVE.timer = setTimeout(liveEventsConnect, wait);
-  });
+  clearTimeout(LIVE.timer);
+  LIVE.timer = setTimeout(liveEventsConnect, wait);
+  void sessionProbe();
 }
 // Signed out (session.js signedOut): stop, and say the stream is down.
 function liveSignedOut() {
