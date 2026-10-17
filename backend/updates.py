@@ -1047,9 +1047,11 @@ def _only(bots, column="u.bot"):
 
 
 def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, limit=40,
-            archive=False, include_archive=False):
+            archive=False, include_archive=False, may_read=None):
     """The feed, newest first, with this person's read state, reply counts, and the requests that
-    ended without an update (so a silent bot shows). `readable` is the set of bots to show."""
+    ended without an update (so a silent bot shows). `readable` is the set of bots to show; `may_read`,
+    all the authors they may read, decides a card's links, so My bots or direct reports narrow the
+    cards but not what a card was written from."""
     where, args = ["1=1"], []
     if not readable:
         where.append("0")
@@ -1076,7 +1078,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
         (actor, actor, *args, limit)).fetchall()
     items = []
     for row in rows:
-        item = with_inputs(c, _decode(row), readable)
+        item = with_inputs(c, _decode(row), readable if may_read is None else may_read)
         item["read"] = bool(item.pop("read_at"))
         item["archived"] = bool(row["archived"])
         item["replies"] = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.update')=?",

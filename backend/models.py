@@ -221,6 +221,11 @@ class TaskTypeCreate(Contract):
     steps_only: bool = False
 
 
+# Refusing a `manager` field says where the choice it was after lives.
+MANAGER_FIXED = ("A task type's manager is fixed by its role and can't be changed. To choose which bot receives public "
+                 "roadmap suggestions, use Settings → Tasks → Public roadmap → Suggestions go to (or `hub roadmap settings`).")
+
+
 class TaskTypeUpdate(Contract):
     default_visibility: Literal['public', 'private'] | None = None
     name: ID | None = None

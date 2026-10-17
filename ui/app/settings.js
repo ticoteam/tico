@@ -76,6 +76,7 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-repos" role="tabpanel" hidden><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
+      ${hlSetupCheckHTML()}
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-providers" role="tabpanel" hidden>
@@ -115,6 +116,7 @@ function pageSettings() {
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
     <dialog class="bot-editor catalog-picker" id="catalog-picker" aria-labelledby="catalog-picker-title"></dialog>`;
   taskTypesSettingsMount();
+  $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
   $('#settings-tabs').onclick = event => {
@@ -127,10 +129,12 @@ function pageSettings() {
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
-// The server's version, and the desktop app's own when the page runs inside it (app/src/main.rs bridge_script).
+// The server's version, and the desktop app's own when the page runs inside it (app/src/main.rs bridge_script), with
+// a way to the app's log file (app/src/applog.rs) when the shell keeps one (it says so in ticoNativeFeatures).
 function settingsVersionHTML() {
   const parts = [S.config.version && `Version ${esc(nvVersion(S.config.version))}`,
-    window.ticoNativeVersion && `App ${esc(nvVersion(window.ticoNativeVersion))}`].filter(Boolean);
+    window.ticoNativeVersion && `App ${esc(nvVersion(window.ticoNativeVersion))}`,
+    (window.ticoNativeFeatures || []).includes('showLog') && '<button class="settings-log" type="button" id="settings-app-log">Show the app\'s log</button>'].filter(Boolean);
   return parts.length ? `<p class="settings-version" id="settings-version">${parts.join(' · ')}</p>` : '';
 }
 // Theme: this browser's choice (ui/theme.js); dark when none is saved.

@@ -37,6 +37,24 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
 
 
 
+def test_a_bot_set_to_haiku_5_5_at_xhigh_runs_that_model_at_that_effort(api):
+    """A Settings model change is what the runner's next claim carries: `--model` and `--effort` come from it."""
+    from backend.tests.test_api import claim, post, put, runner, assign, ready
+    put(api, "providers", {"enabled": ["anthropic"], "runtime": "claude", "model": "claude-opus-5-5",
+                           "expected_revision": 0})
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "effort": "xhigh",
+                                       "expected_revision": revision})
+    post(api, "chat/ops", {"text": "Say hello."})
+    config = claim(api, r)["config"]
+    assert (config["runtime"], config["model"], config["reasoning_effort"]) == ("claude", "claude-haiku-5-5", "xhigh")
+    assert P.price_of("claude-haiku-5-5") == (0.10, 0.01, 0.50)
+
+
 @pytest.mark.parametrize("model,runtime", [("gpt-6-sol", "codex")])
 def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime):
     company = P._record({"enabled": ["openai", "anthropic"], "runtime": runtime, "model": model})

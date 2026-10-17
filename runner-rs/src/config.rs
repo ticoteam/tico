@@ -69,11 +69,28 @@ impl Config {
         self.path.parent().unwrap_or(Path::new(".")).join(format!("state-{}", self.runner_id()))
     }
 
+    /// This registration with `fresh`'s subscription profile keys in place of its own (a key `fresh` lacks is
+    /// dropped); every other key stays as it was read at start.
+    pub fn with_profiles_of(&self, fresh: &Map<String, Value>) -> Config {
+        let mut config = self.clone();
+        for key in PROFILE_KEYS {
+            match fresh.get(*key) {
+                Some(value) => config.data.insert((*key).into(), value.clone()),
+                None => config.data.shift_remove(*key),
+            };
+        }
+        config
+    }
+
     /// The bot's explicit checkout from `repos`, when the registration names one.
     pub fn repo_for(&self, bot: &str) -> Option<PathBuf> {
         self.data.get("repos").and_then(|r| r.get(bot)).and_then(|p| p.as_str()).map(PathBuf::from)
     }
 }
+
+/// The keys that name subscription profiles. A browser sign-in, `profile add` or a hand edit changes them while the
+/// runner runs, so the heartbeat and turns read them from the file again (Runner::config_now).
+pub const PROFILE_KEYS: &[&str] = &["profiles", "default_profile", "bot_profiles"];
 
 /// A turn mostly waits on its model provider, not on this computer's CPU.
 const TURNS_PER_CPU: usize = 5;
@@ -154,6 +171,19 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(again.state_dir(), dir.join("state-r1"));
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn only_the_profile_keys_are_taken_from_a_fresh_read() {
+        let start: Map<String, Value> = serde_json::from_str(r#"{"url":"http://a","profiles":{"old":{"dir":"/p/old"}},"default_profile":"old"}"#).unwrap();
+        let config = Config { path: PathBuf::from("/x/runner.json"), data: start };
+        let disk: Map<String, Value> = serde_json::from_str(r#"{"url":"http://b","profiles":{"new":{"dir":"/p/new"}},"bot_profiles":{"ops":"new"}}"#).unwrap();
+        let now = config.with_profiles_of(&disk);
+        assert_eq!(now.data["profiles"], serde_json::json!({"new": {"dir": "/p/new"}}));
+        assert_eq!(now.data["bot_profiles"], serde_json::json!({"ops": "new"}));
+        assert!(!now.data.contains_key("default_profile"), "a key taken out of the file goes");
+        assert_eq!(now.url(), "http://a", "everything else stays as read at start");
+        assert_eq!(config.data["profiles"], serde_json::json!({"old": {"dir": "/p/old"}}));
     }
 
     #[test]
