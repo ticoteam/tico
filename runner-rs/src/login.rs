@@ -30,6 +30,8 @@ use crate::util::{log, text_of};
 pub const LIFETIME_S: u64 = 15 * 60;
 /// Told to the server in every heartbeat: this runner knows the kinds beyond `sign_in`.
 pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
+/// Switch to subscription (`to_subscription`): a switch for the computer's own login that also takes its API key off.
+pub const SWITCH_TYPE_CAPABILITY: &str = "model_switch_type_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
@@ -531,6 +533,20 @@ fn confirm_switch(s: &Session) -> Result<(), (String, String)> {
     }
 }
 
+/// Switch to subscription, past its commit point: before the new login goes in, the computer's API key comes off this
+/// login (and the company's copy is deleted), and a key login already running is let finish first, so none writes
+/// the key back over the subscription.
+fn key_off(s: &Session, runner: &Runner) -> Result<(), (String, String)> {
+    if let Err(e) = runner.sign_in.mark_key_off(&s.runtime) {
+        return Err(("failed".into(), format!("Could not take the API key off on this computer ({:?}); it stays in use", e.kind())));
+    }
+    if !runner.sign_in.wait_for_key_logins(&s.runtime, crate::signin::KEY_LOGIN_DRAIN) {
+        let _ = runner.sign_in.unmark_key_off(&s.runtime);
+        return Err(("failed".into(), format!("{} is still signing in with its key; try again in a minute", s.runtime)));
+    }
+    Ok(())
+}
+
 fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: Duration) {
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |state: &str, msg: &str| s.finish(state, msg, &runner, &default);
@@ -539,9 +555,11 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         Ok(found) => found,
         Err(e) => return fail("failed", &e),
     };
-    // A switch signs in on the side: the old login keeps working until the new one is in place.
+    // A switch signs in on the side: the old login keeps working until the new one is in place. So does a switch to
+    // a subscription, whose old login is the API key.
     let real_env = env.clone();
-    let switch = if s.kind == "switch" {
+    let to_subscription = s.kind == "to_subscription";
+    let switch = if s.kind == "switch" || to_subscription {
         match begin_switch(&s.runtime, &s.id, &env) {
             Ok((home, side)) => {
                 let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
@@ -648,7 +666,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let (home, side) = switch.as_ref().unwrap();
             let files = login.files.clone();
             match signed_in(&s.runtime, &exe, &env, false) {
-                (true, _) => match confirm_switch(&s) {
+                (true, _) => match confirm_switch(&s).and_then(|()| if to_subscription { key_off(&s, &runner) } else { Ok(()) }) {
                     Err(verdict) => verdict,
                     Ok(()) => match adopt_files(&files, home, side, &real_env) {
                         Ok(moved) => match signed_in(&s.runtime, &exe, &real_env, false) {
@@ -678,6 +696,12 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             }
         }
     };
+    // The subscription did not go in after all: the key it switched from is the login again.
+    if to_subscription && state != "signed_in" && runner.sign_in.key_off(&s.runtime) {
+        if let Err(e) = runner.sign_in.unmark_key_off(&s.runtime) {
+            log(&format!("Tico runner: {} kept its key off after a failed switch: {e}", s.runtime));
+        }
+    }
     if let Some((_, side)) = &switch {
         if !keep_side {
             discard(side);
@@ -775,7 +799,7 @@ impl Logins {
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
-        } else if !["sign_in", "switch", "sign_out", "use_shared_key"].contains(&s.kind.as_str()) {
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription"].contains(&s.kind.as_str()) {
             // Never a sign-in in place of something this runner does not know.
             s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
@@ -783,14 +807,16 @@ impl Logins {
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
-        } else if s.kind == "switch"
+        } else if s.kind == "to_subscription" && !s.profile.is_empty() {
+            s.finish("failed", "Switch to subscription is for the computer's own login", runner, &default);
+        } else if (s.kind == "switch" || s.kind == "to_subscription")
             && crate::harness_tools::login_command(&s.runtime).is_some_and(|l| l.keychain.iter().any(|p| p == crate::runner::platform()))
         {
             // The login is in the system keychain here, not in files: there is no side to sign in on.
             let msg = format!("Switching accounts isn't available for {} on this computer: sign out, then sign in", s.runtime);
             s.finish("failed", &msg, runner, &default);
         } else if s.kind == "use_shared_key" {
-            let state = match runner.sign_in.unmark_signed_out(&s.runtime) {
+            let state = match runner.sign_in.unmark_signed_out(&s.runtime).and_then(|()| runner.sign_in.unmark_key_off(&s.runtime)) {
                 Ok(()) => ("done", "The shared key signs it in again".to_string()),
                 Err(e) => ("failed", format!("Could not change this computer's sign-out ({:?})", e.kind())),
             };
@@ -986,7 +1012,11 @@ exit 2
     /// Run a switch on its own thread, the way the relay does, with `server` standing in for Tico's answer once the
     /// runner says it is finishing (true: confirmed; false: it had been cancelled).
     fn switch_with(runner: &Arc<Runner>, config: &Config, server: Option<bool>) -> (Arc<Session>, std::thread::JoinHandle<()>) {
-        let s = session("switch");
+        switch_kind(runner, config, server, "switch")
+    }
+
+    fn switch_kind(runner: &Arc<Runner>, config: &Config, server: Option<bool>, kind: &str) -> (Arc<Session>, std::thread::JoinHandle<()>) {
+        let s = session(kind);
         let (s2, r2, c2) = (s.clone(), runner.clone(), config.clone());
         let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
         if let Some(confirm) = server {
@@ -1098,6 +1128,37 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
         assert_eq!(sides(), 0);
         std::fs::remove_file(root.join("refuse")).unwrap();
+
+        // Switch to subscription (Computers part 2): the login runs on the company's key until the subscription is in
+        // place. Cancelled before the commit point, or not working once in place, the key stays in use.
+        let key_in_use = || runner.sign_in.headless_secret("codex").map(|(_, v)| v) == Some("sk-team-0123456789".into());
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(&auth, "old\n").unwrap();
+        let (kept, running) = switch_kind(&runner, &config, Some(false), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&kept).0, "cancelled", "{:?}", state(&kept));
+        assert!(key_in_use() && !runner.sign_in.key_off("codex"));
+        std::fs::write(root.join("refuse"), "").unwrap();
+        let (broken, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&broken).0, "failed", "{:?}", state(&broken));
+        assert!(!runner.sign_in.key_off("codex"), "the key is the login again");
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        std::fs::remove_file(root.join("refuse")).unwrap();
+        // In place: the subscription is the login, the company's copy of the key is deleted and no key reaches it.
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        let (moved, running) = switch_kind(&runner, &config, Some(true), "to_subscription");
+        running.join().unwrap();
+        assert_eq!(state(&moved).0, "signed_in", "{:?}", state(&moved));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
+        assert!(runner.sign_in.key_off("codex") && runner.sign_in.headless_secret("codex").is_none());
+        assert!(!std::fs::read_to_string(&team).unwrap().contains("OPENAI_API_KEY"));
+        assert_eq!(sides(), 0);
+        // Use the shared key lifts it.
+        let shared = session("use_shared_key");
+        Logins::default().begin(&runner, &json!({"id": shared.id, "runtime": "codex", "kind": "use_shared_key"}));
+        wait_for(|| !runner.sign_in.key_off("codex"));
+        std::fs::write(&auth, "old\n").unwrap();
 
         // Two login files, and the second cannot be moved in: the first is put back, so the old login is whole.
         let (home, side) = (root.join("multi/home"), root.join("multi/side"));

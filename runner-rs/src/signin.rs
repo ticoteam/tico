@@ -20,6 +20,11 @@ pub const TEAM_KEYS_FILE: &str = "_team_model.env";
 /// computer signs them in again, not the company's and not the 10-minute key login, until a person signs in or
 /// chooses the shared key. A JSON list of runtimes, kept across restarts.
 pub const SIGNED_OUT_FILE: &str = "_signed_out.json";
+/// The runtimes whose computer login a person switched from its API key to a subscription (backend/model_login.py
+/// `to_subscription`): no key on this computer reaches that login, its turns or the 10-minute key login, even while
+/// it is signed in, until a person chooses the shared key. Kept across restarts like SIGNED_OUT_FILE; unlike it, a
+/// sign-in does not lift it.
+pub const KEY_OFF_FILE: &str = "_key_off.json";
 const TEAM_KEY_RETRY: Duration = Duration::from_secs(300);
 const KEY_LOGIN_RETRY: Duration = Duration::from_secs(600);
 /// How long a sign-out waits for a key login already running (its own limit is 30 seconds) to end.
@@ -172,37 +177,57 @@ impl SignIn {
 
     /// Whether a person signed `runtime`'s computer login out from the app (SIGNED_OUT_FILE).
     pub fn signed_out(&self, runtime: &str) -> bool {
-        self.signed_out_list().iter().any(|r| r == runtime)
+        self.list(SIGNED_OUT_FILE).iter().any(|r| r == runtime)
     }
 
-    fn signed_out_list(&self) -> Vec<String> {
-        std::fs::read_to_string(self.secrets.join(SIGNED_OUT_FILE))
+    /// Whether a person switched `runtime`'s computer login to a subscription (KEY_OFF_FILE).
+    pub fn key_off(&self, runtime: &str) -> bool {
+        self.list(KEY_OFF_FILE).iter().any(|r| r == runtime)
+    }
+
+    /// No key on this computer may sign `runtime` in or reach its turns: signed out, or switched to a subscription.
+    fn no_key(&self, runtime: &str) -> bool {
+        self.signed_out(runtime) || self.key_off(runtime)
+    }
+
+    fn list(&self, file: &str) -> Vec<String> {
+        std::fs::read_to_string(self.secrets.join(file))
             .ok()
             .and_then(|t| serde_json::from_str::<Vec<String>>(&t).ok())
             .unwrap_or_default()
     }
 
-    fn write_signed_out(&self, list: &[String]) -> std::io::Result<()> {
+    fn write_list(&self, file: &str, list: &[String]) -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         std::fs::DirBuilder::new().recursive(true).mode(0o770).create(&self.secrets)?;
-        let temp = self.secrets.join(format!("{SIGNED_OUT_FILE}.tmp"));
+        let temp = self.secrets.join(format!("{file}.tmp"));
         let mut out = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
         out.write_all(serde_json::to_string(list).unwrap_or_default().as_bytes())?;
         out.sync_all()?;
-        std::fs::rename(&temp, self.secrets.join(SIGNED_OUT_FILE))
+        std::fs::rename(&temp, self.secrets.join(file))
     }
 
     /// A person signs `runtime`'s computer login out: from now no key on this computer signs it in, and the
     /// company's key this computer holds for it is deleted. Written before the CLI logs out, so no readiness pass
     /// in between signs it straight back in.
     pub fn mark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
+        self.mark(SIGNED_OUT_FILE, runtime)
+    }
+
+    /// A person switched `runtime`'s computer login to a subscription, which is now in place: from now no key on this
+    /// computer reaches it, and the company's key this computer holds for it is deleted.
+    pub fn mark_key_off(&self, runtime: &str) -> std::io::Result<()> {
+        self.mark(KEY_OFF_FILE, runtime)
+    }
+
+    fn mark(&self, file: &str, runtime: &str) -> std::io::Result<()> {
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        let mut list = self.signed_out_list();
+        let mut list = self.list(file);
         if !list.iter().any(|r| r == runtime) {
             list.push(runtime.into());
             list.sort();
-            self.write_signed_out(&list)?;
+            self.write_list(file, &list)?;
         }
         let names = headless_names(runtime);
         let mut team = self.team();
@@ -216,12 +241,21 @@ impl SignIn {
 
     /// A person signed `runtime` in again, or chose the shared key: keys sign it in as before, at once.
     pub fn unmark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
+        self.unmark(SIGNED_OUT_FILE, runtime)
+    }
+
+    /// A person chose the shared key for a login switched to a subscription, or the switch did not go in after all.
+    pub fn unmark_key_off(&self, runtime: &str) -> std::io::Result<()> {
+        self.unmark(KEY_OFF_FILE, runtime)
+    }
+
+    fn unmark(&self, file: &str, runtime: &str) -> std::io::Result<()> {
         {
             let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-            let mut list = self.signed_out_list();
+            let mut list = self.list(file);
             if list.iter().any(|r| r == runtime) {
                 list.retain(|r| r != runtime);
-                self.write_signed_out(&list)?;
+                self.write_list(file, &list)?;
             }
         }
         self.asked.lock().unwrap().remove(runtime);
@@ -254,7 +288,7 @@ impl SignIn {
     /// (name, value) of the key that signs `runtime` in headlessly, or None. None while a person has it signed
     /// out: that is what keeps it out of readiness, the key login, turns and the fallback.
     pub fn headless_secret(&self, runtime: &str) -> Option<(String, String)> {
-        if self.signed_out(runtime) {
+        if self.no_key(runtime) {
             return None;
         }
         let mut env = self.team();
@@ -266,7 +300,7 @@ impl SignIn {
 
     /// Whether the only key that signs `runtime` in is the company's.
     pub fn team_key_only(&self, runtime: &str) -> bool {
-        if self.signed_out(runtime) {
+        if self.no_key(runtime) {
             return false;
         }
         let (hand, team) = (self.hand(), self.team());
@@ -279,7 +313,7 @@ impl SignIn {
     /// case the company rotated it.
     pub async fn team_model_keys(&self, client: &Client, runtime: &str) -> bool {
         let names = headless_names(runtime);
-        if names.is_empty() || self.signed_out(runtime) {
+        if names.is_empty() || self.no_key(runtime) {
             return false;
         }
         let (hand, mut team) = (self.hand(), self.team());
@@ -311,7 +345,7 @@ impl SignIn {
         // The fetch took a while: decide on the files as they are now, under the lock. A person may have signed this
         // runtime out meanwhile, or another runtime's key may have changed.
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        if self.signed_out(runtime) {
+        if self.no_key(runtime) {
             return false;
         }
         team = self.team();
@@ -368,7 +402,7 @@ impl SignIn {
         // one marked after it waits for it to end before logging out.
         let _running = {
             let mut running = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-            if self.signed_out(runtime) {
+            if self.no_key(runtime) {
                 return false;
             }
             *running.entry(runtime.to_string()).or_default() += 1;
@@ -488,6 +522,41 @@ mod tests {
         assert_eq!(asked.load(Ordering::SeqCst), 1);
         assert!(restarted.key_login("codex", &exe).await);
         assert_eq!(std::fs::read_to_string(&runs).unwrap().trim(), "login --with-api-key");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_login_switched_to_a_subscription_takes_no_key_even_signed_in_until_the_shared_key_is_chosen() {
+        // Switch to subscription (backend/model_login.py to_subscription): once the subscription is in place no key on
+        // this computer reaches the login. The turn's key comes only from headless_secret (execute.rs
+        // `api_key_in_turn`), so the next turn runs on the subscription with no API key in its environment.
+        let dir = projects();
+        let secrets = dir.join("secrets");
+        std::fs::write(secrets.join(TEAM_KEYS_FILE), "ANTHROPIC_API_KEY=sk-ant-team-0123456789\nOPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(secrets.join("_shared.env"), "ANTHROPIC_API_KEY=sk-ant-hand-0123456789\n").unwrap();
+        let (exe, runs) = fake_codex(&dir);
+        let sign = SignIn::new(&dir);
+        assert!(sign.headless_secret("claude").is_some(), "before the switch the key is what it runs on");
+        sign.mark_key_off("claude").unwrap();
+        sign.mark_key_off("codex").unwrap();
+        assert!(sign.key_off("claude") && !sign.signed_out("claude"), "switched, not signed out");
+        // The company's copy is deleted; the key placed by hand stays on disk but reaches nothing.
+        assert!(!read_env(&secrets.join(TEAM_KEYS_FILE)).contains_key("ANTHROPIC_API_KEY"));
+        assert_eq!(sign.headless_secret("claude"), None, "no API key for the turn's environment");
+        assert!(!sign.team_key_only("claude"));
+        assert!(!sign.key_login("codex", &exe).await);
+        assert!(!runs.exists(), "the 10-minute key login ran over the subscription");
+        let (client, asked) = team_server().await;
+        assert!(!sign.team_model_keys(&client, "codex").await);
+        assert_eq!(asked.load(Ordering::SeqCst), 0, "the shared key was fetched for a login switched to a subscription");
+        // A later sign-in (Switch account) lifts a sign-out, not this; and it holds across a restart.
+        sign.unmark_signed_out("claude").unwrap();
+        let restarted = SignIn::new(&dir);
+        assert!(restarted.key_off("claude") && restarted.headless_secret("claude").is_none());
+        // Use the shared key is the person saying so.
+        restarted.unmark_key_off("codex").unwrap();
+        assert!(restarted.team_model_keys(&client, "codex").await);
+        assert!(restarted.headless_secret("codex").is_some() && restarted.headless_secret("claude").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
