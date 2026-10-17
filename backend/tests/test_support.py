@@ -2,6 +2,9 @@
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
 import json
+import re
+import secrets
+from pathlib import Path
 
 import httpx
 import pytest
@@ -12,7 +15,8 @@ from backend.tests.test_onboarding import as_person, environment, signed_in  # n
 
 
 class FakeHQ:
-    """Just enough of hq/support.py: keeps tickets, answers by secret, and can be told to fail."""
+    """Just enough of HQ's ticket routes (docs/telemetry.md, "Support tickets"): keeps tickets, answers by secret, and
+    can be told to fail."""
 
     def __init__(self):
         self.tickets, self.seen, self.down, self.status_override = {}, [], False, None
@@ -32,8 +36,8 @@ class FakeHQ:
                 return httpx.Response(422, json={"error": "invalid", "field": self.refuse_field})
             if self.fields is not None and set(body) - self.fields:
                 return httpx.Response(422, json={"error": "invalid", "field": "fields"})
-            tid = "TK-%08d" % (len(self.tickets) + 1)
-            self.tickets[tid] = {"secret": "s" * 20 + str(len(self.tickets)), "status": "open", "input": body, "messages": []}
+            tid = self.new_ticket_id()
+            self.tickets[tid] = {"secret": self.new_secret(), "status": "open", "input": body, "messages": []}
             return httpx.Response(201, json={"ticket_id": tid, "secret": self.tickets[tid]["secret"], "status": "open"})
         parts = path.strip("/").split("/")
         ticket = self.tickets.get(parts[2]) if len(parts) > 2 else None
@@ -49,8 +53,15 @@ class FakeHQ:
             ticket["messages"].append({"id": len(ticket["messages"]) + 1, "created": "z", "from": "person",
                                        "body": json.loads(request.content)["message"]})
             ticket["status"] = "open"
-            return httpx.Response(201, json={"status": "open"})
+            return httpx.Response(201, json={"ticket_id": parts[2], "status": "open",
+                                             "message_id": len(ticket["messages"])})
         return httpx.Response(404, json={})
+
+    def new_ticket_id(self):
+        return "TK-%08d" % (len(self.tickets) + 1)
+
+    def new_secret(self):
+        return "s" * 20 + str(len(self.tickets))
 
     def staff_replies(self, tid, body):
         messages = self.tickets[tid]["messages"]
@@ -167,42 +178,91 @@ def test_a_person_sees_their_own_tickets_and_no_one_elses(environment, hq):
     assert [r.url.path for r in hq.seen] == ["/v1/support/TK-00000001"]
 
 
-def test_a_request_reaches_the_real_hq_and_its_reply_comes_back_to_the_page(environment, monkeypatch, tmp_path):
-    """The whole round trip against hq/support.py itself (not FakeHQ): what the page files reaches HQ's queue, a reply
-    posted there with the staff key comes back in the page's list as unread, and opening the thread clears it."""
-    from fastapi.testclient import TestClient
+ROOT = Path(__file__).resolve().parents[2]
+TICKET_ID = re.compile(r"TK-[A-Z2-7]{8}")             # docs/telemetry.md: "Ticket ids look like TK-AB12CD34"
 
-    from hq.app import create_app
-    from hq.db import Database
-    from hq.releases import Latest
-    key = "k" * 32
-    staff = {"Authorization": "Bearer " + key}
-    latest = Latest(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"tag_name": "v0.2.17"})))
-    with TestClient(create_app(Database(tmp_path / "hq.db"), latest, staff_key=key), client=("203.0.113.9", 5000)) as hq_app:
-        def forward(request):
-            answer = hq_app.request(request.method, request.url.path, content=request.content,
-                                    headers={k: v for k, v in request.headers.items() if k in ("content-type", "x-ticket-secret")})
-            return httpx.Response(answer.status_code, content=answer.content, headers={"content-type": answer.headers["content-type"]})
-        monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(forward))
-        monkeypatch.setattr(support, "FRESH_S", 0)
-        api = environment()
-        mine = file(api).json()
-        (queued,) = hq_app.get("/v1/staff/tickets?status=open", headers=staff).json()["tickets"]
-        assert queued["body"] == "The board will not load"
-        assert hq_app.post(f"/v1/staff/tickets/{queued['ticket_id']}/reply", headers=staff,
-                           json={"body": "Try a reload"}).status_code == 200
-        api.post("/api/v2/support/tickets/refresh", headers=signed_in())
-        listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
-        (ticket,) = listed["tickets"]
-        assert ticket["id"] == mine["id"] and ticket["status"] == "answered" and listed["unread"] == 1
-        assert [(m["from"], m["body"]) for m in ticket["messages"]] == [("staff", "Try a reload")]
-        # Writing back reaches HQ too, and reading the thread clears the unread count.
-        assert api.post(f"/api/v2/support/tickets/{mine['id']}/messages", json={"message": "That fixed it"},
-                        headers=signed_in()).json()["status"] == "open"
-        shown = hq_app.get(f"/v1/staff/tickets/{queued['ticket_id']}", headers=staff).json()
-        assert [m["body"] for m in shown["messages"]] == ["Try a reload", "That fixed it"]
-        api.post(f"/api/v2/support/tickets/{mine['id']}/read", headers=signed_in())
-        assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["unread"] == 0
+
+def documented(doc, *routes):
+    """Each route is a row of HQ's documented API (docs/<doc>), the contract an install is held to. HQ's code is not in
+    this repository (it is in ticoteam/tico-services); the docs are what both sides agree on."""
+    text = (ROOT / "docs" / doc).read_text()
+    for route in routes:
+        assert f"`{route}`" in text, f"{route} is not documented in docs/{doc}"
+
+
+class ContractHQ(FakeHQ):
+    """FakeHQ with ticket ids and secrets made as HQ makes them, and each request it was sent as
+    (method, path, query, X-Ticket-Secret, JSON body), so a test can compare it with the documented contract."""
+
+    def new_ticket_id(self):
+        return "TK-" + "".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") for _ in range(8))
+
+    def new_secret(self):
+        return secrets.token_urlsafe(24)
+
+    def calls(self, start=0):
+        return [(r.method, r.url.path, r.url.query.decode(), r.headers.get("x-ticket-secret"),
+                 json.loads(r.content) if r.content else None) for r in self.seen[start:]]
+
+
+def test_the_ticket_round_trip_keeps_to_hq_s_documented_contract(environment, monkeypatch):
+    """The page's whole ticket round trip, with every request the install makes held exactly to HQ's ticket routes as
+    docs/telemetry.md ("Support tickets") documents them: the method and path, the ticket's secret in `X-Ticket-Secret`
+    (never in the address, never a staff key), and the JSON fields. HQ answers in the documented shapes, and the page
+    shows what they say: a staff reply arrives as unread, writing back reaches the ticket, reading clears the count,
+    deleting removes it. HQ's own side (its queue, the staff routes) is tested in ticoteam/tico-services."""
+    documented("telemetry.md", "POST /v1/support", "GET /v1/support/{id}", "POST /v1/support/{id}/messages",
+               "DELETE /v1/support/{id}", "POST /v1/staff/tickets/{id}/reply")
+    hq = ContractHQ()
+    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
+    monkeypatch.setattr(support, "FRESH_S", 0)
+    api = environment()
+    install_id = api.get("/api/v2/support/compose", headers=signed_in()).json()["install_id"]
+
+    # Filing: `POST /v1/support` with the documented fields only and no secret; `201 {ticket_id, secret, status}`.
+    mine = file(api).json()
+    (tid, held), = hq.tickets.items()
+    assert TICKET_ID.fullmatch(tid) and mine["status"] == "open"
+    assert hq.calls() == [("POST", "/v1/support", "", None,
+                           {"message": "The board will not load", "version": "0.2.17", "install_id": install_id})]
+    secret = held["secret"]
+    assert secret not in json.dumps(api.get("/api/v2/support/tickets", headers=signed_in()).json())
+
+    # The team replies (`POST /v1/staff/tickets/{id}/reply`, HQ's side); the page's refresh asks
+    # `GET /v1/support/{id}` with the secret and shows the documented answer, the reply unread.
+    hq.staff_replies(tid, "Try a reload")
+    mark = len(hq.seen)
+    api.post("/api/v2/support/tickets/refresh", headers=signed_in())
+    assert hq.calls(mark) == [("GET", f"/v1/support/{tid}", "", secret, None)]
+    listed = api.get("/api/v2/support/tickets", headers=signed_in()).json()
+    (ticket,) = listed["tickets"]
+    assert ticket["id"] == mine["id"] and ticket["status"] == "answered" and listed["unread"] == 1
+    assert [(m["id"], m["from"], m["body"]) for m in ticket["messages"]] == [(1, "staff", "Try a reload")]
+
+    # Writing back: `POST /v1/support/{id}/messages` `{message}`, then the ticket is read again.
+    mark = len(hq.seen)
+    assert api.post(f"/api/v2/support/tickets/{mine['id']}/messages", json={"message": "That fixed it"},
+                    headers=signed_in()).json()["status"] == "open"
+    assert hq.calls(mark) == [("POST", f"/v1/support/{tid}/messages", "", secret, {"message": "That fixed it"}),
+                              ("GET", f"/v1/support/{tid}", "", secret, None)]
+    assert [m["body"] for m in hq.tickets[tid]["messages"]] == ["Try a reload", "That fixed it"]
+
+    # Reading the thread clears the unread count and asks HQ nothing.
+    mark = len(hq.seen)
+    api.post(f"/api/v2/support/tickets/{mine['id']}/read", headers=signed_in())
+    assert api.get("/api/v2/support/tickets", headers=signed_in()).json()["unread"] == 0
+    assert hq.calls(mark) == []
+
+    # Deleting: `DELETE /v1/support/{id}` with the secret.
+    mark = len(hq.seen)
+    assert api.delete(f"/api/v2/support/tickets/{mine['id']}", headers=signed_in()).json() == {"deleted": True}
+    assert hq.calls(mark) == [("DELETE", f"/v1/support/{tid}", "", secret, None)] and not hq.tickets
+
+    # Every request went to HQ's address over HTTPS, as JSON when it had a body, and never with a staff key.
+    for request in hq.seen:
+        assert (request.url.scheme, request.url.host) == ("https", "updates.tico.team")
+        assert "authorization" not in request.headers
+        assert request.headers.get("content-type") == ("application/json" if request.content else None)
 
 
 def stored_secret(api, ticket_id):
