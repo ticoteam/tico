@@ -957,7 +957,7 @@ def _roadmap_suggestions(c):
     if not roadmaps.settings(c)['labels']:
         return None
     receiver = roadmaps.settings_view(c)['suggestions_receiver']
-    fix = [_fix("Open Public roadmap", "#/settings", "tasks")]
+    fix = [_fix("Open Public roadmap", "#/settings/roadmap")]
     if not receiver['bot']:
         return _check("roadmap_suggestions", "No bot receives roadmap suggestions", "warn",
                       "Visitors who suggest a feature on your public roadmap are being turned away.", fix)
