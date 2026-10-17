@@ -73,10 +73,22 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
   again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
   Signing in again, or **Use the shared key** next to it, ends that. A named subscription never takes the shared key.
+  A signed-out login reads **Signed out · Sign in** and its chip has a red dot, with or without bots on it. The
+  confirmation names the bots in a line: "Reviewer 1, QA and 2 more will stop running until this is signed in again"
+  (every name on hover).
+- **Switch to subscription** replaces **Switch account** on a Computer's own login that runs on an API key (the shared
+  key or one on the Computer). It is the same sign-in on the side: until the subscription is signed in and in place the
+  key stays in use, and cancelling, failing or running out of time leaves it so. Once the subscription is in place the
+  Computer deletes its copy of the company's key and no key on it reaches that login again: not readiness, not the
+  ten-minute key login and not a turn's environment, so the next turn runs on the subscription. The server stops
+  handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does not bring the key
+  back; only **Use the shared key** does. Bots keep the connection. Not offered for Claude Code on a Mac (Keychain), and
+  it needs a runner that knows it (`Update <computer> to switch to a subscription from here` otherwise).
 
 None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
 `"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
-bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches; `POST
+bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
+switches the Computer's own login off its API key); `POST
 /api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
 sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and

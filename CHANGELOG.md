@@ -8,6 +8,14 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Switch to subscription** on a computer's own Codex or Claude Code login that runs on an API key, in the computer's
+  pop-up on Settings > Computers. The key stays in use until the subscription has signed in and is in place, so a cancel
+  or failure changes nothing; then the key comes off that login (the company's "Every computer" key is not applied to
+  it again, nor put in its turns) until someone chooses **Use the shared key**. Bots keep the connection. Needs a
+  current runner ([Subscriptions](docs/subscriptions.md#signing-out-and-switching-accounts)).
+- A signed-out connection in the computer pop-up reads **Signed out · Sign in** and its chip gets a red dot, and the
+  sign-out confirmation names the bots in a line ("Reviewer 1, QA and 2 more will stop running until this is signed in
+  again").
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, in each computer's pop-up on
   Settings > Computers, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if

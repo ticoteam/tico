@@ -285,10 +285,11 @@ function machineSignInHTML(machine, online, name, auth, value) {
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
 const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
-// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
+// Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
+// for one login, from the shared sign-in module (ui/model-login.js).
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
-  platform: machine.platform || ''}) || '';
+  platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';

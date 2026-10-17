@@ -118,7 +118,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
         }
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
-          rows[id] = {id, runtime: body.runtime, profile: body.profile || '', kind: body.switch ? 'switch' : 'sign_in', state: 'waiting',
+          rows[id] = {id, runtime: body.runtime, profile: body.profile || '', kind: body.switch ? 'switch' : body.to ? 'to_subscription' : 'sign_in', state: 'waiting',
             url: 'https://auth.openai.com/codex/device', code: 'ABCD-1234', created: new Date().toISOString(), lines: []};
           return json(rows[id]);
         }
@@ -196,6 +196,27 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
     await page.locator('.toast', {hasText: 'shared key signs it in'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/shared-key', body: {runtime: 'codex'}});
     await own('codex').getByRole('button', {name: 'Sign out'}).waitFor({timeout: 15000});
+
+    // On the shared key it runs on an API key, so it offers Switch to subscription, not Switch account (Computers part
+    // 2). It is the sign-in dialog as a switch of type: a cancel says the key is still in use; done, the line shows
+    // the subscription and offers Switch account again.
+    assert.deepEqual(await buttons(own('codex')), ['Switch to subscription', 'Sign out']);
+    const toSub = page.locator('dialog.model-login:not(.model-logout)');
+    await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
+    await toSub.locator('h2', {hasText: 'Switch Codex (ChatGPT) on Team box to a subscription'}).waitFor();
+    await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
+    assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', to: 'subscription'}});
+    await toSub.locator('[data-cancel]').click();
+    await toSub.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    assert.match(await toSub.locator('[data-status]').innerText(), /The API key is still in use\./);
+    await page.keyboard.press('Escape');
+    await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
+    await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
+    finish(last(), 'signed_in', () => { box.readiness.runtimes.codex.account = {email: 'old@acme.example', plan: 'pro', kind: 'subscription', checked_at: new Date().toISOString()}; });
+    await toSub.locator('[data-status][data-state=signed_in]').waitFor();
+    assert.equal(await toSub.locator('[data-status]').innerText(), 'Switched. Codex (ChatGPT) on Team box now runs on the subscription; its bots keep it, and the API key is off.');
+    await toSub.getByRole('button', {name: 'Done'}).click();
+    await own('codex').getByRole('button', {name: 'Switch account'}).waitFor({timeout: 15000});
 
     // A named subscription's sign-out has no bots here and says nothing about the shared key. Done, its row on
     // Computers reads Signed out with Sign in, which signs it in again and brings Switch account back.
@@ -282,7 +303,7 @@ const {html, uiFile, harnesses} = require('./support/page.cjs');
 
     // ---- A member who does not run the computer: nothing to sign out or switch.
     const other = await open('cara');
-    assert.equal(await other.page.locator('#set-machines [data-model-sign-out], #set-machines [data-model-switch]').count(), 0);
+    assert.equal(await other.page.locator('#set-machines [data-model-sign-out], #set-machines [data-model-switch], #set-machines [data-model-to-subscription]').count(), 0);
     assert.deepEqual(other.errors, []);
     console.log('PASS: sign out with the bots named, switch account, use the shared key, rights, offline, refresh on a newer heartbeat, named Sign in and Mac');
   } finally { await browser.close(); }
