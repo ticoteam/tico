@@ -45,6 +45,8 @@ SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
 REMOVE_CAPABILITY = "model_remove_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
+# A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
+COMMIT_KINDS = SIDE_KINDS + ("remove",)
 LIFETIME = 15 * 60
 FINISH_SECONDS = 2 * 60
 # `finishing`: a switch signed in on the side and the runner is putting it in place. It can no longer be cancelled;
@@ -177,6 +179,11 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     if running:
         raise Problem("state", "Something else is running for this login on that computer; cancel it or wait for it "
                       "to finish", 409)
+    # A removal can delete the subscription's whole folder, so it runs alone on it: no other tool signs in there
+    # meanwhile, and it does not start while one is.
+    if profile and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime<>? AND {ACTIVE_SQL} "
+                             "AND (kind='remove' OR ?='remove')", (runner["id"], profile, runtime, kind)).fetchone():
+        raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
     if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
     if kind != "sign_in" and not _signs_out(runner) or kind == "to_subscription" and not _switches_type(runner) \
@@ -283,6 +290,10 @@ def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=Fals
     paused bots too: what a removal would leave with nothing to run on when they start again."""
     _operator(c, who, rid, auth)
     _runner(c, rid)
+    return {"runtime": runtime, "profile": profile, "bots": _bots_on(c, rid, runtime, profile, settings, every)}
+
+
+def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers, subscriptions
     from .shared_bots import follow
     ctx = subscriptions.context(c, settings)
@@ -300,11 +311,22 @@ def affected_bots(c, who, rid, runtime, profile, settings, auth=None, every=Fals
         assigned, _ = subscriptions.effective(c, row["bot"], ctx)
         if (assigned or "") == profile:
             out.append({"bot": row["bot"], "name": row["display_name"] or row["bot"]})
-    return {"runtime": runtime, "profile": profile, "bots": out}
+    return out
 
 
 def _names(names):
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _in_use(bots):
+    return (f"{_names([b['name'] for b in bots])} run on it. Move them to another connection on the Bots page "
+            "first")
+
+
+def removing(c, rid, profile):
+    """Whether `profile` is being taken off computer `rid` (a removal not yet ended): no bot chooses it meanwhile."""
+    return bool(profile) and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND kind='remove' "
+                                       f"AND {ACTIVE_SQL}", (rid, profile)).fetchone() is not None
 
 
 def remove(c, who, rid, runtime, profile, settings, auth=None):
@@ -322,8 +344,7 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
         raise Problem("not_found", "That subscription is not on this computer", 404)
     bots = affected_bots(c, who, rid, runtime, profile, settings, auth=auth, every=True)["bots"]
     if bots:
-        raise Problem("in_use", f"{_names([b['name'] for b in bots])} run on it. Move them to another connection on "
-                      "the Bots page first", 409, extra={"bots": bots})
+        raise Problem("in_use", _in_use(bots), 409, extra={"bots": bots})
     row, new = _queue(c, who, runner, runtime, profile, "remove", "remove a subscription")
     if new:
         H.event(c, who.actor, "runner.login.remove", rid, {"runtime": runtime, "profile": profile})
@@ -359,7 +380,8 @@ def cancel(c, who, rid, lid, auth=None):
     sweep(c)
     row = _login(c, rid, lid)
     if row["state"] == "finishing":
-        raise Problem("state", "The new account is already being put in place, so it can't be cancelled now", 409)
+        raise Problem("state", "It is already being removed, so it can't be cancelled now" if row["kind"] == "remove"
+                      else "The new account is already being put in place, so it can't be cancelled now", 409)
     if row["state"] in ACTIVE:
         c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated=? "
                   "WHERE id=?", (H.now(), lid))
@@ -377,7 +399,7 @@ def pending(c, runner_id):
              **({"code": r["pending_code"]} if r["pending_code"] else {})} for r in rows]
 
 
-def report(c, runner_id, lid, body):
+def report(c, runner_id, lid, body, settings=None):
     row = c.execute("SELECT * FROM model_logins WHERE id=? AND runner_id=?", (lid, runner_id)).fetchone()
     if not row:
         raise Problem("not_found", "That sign-in does not exist", 404)
@@ -387,8 +409,17 @@ def report(c, runner_id, lid, body):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] not in SIDE_KINDS:
+    if body.state == "finishing" and row["kind"] not in COMMIT_KINDS:
         raise Problem("state", "Only a switch puts a new login in place", 422)
+    # A removal's commit point: a bot that came to run on the subscription since it was asked for (moved to this
+    # computer, or onto this tool) stops it here, before the runner signs anything out or deletes anything.
+    if body.state == "finishing" and row["kind"] == "remove" and row["state"] != "finishing":
+        bots = _bots_on(c, runner_id, row["runtime"], row["profile"], settings, True)
+        if bots:
+            c.execute("UPDATE model_logins SET state='failed', message=?, updated=? WHERE id=?",
+                      (redact(_in_use(bots)), H.now(), lid))
+            H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
+            return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be cancelled, and it has a little time of its own to finish in.
         c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",

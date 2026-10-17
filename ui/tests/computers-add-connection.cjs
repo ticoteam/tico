@@ -159,8 +159,19 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     assert.match(await remove.locator('[data-remove-bots]').innerText(), /^Sleeper runs on it\. Move it to another connection on the Bots page first/);
     await remove.locator('[data-close]').first().click();
 
-    // With no bots on it, it comes off the computer.
+    // A bot that came onto it after the ask stops it at the computer, before anything goes: the Bots page again.
     refuseRemoval = false;
+    await detail.locator('[data-connection="profile:spare:codex"] [data-connection-remove]').click();
+    await remove.waitFor();
+    await remove.locator('[data-remove]').click();
+    removal = {...removal, state: 'failed', message: 'Writer run on it. Move them to another connection on the Bots page first',
+      updated: new Date().toISOString()};
+    await remove.locator('[data-status][data-state=failed]').waitFor({timeout: 10000});
+    assert.match(await remove.locator('[data-status]').innerText(), /^Writer run on it\. Move them/);
+    assert.equal(await remove.locator('[data-remove-bots-page]').count(), 1);
+    await remove.locator('[data-close]').last().click();
+
+    // With no bots on it, it comes off the computer.
     await detail.locator('[data-connection="profile:spare:codex"] [data-connection-remove]').click();
     await remove.waitFor();
     await remove.locator('[data-remove]').click();

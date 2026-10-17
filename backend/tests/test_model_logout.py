@@ -352,6 +352,44 @@ def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (weekly_key(rid, "work", "codex"),)).fetchone()
 
 
+def test_a_bot_that_comes_onto_a_subscription_being_removed_stops_it_and_nothing_else_runs_on_it_meanwhile(api):
+    """The bots check holds from the ask to the deletion: no bot chooses the subscription while it is being removed,
+    and one that came onto it another way (moved here, or onto this tool) stops the removal at its commit point,
+    before the computer signs anything out. A removal runs alone on the subscription, every tool's sign-in included."""
+    import uuid
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r, runtimes={"codex": {"signed_in": True}, "claude": {"signed_in": True}})
+    add_bot(api, "writer")
+    put_config(api, "writer", "codex")
+    post(api, "bots/writer/assignment", {"runner_id": rid, "expected_generation": 0})
+    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    choose = api.put("/api/v2/subscriptions", json={"target": "writer", "profile": "work"},
+                     headers={**headers("ana-test"), "Idempotency-Key": uuid.uuid4().hex})
+    assert choose.status_code == 409 and "work is being removed from" in choose.json()["error"]["detail"], choose.text
+    # Another tool on the same subscription waits for the removal, and a removal waits for its sign-in.
+    busy = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"}, expected=409)
+    assert "Something else is running on work" in busy["error"]["detail"]
+    # The bot comes onto it some other way before the computer gets to it: the commit point refuses, naming it.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO subscription_assignments VALUES('bot','writer','work',NULL,NULL)")
+    assert report(api, r, out["id"], state="finishing") == {"state": "failed"}
+    row = get(api, f"runners/{rid}/logins/{out['id']}")
+    assert row["state"] == "failed" and "writer run on it" in row["message"] and "Bots page" in row["message"]
+    assert pending(api, r) == []
+    # Moved off it, the next removal goes ahead from its commit point, which can't be cancelled.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
+    sign_in = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"})
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    post(api, f"runners/{rid}/logins/{sign_in['id']}/cancel", {})
+    again = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    assert report(api, r, again["id"], state="finishing") == {"state": "finishing"}
+    refused = post(api, f"runners/{rid}/logins/{again['id']}/cancel", {}, expected=409)
+    assert "already being removed" in refused["error"]["detail"]
+    assert report(api, r, again["id"], state="done", message="Removed work") == {"state": "done"}
+
+
 def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):
     r = online(api, REMOVES)
     rid = r["runner_id"]

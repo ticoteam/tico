@@ -4139,7 +4139,8 @@ def create_app(settings=None):
     def report_login(request: Request, lid: str, body: M.LoginReport):
         who = request.state.identity
         return mutate(request, body, lambda c: (execution.runner(c, who),
-                                                model_login.report(c, who.runner_id, lid, body))[1])
+                                                model_login.report(c, who.runner_id, lid, body,
+                                                                   store.settings))[1])
 
     @app.post("/api/v2/runners/{rid}/harness-actions")
     def harness_action(request: Request, rid: str, body: M.HarnessAction):

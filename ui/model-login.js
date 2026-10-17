@@ -311,7 +311,10 @@
       status.textContent = row.state === 'done' ? `Removed. ${title} is no longer on ${where}.`
         : row.state === 'failed' ? (row.message || 'The removal did not finish; the login is as it was.')
         : row.state === 'expired' ? 'The computer did not remove it in time; the login is as it was.' : '';
-      actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+      // A bot that came onto it since it was asked for stops it before anything goes; that refusal names the Bots page.
+      const toBots = row.state === 'failed' && botsPage && /Bots page/.test(row.message || '');
+      actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'
+        + (toBots ? '<button class="primary" type="button" data-remove-bots-page>Open the Bots page</button>' : '');
       refreshUntil(runnerId, runtime, profile, row.state === 'done' ? 'signed_out' : 'ready', row.updated);
     };
     const tick = async id => {
