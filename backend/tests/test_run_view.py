@@ -210,3 +210,21 @@ def test_a_task_still_in_a_chat_room_never_shows_that_chats_run(api):
     get(api, f"conversations/{chat['conversation_id']}/snapshot", "ben-test", expected=403)
     for token in ("ana-test", "ben-test"):
         assert get(api, f"tasks/{tid}", token)["execution"] is None, "the chat's run is not the task's"
+
+
+def test_the_working_line_is_only_the_owning_bots_run(api):
+    """In the task's own room, only the owning bot's run is the task's "Working" line: another bot's run there is not,
+    and a task a person owns has none."""
+    from backend.views import conversation_execution
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid, attempt = task_attempt(api, machine)
+    assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"]
+    with api.app.state.store.read() as c:
+        cid = H.task(c, tid)["conversation_id"]
+        assert conversation_execution(c, cid, bot="coo") is None, "another bot's runs only"
+        assert conversation_execution(c, cid, bot="ops")["attempt_id"] == attempt["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (tid,))
+    assert get(api, f"tasks/{tid}")["execution"] is None, "a person's task has no session to follow"

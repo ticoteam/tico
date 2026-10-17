@@ -13,6 +13,10 @@ All notable changes to Tico are recorded here. The format follows
   goes (each clearing leaves a task event); a public task whose title was a copy is unpublished. An update that hits a
   clash with the edge network now says to move the `TICO_EDGE_*` settings and then update again.
 
+### Fixed
+- A task page's "Working" line no longer slows to one update every 15 seconds after you come back to its browser tab;
+  it keeps its own pace.
+
 ## [0.3.52] - 2026-10-16
 
 ### Added

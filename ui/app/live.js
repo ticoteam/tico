@@ -53,7 +53,7 @@ function liveSoon(key, fn, ms = 250) {
 const LIVE_THROTTLE = new Map();
 function liveThrottle(key, fn, ms = 15000) {
   const t = LIVE_THROTTLE.get(key) || {at: 0, timer: 0, hidden: false};
-  t.fn = fn; LIVE_THROTTLE.set(key, t);
+  t.fn = fn; t.ms = ms; LIVE_THROTTLE.set(key, t);
   if (document.hidden) { t.hidden = true; return; }
   if (t.timer) return;
   t.timer = setTimeout(() => {
@@ -64,7 +64,7 @@ function liveThrottle(key, fn, ms = 15000) {
 }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
-  for (const [key, t] of LIVE_THROTTLE) if (t.hidden) { t.hidden = false; liveThrottle(key, t.fn); }
+  for (const [key, t] of LIVE_THROTTLE) if (t.hidden) { t.hidden = false; liveThrottle(key, t.fn, t.ms); }   // the caller's own pace
 });
 function liveStart() {
   if (LIVE.started || !liveAvailable()) return;
