@@ -106,6 +106,11 @@ All notable changes to Tico are recorded here. The format follows
 - Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
   @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
   the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
+- The server, runner and updater images run Python 3.15 on Debian trixie with SQLite 3.54.1, built in and checked
+  when the image is built (Debian's own copy is 3.46.1). The update pulls the images, and Tico's own mail venv rebuilds
+  itself on first use. A runner's home volume survives the update, so anything a bot or person built there with the old
+  Python 3.12 (a project's venv, `pip install --user` packages under `~/.local/lib/python3.12`) does not run on 3.15:
+  rebuild it ([updates.md](docs/updates.md#python-environments-on-a-docker-runner) lists them and how).
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
