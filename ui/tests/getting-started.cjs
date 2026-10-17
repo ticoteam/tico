@@ -263,7 +263,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.deepEqual(help.docs, ['how-it-works.md', 'glossary.md', 'connect-an-agent.md', 'README.md']);
     assert.equal(help.map, 0);
     assert.equal(help.fits, true);
-    await page.locator('[data-gs-tour]').click();
+    await page.locator('#help-page [data-gs-tour]').click();
     const tour = page.locator('.gs-tour[role=dialog][aria-modal=true]');
     await tour.waitFor();
     assert.equal(await tour.locator('.gs-tour-count').textContent(), '1 of 6');
@@ -286,6 +286,28 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await tour.waitFor({state: 'detached'});
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false);
     assert.deepEqual(calls.filter(c => c.body.tour).length >= 1, true);
+    await page.close();
+
+    // Take the tour is in the account menu too: the menu closes as the tour starts, and focus comes back to the account button.
+    page = await open('#/updates');
+    const menuTour = page.locator('.gs-tour[role=dialog]');
+    await page.locator('#account').click();
+    assert.deepEqual(await page.locator('#account-menu :is(a, button):not([hidden])').evaluateAll(els => els.map(e => e.textContent.trim()).slice(-1)), ['tourTake the tour']);
+    await page.locator('#account').press('ArrowUp');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'account-tour', 'the arrow keys reach it');
+    await page.keyboard.press('Enter');
+    await menuTour.waitFor();
+    assert.equal(await page.locator('#account-menu').isHidden(), true);
+    assert.equal(await page.locator('.gs-tour-count').textContent(), '1 of 6');
+    await page.keyboard.press('Escape');
+    await menuTour.waitFor({state: 'detached'});
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'account');
+    await page.locator('#account').click();
+    await page.locator('#account-tour').click();
+    await menuTour.waitFor();
+    assert.equal(await page.locator('#account-menu').isHidden(), true, 'a click closes the menu as well');
+    await page.locator('[data-tour-skip]').click();
+    await menuTour.waitFor({state: 'detached'});
     await page.close();
 
     // Someone who joins later gets the tour once, on their first visit, and not again.

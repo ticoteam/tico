@@ -1318,6 +1318,17 @@ mod tests {
     }
 
     #[test]
+    fn a_bots_model_and_effort_reach_claude_code() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let settings = Settings { model: Some("claude-haiku-5-5".into()), effort: Some("xhigh".into()), ..Default::default() };
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let after = |flag: &str| argv.iter().position(|a| a == flag).map(|i| argv[i + 1].as_str());
+        assert_eq!((after("--model"), after("--effort")), (Some("claude-haiku-5-5"), Some("xhigh")));
+    }
+
+    #[test]
     fn flags_follow_the_python_host() {
         assert_eq!(model_for(Some("gpt-5.4")), None);
         assert_eq!(model_for(Some(" claude-opus-5 ")).as_deref(), Some("claude-opus-5"));

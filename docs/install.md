@@ -605,15 +605,24 @@ allowed, take control. The computer itself decides whether it offers one:
 
 - Docker: a new runner offers it. `install.sh --runner` (and `tico setup runner`, and the cloud-init template) writes
   `TICO_SCREEN=1` in the runner's `.env`; `--no-screen` (or `TICO_SCREEN=0` in the cloud-init inputs) writes `0`
-  instead. To change it later, edit that line and run `docker compose up -d`. A runner installed before this default
-  has no such line and keeps its screen off until you add `TICO_SCREEN=1` (or run `install.sh --runner --screen`).
+  instead. A runner installed before this default has no such line and keeps its screen off until you turn it on.
+  To turn it on later, run this in the runner's folder; it takes effect live, with no restart, so no running turn is
+  cut off, and it is saved in `runner.json` on the `runner-home` volume, so it survives updates:
+  `sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on`
+  (`screen off` and `screen status` too). A non-empty `TICO_SCREEN` in `.env` wins over that setting, so with
+  `TICO_SCREEN=0` there the command changes nothing. Then, or on a runner too old for that command, set the line to `1`
+  (`.env` is root's, mode 600, so edit it with sudo) and run `sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) up -d runner`,
+  once the computer is idle, since that recreates the runner's container and cuts off a running turn.
+  `install.sh --runner --screen` writes `TICO_SCREEN=1` too. The `$([ -f runner.override.yaml ] && ...)` part adds the
+  override file a named or `--server-network` runner has, as every compose call for that runner must.
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at **View**, so
 its operator and admins can watch it; choose **Control** there to drive it, or **Off**. A setting someone already chose
 stays, and a computer added before this default keeps its setting. The runner runs a virtual
-display (`:99`, 1440x900) and gives bots `DISPLAY=:99`; its VNC servers listen on no network port (only on
+display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set
+`TICO_SCREEN_DISPLAY`, like `:101`, to use exactly one; when another X server holds it, the screen says which); its VNC servers listen on no network port (only on
 sockets in a directory bots cannot open), and the server relays each session. Anyone allowed to open the screen sees everything on that display, including what a bot types into a page,
 and with Control can use it. All bots on one computer share one display. A Mac reports "Linux only for now".
 

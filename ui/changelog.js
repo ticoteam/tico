@@ -11,9 +11,29 @@ window.renderChangelogNotice = function () {
   if (badge) { badge.hidden = !count; badge.textContent = count; }
 };
 
+// The top of What's new: the Beta features, from the server's one list (backend/beta.py), each with its pages in the
+// manual, and the known issues in the running version, as Tico HQ lists them with the update check (backend/releases.py).
+function changelogBetaHTML() {
+  const rows = S.config.beta || [];
+  if (!rows.length) return '';
+  const page = doc => `<a href="${GH}/blob/main/docs/${esc(doc)}" target="_blank" rel="noopener noreferrer">${esc(doc.replace(/\.md(#.*)?$/, ''))}</a>`;
+  return `<details class="changelog-top changelog-beta" id="changelog-beta">
+      <summary><strong>Beta features</strong></summary>
+      <p>These work today and may still change. A support request's diagnostics say which of them your team has on.</p>
+      <ul>${rows.map(f => `<li>${esc(f.name)}${betaPill(f.id)} <span class="muted">${(f.docs || []).map(page).join(' · ')}</span></li>`).join('')}</ul>
+    </details>`;
+}
+function changelogKnownIssuesHTML() {
+  const u = S.config.update || {}, v = S.config.version ? ' ' + nvVersion(S.config.version) : '';
+  const issue = i => `<li>${/^https:\/\//.test(i.url || '') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}${i.fixed_in ? ` <span class="changelog-ki-fixed">Fixed in ${esc(nvVersion(i.fixed_in))}</span>` : ''}</li>`;
+  const body = !u.known_issues_checked ? '<p class="changelog-ki-none">Could not check: this server\'s update check goes to GitHub, not Tico HQ.</p>'
+    : (u.known_issues || []).length ? `<ul>${u.known_issues.map(issue).join('')}</ul>` : `<p class="changelog-ki-none">None known in${esc(v)}.</p>`;
+  return `<section class="changelog-top changelog-known-issues" id="changelog-known-issues" aria-labelledby="changelog-ki-h"><h2 id="changelog-ki-h">Known issues in your version</h2>${body}</section>`;
+}
+
 window.pageChangelog = async function () {
   const root = document.querySelector('#main');
-  root.innerHTML = `<div class="release-page"><header class="release-header"><div><h1>Changelog</h1><p class="muted release-summary" role="status"></p></div><button class="ghost" type="button" data-read-changes hidden>Mark shown as read</button></header><div class="release-filters"><input type="search" aria-label="Search changes" autocomplete="off" placeholder="Search changes…"><select aria-label="Filter changes"><option value="unread">Since last look</option><option value="product">All product updates</option><option value="">All activity</option></select><button class="primary round-add" type="button" aria-label="Add product update" title="Add product update" hidden data-add-update>+</button></div><div class="release-list" aria-live="polite">Loading changes…</div><button class="ghost" type="button" data-more-changes hidden>Load older changes</button></div>`;
+  root.innerHTML = `<div class="release-page"><header class="release-header"><div><h1>Changelog</h1><p class="muted release-summary" role="status"></p></div><button class="ghost" type="button" data-read-changes hidden>Mark shown as read</button></header>${changelogBetaHTML()}${changelogKnownIssuesHTML()}<div class="release-filters"><input type="search" aria-label="Search changes" autocomplete="off" placeholder="Search changes…"><select aria-label="Filter changes"><option value="unread">Since last look</option><option value="product">All product updates</option><option value="">All activity</option></select><button class="primary round-add" type="button" aria-label="Add product update" title="Add product update" hidden data-add-update>+</button></div><div class="release-list" aria-live="polite">Loading changes…</div><button class="ghost" type="button" data-more-changes hidden>Load older changes</button></div>`;
   const page = root.firstElementChild;
   const search = page.querySelector('input'), filter = page.querySelector('select'), list = page.querySelector('.release-list');
   const summary = page.querySelector('.release-summary'), read = page.querySelector('[data-read-changes]'), add = page.querySelector('[data-add-update]');

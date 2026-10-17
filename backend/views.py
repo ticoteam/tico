@@ -1391,7 +1391,9 @@ def install_views(app, store, auth, mutate, task_view):
             except providers.ProviderError:
                 resolved_runtime = resolved_model = ""
             own = bool(providers._named(config.get("runtime")) or providers._named(config.get("model")))
-            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model,
+            # The effort it runs at, said beside the model on hover; empty when the bot has none.
+            resolved_effort = str(config.get("reasoning_effort") or config.get("effort") or bot.get("effort") or "") if resolved_runtime else ""
+            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model, "resolved_effort": resolved_effort,
                          "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
