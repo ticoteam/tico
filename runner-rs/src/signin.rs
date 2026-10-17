@@ -409,6 +409,7 @@ mod tests {
         assert!(!sign.team_key_only("codex"));
         std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
         assert_eq!(sign.headless_secret("codex"), None, "a key that came back still does not sign it in");
+        assert!(!sign.team_key_only("codex"), "nor counts as the company's key signing it in");
         assert!(!sign.key_login("codex", &exe).await);
         assert!(!runs.exists(), "the key login ran while signed out");
         let (client, asked) = team_server().await;
