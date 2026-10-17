@@ -156,6 +156,9 @@ All notable changes to Tico are recorded here. The format follows
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
   never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
+  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
+  and when it is back, with no need to resend.
 - Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
   `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
 - Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
