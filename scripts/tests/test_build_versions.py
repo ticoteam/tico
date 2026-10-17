@@ -23,21 +23,13 @@ def dockerfile_python():
     return image, minor(re.match(r'python:(\S+)', image).group(1))
 
 
-def test_python_image_is_pinned_by_digest():
-    image, _ = dockerfile_python()
+def test_image_python_is_pinned_and_matches_the_locks_and_workflows():
+    image, python = dockerfile_python()
     assert re.fullmatch(r'python:\d+\.\d+[\w.-]*@sha256:[0-9a-f]{64}', image), image
-
-
-def test_locks_are_compiled_for_the_image_python():
-    _, python = dockerfile_python()
     for lock in LOCKS:
         header = re.search(r'--python-version (\S+)', (ROOT / lock).read_text())
         assert header, f'{lock} does not record which Python it was compiled for'
         assert minor(header.group(1)) == python, f'{lock} is compiled for {header.group(1)}, the image runs {python}'
-
-
-def test_workflows_test_on_the_image_python():
-    _, python = dockerfile_python()
     found = 0
     for workflow in WORKFLOWS:
         for version in re.findall(r"python-version:\s*['\"]?([\d.]+)", workflow.read_text()):
@@ -65,15 +57,12 @@ def rust_stages():
     return stages
 
 
-def test_each_rust_image_can_compile_its_crate():
+def test_every_pinned_rust_can_compile_its_crates():
     stages = rust_stages()
     assert {crate for *_, crate in stages} == {'runner-rs', 'relay-rs'}, stages
     for path, line, compiler, crate in stages:
         assert compiler >= crate_msrv(crate), (f'{path}: {line} is older than {crate} rust-version '
                                                f'{".".join(map(str, crate_msrv(crate)))}')
-
-
-def test_pinned_workflow_rust_can_compile_every_crate():
     msrv = max(crate_msrv('runner-rs'), crate_msrv('relay-rs'))
     pins = [(workflow.name, version) for workflow in WORKFLOWS
             for version in re.findall(r'rustup toolchain install ([\d.]+)', workflow.read_text())]

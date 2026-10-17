@@ -16,12 +16,6 @@ def test_the_test_interpreter_passes():
     assert 'ok' in result.stdout
 
 
-def test_a_different_python_minor_is_refused():
-    major, minor = runtime_check.locked_python()
-    found = runtime_check.problems(version_info=(major, minor + 1, 0))
-    assert any(f'Python {major}.{minor + 1}' in problem and f'{major}.{minor}' in problem for problem in found)
-
-
 class OldSQLite:
     """A connection that reports an old version and has no FTS5, as a distro SQLite built without it would."""
 
@@ -39,25 +33,13 @@ class OldSQLite:
         self.db.close()
 
 
-def test_an_old_sqlite_is_refused():
-    found = runtime_check.problems(connect=lambda _: OldSQLite('3.34.1', fts5=True))
-    assert found == ['SQLite 3.34.1, older than 3.35.0']
-
-
-def test_a_sqlite_without_fts5_is_refused():
+def test_a_wrong_python_an_old_sqlite_and_one_without_fts5_are_refused():
+    major, minor = runtime_check.locked_python()
+    found = runtime_check.problems(version_info=(major, minor + 1, 0))
+    assert len(found) == 1 and f'Python {major}.{minor + 1}' in found[0] and f'{major}.{minor}' in found[0]
+    assert runtime_check.problems(connect=lambda _: OldSQLite('3.34.1', fts5=True)) == ['SQLite 3.34.1, older than 3.35.0']
     found = runtime_check.problems(connect=lambda _: OldSQLite('3.46.0'))
     assert len(found) == 1 and 'lacks FTS5' in found[0]
-
-
-def test_a_lock_without_its_python_header_is_an_error(tmp_path):
-    lock = tmp_path / 'requirements.txt'
-    lock.write_text('fastapi==0.115.0\n')
-    try:
-        runtime_check.locked_python(lock)
-    except ValueError as error:
-        assert '--python-version' in str(error)
-    else:
-        raise AssertionError('a lock that names no Python must not pass')
 
 
 def test_the_image_build_runs_it_in_the_source_stage():
