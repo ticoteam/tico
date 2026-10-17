@@ -8,6 +8,13 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
+  `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download and message counts. Counts are kept only when
+  `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
+  how many messages were sent, turns and cost, and no message text or address; a session ID shaped like a key is
+  refused before it is hashed. Only `https://tico.team` may call these routes from a browser
+  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`, including how many sessions
+  with 2 or more messages downloaded the file.
 - Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
   Usage estimates its cost at Anthropic's list price for prompts up to 100,000 tokens ($0.10 in, $0.01 cached, $0.50
   out per million tokens); a prompt over that costs five times as much, which the estimate does not show.
@@ -43,6 +50,9 @@ All notable changes to Tico are recorded here. The format follows
   and trying to change a task type's manager says where to choose the bot instead. In Settings → Tasks → Public
   roadmap, **Suggestions go to** picks it and says which bot Automatic means now; a chosen bot that has since been
   archived shows as archived, not as a blank. Members see the Public roadmap settings read-only.
+- Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
+  suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
+  shows only while a public label is enabled and clears by itself.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -64,6 +74,10 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
+  "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
+  set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
+  everywhere a model is named.
 - What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
