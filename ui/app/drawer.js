@@ -9,7 +9,7 @@ function setAccountMenu(open, returnFocus = false) {
 }
 $('#account').onclick = () => setAccountMenu($('#account-menu').hidden);
 document.addEventListener('click', ev => {
-  if (!ev.target.closest('.account-wrap') || ev.target.closest('#account-menu a')) setAccountMenu(false);
+  if (!ev.target.closest('.account-wrap') || ev.target.closest('#account-menu :is(a, button)')) setAccountMenu(false);
 });
 document.addEventListener('focusin', ev => {
   if (!ev.target.closest('.account-wrap')) setAccountMenu(false);
@@ -20,7 +20,7 @@ $('.account-wrap').addEventListener('keydown', ev => {
   }
   if (ev.target.id === 'account' && ['ArrowDown', 'ArrowUp'].includes(ev.key)) {
     ev.preventDefault(); setAccountMenu(true);
-    const shown = [...$('#account-menu').querySelectorAll('a:not([hidden])')];
+    const shown = [...$('#account-menu').querySelectorAll(':is(a, button):not([hidden])')];
     shown[ev.key === 'ArrowDown' ? 0 : shown.length - 1]?.focus();
   }
 });
