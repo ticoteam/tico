@@ -8,9 +8,9 @@ No model and no transport: functions over the draft dict the page keeps. Whateve
     draft = turn.finish()                    # what goes back to the page; `undo` holds the plan before the turn
     turn.keys_removed                        # a key-shaped string was cut: tell the visitor not to paste keys
 
-Standard library only, except that `from_yaml` needs PyYAML. Self-contained so it can be copied as is:
-scripts/build_catalog_json.py copies this package into hq/company_file and writes hq/onboarding-actions.json, the
-actions, catalogue and starter pack for the page's browser planner.
+Standard library only, except that `from_yaml` needs PyYAML. Self-contained so it can be copied as is: Tico HQ
+(ticoteam/tico-services) serves the setup page from a copy taken from a pinned Tico release, with the actions,
+catalogue and starter pack for the page's browser planner.
 """
 from .actions import Refusal, Turn, apply_action, undo
 from .draft import LIMITS, PACK, ROLES, SPEC, DraftError, blank

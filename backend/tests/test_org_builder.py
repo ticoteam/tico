@@ -79,10 +79,10 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
     assert set(ids(R.rank(built, "finance", "invoices sales resellers"))) <= {"controller", "collections"}
 
 
-def test_the_shipped_catalog_has_a_head_for_every_department_and_hq_has_a_current_copy():
-    """Every department's head is a card in it, and hq/catalog.json, hq/recruit_rank.py, the setup page's draft engine
-    (backend/company_file/roles.json, hq/company_file, hq/onboarding-actions.json) are what
-    scripts/build_catalog_json.py builds today, with the same version the server computes."""
+def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():
+    """Every department's head is a card in it, and the setup page's role list (backend/company_file/roles.json) is what
+    scripts/build_catalog_json.py builds today. Tico HQ's copies of the catalog and the engine are built in
+    ticoteam/tico-services from a pinned release."""
     settings = SimpleNamespace(catalog_dir=ROOT / "templates" / "catalog")
     built = recruit.catalog(settings)
     departments = yaml.safe_load((ROOT / "templates" / "groups.yaml").read_text())["departments"]
@@ -94,7 +94,6 @@ def test_the_shipped_catalog_has_a_head_for_every_department_and_hq_has_a_curren
     check = subprocess.run([sys.executable, str(ROOT / "scripts" / "build_catalog_json.py"), "--check"],
                            capture_output=True, text=True)
     assert check.returncode == 0, check.stderr
-    assert json.loads((ROOT / "hq" / "catalog.json").read_text())["version"] == built["version"]
 
 
 @pytest.fixture

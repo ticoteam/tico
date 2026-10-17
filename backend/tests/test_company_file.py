@@ -467,10 +467,3 @@ def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_fil
     assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-lead"
     assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
-
-def test_hq_s_copy_runs_the_same_engine():
-    from hq import company_file as H
-
-    draft = started()
-    assert H.to_yaml(draft, CREATED) == C.to_yaml(draft, CREATED)
-    assert H.SPEC == C.SPEC and H.PACK == C.PACK and H.ROLES == C.ROLES

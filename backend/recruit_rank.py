@@ -1,9 +1,9 @@
 """The org builder's catalog and its local recommender: which bots to suggest for one department.
 
 Standard library only, because the same file runs in two places: the Tico server (backend/recruit.py, the answer when
-Tico HQ is off or unreachable) and Tico HQ (hq/recruit.py, the answer when its model is capped or not configured).
-`scripts/build_catalog_json.py` copies it to hq/recruit_rank.py and writes hq/catalog.json with `build()`; its `--check`
-fails when either copy is stale.
+Tico HQ is off or unreachable) and Tico HQ (`POST /v1/recruit`, the answer when its model is capped or not configured).
+HQ's code is in ticoteam/tico-services, which copies this file and builds its catalog with `build()` from a pinned Tico
+release, so both sides agree on `catalog_version`.
 
 `build(departments, cards)` turns templates/groups.yaml and the card.yaml files (already parsed) into
 {version, departments, cards}. `rank(catalog, department, briefing, about)` answers {bots: [{template_id, why}],
