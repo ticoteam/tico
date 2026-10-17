@@ -1517,11 +1517,22 @@ def install_views(app, store, auth, mutate, task_view):
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
+            from . import subscriptions, inbox_isolation
+            subscription_context = subscriptions.context(c, store.settings)
+            kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
+            # The bots a member may not even see (an admin sees them all): left off another person's computer.
+            unseen = set() if auth.bot_admin(who) else {bot for bot, a in auth.bot_accesses(c, who).items() if not a["see"]}
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
-                if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
+                # Every person sees every working computer; only an admin or its operator may change it, and only
+                # they read its signed-in accounts and own login's usage (#610, as in /v2/computers). Another member
+                # gets the bots they may see on it.
+                manage = auth.bot_admin(who) or who.actor == "human:" + row["operator"]
+                if not manage and row["revoked_at"]:
                     continue
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]
+                hidden = set() if manage else unseen
+                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
+                        if a[0] not in hidden]
                 value = dict(row)
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
@@ -1537,18 +1548,28 @@ def install_views(app, store, auth, mutate, task_view):
                     "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
                     "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
-                                             if bot in assigned_here}
+                                             if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():
                     report.pop("tools", None)
                 from .harness_actions import choices, recent
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                from .subscriptions import computer_profiles
-                # Each named subscription on it, with its sign-in, account and usage windows: this list is already
-                # limited to an administrator or the computer's operator, who may read its accounts.
+                # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
+                # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
+                # computer's own login is that subscription's account, so a member's page shows them as one too.
+                # `bot_connections`: the connection each of its bots actually runs on.
+                profiles = subscriptions.computer_profiles(c, row, True)
+                same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
+                if not manage:
+                    for profile in profiles:
+                        subscriptions.without_accounts(profile["runtimes"])
+                    subscriptions.without_accounts(value["readiness"].get("runtimes") or {}, windows=True)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "profiles": computer_profiles(c, row, True),
+                                 "may_manage": manage, "profiles": profiles, "same_account": same_account,
+                                 "bot_connections": [link for link in subscriptions.connections(
+                                     c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
+                                 "inbox_only": row["id"] in kept_for_inbox,
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

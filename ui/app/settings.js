@@ -80,7 +80,7 @@ function pageSettings() {
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-providers" role="tabpanel" hidden>
-      <section class="card subs-card" id="settings-subs" aria-labelledby="settings-subs-h" hidden><header><h2 id="settings-subs-h">Subscriptions</h2></header><div id="set-subs"></div></section>
+      <p class="settings-moved" data-logins-moved>Logins and keys are now on each computer · <a href="#/settings/computers">Computers</a></p>
       <section class="card"><header><h2>AI providers</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
@@ -319,7 +319,6 @@ async function loadSettings() {
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
-    void renderSettingsSubs();
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     const add = $('#settings-add-bot');

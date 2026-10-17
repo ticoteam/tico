@@ -28,7 +28,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
 | Repositories | Team repositories, Owner product-repository creation, and bot repository access. |
-| Subscriptions | Named provider logins on Computers and defaults for groups and bots. |
+| Subscriptions | Named provider logins on Computers and the one each bot runs on. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
 | Conversations | Chats with bots: send, list, and stream replies. |

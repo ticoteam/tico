@@ -81,6 +81,18 @@ All notable changes to Tico are recorded here. The format follows
   "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
   set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
   everywhere a model is named.
+- **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
+  waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
+  of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
+  depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
+  computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
+  connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
+  and **Revoke computer**. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
+  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
+  accounts and changes anything on it.
+- Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
+  The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
+  are not moved to the bots; choose one per bot where it is needed.
 - What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
@@ -113,7 +125,7 @@ All notable changes to Tico are recorded here. The format follows
   default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
   Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
   Engineering did.
-- A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
+- A subscription you sign in from a computer on **Settings > Computers** shows up on that computer at
   once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
   stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can
   sign it in again; one taken out of the computer's `runner.json` goes from the list within 15 seconds.

@@ -18,7 +18,7 @@ function settingsBotEditorRows(e) {
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
-    <div class="sb-row" data-bot-sub-row hidden><span>Subscription</span><select class="settings-inline-select" data-bot-sub="${esc(e.name)}" aria-label="Subscription for ${esc(e.display_name)}"></select><span></span></div>`}`;
+    <div class="sb-row" data-bot-sub-row hidden><span>Connection</span><select class="settings-inline-select" data-bot-sub="${esc(e.name)}" aria-label="Connection for ${esc(e.display_name)}"></select><span></span></div>`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
 // `compaction` takes it, and it saves on its own without a fresh session, like the computer.

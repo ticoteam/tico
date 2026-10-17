@@ -157,6 +157,11 @@ created by a member has Instructions the Team has not reviewed, so it does not g
 
 A computer still hosts its owner's bots and the team owner's; taking members' bots adds members' bots, it does not move anyone else's.
 
+Every person sees every working computer in Settings > Computers (`GET /api/v2/operations`): its connections and their
+sign-in state, its named subscriptions' usage, and the bots on it that they may see. Only an admin or the computer's
+operator also sees the signed-in accounts and the usage of the computer's own login, sees revoked computers, and changes
+anything on it (sign in, rename, usage readings, screen, tools, performance, inbox-only, revoke); the API refuses anyone else.
+
 ## A computer's screen
 
 > **Beta**: a computer's screen (View and Control) works today and may still change. See [Beta features](support.md#beta-features).
@@ -207,12 +212,12 @@ against the session again.
 
 Every computer reports its CPU, memory, swap, disk and its busiest processes every 30 seconds, so a slow or overloaded
 computer can be debugged afterwards. It is on by default. The computer's operator or an admin turns it off in
-**Settings > Computers > ⋯ > Performance diagnostics** (`POST /api/v2/computers/<id>/performance {"mode": "off"}`); Off
+**Performance diagnostics** in the computer's pop-up in Settings > Computers (`POST /api/v2/computers/<id>/performance {"mode": "off"}`); Off
 stops the reports, and what was recorded stays until it is 14 days old. **Delete history** on the page, or
 `DELETE /api/v2/computers/<id>/performance`, removes it now. Each change is in the audit log (`runner.performance`,
 `runner.performance_erased`).
 
-Every person and bot of the company reads it: **⋯ > Performance** in Settings > Computers, `hub computer performance <computer>`,
+Every person and bot of the company reads it: **Performance** in a computer's pop-up in Settings > Computers, `hub computer performance <computer>`,
 or `GET /api/v2/computers/<id>/performance?hours=24` (1 to 336). A report holds numbers and process names only (the
 program's own name, never its arguments), and the turns shown are the server's own record of what ran. A bot the
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
