@@ -57,3 +57,22 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
     with api.app.state.store.transaction() as c:
         assert H.say(c, "human:ben", "bot:cpo", "Are you stuck?"), "a person's message waits, as before"
         assert H.note_create(c, "human:ben", "bot:cpo", "Back soon?")
+    # A bot a person paused stays theirs: its manager bot cannot queue work for it.
+    with api.app.state.store.transaction() as c:
+        H.status_set(c, "human:ana", "cpo", state="active", reason="reviewed")
+        H.status_set(c, "human:ana", "cpo", state="paused", reason="holding it")
+    with pytest.raises(H.Refused) as got:
+        with api.app.state.store.transaction() as c:
+            H.say(c, "bot:ops", "bot:cpo", "Start the export work.")
+    assert got.value.rule == "reach"
+
+
+def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
+    import json
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        c.execute("UPDATE bot_config SET reports_to=NULL, config_json=? WHERE bot='cpo'",
+                  (json.dumps({**config, "reports_to": "ops"}),))
+        H.quarantine(c, "cpo", "10 repeated refusals today")
+    with api.app.state.store.transaction() as c:
+        assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")

@@ -89,8 +89,9 @@ something new that is refused is recorded, not counted, until 30 refusals of any
 for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
 counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
-A person's message, note or task comment to a paused or quarantined bot is kept and runs when it is back, and so
-is its manager bot's (the bot it reports to on the org chart); any other bot still cannot write to it. When a
+A person's message, note or task comment to a paused or quarantined bot is kept and runs when it is back. To a
+quarantined bot, so is its manager bot's (the bot it reports to on the org chart); any other bot, and any bot
+writing to a bot a person paused, still cannot. When a
 quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico leaves the bot a quiet note that its
 next run carries: the refusal that stopped it, and "Do not retry this action; leave a note for a person if you
 still need it."

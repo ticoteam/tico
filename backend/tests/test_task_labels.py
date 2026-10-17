@@ -1,6 +1,8 @@
 """Who changes a task's labels: a mover any label; a bot a classification label on a task it manages (its own, one
 it asked for, or one of a type it manages); a label on a public roadmap or one Tico acts on keeps its gate."""
 
+import json
+
 from backend import hubdb as H
 from backend.tests.test_roadmaps import public_setup
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401 (fixture)
@@ -121,3 +123,38 @@ def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats
         r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 992}, headers=headers(token))
         assert r.status_code == 403, r.text
     assert state(api, "cpo") == "quarantined"
+
+
+def test_an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_once_on_a_public_task(api):
+    public_setup(api)
+    token = bot_token(api, "cpo")
+    item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap"})
+    with api.app.state.store.transaction() as c:      # published: the label now puts it on the roadmap
+        c.execute("UPDATE tasks SET visibility='public', public_title='Better search' WHERE id=?", (item["id"],))
+
+    def approved(labels):
+        preview = post(api, "tasks/" + item["id"] + "/publication-preview", {"labels": labels}, token=token)
+        approval = post(api, "approvals", {"kind": "publish", "task_id": item["id"], "payload": preview["payload"]}, token=token)
+        post(api, "approvals/" + approval["id"], {"decision": "approved"})
+        return approval["id"]
+
+    refused = label(api, item["id"], ["roadmap", "goal:on"], token, expected=403, approval_id=approved(["roadmap", "goal:on"]))
+    assert "goal:on changes how Tico runs the task" in refused["error"]["detail"]
+    assert label(api, item["id"], ["roadmap"], token, approval_id=approved(["roadmap"]))["labels"] == ["roadmap"]
+    assert api.get("/public/roadmaps/roadmap/tasks/" + item["id"]).status_code == 200
+    assert label(api, item["id"], [], token, approval_id=approved([]))["labels"] == []
+    assert api.get("/public/roadmaps/roadmap/tasks/" + item["id"]).status_code == 404
+
+
+def test_label_refusals_on_different_tasks_each_count(api):
+    token = bot_token(api, "cpo")
+    tickets = [post(api, "tasks", {"owner": "cmo", "title": f"Build part {i}", "body": "x", "type": "Engineering"})
+               for i in range(2)]
+    for ticket in tickets:
+        for _ in range(2):
+            label(api, ticket["id"], ["qa"], token, expected=403)
+    with api.app.state.store.read() as c:
+        about = [json.loads(r[0]).get("task") for r in c.execute(
+            "SELECT detail_json FROM refusals WHERE actor='bot:cpo' AND rule='label' ORDER BY ts")]
+    assert about == [tickets[0]["id"]] * 2 + [tickets[1]["id"]] * 2, "the replayed refusal keeps its task"
+

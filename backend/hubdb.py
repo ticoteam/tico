@@ -1906,13 +1906,17 @@ HELD_STATES = ("quarantined", "paused")
 
 def held_for(conn, actor, target):
     """Whether what `actor` writes to a paused or quarantined bot is kept for when it is back, rather than refused
-    (rule 2): a person's, or the bot's own manager bot's (bot_config.reports_to), so it can say why it stopped."""
+    (rule 2): a person's, or, to a quarantined bot, its own manager bot's (bot_config.reports_to, else its declared
+    reports_to, as auth.bot_contact reads it), so it can say why it stopped. A paused bot stays a person's."""
     if is_human(actor):
         return True
     target = resolve_actor(conn, target)
     if not (is_bot(actor) and is_bot(target)) or not _has_table(conn, "bot_config"):
         return False
-    boss = str((_one(conn, "SELECT reports_to FROM bot_config WHERE bot=?", (actor_id(target),)) or {}).get("reports_to") or "")
+    if (bot(conn, actor_id(target)) or {}).get("state") != "quarantined":
+        return False
+    row = _one(conn, "SELECT reports_to, config_json FROM bot_config WHERE bot=?", (actor_id(target),)) or {}
+    boss = str(row.get("reports_to") or (_json(row.get("config_json"), {}) or {}).get("reports_to") or "")
     return bool(boss) and not boss.startswith("human:") and actor_id(boss) == actor_id(actor)
 
 

@@ -54,8 +54,8 @@ All notable changes to Tico are recorded here. The format follows
   counts toward a quarantine once per task an hour. Lane and number are unchanged: a person's.
 - A bot back from a quarantine finds a note in its next run with the refusal that stopped it and "Do not retry this
   action; leave a note for a person if you still need it", whether the cooldown lifted it or a person cleared it.
-  While a bot is paused or quarantined, its manager bot's messages, notes and task comments are kept for when it is
-  back instead of refused, as a person's already were (and a person's notes now are too).
+  While a bot is quarantined, its manager bot's messages, notes and task comments are kept for when it is back
+  instead of refused, as a person's already were (and a person's notes to a paused or quarantined bot now are too).
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
