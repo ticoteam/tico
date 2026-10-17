@@ -24,6 +24,98 @@ def test_engineering_children_drive_approved_roadmap_and_reopen(api):
     assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Building'
 
 
+def _dev_tickets(api):
+    """A Dev tickets type shaped like the software factory's: Done ships, Closed and Won't do do not."""
+    from backend import roadmap_flow as F
+    with api.app.state.store.transaction() as c:
+        dev = H.type_create(c, 'human:ana', 'Dev tickets', steps=[
+            {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
+            {'name': 'Done', 'status': 'done'}, {'name': 'Closed', 'status': 'closed'},
+            {'name': "Won't do", 'status': 'declined'}])
+        F.ensure(c)     # hands the type to engineering-lead, as on a server start
+    return dev
+
+
+def _building(api, dev, title, tickets=2):
+    item = post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
+                               'step': 'Approved'})
+    children = [post(api, 'tasks', {'owner': 'ops', 'title': f'{title} part {n}', 'body': 'Build it.',
+                                    'type': dev['id'], 'relations': [{'task': item['id'], 'kind': 'parent'}]})
+                for n in range(tickets)]
+    assert get(api, 'tasks/' + item['id'])['task']['step']['name'] == 'Building'
+    return item, children
+
+
+def _step(api, task, step):
+    return post(api, 'tasks/' + task['id'], {'version': get(api, 'tasks/' + task['id'])['task']['version'],
+                                             'step': step})
+
+
+def _roadmap_step(api, item):
+    return get(api, 'tasks/' + item['id'])['task']['step']['name']
+
+
+def test_a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api):
+    dev = _dev_tickets(api)
+    item, (done, dropped) = _building(api, dev, 'Exports')
+    _step(api, done, 'Done')
+    assert _roadmap_step(api, item) == 'Building'
+    _step(api, dropped, 'Closed')
+    assert _roadmap_step(api, item) == 'Shipped'
+
+    item, children = _building(api, dev, 'Imports')
+    for child in children:
+        _step(api, child, 'Closed')
+    assert _roadmap_step(api, item) == 'Approved'
+    assert get(api, 'tasks/' + item['id'])['task']['done_at'] is None
+
+    item, (closed, declined) = _building(api, dev, 'Sharing')
+    _step(api, closed, 'Closed')
+    _step(api, declined, "Won't do")
+    assert _roadmap_step(api, item) == 'Approved'
+
+
+def test_a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api):
+    dev = _dev_tickets(api)
+    item, children = _building(api, dev, 'Reports')
+    for child in children:
+        _step(api, child, 'Done')
+    assert _roadmap_step(api, item) == 'Shipped'
+    for child in children:
+        # Accepting finished work closes it, which lands a Dev ticket on its Closed step.
+        closed = post(api, 'tasks/' + child['id'], {'version': get(api, 'tasks/' + child['id'])['task']['version'],
+                                                    'close': True})
+        assert closed['step']['name'] == 'Closed' and closed['status'] == 'closed'
+    assert _roadmap_step(api, item) == 'Shipped'
+
+    item, (child,) = _building(api, dev, 'Reopened', tickets=1)
+    _step(api, child, 'Done')
+    _step(api, child, 'In Progress')
+    assert _roadmap_step(api, item) == 'Building'
+    _step(api, child, 'Closed')
+    assert _roadmap_step(api, item) == 'Approved'
+
+    item, (child,) = _building(api, dev, 'Dropped after Done', tickets=1)
+    _step(api, child, 'Done')
+    _step(api, child, "Won't do")
+    assert _roadmap_step(api, item) == 'Approved'
+    closed = post(api, 'tasks/' + child['id'], {'version': get(api, 'tasks/' + child['id'])['task']['version'],
+                                                'close': True})
+    assert closed['step']['name'] == 'Closed'
+    assert _roadmap_step(api, item) == 'Approved'
+
+
+def test_a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api):
+    item = post(api, 'tasks', {'owner': 'cpo', 'title': 'Search', 'body': 'Spec.', 'type': 'Product roadmap',
+                               'step': 'Approved'})
+    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build search', 'body': 'Build it.',
+                                'type': 'Engineering', 'relations': [{'task': item['id'], 'kind': 'parent'}]})
+    assert _roadmap_step(api, item) == 'Building'
+    child = _step(api, child, 'Done')
+    assert child['status'] == 'closed'
+    assert _roadmap_step(api, item) == 'Shipped'
+
+
 def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(api):
     draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
                                'type': 'Product roadmap'})

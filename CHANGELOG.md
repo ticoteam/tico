@@ -63,6 +63,15 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- A Linux computer's screen now comes up when another X server (say a headless IDE's own `Xvfb :99`) already holds
+  display `:99`. The runner takes the first free display from `:99` to `:120`, and bots get that `DISPLAY`. Set
+  `TICO_SCREEN_DISPLAY` (like `:101`) to use one display exactly. When the display it needs is taken, the computer's
+  screen says so, with the process holding it when the runner can read it: "Display :99 is in use by another X
+  server (Xvfb, pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display." It used to say only "Xvfb :99 did
+  not start".
+- A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
+  **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
+  straight from Done still counts as shipped, as does the default Engineering type's Done step.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
@@ -71,6 +80,8 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
+  so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 
 ## [0.3.52] - 2026-10-16
 
