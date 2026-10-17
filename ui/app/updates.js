@@ -30,6 +30,8 @@ function updCacheRead(state) {
   try { return JSON.parse(sessionStorage.getItem(UPD_CACHE(state)) || 'null'); } catch { return null; }
 }
 function updCacheWrite(state, data) {
+  // An update opened from a From: link belongs to this visit only; the next visit's first paint shows the feed.
+  if (state.linked?.size && data?.updates) data = {...data, updates: data.updates.filter(u => !state.linked.has(u.id))};
   try { sessionStorage.setItem(UPD_CACHE(state), JSON.stringify(data)); } catch {}
 }
 function updCacheClear() {
@@ -50,7 +52,7 @@ function pageUpdates() {
   // "a filter at the top, on by default, to only show my bots" (the bots I own), in List and Archive.
   const {mine, layout, scope} = updPrefs();
   const state = UPD = {kind, view, mine, layout, scope, expanded: null, editing: false, data: null, open: new Set(), threads: {}, pending: new Set(), manualUnread: new Set(),
-                       archivePending: new Set(), loadSeq: 0, mutationSeq: 0, sel: -1, loading: true, fromCache: false};
+                       archivePending: new Set(), linked: new Map(), loadSeq: 0, mutationSeq: 0, sel: -1, loading: true, fromCache: false};
   const cached = state.data = updCacheRead(state);
   state.loading = !cached; state.fromCache = !!cached;
   if (cached) updOrder(state, true);
@@ -134,9 +136,16 @@ async function updLoad(state, more = false) {
   state.loading = false;
   if (!r) { if (!state.data) $('#upd-feed').innerHTML = '<div class="empty">Could not load the updates yet; trying again…</div>'; setTimeout(() => UPD === state && updLoad(state, more), 4000); return; }
   if (r.roots) { state.data = updFromTree(r); updCacheWrite(state, state.data); state.fromCache = false; }
-  else if (more && state.data) state.data = {...r, updates: [...state.data.updates, ...r.updates], missed: state.data.missed};
-  else { state.data = r; updCacheWrite(state, r); state.fromCache = false; }
+  else if (more && state.data) {
+    const have = new Set(state.data.updates.map(u => u.id));   // a From: link may have loaded one already
+    state.data = {...r, updates: [...state.data.updates, ...r.updates.filter(u => !have.has(u.id))], missed: state.data.missed};
+  }
+  else {
+    state.data = r; updCacheWrite(state, r); state.fromCache = false;
+    for (const {update} of state.linked.values()) if (!r.updates.some(u => u.id === update.id)) r.updates.push(update);
+  }
   updOrder(state, !more);
+  updLinkedRank(state);
   updBadge(r.unread);
   updRender(state);
 }
@@ -377,8 +386,9 @@ async function updPostOwn(state, form) {
   } catch (e) { err.textContent = e.message || 'Could not post it.'; button.disabled = false; }
 }
 // A "From:" link: in the tree, open that report's card (its managers' cards too) and go to it; in List, go to
-// its card when it is on the page, else to its author.
-function updGoInput(state, link) {
+// its card when it is on the page, else load that one update and show it under the card that links it (the
+// author's page shows their latest, which on an older card is a newer update). If it can't load, its author.
+async function updGoInput(state, link) {
   const id = link.dataset.updInput;
   if (state.data?.tree && updIsTree(state)) {
     const path = [], find = nodes => nodes.some(n => (n.update?.id === id || find(n.children)) && path.push(n.key));
@@ -387,9 +397,29 @@ function updGoInput(state, link) {
       updRender(state);
     }
   }
-  const i = (state.list || []).findIndex(u => u.id === id);
+  let i = (state.list || []).findIndex(u => u.id === id);
+  if (i < 0 && !updIsTree(state) && state.data) {
+    const from = link.closest('[data-upd]')?.dataset.upd;
+    const r = await v2Get('/v2/updates/' + encodeURIComponent(id));
+    if (UPD !== state || !state.data) return;
+    if (r?.update) {
+      if (!state.data.updates.some(u => u.id === id)) state.data.updates.push(r.update);
+      state.threads[id] ||= r.thread;
+      // Kept through this visit's reloads, and shown even when My bots would hide its author.
+      state.linked.set(id, {update: state.data.updates.find(u => u.id === id), from});
+      updLinkedRank(state);
+      updRender(state);
+      i = state.list.findIndex(u => u.id === id);
+    }
+  }
   if (i < 0) { location.hash = link.getAttribute('href'); return; }
   updSelect(state, i);
+}
+// An update opened from a From: link sits just under the card that links it.
+function updLinkedRank(state) {
+  if (!state.linked.size) return;
+  state.order ||= new Map();
+  for (const [id, {from}] of state.linked) state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
 }
 function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
@@ -409,8 +439,10 @@ function updRender(state) {
   // Unread first, then newest to oldest; the order is set when the page opens
   // (updOrder) and never moves while you read and scroll, only on the next visit.
   const rank = state.order || new Map();
-  const items = (data.updates || []).filter(u => !state.mine || isMine(u.bot))
+  const items = (data.updates || []).filter(u => !state.mine || isMine(u.bot) || state.linked.has(u.id))
     .sort((a, b) => (rank.get(a.id) ?? -1) - (rank.get(b.id) ?? -1));
+  const selected = state.list?.[state.sel]?.id, at = selected ? items.findIndex(u => u.id === selected) : -1;
+  if (at >= 0) state.sel = at;                          // a reload keeps the same card selected
   state.list = items;
   // Just the updates in a feed; no greeting, no progress, no who did not report.
   let html = items.map((u, i) => updCard(u, i, state)).join('');
@@ -513,6 +545,7 @@ async function updArchive(state, id) {
     updSaveDrafts();
     state.archivePending.delete(id);
     state.data.updates = state.data.updates.filter(u => u.id !== id);
+    state.linked.delete(id);                            // archived: not carried into the next reload
     state.pending.delete(id);
     state.list = (state.list || []).filter(u => u.id !== id);
     updRender(state);
@@ -563,7 +596,7 @@ function updBind(state) {
     }
     if (ev.target.closest('[data-upd-cancel]')) { state.editing = false; updRender(state); return; }
     const input = ev.target.closest('[data-upd-input]');
-    if (input) { ev.preventDefault(); updGoInput(state, input); return; }
+    if (input) { ev.preventDefault(); void updGoInput(state, input); return; }
     if (!card || ev.target.closest('[data-upd-bot], a, textarea, form')) return;
     const deck = ev.target.closest('[data-upd-deck]');
     if (deck) {

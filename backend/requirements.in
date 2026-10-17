@@ -19,4 +19,4 @@ dnspython>=2.7,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo de
 pypdf>=5,<7
 
 python-multipart>=0.0.22,<1
-Pillow>=12.0,<13
+Pillow>=13.0,<14

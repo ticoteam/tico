@@ -13,6 +13,9 @@ All notable changes to Tico are recorded here. The format follows
   `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
   how many messages were sent, turns and cost, and no message text or address. Only `https://tico.team` may call these routes from a browser
   (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`.
+- Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
+  Usage estimates its cost at Anthropic's list price for prompts up to 100,000 tokens ($0.10 in, $0.01 cached, $0.50
+  out per million tokens); a prompt over that costs five times as much, which the estimate does not show.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
@@ -34,8 +37,15 @@ All notable changes to Tico are recorded here. The format follows
   default, and **Whole org** shows the chart from the top (the choice is kept). The badge and unread dots count only
   your direct reports, so a report's report never alerts. **List** keeps the plain newest-first feed. On Friday the
   **Weekly** tab has your week in review to write or edit as its slides (goal, done, focus, blockers, KPIs). A
-  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card;
+  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card (in
+  **List**, an older one not on the page opens under the card that links it, not the author's latest);
   `hub update show` lists them too, and you only see those you may read.
+- Public roadmaps: choose which bot receives visitor suggestions with `suggestions_bot` in roadmap settings
+  (`hub roadmap settings --suggestions-bot SLUG`, or `--automatic`), owners and admins only. Automatic, the default,
+  is today's Product Manager rule, then a Head of Product bot, so a team without a Product Manager still takes
+  suggestions; an archived bot never gets them. Reading the settings shows the bot suggestions go to now. With no
+  receiving bot a visitor gets "Suggestions aren't being accepted right now." instead of an internal setup error,
+  and trying to change a task type's manager says where to choose the bot instead.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -49,8 +59,20 @@ All notable changes to Tico are recorded here. The format follows
   only, **Full access**, for a time they choose (24 hours by default). A banner shows on every screen while it lasts, Stop
   ends it at once, and every request support makes is listed under the request. The install dials out to Tico HQ; nothing
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
+- A bot's **More** always has a **Screen** row, so the screen stays findable when it isn't working: ready (open it, View
+  or Control), or why not and what to do. Screen off: the computer's operator or an admin turns it on (View) there.
+  No screen offered: the steps on the computer, with commands to copy; on Docker the main one turns the screen on live
+  inside the runner's container, with no restart (install.md says the same). Also a Mac, an offline computer, no computer, or
+  not yours to open. The header's Screen button now shows only when the row is ready (not while the computer is offline).
+  Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
+  button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
+  the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
+  **Changelog** page; and **Take the tour** is in the account menu.
+- Faster image handling and startup with Pillow 13, plus pydantic 2.14, pypdf 6.21, Starlette 1.8 and Uvicorn 0.54.
+  Python and browser tests use one Playwright version (1.64), so they share one Chromium and WebKit.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -60,6 +82,26 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- Roadmaps keep working after the bot that managed the Product roadmap or Dev tickets type is archived or replaced.
+  Tico found both types by their manager's name (`product-manager`, `engineering-lead`), so a type that moved to
+  another bot lost its Approved → Building → Shipped sync, its Roadmap tab and its ranked list. Each type now has a
+  role (`role` in `hub task types` and the API), given once on upgrade without changing any task; setting up the
+  default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
+  Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
+  Engineering did.
+- A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
+  once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
+  stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can
+  sign it in again; one taken out of the computer's `runner.json` goes from the list within 15 seconds.
+- A Linux computer's screen now comes up when another X server (say a headless IDE's own `Xvfb :99`) already holds
+  display `:99`. The runner takes the first free display from `:99` to `:120`, and bots get that `DISPLAY`. Set
+  `TICO_SCREEN_DISPLAY` (like `:101`) to use one display exactly. When the display it needs is taken, the computer's
+  screen says so, with the process holding it when the runner can read it: "Display :99 is in use by another X
+  server (Xvfb, pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display." It used to say only "Xvfb :99 did
+  not start".
+- A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
+  **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
+  straight from Done still counts as shipped, as does the default Engineering type's Done step.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
@@ -68,6 +110,8 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
+  so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 
 ## [0.3.52] - 2026-10-16
 

@@ -60,8 +60,8 @@ for example. Edit each bot's instructions to match its role here, or ask BotOps 
 ## Dev tickets: the steps
 
 In Settings → Types, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
-Renaming keeps the type with Head of Engineering, so a roadmap item follows its Dev tickets (below); a new type you
-create yourself doesn't get that link. Move any tasks off a step before you delete it or change its status.
+Renaming keeps the type with Head of Engineering, so a roadmap item follows its Dev tickets (below), and so does a type
+you create named Dev tickets. Move any tasks off a step before you delete it or change its status.
 
 | Step | Status | Moved there by | What happens |
 |---|---|---|---|

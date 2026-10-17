@@ -4,7 +4,9 @@ review are there), and `app-server` speaking the part of the JSON-RPC protocol r
 (scripts/journey-fake-codex.py, plus token usage, native goals, steering, `account/read` and `account/rateLimits/read`).
 Every thread, goal, steer, turn and rate-limit request is appended to $FAKE_LOG, with the turn's homes, cwd and granted
 variables; a prompt containing REMEMBER leaves a file in that cwd's memory/. FAKE_CODEX_LOGIN=apikey signs it in with
-an API key, whose plan usage the server refuses to read.
+an API key, whose plan usage the server refuses to read. FAKE_CODEX_LOGIN=file makes the sign-in $CODEX_HOME/auth.json:
+`login status` says logged in only when it is there, and `login --device-auth` shows a link and a code, then waits for
+the test to put `approve` (writes auth.json) or `deny` (fails) in $CODEX_HOME.
 
 Scripted prompts: HANG streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; LIMIT
 fails the turn with a usage limit; SLOW streams one delta and answers after $FAKE_SLOW seconds (2), or at once
@@ -52,9 +54,28 @@ def main():
     if "--version" in sys.argv:
         print("codex-cli 99.0.0")
         return
+    home = os.environ.get("CODEX_HOME", "")
+    by_file = os.environ.get("FAKE_CODEX_LOGIN") == "file"
     if sys.argv[1:3] == ["login", "status"]:
+        if by_file and not os.path.exists(os.path.join(home, "auth.json")):
+            print("Not logged in")
+            sys.exit(1)
         print("Logged in using ChatGPT")
         return
+    if by_file and sys.argv[1:3] == ["login", "--device-auth"]:
+        print("Open this link\n  https://auth.openai.com/codex/device \nEnter this one-time code\n   ABCD-1234", flush=True)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if os.path.exists(os.path.join(home, "deny")):
+                print("Login was not completed")
+                sys.exit(1)
+            if os.path.exists(os.path.join(home, "approve")):
+                with open(os.path.join(home, "auth.json"), "w") as f:
+                    f.write("{}")
+                print("Successfully logged in")
+                return
+            time.sleep(0.05)
+        sys.exit(1)
     if sys.argv[1:3] == ["app-server", "generate-json-schema"]:
         schema(sys.argv[sys.argv.index("--out") + 1])
         return
