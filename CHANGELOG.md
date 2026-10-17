@@ -63,6 +63,13 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
+  purpose and the job that would start next is still young. It judges a bot by the oldest job that could start now:
+  slow only once that job has waited 15 minutes (a person's message: 2). When every job is held, it names the reason.
+- A computer someone pressed Restart for now says so until it restarts. Its held work shows on Health as "{computer} is
+  restarting: it starts new work once its running turns end", and its row in Settings > Computers says it is
+  restarting. If the restart takes over 34 minutes, Health Monitor files a `runner_restarting` setup finding.
+  Before, that wait read as a Tico bug.
 
 ## [0.3.52] - 2026-10-16
 

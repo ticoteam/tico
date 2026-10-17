@@ -11,13 +11,14 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | Check | Kind | What it means |
 |---|---|---|
 | `runner_outdated` | setup | An online computer is on an older release, cannot work with this one, or failed to update; or it holds queued work until its running turns finish so it can update (the finding names that work) |
+| `runner_restarting` | setup | A computer a person pressed Restart for has said it is restarting for over 34 minutes (20 minutes still claiming, then up to 14 for its running turns); the finding names the turns still running and the work it holds |
 | `computer_silent` | setup | A computer has not checked in for 10 minutes or more while work is queued for its bots |
 | `limited_no_fallback` | setup | A bot's turns stopped on a subscription or spend limit in the last day and it has no fallback model |
 | `stuck_setup` | setup | A bot has been in setup over an hour while work waits for it |
 | `worktree_error` | setup | A task worktree failed on its computer |
 | `push_stuck` | setup | A runner reports a checkout with commits it cannot push (diverged) |
 | `cannot_fetch` | setup | A runner keeps failing to fetch a bot's repository |
-| `queue_idle` | tico-bug | Work queued 15 minutes or more (a person's message: 2 minutes) on an online computer that has room, no limit and no update waiting, and none of the claim's own reasons to hold it (drained, worktrees being maintained, a lapsed lease still running, interrupted work awaiting review, a usage-limit cooldown, readiness not reported, a rejected sign-in, a subscription profile, a check model, a busy lane). A held bot's Health row names that reason instead. Its report says where as `Where: bot-N on runner-M`, the labels of the attached diagnostics bundle |
+| `queue_idle` | tico-bug | The oldest job a claim would hand out has been queued 15 minutes or more (a person's message: 2 minutes) on an online computer that has room, no limit and no update or restart waiting, and none of the claim's own reasons to hold it (drained, worktrees being maintained, a lapsed lease still running, interrupted work awaiting review, a usage-limit cooldown, readiness not reported, a rejected sign-in, a subscription profile, a check model, a busy lane). A held bot's Health row names that reason instead. Its report says where as `Where: bot-N on runner-M`, the labels of the attached diagnostics bundle |
 | `worktree_fallback` | tico-bug | A task's turn ran in the bot's checkout because its worktree hit Permission denied |
 | `event_stream` | tico-bug | A runner lost its event stream three times in its last 50 error lines, not counting drops from 5 minutes before a server start (a deploy, an update, a restart) to 2 minutes after, nor drops the runner says were back within 30 seconds (a proxy or tunnel resetting the long-lived stream; the runner polls meanwhile and catches up on reconnect) |
 | `readiness_403` | tico-bug | A runner's readiness report keeps being refused |

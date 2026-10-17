@@ -63,6 +63,9 @@ pub struct Runner {
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
     /// as usual for SELF_UPDATE_DRAIN_S before it stops claiming so that moment comes (service.py restart_forced).
     restart: Mutex<Option<Instant>>,
+    /// When that restart arrived, ISO-8601 UTC: every heartbeat says so until the runner has restarted, so Health
+    /// names the restart, not a Tico bug, for the work it holds back (backend/health.py `restarting`).
+    restart_since: Mutex<Option<String>>,
     /// A restart was asked for on a runner nothing would start again: said once.
     restart_refused: AtomicBool,
     /// When the container was told to stop (`docker stop`, a host update): no new claims, the running turns
@@ -138,6 +141,7 @@ impl Runner {
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
             restart: Mutex::new(None),
+            restart_since: Mutex::new(None),
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             warm: crate::warm::WarmSessions::new(state.directory.join("antigravity"), capacity.max(8)),
@@ -336,6 +340,7 @@ impl Runner {
         if !self.accounts.load(Ordering::SeqCst) {
             strip_accounts(&mut body);
         }
+        add_restart(&mut body, self.restart_since.lock().unwrap().as_deref());
         // The repositories report rides only on full passes, which are always sent.
         let printed = steady(&body).to_string();
         if let Some(rows) = repository_rows {
@@ -406,6 +411,8 @@ impl Runner {
                         follower.take_main().await;
                     }
                     *self.restart.lock().unwrap() = Some(Instant::now());
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                    *self.restart_since.lock().unwrap() = crate::util::iso(&json!(now.as_secs())).as_str().map(String::from);
                     log("Tico runner: restart requested; restarting when no turn is running");
                 } else if !self.restart_refused.swap(true, Ordering::SeqCst) {
                     log("Tico runner: restart requested, but nothing would start this runner again; run `scripts/tico install` once, or restart it by hand");
@@ -491,6 +498,13 @@ pub fn drains_on_stop() -> bool {
 /// Whether a restart asked for at `asked` has stopped this runner claiming (service.py SELF_UPDATE_DRAIN_S).
 fn drained(asked: Option<Instant>, now: Instant) -> bool {
     asked.is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(RESTART_DRAIN_S))
+}
+
+/// A restart under way rides on the heartbeat (an older server that refuses it gets it held back, lanes.rs ROOT_FIELDS).
+fn add_restart(body: &mut Value, since: Option<&str>) {
+    if let Some(since) = since {
+        body["restart"] = json!({"since": since});
+    }
 }
 
 /// Take `credential_source` out of every runtime row; whether there was any (service.py maintain).
@@ -772,6 +786,21 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_under_way_rides_on_the_heartbeat_and_an_older_server_gets_it_held_back() {
+        let mut body = json!({"version": "test"});
+        add_restart(&mut body, None);
+        assert!(body.get("restart").is_none());
+        add_restart(&mut body, Some("2026-10-17T11:41:00+00:00"));
+        assert_eq!(body["restart"], json!({"since": "2026-10-17T11:41:00+00:00"}));
+        let field = crate::lanes::refused_field("body.restart: Extra inputs are not permitted", &body);
+        assert_eq!(field.as_deref(), Some("restart"));
+        crate::lanes::hold_back("restart");
+        crate::lanes::drop_held(&mut body);
+        crate::lanes::release("restart");
+        assert!(body.get("restart").is_none() && body["version"] == "test");
+    }
 
     #[test]
     fn a_requested_restart_keeps_claiming_for_twenty_minutes_then_stops() {

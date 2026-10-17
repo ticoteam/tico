@@ -686,6 +686,9 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
+                # a heartbeat no longer says so (backend/health.py `restarting`).
+                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")

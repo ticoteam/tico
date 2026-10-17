@@ -1044,6 +1044,12 @@ class Heartbeat(Contract):
     commit: str | None = Field(default=None, pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})?$")
     kind: Literal["mac", "linux", "docker"] | None = None
     update: "RunnerUpdate | None" = None
+    # A restart a person asked for that has not happened yet (runner-rs runner.rs): sent until the runner restarts.
+    restart: "RunnerRestart | None" = None
+
+
+class RunnerRestart(Contract):
+    since: str = Field(max_length=40)
 
 
 class RunnerUpdate(Contract):

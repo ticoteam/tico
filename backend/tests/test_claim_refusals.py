@@ -6,9 +6,9 @@ import re
 
 import pytest
 
-from backend import diagnostics, execution, health, health_monitor
+from backend import check_models, diagnostics, execution, health, health_monitor
 from backend.store import H
-from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
 
 
@@ -153,3 +153,74 @@ def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     assert diagnostics.Redactor((), bots, ()).label("ops") == bot and computer.startswith("runner-")
     assert not re.search(r"\bops\b", message) and "Test Mac" not in message and machine["runner_id"] not in message
     assert not names.get("ops") or names["ops"] not in message
+
+
+def ops_rows(api):
+    """Health's Stuck rows for ops and the Health Monitor's findings, as the jobs stand."""
+    store = api.app.state.store
+    with store.read() as c:
+        online = {r["id"] for r in health._online_runners(c)}
+        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
+        found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
+    return rows, found
+
+
+def queued_at(api, task, minutes):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued' AND message_id IN "
+                  "(SELECT id FROM messages WHERE body LIKE ?)", (H.shift(H.now(), minutes=-minutes), f"%{task['title']}%"))
+        return c.execute("SELECT created FROM jobs WHERE bot='ops' AND state='queued' AND message_id IN "
+                         "(SELECT id FROM messages WHERE body LIKE ?)", (f"%{task['title']}%",)).fetchone()[0]
+
+
+def test_an_old_held_check_beside_a_young_free_job_is_neither_held_nor_slow(api):
+    """Health ages the job the claim would take: an old check held by its model's usage limit says nothing while a
+    young job waits normally, and its own reason once nothing else is queued."""
+    machine = task_bot(api, lanes=True)
+    check = new_task(api, "the check")
+    with api.app.state.store.transaction() as c:
+        check_models.record(c, "bot:ops", check["id"], {"runtime": "codex", "model": "gpt-6.1", "harness": "codex",
+                                                         "effort": "", "role": "check"})
+        check_models.hold(c, check["id"], "codex", H.shift(H.now(), minutes=30))
+    queued_at(api, check, 40)
+    rows, found = ops_rows(api)
+    assert [r["reason"] for r in rows] == ["check_model"] and "queue_idle" not in found
+    second = new_task(api, "the second")
+    queued_at(api, second, 1)
+    rows, found = ops_rows(api)
+    assert rows == [] and "queue_idle" not in found
+    # A person's message the claim would take is old at two minutes, behind a free job not yet old at ten.
+    waiting = queued_at(api, second, 10)
+    assert ops_rows(api)[0] == []
+    chat = post(api, "chat/ops", {"text": "Are you there?"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), minutes=-3), chat["id"]))
+    assert [(r["reason"], r["oldest"]) for r in ops_rows(api)[0]] == [("slow", waiting)]
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM jobs WHERE message_id=?", (chat["id"],))
+    created = queued_at(api, second, 16)
+    rows, found = ops_rows(api)
+    assert [(r["reason"], r["oldest"]) for r in rows] == [("slow", created)] and "queue_idle" in found
+
+
+def test_a_computer_restarting_holds_its_work_and_is_a_finding_once_it_takes_too_long(api):
+    machine = task_bot(api, lanes=True)
+    queued_at(api, new_task(api, "first"), 16)
+    beat = {"version": "test", "platform": "test", "capacity": 8, "readiness": {"ops": True},
+            "capabilities": ["task_lanes_v2"]}
+    post(api, "runners/heartbeat", {**beat, "restart": {"since": H.shift(H.now(), minutes=-10)}}, token=machine["token"])
+    rows, found = ops_rows(api)
+    assert [r["reason"] for r in rows] == ["restarting"] and not found & {"queue_idle", "runner_restarting"}
+    with api.app.state.store.read() as c:
+        [row] = health._stuck(c, rows, set(), health_admin(api), True)
+    assert row["why"] == "Test Mac is restarting: it starts new work once its running turns end"
+    assert next(m for m in api.get("/api/v2/operations", headers=headers()).json()["computers"]
+                if m["id"] == machine["runner_id"])["restarting"]
+    # Past the runner's own drain and stop windows the restart is stuck: a setup finding, still no Tico bug.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET restart_since=? WHERE id=?", (H.shift(H.now(), minutes=-35), machine["runner_id"]))
+    assert {"runner_restarting"} <= ops_rows(api)[1] and "queue_idle" not in ops_rows(api)[1]
+    # The restarted runner's first heartbeat no longer says so.
+    post(api, "runners/heartbeat", beat, token=machine["token"])
+    rows, found = ops_rows(api)
+    assert [r["reason"] for r in rows] == ["slow"] and "runner_restarting" not in found

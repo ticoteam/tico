@@ -25,6 +25,9 @@ from .views import roster
 
 QUEUE_MINUTES = 15          # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting there waiting for the reply
+# A Restart a person pressed claims for 20 minutes, then waits up to 14 for its running turns (runner-rs runner.rs
+# RESTART_DRAIN_S + STOP_DRAIN_S): past that it is stuck, and Health Monitor says so.
+RESTART_STUCK_MINUTES = 34
 SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
 NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
@@ -382,8 +385,9 @@ def _waiting(c, online_ids, settings=None):
     work stuck behind them, and bots whose queued work is old even though their computer is up.
     The third list is every bot with queued work that is not starting, with the computer's own
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
-    claim has no reason to hold is "slow", a Tico bug."""
-    from .execution import bot_refusal
+    claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
+    beside a young free one is neither."""
+    from .execution import bot_claimable
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
@@ -411,6 +415,9 @@ def _waiting(c, online_ids, settings=None):
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
         "SELECT runner_id,update_target FROM runner_versions WHERE update_state IN ('waiting','updating')")}
+    # A computer a person pressed Restart for claims for a while, then claims nothing until its running turns end and
+    # it restarts (runner-rs runner.rs RESTART_DRAIN_S); it says so in its heartbeat until it has.
+    restarting = {r["id"] for r in c.execute("SELECT id FROM runners WHERE restart_since IS NOT NULL AND revoked_at IS NULL")}
     documents = {}      # one parse per computer, and only for bots with queued work: Health is polled by every tab
 
     def report_for(slug, where):
@@ -453,8 +460,13 @@ def _waiting(c, online_ids, settings=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             idle = slug not in busy and where[0] not in full
-            refused = bot_refusal(c, settings, where[0], slug) if idle else None
-            reason = "limit" if refused == "limit" else "updating" if where[0] in updating else refused or "slow"
+            refused, first, person = bot_claimable(c, settings, where[0], slug, person_cutoff) if idle else (None,) * 3
+            if idle and not refused:
+                if not ((first and first < cutoff) or (person and person < person_cutoff)):
+                    continue        # the job the claim would take is young: its older jobs are held, each on purpose
+                row["oldest"] = first
+            reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
+                      else "restarting" if where[0] in restarting else refused or "slow")
             slow.append({**row, "reason": reason if idle else "busy"})
             if idle:
                 stuck.append({**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
@@ -520,6 +532,7 @@ RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/runs"), ("Open Computers", "#/s
     ("Open bot settings", "#/settings", "bots")
 HELD = {
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
+    "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
     "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
@@ -1374,7 +1387,7 @@ def view(c, who, settings, auth, github, config):
     blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     if blocking:
         # A count: each bot, its reason and its fix are listed once, under `stuck` (Health's Stuck list, Overview).
-        bad = any(s["reason"] not in ("slow", "updating", "draining", "maintaining", "lane_held", "cooling_off")
+        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              f"{_plural(len(blocking), 'bot')} with work that is not starting.", []))
