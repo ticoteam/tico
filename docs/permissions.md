@@ -175,6 +175,14 @@ Only the computer's operator and admins open the screen, in the app themselves: 
 ticket, at most three at once per computer, an hour at most each. Every opening and closing is in the audit log
 (`runner.screen_open`, `runner.screen_close` with who, view or control, and how long).
 
+Where the status shows: every bot's **More** has a **Screen** row, in Setup (or About). When the screen is ready it opens
+it and says View or Control, and the bot's header has a **Screen** button too. Otherwise the row says why and what to do:
+the screen is off in Tico (the operator or an admin gets **Turn on (View)** right there; Control stays a choice in
+Settings > Computers), the computer offers no screen yet (the steps to turn it on on the computer, with commands to copy),
+it is a Mac (Linux only for now), the computer is offline, the bot has no computer, or only the operator and admins may
+open it. Someone who may see the bot but not its activity is told its computer isn't shown to them, and nothing more.
+The row follows the computer as the page refreshes (it comes online, its screen is turned on), with no reload.
+
 ## Tico support
 
 A session a person opens from a support request ([support.md](support.md#letting-tico-support-in)) lets the Tico team in as

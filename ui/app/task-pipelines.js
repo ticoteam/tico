@@ -10,6 +10,9 @@ const pipelineStepsOnly = task => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = state => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task, body) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
 const pipelineStepName = id => TASK_TYPES.flatMap(type => type.steps).find(step => step.id === id)?.name || id;
+// The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
+const pipelineRoleType = role => TASK_TYPES.find(type => type.role === role);
+const pipelineProductType = () => pipelineRoleType('product-roadmap');
 async function taskTypesLoad() {
   if (!S.me?.cloud) return TASK_TYPES;
   if (!TASK_TYPES_LOADING) TASK_TYPES_LOADING = get('/v2/task-types').then(data => {
@@ -31,16 +34,18 @@ function taskPipelineMatches(task, state) {
   return pipelineTypeId(task) === (state.type || 'general');
 }
 // Common types stay one click away; other team-defined types share the last segment.
+// Engineering and a Dev tickets type made later may both have the engineering role; Dev tickets goes first.
 function taskPipelineDevType() {
-  return TASK_TYPES.find(type => type.manager === 'engineering-lead' || type.id === 'engineering') || TASK_TYPES.find(type => /^dev(?:[ -]?tickets?)?$/i.test(type.name))
-    || TASK_TYPES.find(type => /^dev(?:[ -]?tickets?)?$/i.test(type.id));
+  const dev = type => /^dev(?:[ -]?tickets?)?$/i.test(type.name) || /^dev(?:[ -]?tickets?)?$/i.test(type.id);
+  const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
+  return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
 }
 function taskPipelineTools(state) {
   const host = $('#task-type');
   if (!host) return;
   host.hidden = state.view === 'recurring';
   const dev = taskPipelineDevType();
-  const product = TASK_TYPES.find(type => type.manager === 'product-manager' || type.id === 'product-roadmap');
+  const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
   const selected = other.find(type => type.id === state.type);
   const segment = (id, label, disabled = false) => `<button type="button" id="task-type-${esc(id)}" data-task-type="${esc(id)}" aria-pressed="${state.type === id}"${disabled ? ' disabled title="This team has no Dev ticket type"' : ''}>${esc(label)}</button>`;
@@ -62,7 +67,7 @@ function taskPipelineSelect(state, id) {
 }
 function taskPipelineMenu(state, anchor) {
   const dev = taskPipelineDevType();
-  const product = TASK_TYPES.find(type => type.manager === 'product-manager' || type.id === 'product-roadmap');
+  const product = pipelineProductType();
   const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="More task types">
     <div class="tl-menu-h" aria-hidden="true">Task type</div>
@@ -118,7 +123,7 @@ async function taskPipelineCreate(form, selected = '') {
   form.elements.owner.addEventListener('change', () => { ownerTouched = true; });
   const defaults = () => {
     const type = TASK_TYPES.find(t => t.id === select.value);
-    visibility.hidden = type?.manager !== 'product-manager';
+    visibility.hidden = type?.role !== 'product-roadmap';
     flag.checked = type?.default_visibility === 'public' && !form.elements.private?.checked;
     flag.disabled = !!form.elements.private?.checked;
     showPublicText();

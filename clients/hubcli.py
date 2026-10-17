@@ -49,7 +49,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
     hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
     hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
-                         [--bot-public-approval|--no-bot-public-approval]   read, or change (owners and admins)
+                         [--bot-public-approval|--no-bot-public-approval] [--suggestions-bot SLUG|--automatic]
+                                                       read, or change (owners and admins)
     hub task deleted                                   deleted tasks you may restore
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
@@ -1856,6 +1857,9 @@ def parser():
     s.add_argument("--suggestion-limit", dest="suggestion_limit", type=int, help="visitor suggestions waiting at once")
     s.add_argument("--bot-public-approval", dest="bot_public_approval", action=argparse.BooleanOptionalAction, default=None,
                    help="bots need an approval to publish")
+    who = s.add_mutually_exclusive_group()
+    who.add_argument("--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions")
+    who.add_argument("--automatic", action="store_true", help="suggestions go to the Automatic bot (Product Manager, then Head of Product)")
     s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")

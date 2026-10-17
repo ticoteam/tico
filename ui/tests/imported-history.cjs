@@ -1,5 +1,5 @@
 // Imported history is a snapshot, with no runtime credential actions; real agents retain them. A human's Grok Bots
-// sit in one cluster under them, pinned ones first; their Dots is a plain row.
+// are ordinary org-chart rows: source sections do not override their placement or ordering.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,6 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
   const page = await browser.newPage({serviceWorkers: 'block'});
   const last = new Date(Date.now() - 27 * 3600e3).toISOString();
   let fresh = false;
+  const placements = {};
   const errors = [], writes = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { window.EventSource = undefined; });
@@ -18,8 +19,9 @@ const {html, uiFile} = require('./support/page.cjs');
       online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen:last}},
     {name:'live-agent',display_name:'Live Agent',status:'active',host:'keeper',can_chat:true,operator:'ana',
       online:false,agent:{harness:'hermes',credential:true,last_seen:last}},
-    ...[['groky','Groky','Pinned'],['grok-scout','Grok Scout',''],['grok-poetry','Poetry Post','']].map(([name,display_name,section]) =>
+    ...[['groky','Groky','Pinned'],['grok-scout','Grok Scout','Outreach'],['grok-poetry','Poetry Post','']].map(([name,display_name,section]) =>
       ({name,display_name,status:'active',host:'keeper',harness:'grokbot',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
+        revision:1,...placements[name],
         agent:{harness:'grokbot',credential:true,synced:true,label:'Grok Bot',section,last_seen:last}})),
     {name:'dots',display_name:'Dots',status:'active',host:'keeper',harness:'dots',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
       agent:{harness:'dots',credential:true,synced:true,label:'Dots',section:'',last_seen:last}}
@@ -35,9 +37,28 @@ const {html, uiFile} = require('./support/page.cjs');
       const file = uiFile(p.slice('/tico/ui/'.length));
       if (fs.existsSync(file)) return route.fulfill({path:file});
     }
+    if (p.startsWith('/vendor/') || p.startsWith('/assets/')) {
+      const file = uiFile(p.slice(1));
+      if (fs.existsSync(file)) return route.fulfill({path:file});
+    }
     if (p === '/api/me') return json({id:'ana',role:'owner',email:'ana@acme.example',cloud:true,bot_admin:true});
-    if (p === '/api/humans') return json({people:[{id:'ana',name:'Ana'}]});
+    if (p === '/api/humans') return json({people:[{id:'ana',name:'Ana'},{id:'ben',name:'Ben'}],
+      org_groups:[{id:'marketing',name:'Marketing',parent:''}]});
     if (p === '/api/employees') return json(bots());
+    if (p === '/api/issues') return json([]);
+    const definition = p.match(/^\/api\/v2\/bots\/([^/]+)\/definition$/);
+    if (definition && request.method() === 'POST') {
+      const body = request.postDataJSON();
+      assert.equal(body.expected_revision, 1);
+      placements[definition[1]] = {reports_to:body.reports_to,
+        org_parent:body.reports_to.startsWith('human:') ? 'p:' + body.reports_to.slice(6) : 'b:' + body.reports_to};
+      return json({});
+    }
+    if (p === '/api/v2/groups/marketing' && request.method() === 'PATCH') {
+      const body = request.postDataJSON();
+      for (const name of body.add?.bots || []) placements[name] = {...placements[name],team:'marketing'};
+      return json({});
+    }
     if (p === '/api/status') return json({cloud:true,keeper_alive:true,active:[],queued:[],health_issues:[]});
     if (p === '/api/v2/status') return json({bots:bots().map(b=>({bot:b.name,state:'idle',open_tasks:1}))});
     if (p === '/api/v2/tasks') return json({tasks:[],next_offset:null});
@@ -80,15 +101,40 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.deepEqual(errors,[]);
     assert.deepEqual(writes,[],'reading snapshots creates no credential or sends a message');
     await page.goto('https://tico-ui.test/#/');
-    const cluster = page.locator('#tree li.org-cluster:not(.org-cluster-section)');
-    await cluster.waitFor();
-    assert.match(await cluster.locator('> .noderow').innerText(),/Grok Bot\s*3/);
-    assert.equal(await cluster.locator('li.org-cluster-section').count(),0,'Pinned is not its own section');
-    assert.deepEqual(await cluster.locator('> ul > li a.node .nm').allInnerTexts(),['Groky','Grok Scout','Poetry Post'],
-      'Pinned leads, as in Grok');
-    assert.equal(await page.locator('#tree li.org-cluster a.node[href="#/bot/dots"]').count(),0,'Dots is one agent: no cluster');
+    const node = key => page.locator(`#tree [data-org="${key}"]`);
+    const children = key => node(key).locator('xpath=ancestor::li[1]').locator(':scope > ul > li > .noderow > a.node');
+    await node('b:groky').waitFor();
+    assert.equal(await page.locator('#tree .org-cluster, #tree [data-toggle^="c:"]').count(),0);
+    assert.deepEqual(await children('p:ana').locator('.nm').allInnerTexts(),['Dots','Grok Scout','Groky','Poetry Post'],
+      'Grok sections and Pinned do not override ordinary sibling ordering');
+    for (const name of ['groky','grok-scout','grok-poetry']) {
+      assert.equal(await node('b:' + name).count(),1);
+      assert.equal(await node('b:' + name).getAttribute('draggable'),'true');
+      assert.equal(await node('b:' + name).locator('.rt[aria-label="Runs on Grok Bot"]').count(),1);
+    }
     assert.equal(await page.locator('#tree a.node[href="#/bot/dots"]').count(),1);
-    if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-cluster.png'});
+    if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-org-chart.png'});
+
+    // Use the same drop path as ordinary bots: a bot manager, a human and a department.
+    await page.evaluate(() => orgDrop('b:groky','b:live-agent'));
+    await page.evaluate(() => orgDrop('b:grok-scout','p:ben'));
+    await page.evaluate(() => orgDrop('b:grok-poetry','g:marketing'));
+    await page.evaluate(() => refresh(false));
+    assert.deepEqual(await children('b:live-agent').locator('.nm').allInnerTexts(),['Groky']);
+    assert.deepEqual(await children('p:ben').locator('.nm').allInnerTexts(),['Grok Scout']);
+    assert.deepEqual(await children('g:marketing').locator('.nm').allInnerTexts(),['Poetry Post']);
+    assert.deepEqual(writes,['/api/v2/bots/groky/definition','/api/v2/bots/grok-scout/definition','/api/v2/groups/marketing']);
+    await page.evaluate(() => { collapsed.clear(); saveCollapsed(); renderTree(); });
+    if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-org-chart-moved.png'});
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('#mobile-more').click();
+    assert.equal(await node('b:groky').count(),1);
+    assert.equal(await node('b:groky').isVisible(),true);
+    assert.equal(await page.locator('#tree .org-cluster').count(),0);
+    await page.waitForFunction(() => document.getAnimations().every(animation =>
+      animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity));
+    assert.equal(await node('b:groky').isVisible(),true);
+    if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/grok-org-chart-mobile.png'});
     assert.deepEqual(errors,[]);
     console.log('imported-history: ok');
   } finally { await browser.close(); }

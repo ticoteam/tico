@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::client::ApiError;
-use crate::config::Config;
 use crate::runner::Runner;
 use crate::util::{iso, parse_iso, text_of};
 
@@ -184,7 +183,7 @@ impl Refreshes {
         }
         let wanted = runner.client.get("runner-subscription-refreshes").await?;
         let Some(work) = wanted["refreshes"].as_array().and_then(|a| a.first()).cloned() else { return Ok(()) };
-        let config = Config::load(&runner.config.path).unwrap_or_else(|_| runner.config.clone());
+        let config = runner.config_now();
         let name = text_of(&work["profile"]);
         // An isolated profile, captured once: never the global or default profile.
         let profile = (!name.is_empty()).then(|| crate::profiles::select(&config.data, None, Some(&name))).flatten();

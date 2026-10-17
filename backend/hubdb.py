@@ -988,9 +988,11 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
+    # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
+    from .roadmap_flow import ensure as ensure_roadmap_types, migrate as migrate_roadmap_roles
+    migrate_roadmap_roles(conn)
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
-        from .roadmap_flow import ensure as ensure_roadmap_types
         ensure_roadmap_types(conn)
     from .roadmaps import migrate as migrate_roadmaps
     migrate_roadmaps(conn)
@@ -2614,6 +2616,8 @@ def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=Fal
         refuse(conn, actor, 'kind', 'default_visibility is public or private')
     conn.execute('UPDATE task_types SET default_visibility=? WHERE id=?', (default_visibility, ident))
     _type_steps(conn, actor, ident, steps)
+    from .roadmap_flow import claim as claim_roles
+    claim_roles(conn)
     row = type_get(conn, ident)
     event(conn, actor, "task_type.create", ident, row)
     return row
@@ -2633,6 +2637,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
     if name is not None:
         name = _type_name(conn, actor, name, row["id"])
         conn.execute("UPDATE task_types SET name=? WHERE id=?", (name, row["id"]))
+        from .roadmap_flow import claim as claim_roles
+        claim_roles(conn)
     if numbered is not None:
         conn.execute("UPDATE task_types SET numbered=? WHERE id=?", (int(bool(numbered)), row["id"]))
     if steps_only is not None:

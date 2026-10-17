@@ -128,6 +128,8 @@ function gsTourEnd() {
   root.remove();
   GS_TOUR = null;
   if (phone) setDrawer(false, true);
+  // Started from the account menu, which closed as the tour took focus: back to the button that opens it.
+  else if (opener?.closest?.('#account-menu')) $('#account').focus();
   else if (opener && opener.isConnected) opener.focus();
   void gsState({tour: true});
 }

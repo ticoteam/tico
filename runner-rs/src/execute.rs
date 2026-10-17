@@ -614,7 +614,7 @@ impl Runner {
         let rows = self.runtime_rows.lock().unwrap().clone();
         let assignments = self.assignments_seen();
         let rejected = |runtime: &str, p: &Profile| self.sign_in.rejection(runtime, Some(p)).is_some();
-        crate::profiles::turn_profile(&self.config.data, attempt, &rows, &assignments, &rejected).map_err(Fail::unavailable)
+        crate::profiles::turn_profile(&self.config_now().data, attempt, &rows, &assignments, &rejected).map_err(Fail::unavailable)
     }
 
     /// One turn, start to result. Err only when the result could not be settled; the loop then saves an
