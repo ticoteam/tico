@@ -606,7 +606,8 @@ allowed, take control. The computer itself decides whether it offers one:
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at **View**, so
 its operator and admins can watch it; choose **Control** there to drive it, or **Off**. A setting someone already chose
 stays, and a computer added before this default keeps its setting. The runner runs a virtual
-display (`:99`, 1440x900) and gives bots `DISPLAY=:99`; its VNC servers listen on no network port (only on
+display (1440x900) on the first free display from `:99` to `:120` and gives bots that `DISPLAY` (set
+`TICO_SCREEN_DISPLAY`, like `:101`, to use exactly one; when another X server holds it, the screen says which); its VNC servers listen on no network port (only on
 sockets in a directory bots cannot open), and the server relays each session. Anyone allowed to open the screen sees everything on that display, including what a bot types into a page,
 and with Control can use it. All bots on one computer share one display. A Mac reports "Linux only for now".
 

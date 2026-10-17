@@ -141,6 +141,7 @@ today
 travel_explore
 troubleshoot
 verified_user
+view_agenda
 view_timeline
 warning
 waving_hand
