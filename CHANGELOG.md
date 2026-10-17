@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Roadmaps: a database that ran an unreleased roadmaps build from main has the internal text it copied into public
+  text cleared field by field, so a rewritten public title keeps its task public while a copied summary goes (each
+  clearing leaves a task event); a public task whose title was a copy is unpublished. An update that hits the
+  `TICO_EDGE_*` network clash now says to update again after setting a free range in `.env`.
+
 ## [0.3.52] - 2026-10-16
 
 ### Added
@@ -155,9 +161,8 @@ All notable changes to Tico are recorded here. The format follows
   `TICO_TRUSTED_PROXIES`; the Compose file gives Caddy and cloudflared fixed addresses on their own network and
   trusts exactly those, so each visitor keeps their own limit; an update that hits a clash with that network names
   the `TICO_EDGE_*` settings that move it. A database that ran an unreleased build of roadmaps from main has the
-  internal text it copied into public text cleared once, field by field, so a rewritten public title keeps its task
-  public while a copied summary goes (each clearing leaves a task event); a public task whose title was a copy is
-  unpublished. Adds Product roadmap and Engineering task types, a
+  internal text it copied into public text cleared once (each clearing leaves a task event), and tasks it published
+  that way unpublished. Adds Product roadmap and Engineering task types, a
   ranked roadmap view, and requesters (Requested by) on tasks.
 
 ### Changed
