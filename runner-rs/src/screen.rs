@@ -2,13 +2,14 @@
 //! `control` mode drive, from the web app. Off unless this computer's owner turned it on here: `TICO_SCREEN=1`, or
 //! `tico-runner screen on` (runner.json `screen: true`). The hub keeps its own off/view/control setting on top.
 //!
-//! While on, on Linux, the runner supervises `Xvfb :99`, a window manager and two `x11vnc`, one taking input and one
+//! While on, on Linux, the runner supervises an `Xvfb` on the first free display from `:99` (or exactly
+//! `TICO_SCREEN_DISPLAY`'s), a window manager and two `x11vnc`, one taking input and one
 //! view-only. Neither listens on TCP: each serves a unix socket in a fresh directory only the runner's user can enter,
 //! so no bot and no other VNC server can stand in for either. They run with that directory as HOME, a clean
 //! environment, and x11vnc's rc files, external commands and remote control off, so nothing a bot writes reaches
 //! them. A session the hub opens (the stream's `screen_open`, or the 10 s poll of `runners/me/screen/sessions`
 //! while on) is one websocket to the hub, with the runner's own token, piped to the socket its `control` flag picks
-//! while that x11vnc is the one this runner started and still runs; the runner, not the browser, decides which. Bot turns get `DISPLAY=:99` while the
+//! while that x11vnc is the one this runner started and still runs; the runner, not the browser, decides which. Bot turns get that `DISPLAY` while the
 //! display is up, so headed browsers and computer use draw where people can see them.
 
 use std::collections::HashSet;
@@ -27,7 +28,13 @@ use crate::client::{bearer, Client, CLIENT_VERSION};
 use crate::util::{log, text_of};
 
 pub const CAPABILITY: &str = "screen_v1";
-pub const DISPLAY: &str = ":99";
+/// The display a screen tries first; when another X server holds it, the next free one up to LAST_DISPLAY.
+const FIRST_DISPLAY: u32 = 99;
+const LAST_DISPLAY: u32 = 120;
+/// Where X servers keep their lock files (`.X<n>-lock`) and sockets (`.X11-unix/X<n>`).
+const X_ROOT: &str = "/tmp";
+/// Stands for the chosen display in a program's arguments.
+const AT_DISPLAY: &str = "{display}";
 pub const WIDTH: u32 = 1440;
 pub const HEIGHT: u32 = 900;
 /// The VNC endpoints, as sockets in the private directory.
@@ -143,6 +150,8 @@ struct Shared {
     /// The hub takes `screen_v1` and readiness `screen` (`runners/desired` features): an older one refuses both.
     hub: AtomicBool,
     failure: Mutex<Option<String>>,
+    /// The display number the running Xvfb serves, chosen each time it starts.
+    display: Mutex<Option<u32>>,
     missing: Mutex<Vec<&'static str>>,
     /// Sessions with a bridge running here, so a poll never opens a second one.
     bridging: Mutex<HashSet<String>>,
@@ -160,6 +169,7 @@ fn shared() -> &'static Shared {
         dir: Mutex::new(None),
         hub: AtomicBool::new(false),
         failure: Mutex::new(None),
+        display: Mutex::new(None),
         missing: Mutex::new(vec![]),
         bridging: Mutex::new(HashSet::new()),
         wake: Notify::new(),
@@ -179,8 +189,10 @@ pub fn readiness() -> Option<Value> {
 }
 
 /// `DISPLAY` for a bot turn while the virtual display is up.
-pub fn display() -> Option<&'static str> {
-    shared().up.load(Ordering::SeqCst).then_some(DISPLAY)
+pub fn display() -> Option<String> {
+    let s = shared();
+    let n = *s.display.lock().unwrap();
+    n.filter(|_| s.up.load(Ordering::SeqCst)).map(|n| format!(":{n}"))
 }
 
 /// The event stream said the hub opened a session: poll for it now.
@@ -233,12 +245,12 @@ impl Proc {
         }
     }
 
-    fn start(&mut self, dir: &Path) {
+    fn start(&mut self, dir: &Path, display: &str) {
         if Instant::now() < self.next {
             return;
         }
         let mut cmd = Command::new(self.name);
-        cmd.args(&self.args);
+        cmd.args(self.args.iter().map(|a| if a == AT_DISPLAY { display } else { a.as_str() }));
         if let Some(endpoint) = self.socket {
             let path = dir.join(endpoint.socket());
             let _ = std::fs::remove_file(&path); // one a previous x11vnc of ours left
@@ -249,14 +261,14 @@ impl Proc {
         cmd.env_clear()
             .env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()))
             .env("HOME", dir)
-            .env("DISPLAY", DISPLAY)
+            .env("DISPLAY", display)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
         #[cfg(target_os = "linux")]
         unsafe {
-            // A runner that dies without stopping them takes its display with it, so the next one can have :99.
+            // A runner that dies without stopping them takes its display with it, so the next one can have its display.
             cmd.pre_exec(|| {
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
                 Ok(())
@@ -286,19 +298,96 @@ impl Proc {
     }
 }
 
-fn display_socket() -> PathBuf {
-    PathBuf::from(format!("/tmp/.X11-unix/X{}", DISPLAY.trim_start_matches(':')))
+// ------------------------------------------------------------------------------------------ the display
+
+fn display_socket(root: &Path, n: u32) -> PathBuf {
+    root.join(".X11-unix").join(format!("X{n}"))
+}
+
+/// The pid an X server wrote in its lock file (ten columns and a newline).
+fn lock_pid(root: &Path, n: u32) -> Option<i32> {
+    std::fs::read_to_string(root.join(format!(".X{n}-lock"))).ok()?.trim().parse().ok().filter(|p| *p > 0)
+}
+
+fn alive(pid: i32) -> bool {
+    // Signal 0 only checks; EPERM is a live process of another user.
+    let sent = unsafe { libc::kill(pid, 0) };
+    sent == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Some process serves the display's socket, by path or by the abstract name a Linux X server also takes. A socket
+/// file left by a server that is gone is no one's. Without /proc, any socket file counts.
+fn listening(root: &Path, n: u32) -> bool {
+    let path = display_socket(root, n).display().to_string();
+    let named = format!("@{path}");
+    match std::fs::read_to_string("/proc/net/unix") {
+        Ok(table) => table.lines().any(|l| l.split_whitespace().nth(7).is_some_and(|p| p == path || p == named)),
+        Err(_) => Path::new(&path).exists(),
+    }
+}
+
+/// Who holds a display: a live process named in its lock file, or one serving its socket.
+#[derive(Debug, PartialEq)]
+struct Holder {
+    pid: Option<i32>,
+    name: Option<String>,
+}
+
+fn holder(root: &Path, n: u32) -> Option<Holder> {
+    let pid = lock_pid(root, n).filter(|p| alive(*p));
+    if pid.is_none() && !listening(root, n) {
+        return None;
+    }
+    let name = pid.and_then(|p| std::fs::read_to_string(format!("/proc/{p}/comm")).ok()).map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    Some(Holder { pid, name })
+}
+
+fn in_use(n: u32, holder: &Holder) -> String {
+    let who = match (&holder.name, holder.pid) {
+        (Some(name), Some(pid)) => format!(" ({name}, pid {pid})"),
+        (None, Some(pid)) => format!(" (pid {pid})"),
+        _ => String::new(),
+    };
+    format!("Display :{n} is in use by another X server{who}. Stop it or set TICO_SCREEN_DISPLAY to a free display.")
+}
+
+/// `TICO_SCREEN_DISPLAY`: unset or blank searches; otherwise exactly that display, a colon and a number.
+fn display_override(env: Option<&str>) -> Result<Option<u32>, String> {
+    let Some(value) = env.map(str::trim).filter(|v| !v.is_empty()) else { return Ok(None) };
+    let digits = value.strip_prefix(':').filter(|d| (1..=5).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit()));
+    match digits.and_then(|d| d.parse().ok()) {
+        Some(n) => Ok(Some(n)),
+        None => Err("TICO_SCREEN_DISPLAY is not a display: write a colon and a number, like :101".into()),
+    }
+}
+
+/// The display a new Xvfb takes: `TICO_SCREEN_DISPLAY`'s, or the first free one from FIRST_DISPLAY to LAST_DISPLAY.
+fn choose(root: &Path, env: Option<&str>) -> Result<u32, String> {
+    if let Some(n) = display_override(env)? {
+        return match holder(root, n) {
+            Some(h) => Err(in_use(n, &h)),
+            None => Ok(n),
+        };
+    }
+    (FIRST_DISPLAY..=LAST_DISPLAY).find(|n| holder(root, *n).is_none()).ok_or_else(|| {
+        format!("Displays :{FIRST_DISPLAY} to :{LAST_DISPLAY} are all in use by other X servers. Stop one or set TICO_SCREEN_DISPLAY to a free display.")
+    })
+}
+
+/// The display's server is this Xvfb: its lock file names our child (an X server writes it before its socket).
+fn ours(root: &Path, n: u32, pid: Option<u32>) -> bool {
+    pid.is_some_and(|p| lock_pid(root, n) == i32::try_from(p).ok())
 }
 
 /// x11vnc without its rc file, external commands, remote control (over X properties, which any X client can set)
 /// or name lookups. Access is the socket's directory.
-const VNC_ARGS: &[&str] = &["-display", DISPLAY, "-norc", "-nocmds", "-noremote", "-safer", "-nolookup", "-shared", "-forever", "-nopw", "-quiet"];
+const VNC_ARGS: &[&str] = &["-display", AT_DISPLAY, "-norc", "-nocmds", "-noremote", "-safer", "-nolookup", "-shared", "-forever", "-nopw", "-quiet"];
 
 fn children() -> Vec<Proc> {
     let size = format!("{WIDTH}x{HEIGHT}x24");
     let view: Vec<&str> = VNC_ARGS.iter().copied().chain(["-viewonly"]).collect();
     vec![
-        Proc::new("Xvfb", &[DISPLAY, "-screen", "0", &size, "-nolisten", "tcp"]),
+        Proc::new("Xvfb", &[AT_DISPLAY, "-screen", "0", &size, "-nolisten", "tcp"]),
         Proc::new(window_manager().unwrap_or(WINDOW_MANAGERS[0]), &[]),
         Proc::vnc(Endpoint::Control, VNC_ARGS),
         Proc::vnc(Endpoint::View, &view),
@@ -391,30 +480,52 @@ async fn tick(procs: &mut [Proc]) {
         for p in rest.iter_mut() {
             p.stop().await; // they draw on a display that is gone
         }
-        xvfb.start(&dir);
+        // A display another X server holds is never started on, so its socket is never taken for ours.
+        let root = Path::new(X_ROOT);
+        let n = match choose(root, std::env::var("TICO_SCREEN_DISPLAY").ok().as_deref()) {
+            Ok(n) => n,
+            Err(reason) => {
+                note(reason);
+                return;
+            }
+        };
+        if xvfb.failures < XVFB_GIVE_UP {
+            *s.failure.lock().unwrap() = None; // a display that was in use may be free now
+        }
+        *s.display.lock().unwrap() = Some(n);
+        xvfb.start(&dir, &format!(":{n}"));
         if xvfb.child.is_none() {
-            note_xvfb(xvfb);
+            note_xvfb(xvfb, n);
             return;
         }
-        // Up once its socket is there; Xvfb removes a stale lock from a display whose server is gone.
+        // Up once its socket is there and its lock names it; Xvfb removes a stale lock from a display whose server is gone.
+        let pid = xvfb.child.as_ref().and_then(|c| c.id());
+        let ready = || display_socket(root, n).exists() && ours(root, n, pid);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !display_socket().exists() && Instant::now() < deadline && xvfb.running() {
+        while !ready() && Instant::now() < deadline && xvfb.running() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        // A socket left by another X server on :99 is there at once; this Xvfb then exits within moments.
+        // An Xvfb that cannot serve the display exits within moments.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if !xvfb.running() || !display_socket().exists() {
-            note_xvfb(xvfb);
+        if !xvfb.running() || !ready() {
+            if let Some(child) = xvfb.child.as_mut() {
+                let _ = child.start_kill(); // still running but not serving: count it as a failed start
+                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+                xvfb.running();
+            }
+            note_xvfb(xvfb, n);
             return;
         }
-        log(&format!("Tico runner: screen display {DISPLAY} is up ({WIDTH}x{HEIGHT})"));
+        log(&format!("Tico runner: screen display :{n} is up ({WIDTH}x{HEIGHT})"));
     }
+    let Some(n) = *s.display.lock().unwrap() else { return };
+    let display = format!(":{n}");
     *s.failure.lock().unwrap() = None;
     s.up.store(true, Ordering::SeqCst);
     let mut started = false;
     for p in rest.iter_mut() {
         if !p.running() {
-            p.start(&dir);
+            p.start(&dir, &display);
             started = true;
         }
     }
@@ -431,9 +542,19 @@ async fn tick(procs: &mut [Proc]) {
     }
 }
 
-fn note_xvfb(xvfb: &Proc) {
+/// An Xvfb failing on a free display: said once it has failed XVFB_GIVE_UP starts in a row.
+fn note_xvfb(xvfb: &Proc, n: u32) {
     if xvfb.failures >= XVFB_GIVE_UP {
-        *shared().failure.lock().unwrap() = Some(format!("Xvfb {DISPLAY} did not start"));
+        note(format!("Xvfb :{n} did not start"));
+    }
+}
+
+/// Readiness gives this as the reason; the log says it once each time it changes.
+fn note(reason: String) {
+    let mut failure = shared().failure.lock().unwrap();
+    if failure.as_deref() != Some(reason.as_str()) {
+        log(&format!("Tico runner: screen: {reason}"));
+        *failure = Some(reason);
     }
 }
 
@@ -445,6 +566,7 @@ async fn stop_all(procs: &mut [Proc]) {
     for p in procs.iter_mut().rev() {
         p.stop().await;
     }
+    *s.display.lock().unwrap() = None;
     if let Some(dir) = s.dir.lock().unwrap().take() {
         let _ = std::fs::remove_dir_all(dir); // the one this runner made: its sockets and the children's HOME
     }
@@ -616,5 +738,209 @@ mod tests {
         assert_eq!(endpoint_for(&json!({"session_id": "a"})), Endpoint::View);
         assert_eq!(ws_url("https://hub.acme.example", "s1").unwrap(), "wss://hub.acme.example/api/v2/runners/me/screen/s1/ws");
         assert_eq!(ws_url("http://127.0.0.1:8000/", "s1").unwrap(), "ws://127.0.0.1:8000/api/v2/runners/me/screen/s1/ws");
+    }
+
+    /// A fresh directory standing in for /tmp, with the `.X11-unix` an X server makes.
+    fn x_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("tico-xroot-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join(".X11-unix")).unwrap();
+        root
+    }
+
+    fn write_lock(root: &Path, n: u32, pid: u32) {
+        std::fs::write(root.join(format!(".X{n}-lock")), format!("{pid:>10}\n")).unwrap();
+    }
+
+    /// Another X server on display n: a lock naming a live process (this test) and a socket it serves.
+    #[cfg(target_os = "linux")]
+    fn hold(root: &Path, n: u32) -> std::os::unix::net::UnixListener {
+        write_lock(root, n, std::process::id());
+        std::os::unix::net::UnixListener::bind(display_socket(root, n)).unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    #[cfg(target_os = "linux")]
+    fn own_name() -> String {
+        std::fs::read_to_string("/proc/self/comm").map(|c| c.trim().to_string()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_display_override_is_a_colon_and_a_number() {
+        assert_eq!(display_override(None), Ok(None));
+        assert_eq!(display_override(Some("")), Ok(None));
+        assert_eq!(display_override(Some("  ")), Ok(None));
+        assert_eq!(display_override(Some(":101")), Ok(Some(101)));
+        assert_eq!(display_override(Some(" :0 ")), Ok(Some(0)));
+        for junk in ["junk", "101", ":", ":1a", ":-1", ": 1", ":101.0", "localhost:101", ":123456"] {
+            let err = display_override(Some(junk)).unwrap_err();
+            assert!(err.starts_with("TICO_SCREEN_DISPLAY is not a display"), "{junk}: {err}");
+        }
+        // Readiness says so in place of starting anything.
+        let err = choose(&x_root(), Some("junk")).unwrap_err();
+        assert_eq!(report(true, "linux", &[], Some(&err), true).unwrap()["reason"], err);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")] // /proc
+    fn a_display_another_x_server_holds_is_passed_over() {
+        let root = x_root();
+        assert_eq!(choose(&root, None), Ok(FIRST_DISPLAY));
+        let _first = hold(&root, FIRST_DISPLAY);
+        assert_eq!(choose(&root, None), Ok(FIRST_DISPLAY + 1));
+        // A live lock alone holds a display; so does a served socket with no lock (or a lock it can't name).
+        write_lock(&root, FIRST_DISPLAY + 1, std::process::id());
+        let _second = std::os::unix::net::UnixListener::bind(display_socket(&root, FIRST_DISPLAY + 2)).unwrap();
+        assert_eq!(choose(&root, None), Ok(FIRST_DISPLAY + 3));
+        assert_eq!(holder(&root, FIRST_DISPLAY + 2), Some(Holder { pid: None, name: None }));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")] // /proc
+    fn a_stale_lock_and_socket_leave_the_display_free() {
+        let root = x_root();
+        write_lock(&root, FIRST_DISPLAY, dead_pid());
+        drop(std::os::unix::net::UnixListener::bind(display_socket(&root, FIRST_DISPLAY)).unwrap());
+        assert!(display_socket(&root, FIRST_DISPLAY).exists(), "the socket file stays behind");
+        // A process another test forks at that moment holds the socket until it execs.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while listening(&root, FIRST_DISPLAY) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(holder(&root, FIRST_DISPLAY), None);
+        assert_eq!(choose(&root, None), Ok(FIRST_DISPLAY));
+        // A lock that names no pid (or pid 0, which would signal our own process group) is no one's.
+        std::fs::write(root.join(format!(".X{FIRST_DISPLAY}-lock")), "         0\n").unwrap();
+        assert_eq!(choose(&root, None), Ok(FIRST_DISPLAY));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")] // /proc
+    fn the_override_is_used_exactly_and_says_who_holds_it() {
+        let root = x_root();
+        assert_eq!(choose(&root, Some(":101")), Ok(101));
+        let _held = hold(&root, FIRST_DISPLAY);
+        let reason = choose(&root, Some(":99")).unwrap_err();
+        let me = std::process::id();
+        assert_eq!(
+            reason,
+            format!("Display :99 is in use by another X server ({}, pid {me}). Stop it or set TICO_SCREEN_DISPLAY to a free display.", own_name())
+        );
+        assert!(!reason.contains("did not start"));
+        assert!(!offers(report(true, "linux", &[], Some(&reason), true).as_ref()));
+        // The override never searches: a held :101 is reported even with :102 free.
+        let _other = hold(&root, 101);
+        assert!(choose(&root, Some(":101")).unwrap_err().starts_with("Display :101 is in use by another X server ("));
+    }
+
+    #[test]
+    fn the_reason_names_the_holder_only_when_it_can() {
+        let text = |pid, name: Option<&str>| in_use(99, &Holder { pid, name: name.map(String::from) });
+        assert_eq!(text(Some(1234), Some("Xvfb")), "Display :99 is in use by another X server (Xvfb, pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display.");
+        assert_eq!(text(Some(1234), None), "Display :99 is in use by another X server (pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display.");
+        assert_eq!(text(None, None), "Display :99 is in use by another X server. Stop it or set TICO_SCREEN_DISPLAY to a free display.");
+        // The hub keeps 200 characters of a reason (ScreenReadiness); a process name is at most 15.
+        let longest = in_use(99999, &Holder { pid: Some(4_194_304), name: Some("x".repeat(15)) });
+        assert!(longest.len() <= 200, "{}", longest.len());
+    }
+
+    #[test]
+    fn every_display_in_use_says_so() {
+        let root = x_root();
+        for n in FIRST_DISPLAY..=LAST_DISPLAY {
+            write_lock(&root, n, std::process::id());
+        }
+        assert_eq!(
+            choose(&root, None),
+            Err("Displays :99 to :120 are all in use by other X servers. Stop one or set TICO_SCREEN_DISPLAY to a free display.".into())
+        );
+        assert_eq!(choose(&root, Some(":121")), Ok(121));
+    }
+
+    #[test]
+    fn a_display_is_ours_only_when_its_lock_names_our_xvfb() {
+        let root = x_root();
+        assert!(!ours(&root, 99, Some(4321)), "no lock yet");
+        write_lock(&root, 99, 4321);
+        assert!(ours(&root, 99, Some(4321)));
+        assert!(!ours(&root, 99, Some(4322)), "another X server's lock and socket are never taken for ours");
+        assert!(!ours(&root, 99, None));
+    }
+
+    /// Each program draws on display n: its DISPLAY, and for Xvfb and x11vnc their arguments.
+    #[cfg(target_os = "linux")]
+    fn all_on(procs: &[Proc], n: u32) {
+        for p in procs {
+            let pid = p.child.as_ref().and_then(|c| c.id()).unwrap_or_else(|| panic!("{} is not running", p.name));
+            let read = |f: &str| std::fs::read(format!("/proc/{pid}/{f}")).map(|b| String::from_utf8_lossy(&b).replace('\0', " ")).unwrap();
+            assert!(read("environ").contains(&format!("DISPLAY=:{n} ")), "{} environ", p.name);
+            if p.name != procs[1].name {
+                assert!(read("cmdline").contains(&format!(" :{n} ")), "{}: {}", p.name, read("cmdline"));
+            }
+        }
+    }
+
+    /// The other X server, stopped however the test ends.
+    #[cfg(target_os = "linux")]
+    struct Other(std::process::Child);
+
+    #[cfg(target_os = "linux")]
+    impl Drop for Other {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The real programs on this computer's /tmp: another Xvfb holds the first free display, and the screen comes up
+    /// on the next one; then TICO_SCREEN_DISPLAY picks one exactly. Needs Xvfb, x11vnc and a window manager:
+    /// `cargo test screen::tests::live -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    #[cfg(target_os = "linux")]
+    async fn live_the_screen_takes_the_next_free_display_or_the_override() {
+        let root = Path::new(X_ROOT);
+        let taken = choose(root, None).unwrap();
+        let other = Other(std::process::Command::new("Xvfb").args([format!(":{taken}").as_str(), "-nolisten", "tcp"]).spawn().unwrap());
+        while !(display_socket(root, taken).exists() && holder(root, taken).is_some()) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let s = shared();
+        s.hub.store(true, Ordering::SeqCst);
+        s.on.store(true, Ordering::SeqCst);
+        let mut procs = children();
+        tick(&mut procs).await;
+        let next = s.display.lock().unwrap().unwrap();
+        assert!(next > taken, "{next} after {taken}");
+        assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
+        assert_eq!(display(), Some(format!(":{next}")));
+        all_on(&procs, next);
+        stop_all(&mut procs).await;
+        assert_eq!(display(), None);
+
+        // TICO_SCREEN_DISPLAY on the held display: the reason names it, and nothing starts.
+        std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{taken}"));
+        let mut procs = children();
+        tick(&mut procs).await;
+        let reason = text_of(&readiness().unwrap()["reason"]);
+        assert!(reason.starts_with(&format!("Display :{taken} is in use by another X server (Xvfb, pid {})", other.0.id())), "{reason}");
+        assert!(procs[0].child.is_none());
+        drop(other);
+
+        // And on a free one: Xvfb, the window manager, both x11vnc and bot turns use exactly it.
+        let free = (taken + 2..LAST_DISPLAY).find(|n| holder(root, *n).is_none()).unwrap();
+        std::env::set_var("TICO_SCREEN_DISPLAY", format!(":{free}"));
+        tick(&mut procs).await;
+        std::env::remove_var("TICO_SCREEN_DISPLAY");
+        assert_eq!(readiness().unwrap()["available"], true, "{:?}", readiness());
+        assert_eq!(display(), Some(format!(":{free}")));
+        all_on(&procs, free);
+        stop_all(&mut procs).await;
     }
 }
