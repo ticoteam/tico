@@ -5,7 +5,7 @@ suggestions while you build your team chart, and, only when you press Send, a su
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
-Tico HQ, is run by the Tico team from a separate repository; what it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
+Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
 ## The anonymous usage count
 

@@ -109,6 +109,7 @@ source in ticoteam/tico-services. `TICO_HQ_URL` points an install at another add
 `TICO_TELEMETRY`, `DO_NOT_TRACK`, the toggle, demo mode or before the notice; HQ down falls back to GitHub; debug sends
 nothing; owner-only controls). `backend/tests/test_support.py` and `backend/tests/test_support_access.py` hold the install to
 the ticket routes above and the [support access routes](tico-hq.md#support-access) exactly: method, path, the
-`X-Ticket-Secret` header and the JSON fields. HQ's own tests (no address stored or logged; bad input refused; the stats
-math, suppression and retention; tickets and the staff routes; the Support Agent's `hq-tickets` against the real routes)
-are in ticoteam/tico-services with its code.
+`X-Ticket-Secret` header and the JSON fields. `runner/tests/test_hq_tickets.py` holds the Support Agent's `hq-tickets`
+and `gh-support` to the staff routes above and `POST /v1/staff/judge`. HQ's own tests (no address stored or logged; bad
+input refused; the stats math, suppression and retention; tickets, the judge and the staff routes as HQ serves them) are in
+ticoteam/tico-services with its code.

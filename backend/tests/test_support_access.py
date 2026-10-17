@@ -145,22 +145,22 @@ def test_every_off_switch_refuses_and_ends_what_was_live(environment, hq, monkey
     elif switch == "rule":
         assert api.put("/api/v2/access/rules", json={"support_access": False}, headers=signed_in()).status_code == 200
     else:
-        api = environment(demo=True)
+        # The same install, its live session and all, now in demo mode.
+        monkeypatch.setattr(api.app.state.store.settings, "demo", True)
         api.headers["Host"] = "localhost:8765"
     status = api.get("/api/v2/support/access", headers=signed_in()).json()
     assert status["available"] is False and status["active"] is None and status["off_reason"]
     r = api.post("/api/v2/support/access", json={"ticket_id": "sup_x"}, headers=signed_in())
     assert r.status_code == 409 and r.json()["error"]["code"] == "support_access_off"
-    if switch != "demo":
-        assert api.get("/api/v2/health", headers=token).status_code == 401
-        sent = len(hq.seen)
-        assert support_access.pull_once(api.app) is False
-        # With support itself off nothing goes to HQ, not even the end notice. With only the flag off, HQ hears it ended;
-        # the team rule ended it when it was turned off, which tells HQ nothing.
-        ended = ["end"] if switch == "flag" else []
-        assert [r.url.path.rsplit("/", 1)[-1] for r in hq.seen[sent:]] == ended
-        with api.app.state.store.read() as c:
-            assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "turned_off"
+    assert api.get("/api/v2/health", headers=token).status_code == 401
+    sent = len(hq.seen)
+    assert support_access.pull_once(api.app) is False
+    # With support itself off nothing goes to HQ, not even the end notice. With only the flag off, HQ hears it ended;
+    # the team rule ended it when it was turned off, which tells HQ nothing.
+    ended = ["end"] if switch == "flag" else []
+    assert [r.url.path.rsplit("/", 1)[-1] for r in hq.seen[sent:]] == ended
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "turned_off"
 
 
 def test_app_access_reads_and_changes_setup_and_nothing_else(environment, hq):

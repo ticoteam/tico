@@ -2,8 +2,12 @@
 starter pack, undo, pending and the company file round trip. Tests 3, 4 and 4b need the model and are ticket 46's."""
 import copy
 import datetime as dt
+import importlib.util
 import json
 import random
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -467,3 +471,27 @@ def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_fil
     assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-lead"
     assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
+
+
+def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
+    """Tico HQ (ticoteam/tico-services) serves tico.team/setup from `scripts/build_catalog_json.py --out DIR`'s
+    company_file/: imported from there, by itself, it gives the same file, actions, starter pack and roles."""
+    root = Path(__file__).resolve().parents[2]
+    made = subprocess.run([sys.executable, str(root / "scripts" / "build_catalog_json.py"), "--out", str(tmp_path)],
+                          capture_output=True, text=True)
+    assert made.returncode == 0, made.stderr
+    spec = importlib.util.spec_from_file_location("exported_company_file", tmp_path / "company_file" / "__init__.py",
+                                                  submodule_search_locations=[str(tmp_path / "company_file")])
+    H = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = H
+    try:
+        spec.loader.exec_module(H)
+        draft = started()
+        assert H.to_yaml(draft, CREATED) == C.to_yaml(draft, CREATED)
+        assert H.SPEC == C.SPEC and H.PACK == C.PACK and H.ROLES == C.ROLES
+        assert Path(H.draft.__file__).parent == tmp_path / "company_file"
+        removed = H.scrub("key sk-" + "a" * 40)
+        assert removed == C.scrub("key sk-" + "a" * 40) and removed[1] is True
+    finally:
+        for name in [n for n in sys.modules if n == spec.name or n.startswith(spec.name + ".")]:
+            del sys.modules[name]

@@ -9,8 +9,8 @@ No model and no transport: functions over the draft dict the page keeps. Whateve
     turn.keys_removed                        # a key-shaped string was cut: tell the visitor not to paste keys
 
 Standard library only, except that `from_yaml` needs PyYAML. Self-contained so it can be copied as is: Tico HQ
-(ticoteam/tico-services) serves the setup page from a copy taken from a pinned Tico release, with the actions,
-catalogue and starter pack for the page's browser planner.
+(ticoteam/tico-services) serves the setup page from a copy taken from a published Tico release
+(`scripts/build_catalog_json.py --out DIR`), with the actions, catalogue and starter pack for the page's browser planner.
 """
 from .actions import Refusal, Turn, apply_action, undo
 from .draft import LIMITS, PACK, ROLES, SPEC, DraftError, blank
