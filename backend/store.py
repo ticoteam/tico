@@ -681,8 +681,8 @@ class Store:
                 H.add_column(c, "runners", "accepts_member_bots", "INTEGER NOT NULL DEFAULT 0")
                 # Who may open a computer's screen from the app: off, view or control (backend/screen.py).
                 H.add_column(c, "runners", "screen", "TEXT NOT NULL DEFAULT 'off'")
-                # 1 on a computer enrolled since Screen started at View, until its first screen offer or a person's
-                # choice; computers that existed before keep what they had.
+                # 1 on a computer enrolled since Screen got a first-offer default, until its first screen offer or a
+                # person's choice; computers that existed before keep what they had.
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
