@@ -197,6 +197,8 @@ def acl(c, settings):
 
 # ----------------------------------------------------------------------------- roster
 def _save_roster(c, roster):
+    from .report_order import roster_saved
+    roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
               "value_json=excluded.value_json", (json.dumps(roster, sort_keys=True),))
 

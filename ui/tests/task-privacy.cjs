@@ -28,7 +28,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     const bots = [['coo', 'COO', 'leadership'], ['cpo', 'AI CPO', 'product'], ['cmo', 'AI CMO', 'marketing'],
       ['cto', 'CTO', 'engineering']].map(([name, display_name, team]) =>
       ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team,
-        runtime: {cpo: 'codex', cmo: 'claude'}[name], private_tasks_default: name === 'cpo'}));
+        runtime: {cpo: 'codex', cmo: 'claude'}[name], private_tasks_default: name === 'cpo',
+        update_subscriptions: name === 'cpo' ? ['templates'] : []}));
     const now = new Date().toISOString();
     const task = (id, over) => ({id, title: id, body: 'Details.', owner: 'bot:cmo', requester: 'human:reviewer', status: 'open',
       lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
@@ -160,6 +161,10 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         comments.push({id: 'm' + comments.length, kind: 'say', from_actor: 'human:reviewer', to_actor: 'bot:cmo', body: body.text, created: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
         return json({comment: comments.at(-1), comments, woke: true});
       }
+      if (/^\/api\/v2\/bots\/[^/]+\/definition$/.test(p) && req.method() === 'POST') {
+        const body = req.postDataJSON(); posted.push({path: p, body});
+        return json({});
+      }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
       return json({});
@@ -212,6 +217,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await settings.locator('[name=private_tasks_default]').waitFor();
     assert(await settings.locator('[name=private_tasks_default]').isChecked());
     await shot('private-bot-settings-desktop');
+    // Subscribe to updates starts from the saved choice and sends only a change, at either width.
+    assert(await settings.locator('[name=update_templates]').isChecked());
+    assert(!(await settings.locator('[name=update_tico]').isChecked()));
+    await page.setViewportSize({width: 390, height: 844});
+    await settings.locator('[name=update_tico]').check();
+    await settings.locator('[type=submit]').click();
+    await page.waitForFunction(() => !document.querySelector('#bot-editor').open);
+    assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition').body.update_subscriptions, ['templates', 'tico']);
     assert.deepEqual(errors, []);
     console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload');
   } finally { await browser.close(); }

@@ -36,7 +36,7 @@ EMPTY = (
     # routines and watchers
     "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "watcher_runs", "watcher_items", "watcher_refs",
     # runner and bot sessions
-    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "model_logins",
+    "enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "model_logins", "model_login_cleared",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
     "runner_versions",
     # human sign-in and service keys
@@ -52,6 +52,9 @@ EMPTY = (
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures", "attempt_capture_drops",
+    # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
+    # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
+    "feed_walks", "feed_cursors", "feed_deliveries",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
@@ -65,7 +68,8 @@ KEEP = frozenset((
     "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "changes", "chat_goals",
     "cloud_migrations", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
-    "external_snapshots", "external_versions", "flight_db", "flight_events", "flight_process", "flight_requests",
+    "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
+    "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
     "health_findings", "health_reports", "humans", "import_refs", "intake_items", "kpi_definitions", "kpi_readings",
     "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "linked_docs",

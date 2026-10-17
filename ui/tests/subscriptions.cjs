@@ -96,7 +96,9 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     // Each computer with the subscriptions it reported and its bots' connections (backend/views.py operations).
-    const machines = data.machines.map(m => ({...m, profiles: structuredClone(data.subs.profiles_by_computer.find(c => c.runner_id === m.id)?.profiles || []),
+    // `readiness_at`: the computer's last report, newer than a finished sign-in once its next heartbeat came (`beatAt`).
+    const reported = data.beatAt && Date.now() >= data.beatAt ? new Date().toISOString() : undefined;
+    const machines = data.machines.map(m => ({...m, readiness_at: reported || m.readiness_at, profiles: structuredClone(data.subs.profiles_by_computer.find(c => c.runner_id === m.id)?.profiles || []),
       bot_connections: m.bots.map(bot => ({bot, ...(bot === 'builder' ? lineFor(data) : {profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: null, problem: ''}), computer: undefined}))}));
     if (p === '/api/v2/operations') return json({machines: as === 'owner' ? machines : machines.filter(m => m.operator === me.id), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: [], harnesses});
@@ -120,7 +122,8 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       // finishLogin: the sign-in completes, and the computer reports it on its next heartbeat.
       if (data.finishLogin && method === 'GET') {
         data.subs.profiles_by_computer[0].profiles[0].runtimes.claude.signed_in = true;
-        return json({id: 'l1', state: 'signed_in', created: new Date().toISOString(), lines: []});
+        data.beatAt = data.beatAt || Date.now() + 2000;
+        return json({id: 'l1', state: 'signed_in', created: new Date().toISOString(), updated: new Date(data.beatAt - 2000).toISOString(), lines: []});
       }
       return json({id: 'l1', state: method === 'POST' ? 'cancelled' : 'waiting', url: 'https://claude.ai/oauth/example', code: 'ACME-1234', created: new Date().toISOString(), lines: []});
     }

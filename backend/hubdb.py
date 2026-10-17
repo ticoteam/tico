@@ -115,7 +115,14 @@ LANE_TEAMS = ("product", "engineering")     # store.py's one-time lane migration
 # parent. Keyed on the roster team in
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
 MOVER_TEAMS = ("leadership", "product", "engineering")
-MOVER_FIELDS = ("lane", "labels")   # what only a mover changes (a parent or blocker: task_relations)
+MOVER_FIELDS = ("lane", "number")   # what only a mover changes (a parent or blocker: task_relations)
+# Labels are a mover's too, except that a bot may change a classification label on a task it manages
+# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
+WORKFLOW_LABELS = ("goal:on", "goal:off")
+# ...and a label on a public roadmap (roadmaps.settings) needs the bot's approved publish approval.
+# A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
+# retrying a refusal it already had cannot quarantine itself in seconds.
+LABEL_REFUSAL_WINDOW_S = 3600
 LINK_KINDS = ("pr", "issue", "url", "doc", "worktree", "session")
 TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")     # warn | refuse | off
 # Rule 7's writing checks on an item for a person and the shape of an update: warned about with
@@ -679,11 +686,12 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
 class Refused(Exception):
     """A write the rules do not allow. `rule` names the rule; `detail` says what to fix."""
 
-    def __init__(self, rule, detail="", severity="normal"):
+    def __init__(self, rule, detail="", severity="normal", task=None):
         super().__init__(f"{rule}: {detail}" if detail else str(rule))
         self.rule = rule
         self.detail = detail
         self.severity = severity
+        self.task = task            # the task a `label` refusal was about (refuse)
 
 
 # ----------------------------------------------------------------------------- basics
@@ -1111,14 +1119,16 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
-    reviewing the refusal reads; a private task write keeps only what was refused."""
+    reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
+    a `label` refusal was about, which _escalate counts it by."""
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
-           "detail_json": _dump({"detail": recorded, **({"context": context} if context else {})}), "severity": severity}
+           "detail_json": _dump({"detail": recorded, **({"context": context} if context else {}),
+                                 **({"task": task} if task else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
@@ -1129,7 +1139,7 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None):
             pass
     if writing_refusal(rule, detail):
         detail += ". Rewrite the title/body to fix these writing errors and retry. Do not ask the human to waive formatting rules."
-    raise Refused(rule, detail, severity)
+    raise Refused(rule, detail, severity, task)
 
 
 # ----------------------------------------------------------------------------- lint (rule 7)
@@ -1662,8 +1672,18 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
-    count, distinct = conn.execute("SELECT COUNT(*), COUNT(DISTINCT rule || char(31) || detail_json) FROM refusals "
-                                   "WHERE actor=? AND ts>=? AND rule<>'lint'", (actor, since)).fetchone()
+    counted, last = [], {}
+    for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
+                                      "AND rule<>'lint' ORDER BY ts, id", (actor, since))):
+        if refused["rule"] == "label":
+            # A label refusal says who may make the change instead; retrying it is not reaching further, so
+            # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
+            about = (_json(refused["detail_json"], {}) or {}).get("task")
+            if about in last and parse_ts(refused["ts"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
+                continue
+            last[about] = parse_ts(refused["ts"])
+        counted.append((refused["rule"], refused["detail_json"]))
+    count, distinct = len(counted), len(set(counted))
     # Only a refusal the bot has already had (same rule, same words) counts toward the quarantine: retrying a
     # refused action is what the limit stops. A first try at something new that is refused is recorded, not counted.
     repeats = count - distinct
@@ -1679,11 +1699,12 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                      f"Read its refusals and decide whether its playbook or its reach needs a change.", origin=actor)
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
+    stopped = {"rule": rule, "detail": said}       # what the bot is told when it is back (quarantine_lifted_note)
     if repeats >= QUARANTINE_AT:
-        quarantine(conn, slug, f"{repeats} repeated refusals today")
+        quarantine(conn, slug, f"{repeats} repeated refusals today", refusal=stopped)
     elif count >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
-        quarantine(conn, slug, f"{count} refusals today")
+        quarantine(conn, slug, f"{count} refusals today", refusal=stopped)
 
 
 def task_origin(conn, row):
@@ -1780,11 +1801,13 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     return lifted
 
 
-def quarantine(conn, slug, reason, context=None):
+def quarantine(conn, slug, reason, context=None, refusal=None):
     """Rule 8's stop: the bot writes nothing more until a human sets it active again. `context` is the
-    refusal that stopped it, for the person who reviews it (`quarantine_review`)."""
+    refusal that stopped it, for the person who reviews it (`quarantine_review`); `refusal` ({rule, detail})
+    is the last refused write of a refusal-count quarantine, for the bot when it is back."""
     conn.execute("UPDATE bots SET state='quarantined' WHERE slug=?", (slug,))
-    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {})})
+    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {}),
+                                                         **({"refusal": refusal} if refusal else {})})
     # The status line people read says what the check matched, not the rule's own words.
     focus = (f"Paused for review: the safety check stopped a {context['what']} naming {context['found']}"
              if context and context.get("found") else reason)
@@ -1793,6 +1816,30 @@ def quarantine(conn, slug, reason, context=None):
     except Refused:
         pass
     return bot(conn, slug)
+
+
+QUARANTINE_LIFTED = "Do not retry this action; leave a note for a person if you still need it."
+
+
+def quarantine_lifted_note(conn, slug):
+    """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
+    run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
+    back from a cooldown retried the same refused write."""
+    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
+                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    detail = (_json(row["detail_json"], {}) or {}) if row else {}
+    review, refused = quarantine_review(conn, slug) or {}, detail.get("refusal") or {}
+    if review.get("what"):
+        what = f"the safety check stopped a {review['what']}" + (f" naming {review['found']}" if review.get("found") else "")
+    elif refused.get("detail"):
+        what = f"{refused['detail']} ({refused.get('rule')})"
+    else:
+        what = detail.get("reason") or "a refused write"
+    body = f"You were quarantined and are back. The refusal that stopped you: {what}. {QUARANTINE_LIFTED}"
+    ident = new_id()
+    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                 (ident, KEEPER, bot_actor(slug), body[:NOTE_MAX], now()))
+    event(conn, KEEPER, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
 
 
 # ----------------------------------------------------------------------------- identity
@@ -1860,6 +1907,22 @@ def resolve_actor(conn, value):
 
 
 HELD_STATES = ("quarantined", "paused")
+
+
+def held_for(conn, actor, target):
+    """Whether what `actor` writes to a paused or quarantined bot is kept for when it is back, rather than refused
+    (rule 2): a person's, or, to a quarantined bot, its own manager bot's (bot_config.reports_to, else its declared
+    reports_to, as auth.bot_contact reads it), so it can say why it stopped. A paused bot stays a person's."""
+    if is_human(actor):
+        return True
+    target = resolve_actor(conn, target)
+    if not (is_bot(actor) and is_bot(target)) or not _has_table(conn, "bot_config"):
+        return False
+    if (bot(conn, actor_id(target)) or {}).get("state") != "quarantined":
+        return False
+    row = _one(conn, "SELECT reports_to, config_json FROM bot_config WHERE bot=?", (actor_id(target),)) or {}
+    boss = str(row.get("reports_to") or (_json(row.get("config_json"), {}) or {}).get("reports_to") or "")
+    return bool(boss) and not boss.startswith("human:") and actor_id(boss) == actor_id(actor)
 
 
 def _reach(conn, actor, target, allow_planned=False, allow_held=False):
@@ -2037,9 +2100,11 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     on_task = (refs or {}).get("task")
     path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
-    # A person's message to a paused or quarantined bot is kept: runners claim only active bots' work
-    # (execution.claim), so it runs when the bot is back. A bot still cannot write to one (rule 2).
-    target = _reach(conn, actor, to_actor, allow_held=is_human(actor))
+    # A person's message to a paused or quarantined bot is kept, and so is its manager bot's (held_for): runners
+    # claim only active bots' work (execution.claim), so it runs when the bot is back. Any other bot still cannot
+    # write to one (rule 2).
+    held = held_for(conn, actor, to_actor)
+    target = _reach(conn, actor, to_actor, allow_held=held)
     refs = dict(refs or {})
     warnings = []
 
@@ -2052,7 +2117,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
     else:
         conv = _pair_conversation(conn, actor, target,
-                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=is_human(actor))
+                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=held)
 
     # rule 3: the loop caps
     if is_bot(actor) and is_bot(target):
@@ -2877,7 +2942,8 @@ def hydrate_task_tags(conn, rows):
             by_id[value.pop("task_id")]["tags"].append(value)
 
 
-def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
+def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, approved=False):
+    """`approved`: _label_writer already used this change's publish approval."""
     keys, resolved = _labels(labels), []
     for key in keys:
         row = tag_by_key(conn, key)
@@ -2887,7 +2953,7 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
     task_row = task(conn, task_id)
     old = task_labels(task_row)
     from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-    if task_row['visibility'] == 'public' and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels']):
+    if not approved and task_row['visibility'] == 'public' and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels']):
         approve_roadmap(conn, actor, task_id, 'labels', {'labels': keys}, approval_id)
     old_ids = {r[0] for r in conn.execute("SELECT tag_id FROM task_tags WHERE task_id=?", (task_id,))}
     wanted, ordered = set(), []
@@ -2905,6 +2971,62 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None):
         event(conn, actor, "tag.detach", ident, {"task_id": task_id})
     if old != keys:
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
+
+
+def type_manager(conn, row):
+    """The slug of the bot that manages this task's type (task_types.manager), or None."""
+    return (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
+
+
+def _label_writer(conn, actor, row, labels, approval_id=None):
+    """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
+    on a task it manages, one it owns or asked for or whose type it manages (task_types.manager), and nothing
+    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
+    there once it is public, so adding or removing one takes the bot's exact approved publish approval
+    (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
+    counts once per task an hour (_escalate). Returns whether the approval was used."""
+    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
+    keys = _labels(labels)
+    changed = sorted(set(keys) ^ set(task_labels(row)))
+    if not changed:
+        return False
+    slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
+    if actor not in (row["owner"], row["requester"]) and type_manager(conn, row) != slug:
+        refuse(conn, actor, "label",
+               f"{slug} changes labels only on a task it owns, asked for or whose type it manages; labels on "
+               f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
+    settings = roadmap_settings(conn)
+    public = [k for k in changed if k in settings["labels"]]
+    flow = [k for k in changed if k in WORKFLOW_LABELS]
+    if public and settings["bot_public_approval"] and approval_id and not flow:
+        # An approval that is pending, spent or for other labels is still this label refusal: a bot retrying
+        # it would otherwise count every retry and quarantine itself, as before.
+        try:
+            approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
+        except Refused as exc:
+            if exc.rule != "approval":
+                raise
+            refuse(conn, actor, "label",
+                   f"approval {approval_id} does not cover this change: a publish approval is used once, must be "
+                   f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
+                   f"label the task keeps; request a new one, or ask a person on the {teams} teams", task=row["id"])
+        return True
+    held = []
+    if flow:
+        held.append(f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
+                    f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}")
+    if public:
+        held.append(f"{', '.join(public)} {'is a public roadmap label' if len(public) == 1 else 'are public roadmap labels'}"
+                    f" (adding or removing one puts the task on a roadmap or takes it off), so "
+                    + (f"it needs an approved publish approval: get the payload with `hub task publication-preview "
+                       f"{row['id']}` and a --label for each label the task keeps, request the approval, then retry "
+                       f"with its id (--approval-id), or ask a person on the {teams} teams"
+                       if settings["bot_public_approval"] else f"a person on the {teams} teams changes it"))
+    if held:
+        rest = [k for k in changed if k not in public and k not in flow]
+        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
+               task=row["id"])
+    return False
 
 
 def _lane_for(conn, lane, owner, actor):
@@ -4104,6 +4226,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     mine = mine or bool(delegated) or task_ancestor_party(conn, actor, row) or type_bot_works(conn, actor, row)
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+    labels_only = labels is not None and not clear_size and all(v is None for v in (
+        status, note, owner, due, body, lane, rank, goal_id, type, step, step_rank, number, title, private,
+        waiting_on, roles, visibility, public_title, public_summary, size))
+    # The bot that manages the task's type may change its labels whatever the type's `bots` setting
+    # (_label_writer decides which); nothing else on the task becomes its to change.
+    mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and type_manager(conn, row) == actor_id(actor)
     if not mine and not mover and actor != KEEPER:
         refuse(conn, actor, "identity", f"{task_id} is not yours to change")
     state_change = status is not None or type is not None or step is not None
@@ -4174,11 +4302,14 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         note, waiting_on = BLOCKED_ON.format(name=person_name(conn, waiting_on), ask=said), ""
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
-    wanted = {k: v for k, v in (("lane", lane), ("labels", labels), ("number", number)) if v is not None}
+    wanted = [k for k, v in (("lane", lane), ("number", number)) if v is not None]
+    if not is_bot(actor) and labels is not None:
+        wanted.insert(1, "labels")  # a person who is not a mover changes no label, as before
     if wanted and not mover:
         refuse(conn, actor, "identity",
                f"{', '.join(wanted)} on a task {'is' if len(wanted) == 1 else 'are'} changed by a person on "
                f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_id(actor)}")
+    approved = labels is not None and not mover and _label_writer(conn, actor, row, labels, approval_id)
     if lane is not None:
         lane = _lane_for(conn, lane, row["owner"], actor)    # a task moves only onto company
     if title is not None:
@@ -4234,7 +4365,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         args[field] = value
         _task_event(conn, task_id, actor, field, row.get(field), value, note or "")
     if labels is not None:
-        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id)
+        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
         sets.append("updated=:updated")
     if owner is not None:
         new_owner = _reach(conn, actor, owner)
@@ -5393,9 +5524,10 @@ NOTE_WAITING_SQL = (
 
 
 def note_create(conn, actor, to, body):
-    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one."""
+    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one. A paused or
+    quarantined bot's note waits for its next run when a person or its manager bot leaves it (held_for)."""
     _writer(conn, actor)
-    target = _reach(conn, actor, to)
+    target = _reach(conn, actor, to, allow_held=held_for(conn, actor, to))
     if not is_bot(target):
         refuse(conn, actor, "note", "a note waits for a bot's next run; a person has none, so tell them another way")
     if target == actor:
@@ -5448,10 +5580,11 @@ def note_cancel(conn, actor, note_id, human=False):
 
 
 def notes_waiting(conn, bot, limit=50):
-    """The notes waiting for `bot` (a slug), oldest first."""
+    """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
+    (quarantine_lifted_note) must reach the next run even behind a full backlog."""
     return _rows(conn.execute(
-        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} ORDER BY n.created,n.id LIMIT ?",
-        ("bot:" + bot, limit)))
+        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} "
+        f"ORDER BY n.from_actor<>?,n.created,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
 
 
 def notes_waiting_counts(conn, bots, limit=500):
@@ -5688,6 +5821,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
             refuse(conn, actor, "quarantined", f"only a person takes {slug} out of this quarantine")
     if quarantined and state == "active":
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
+        quarantine_lifted_note(conn, slug)
     if quarantined and state not in ("active", "quarantined"):
         # Lease expiry and completion are routine keeper updates. Neither can clear or mask
         # the human review required by quarantine.

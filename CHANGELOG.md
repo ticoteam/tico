@@ -8,6 +8,25 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, in each computer's pop-up on
+  Settings > Computers, for the computer's own login and each named subscription. Sign out names the bots that stop first;
+  Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
+  the new one doesn't take; it isn't offered for Claude Code on a Mac, which keeps its login in the Keychain. After any
+  of these the page waits for the computer's next report before redrawing. A computer login someone signed
+  out stays signed out: the model key given to every computer no longer signs it back in, until someone signs in or
+  chooses **Use the shared key**. No restart. Needs a current runner on the computer.
+- The team chart keeps the order you put a manager's reports in, for everyone who views it, instead of A–Z. Drag a
+  human or a bot above or below another report of the same manager, or use **Move up** / **Move down** in its row's
+  menu (keyboard too). A new report goes last. The Goals tree, a person's page and Updates follow the same order.
+  Whoever may put reports under that manager may order them, and a bot its own; a drop onto someone you may not put
+  it under says so and moves nothing. Bots read and set it with `hub org order <manager> [--set a,b,c]`
+  ([team chart](docs/org-chart.md#the-order-of-reports)).
+- **Subscribe to updates** in a bot's settings: its managers choose **Default employee settings** (changes to the
+  template it was made from, from tico.team's template changelog feeds), **Tico updates** (published releases,
+  including MCP and tool changes), both or neither. Each update is one quiet note for the bot's next run, with a
+  short quoted summary, release or commit links and whether action may be needed, and why. It wakes nothing and
+  changes nothing about the bot; turning a category back on starts from the newest update, without a backlog
+  (`hub bot update --subscribe-updates`, [Creating bots](docs/creating-bots.md#subscribe-to-updates)).
 - Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
   `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download and message counts. Counts are kept only when
   `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
@@ -18,6 +37,12 @@ All notable changes to Tico are recorded here. The format follows
 - Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
   Usage estimates its cost at Anthropic's list price: $0.10 in, $0.01 cached and $0.50 out per million tokens for a
   prompt up to 100,000 tokens, five times that for a longer one.
+- HQ: **Talk to a person** on tico.team/setup files a support ticket of kind `setup-website` through HQ's support desk
+  (`POST /v1/support`, from `https://tico.team` only, with its CORS preflight). The ticket is fixed text (email, step, mode,
+  turns); the visitor's note, and their plan only if they ticked it, are an attachment marked Untrusted public input, with
+  key-shaped strings removed before the spam and injection check or the database see them. Never the chat. One ticket per
+  visit, 3 a day per address and per email, `HQ_SETUP_TICKETS_DAILY_CAP` a day (default 50): `429 {"busy": true}`. The
+  answer is the reply page's link on `HQ_DOMAIN`. The Support bot's task shows the kind and the attachment's label.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
@@ -106,6 +131,16 @@ All notable changes to Tico are recorded here. The format follows
 - Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
   @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
   the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
+- A bot may now add and remove classification labels (`qa`, an area, a priority) on a task it manages: one it
+  owns, asked for, or whose type it manages, such as Head of Product on its roadmap items or Head of Engineering on
+  Dev tickets. Before, only a person on the leadership, product or engineering teams could, and bots trying it were
+  quarantined. A public roadmap label still needs an approved publish approval (`hub task label --approval-id`), both
+  to add and to remove, and `goal:on`/`goal:off` still need a person; the refusal says which label and why, and
+  counts toward a quarantine once per task an hour. Lane and number are unchanged: a person's.
+- A bot back from a quarantine finds a note in its next run with the refusal that stopped it and "Do not retry this
+  action; leave a note for a person if you still need it", whether the cooldown lifted it or a person cleared it.
+  While a bot is quarantined, its manager bot's messages, notes and task comments are kept for when it is back
+  instead of refused, as a person's already were (and a person's notes to a paused or quarantined bot now are too).
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -115,6 +150,18 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
+  `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
+- Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
+  about sign-in. It now opens the sign-in section of the install guide. Every link that names a Settings tab is now checked
+  against the tabs that exist, and chat's and the Goal Manager's links to a tab are tested by clicking them.
+- BotOps and Assistant Confirm cards read in plain words: a repository change says who gets what and what they lose
+  ("Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."), never
+  `PUT /api/v2/...` or a word like "chosen" or "all"; any other card without a sentence of its own gets a plain one, and
+  a card made before this reads plainly too, its old line kept under Details. The method, path and fields are under a
+  closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one
+  card no longer makes the chat jump: the other cards stay exactly as they were, with any **Show more** or Details you
+  opened still open, and focus stays where it was.
 - Usage prices each model request at its own rate when the model charges more for long prompts (Claude Haiku 5.5, over
   100,000 tokens). It used to price a whole run at the lower rate, so a Haiku 5.5 run could read up to five times too
   low. A run from a runner that doesn't report each request (update the runner) says **estimate, may be low**.

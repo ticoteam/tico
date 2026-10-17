@@ -1033,7 +1033,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1225,6 +1225,12 @@ class GroupUpdate(Contract):
     remove: GroupMembers = Field(default_factory=GroupMembers)
 
 
+class ReportOrder(Contract):
+    """A manager's direct reports in the order the team chart shows them: bot slugs and human ids (`bot:` or `human:`
+    in front when one could be either). Reports left out keep their places."""
+    reports: list[ID] = Field(min_length=1, max_length=200)
+
+
 class BotDefinitionCreate(Contract):
     private_tasks_default: StrictBool = False
     slug: Slug | None = None                 # left out, picked from the display name
@@ -1286,6 +1292,8 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
+    # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
+    update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
     # BotOps applying a person's own request: the id of that person's message to BotOps. The
     # change is checked as that person, never as BotOps (backend/app.py update_bot).
@@ -1823,6 +1831,17 @@ class LoginStart(Contract):
     # Which runtimes the browser can sign in is the manifests' call (backend/model_login.py RUNTIMES).
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
+    # Sign in to another account in place: the old login keeps working until the new one has finished.
+    switch: bool = False
+
+
+class LogoutStart(Contract):
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
+
+
+class SharedKeyUse(Contract):
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
 
 
 class LoginCode(Contract):
@@ -1830,7 +1849,7 @@ class LoginCode(Contract):
 
 
 class LoginReport(Contract):
-    state: Literal["starting", "waiting", "signed_in", "failed"]
+    state: Literal["starting", "waiting", "finishing", "signed_in", "signed_out", "done", "failed"]
     url: str = Field(default="", max_length=2100)
     code: str = Field(default="", max_length=40)
     lines: list[str] = Field(default_factory=list, max_length=40)

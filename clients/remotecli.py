@@ -126,7 +126,7 @@ def run(args, who=None):
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
-              "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "run list",
+              "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "org order", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import"):
         if fn == "routine update":                  # --enable / --disable are the tool's `enabled`; a key or an id names it
@@ -674,6 +674,9 @@ def bots(client, args):
                                     ("task_goal", getattr(args, "task_goal", None)),
                                     ("review_model", getattr(args, "review_model", None)),
                                     ("capture_stream", getattr(args, "capture_stream", None))) if v is not None}
+        if getattr(args, "subscribe_updates", None) is not None:
+            picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
+            fields["update_subscriptions"] = picked
         try:
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:

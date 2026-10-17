@@ -288,6 +288,89 @@ def describe_stopped(result):
     return ', '.join(parts + (['repository creation'] if result.get('creation_stopped') else []))
 
 
+LEVEL = {'read': 'read-only', 'write': 'write'}
+
+
+def _short(full_name):
+    return str(full_name).split('/')[-1]
+
+
+def _and(names):
+    names = list(names)
+    return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
+
+
+def preview_change(c, settings, actor, bot, body):
+    """`plain_change` for a card made outside `bot_set` (a carried hand-off): the change tried as the person who would
+    confirm it, then rolled back. None when the try is refused; the card then reads the request (`plain_request`)."""
+    try:
+        update = RepoAccessUpdate(**(body if isinstance(body, dict) else {}))
+    except ValueError:
+        return None
+    row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    org = row['org'] if row else getattr(settings, 'github_owner', '')
+    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    c.execute('SAVEPOINT repo_preview')
+    try:
+        before = access(c, bot, org)
+        return plain_change(name, before, set_access(c, bot, update, org, actor, team_list=True, own_click=False))
+    except Problem:
+        return None
+    finally:
+        c.execute('ROLLBACK TO repo_preview')
+        c.execute('RELEASE repo_preview')
+
+
+def plain_change(name, before, result):
+    """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
+    Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.` `before` is
+    `access()` before the change, `result` what `set_access` returned."""
+    was = {r['full_name'].lower(): r for r in before['effective']}
+    now = {r['full_name'].lower(): r for r in result['effective']}
+    changed = [f"{LEVEL[now[k]['access']]} on {_short(now[k]['full_name'])} (was {LEVEL[was[k]['access']]})"
+               for k in sorted(now) if k in was and now[k]['access'] != was[k]['access']]
+    gained = [f"{LEVEL[now[k]['access']]} on {_short(now[k]['full_name'])}" for k in sorted(now) if k not in was]
+    lost = [_short(was[k]['full_name']) for k in sorted(was) if k not in now]
+    lines = ['; '.join(changed)] if changed else []
+    if gained:
+        lines.append('gets ' + _and(gained))
+    if lost:
+        lines.append('loses access to ' + _and(lost))
+    if result.get('workflows_stopped'):
+        lines.append('can no longer run workflows in ' + _and(_short(n) for n in result['workflows_stopped']))
+    if result.get('creation_stopped'):
+        lines.append('can no longer create repositories')
+    if not lines:
+        return name + ': no change to the repositories it can reach.'
+    return name + ': ' + '. '.join(line[0].upper() + line[1:] if i else line for i, line in enumerate(lines)) + '.'
+
+
+def plain_request(name, body):
+    """The same card read from the request alone, when trying it first was refused (`preview_change`): what it is set
+    to. A field the request leaves out keeps what is stored (`set_access`), so the line says so instead of guessing."""
+    body = body if isinstance(body, dict) else {}
+    mode = body.get('mode')
+    if mode == 'own':
+        what = 'only its own repository'
+    elif mode == 'all':
+        what = ((LEVEL.get(body['all_access'], 'write') if body.get('all_access') else 'the access level set before')
+                + ' on every repository the team uses')
+    elif mode == 'chosen':
+        if body.get('chosen') is None:
+            what = 'the repositories picked for it before, again'
+        else:
+            chosen = [g for g in body['chosen'] if isinstance(g, dict)]
+            what = ('; '.join(f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}" for g in chosen)
+                    + ', besides its own repository') if chosen else 'only its own repository'
+    else:
+        what = 'its repository access changes'
+    if body.get('create_repositories') is True:
+        what += '; may create repositories'
+    elif body.get('create_repositories') is False:
+        what += '; may no longer create repositories'
+    return name + ': ' + what + '.'
+
+
 def sync(service):
     with service.repository_sync_lock:
         return _sync(service)
@@ -630,6 +713,7 @@ def install(app, store, service):
             # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked.
+            before = access(c, bot, org)
             c.execute('SAVEPOINT repo_narrowing')
             result = set_access(c, bot, body, org, who.actor, team_list=True, own_click=False)
             if not result['stopped'] and not result.get('creation_stopped') and not result.get('workflows_stopped'):
@@ -641,8 +725,9 @@ def install(app, store, service):
             lost = describe_stopped(result)
             propose = getattr(app.state, 'botops_propose', None)
             if who.via == 'botops' and propose:
+                plain = plain_change(name, before, result)
                 return propose(c, who, 'PUT', '/api/v2/bots/' + bot + '/repositories', body.model_dump(exclude_none=True),
-                               ("Set " + name + "'s repository access to " + body.mode + ". This stops: " + lost)[:300])
+                               plain[:300], what=plain)
             raise Problem('forbidden', 'This takes ' + lost + ' away from ' + name + '; a person who manages it makes '
                           'that change in Settings > Repositories', 403)
 

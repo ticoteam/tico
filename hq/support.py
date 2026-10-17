@@ -30,6 +30,7 @@ cannot be used to read another person's replies. Nothing deletes a ticket by its
 filed it, or the team on their request, deletes it. PRIVACY.md is the statement of it; docs/support.md is how the team
 works the queue.
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -42,7 +43,8 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from . import support_page
+from . import cors, judge as judge_module, support_page
+from .company_file.keys import scrub
 from .limits import Limiter
 
 MAX_MESSAGES = 60                 # a ticket's thread, both sides
@@ -71,9 +73,32 @@ FIELDS = ("message", "email", "install_id", "version")
 OPTIONAL = ("diagnostics",)       # the person's own choice; staff routes only ever show it
 # The desktop app's version, when the person wrote from the app; labelled apart from the server's `version`.
 APP_FIELDS = ("app_version",)
-# What the person asked for: help (the default), help with setting up, or an answer to "How is Tico working for you?".
-KINDS = ("support", "setup", "feedback")
+# What the person asked for: help (the default), help with setting up, an answer to "How is Tico working for you?", or
+# Talk to a person on the tico.team/setup page (a visitor with no install yet; `parse_setup_website` reads its own fields).
+KINDS = ("support", "setup", "feedback", "setup-website")
 KIND_FIELDS = ("kind",)
+
+# Talk to a person on tico.team/setup. Everything the visitor types is in the attachment, never the title or the body.
+SETUP_WEBSITE = "setup-website"
+SETUP_ORIGIN = cors.ORIGIN             # the only origin that may file one
+SETUP_REQUIRED = ("kind", "email", "step", "mode", "turns", "session_id")
+SETUP_OPTIONAL = ("note", "plan")      # the plan only when the visitor ticked "send my plan"; never the chat
+SETUP_LINE = "A visitor on tico.team/setup asked to talk to a person."
+UNTRUSTED_LABEL = "Untrusted public input"
+SETUP_MODES = ("browser", "server")
+SETUP_STEPS = ("company", "chart", "goals", "team", "rules", "file")     # the page's tabs
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{16,64}")
+# What the page sends (crypto.randomUUID), which is random enough that the key filter would take it for a key.
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+PLAN_FORMAT = re.compile(r"^version:[ \t]*[\"']?0\.2[\"']?[ \t]*(?:#.*)?$", re.M)
+MAX_NOTE = 1000                   # characters
+MAX_PLAN = 32 * 1024              # bytes of tico.company.yaml; the full starter pack is about 8 KB
+MAX_TURNS = 1000
+# The raw body, before the fields are checked. JSON may write each two-byte character as a six-byte \uXXXX, and each
+# character beyond U+FFFF as twelve, so a plan and a note that are within their limits can take this much.
+MAX_SETUP_REQUEST = 3 * MAX_PLAN + 12 * MAX_NOTE + 4 * 1024
+SETUP_DAILY_CAP = 50              # HQ_SETUP_TICKETS_DAILY_CAP: setup-website tickets a day across all addresses
+PUBLIC_URL = "https://updates.tico.team"     # https://HQ_DOMAIN when set: where the reply page is, for the link in the answer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tickets(
@@ -81,7 +106,7 @@ CREATE TABLE IF NOT EXISTS tickets(
  closed TEXT, status TEXT NOT NULL DEFAULT 'open', body TEXT NOT NULL, email TEXT, install_id TEXT, version TEXT, app_version TEXT,
  email_pending INTEGER NOT NULL DEFAULT 0, diagnostics TEXT, signature TEXT NOT NULL DEFAULT '',
  verdict TEXT NOT NULL DEFAULT 'unchecked', verdict_reason TEXT NOT NULL DEFAULT '', held INTEGER NOT NULL DEFAULT 0,
- kind TEXT NOT NULL DEFAULT 'support');
+ kind TEXT NOT NULL DEFAULT 'support', attachment TEXT);
 CREATE INDEX IF NOT EXISTS tickets_created ON tickets(created);
 CREATE TABLE IF NOT EXISTS ticket_verdicts(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT NOT NULL, at TEXT NOT NULL, old TEXT NOT NULL, new TEXT NOT NULL,
@@ -120,9 +145,19 @@ class Invalid(Exception):
         self.field = field
 
 
+def utf8(value):
+    """Whether `value` can be written as UTF-8. JSON can carry an unpaired surrogate as an escape ("\\ud800"); UTF-8, and
+    so the database and the judge, cannot."""
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def text(value, field, limit):
-    """Plain text of 1..limit characters: a string, no control characters, no blank message."""
-    if not isinstance(value, str) or CONTROL.search(value):
+    """Plain text of 1..limit characters: a string, valid UTF-8, no control characters, no blank message."""
+    if not isinstance(value, str) or not utf8(value) or CONTROL.search(value):
         raise Invalid(field)
     value = value.replace("\r\n", "\n").replace("\r", "\n")
     if not value.strip() or len(value) > limit:
@@ -132,17 +167,18 @@ def text(value, field, limit):
 
 def _plain(value, depth=0):
     """Whether `value` is JSON made only of strings, numbers, booleans, null, lists and objects, not deeply nested,
-    with no control character in any string."""
+    with no control character in any string and every string valid UTF-8."""
     if depth > DIAGNOSTICS_DEPTH:
         return False
     if isinstance(value, str):
-        return not CONTROL.search(value)
+        return utf8(value) and not CONTROL.search(value)
     if value is None or isinstance(value, (bool, int, float)):
         return True
     if isinstance(value, list):
         return all(_plain(v, depth + 1) for v in value)
     if isinstance(value, dict):
-        return all(isinstance(k, str) and not CONTROL.search(k) and _plain(v, depth + 1) for k, v in value.items())
+        return all(isinstance(k, str) and utf8(k) and not CONTROL.search(k) and _plain(v, depth + 1)
+                   for k, v in value.items())
     return False
 
 
@@ -166,7 +202,7 @@ def parse_ticket(data):
     if not isinstance(data, dict) or set(data) - set(FIELDS) - set(APP_FIELDS) - set(KIND_FIELDS) - set(OPTIONAL):
         raise Invalid("fields")
     kind = data.get("kind", "support")
-    if kind not in KINDS:
+    if kind not in KINDS or kind == SETUP_WEBSITE:
         raise Invalid("kind")
     message = text(data.get("message"), "message", MAX_MESSAGE)
     values = {}
@@ -174,17 +210,75 @@ def parse_ticket(data):
         value = data.get(name)
         if value in (None, ""):
             values[name] = None
-        elif not isinstance(value, str) or (name == "email" and len(value) > 254) or not pattern.fullmatch(value):
+        elif not isinstance(value, str) or not utf8(value) or (name == "email" and len(value) > 254) \
+                or not pattern.fullmatch(value):
             raise Invalid(name)
         else:
             values[name] = value
     return message, values["email"], values["install_id"], values["version"], values["app_version"], kind
 
 
+def parse_setup_website(data):
+    """The fields of a Talk to a person request from tico.team/setup, as a dict, or Invalid("fields"): the answer names
+    nothing, so the page gets no help probing it. There is no field for the chat, so the chat cannot be sent."""
+    if not isinstance(data, dict) or set(SETUP_REQUIRED) - set(data) or set(data) - set(SETUP_REQUIRED) - set(SETUP_OPTIONAL):
+        raise Invalid("fields")
+    if any(isinstance(value, str) and not utf8(value) for value in data.values()):
+        raise Invalid("fields")
+    email, step, mode, turns, session_id = (data[name] for name in ("email", "step", "mode", "turns", "session_id"))
+    if data["kind"] != SETUP_WEBSITE or not isinstance(email, str) or len(email) > 254 or not EMAIL.fullmatch(email) \
+            or step not in SETUP_STEPS or mode not in SETUP_MODES \
+            or not isinstance(turns, int) or isinstance(turns, bool) or not 0 <= turns <= MAX_TURNS \
+            or not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id) \
+            or not UUID.fullmatch(session_id) and scrub(session_id)[1]:      # a key is never hashed into a limit
+        raise Invalid("fields")
+    note, plan = data.get("note"), data.get("plan")
+    if note is not None:
+        if not isinstance(note, str) or CONTROL.search(note):
+            raise Invalid("fields")
+        note = note.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(note) > MAX_NOTE:
+            raise Invalid("fields")
+    if plan is not None:
+        # HQ stores the file as text and never reads it, so it checks only what it is: plain text, not too big, format 0.2.
+        if not isinstance(plan, str) or CONTROL.search(plan) or len(plan.encode()) > MAX_PLAN:
+            raise Invalid("fields")
+        plan = plan.replace("\r\n", "\n").replace("\r", "\n")
+        if plan.strip() and not PLAN_FORMAT.search(plan):
+            raise Invalid("fields")
+    return {"email": email, "step": step, "mode": mode, "turns": turns, "session_id": session_id,
+            "note": note or None, "plan": plan if plan and plan.strip() else None}
+
+
+def setup_body(ask):
+    """The ticket's body: fixed text and the checked fields, never anything the visitor wrote."""
+    return (f"{SETUP_LINE}\nEmail: {ask['email']}\nStep: {ask['step']}\nMode: {ask['mode']}\nTurns: {ask['turns']}")
+
+
+async def judge_setup(judge, note, plan):
+    """(verdict, reason) for what a visitor wrote, the note and the plan, before any bot reads them. The judge reads at most
+    judge.MAX_TEXT characters, so a long plan is judged in parts. Any part may make the ticket `injection_risk`; only the
+    note can make it `spam` (held): a company file is not an advert, so a plan part judged spam is left to a person
+    (`unchecked`)."""
+    size = judge_module.MAX_TEXT
+    parts = ([("note", note)] if note else []) + [("plan", plan[i:i + size]) for i in range(0, len(plan or ""), size)]
+    if not parts:
+        return "legit", "nothing from the visitor to check: the ticket is fixed text"
+    answers = await asyncio.gather(*(run_in_threadpool(judge, part) for _, part in parts))
+    found = [(name, verdict if verdict in VERDICTS else "unchecked", str(reason)) for (name, _), (verdict, reason) in zip(parts, answers)]
+    for wanted, test in (("injection_risk", lambda name, v: v == "injection_risk"),
+                         ("spam", lambda name, v: name == "note" and v == "spam"),
+                         ("unchecked", lambda name, v: v in ("unchecked", "spam"))):
+        for name, verdict, reason in found:
+            if test(name, verdict):
+                return wanted, f"{name}: {reason}" + (" (a plan is not held as spam)" if verdict == "spam" and wanted != "spam" else "")
+    return "legit", "note and plan judged legit" if note and plan else ("note judged legit" if note else "plan judged legit")
+
+
 class Tickets:
     """The tickets table and the limits in front of it. Shares the installs database's connection and lock."""
 
-    def __init__(self, db, now=utcnow, clock=time.monotonic):
+    def __init__(self, db, now=utcnow, clock=time.monotonic, setup_daily_cap=SETUP_DAILY_CAP):
         self.db, self.now = db, now
         self.on_release = None   # called with a ticket id when a person releases it from the spam hold
         with db.lock:
@@ -202,7 +296,7 @@ class Tickets:
                         db.conn.execute("UPDATE tickets SET signature=? WHERE ticket_id=?", (found, row["ticket_id"]))
             for column, spec in (("verdict", "TEXT NOT NULL DEFAULT 'unchecked'"), ("verdict_reason", "TEXT NOT NULL DEFAULT ''"),
                                  ("held", "INTEGER NOT NULL DEFAULT 0"), ("app_version", "TEXT"),
-                                 ("kind", "TEXT NOT NULL DEFAULT 'support'")):
+                                 ("kind", "TEXT NOT NULL DEFAULT 'support'"), ("attachment", "TEXT")):
                 if column not in have:
                     db.conn.execute(f"ALTER TABLE tickets ADD COLUMN {column} {spec}")
             reply_columns = {row[1] for row in db.conn.execute("PRAGMA table_info(ticket_replies)")}
@@ -220,12 +314,19 @@ class Tickets:
         # A support-access link (support_access.py): calls per ticket once its secret is proven, and wrong secrets per address.
         self.access = Limiter(limit=20000, window=3600, clock=clock)
         self.access_refused = Limiter(limit=60, window=3600, clock=clock)
+        # Talk to a person on tico.team/setup: one ticket per setup session, 3 a day per address and per email address,
+        # and a daily cap across all of them (0 turns it off). Salted hashes in memory, as above.
+        self.setup_sessions = Limiter(limit=1, window=30 * 86400, clock=clock)
+        self.setup_per_address = Limiter(limit=3, window=86400, clock=clock)
+        self.setup_per_email = Limiter(limit=3, window=86400, clock=clock)
+        self.setup_daily = Limiter(limit=setup_daily_cap, window=86400, clock=clock)
 
     # ------------------------------------------------------------------ people
     def create(self, message, email, install_id, version, diagnostics=None, verdict="unchecked", reason="", app_version=None,
-               kind="support"):
+               kind="support", attachment=None):
         """Store a ticket. Returns (ticket_id, secret); the secret is not kept, only its hash. `diagnostics` is the
-        attached bundle as compact JSON; it is kept with the ticket until the ticket is deleted."""
+        attached bundle as compact JSON; it is kept with the ticket until the ticket is deleted. `attachment` is what a
+        visitor on tico.team/setup wrote ({"note", "plan"}), kept apart from the body under its Untrusted public input label."""
         secret = secrets.token_urlsafe(24)
         moment = stamp(self.now())
         with self.db.lock:
@@ -235,9 +336,10 @@ class Tickets:
                     break
             self.db.conn.execute(
                 "INSERT INTO tickets(ticket_id,key_hash,created,updated,status,body,email,install_id,version,app_version,"
-                "diagnostics,signature,verdict,verdict_reason,held,kind) VALUES(?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?)",
+                "diagnostics,signature,verdict,verdict_reason,held,kind,attachment) VALUES(?,?,?,?,'open',?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ticket_id, digest(secret), moment, moment, message, email, install_id, version, app_version, diagnostics,
-                 signature_of(message), verdict, reason[:200], 1 if verdict == "spam" else 0, kind))
+                 signature_of(message), verdict, reason[:200], 1 if verdict == "spam" else 0, kind,
+                 json.dumps({"label": UNTRUSTED_LABEL, **attachment}, ensure_ascii=False) if attachment else None))
         return ticket_id, secret
 
     def _owned(self, ticket_id, secret):
@@ -311,6 +413,12 @@ class Tickets:
                 "verdict": row["verdict"], "verdict_reason": row["verdict_reason"], "held": bool(row["held"])}
         if full and row["diagnostics"]:
             view["diagnostics"] = json.loads(row["diagnostics"])
+        if row["attachment"]:
+            # A listing names the label and the parts; `show` carries the text, still under its label.
+            attached = json.loads(row["attachment"])
+            parts = [name for name in ("note", "plan") if attached.get(name)]
+            view["attachment"] = {"label": attached["label"], "parts": parts,
+                                  **({name: attached[name] for name in parts} if full else {})}
         return view
 
     def listing(self, status="", since="", limit=50, signature=""):
@@ -437,21 +545,29 @@ async def read_json(request, limit):
         return 422, "invalid"
 
 
-def install(app, tickets, address, staff_key="", judge=None):
+def install(app, tickets, address, staff_key="", judge=None, public_url=PUBLIC_URL):
     """Add the routes. `address(request)` is who is asking, for the rate limits only. `judge(text) -> (verdict, reason)`
-    classifies what arrives (judge.py); it never raises, and without one every verdict is `unchecked`. Returns the
-    staff key check, for the other staff routes (notices.py)."""
+    classifies what arrives (judge.py); it never raises, and without one every verdict is `unchecked`. `public_url` is
+    where the reply page is, for the link a setup-website ticket answers with. Returns the staff key check, for the other
+    staff routes (notices.py)."""
     key_digest = digest(staff_key) if staff_key else ""
     judge = judge or (lambda text: ("unchecked", "no judge"))
+    public_url = public_url.rstrip("/")
 
     @app.post("/v1/support")
     async def file_ticket(request: Request):
         who = address(request)
+        browser = request.headers.get("origin") == SETUP_ORIGIN
         if not tickets.per_address.allow(who) or not tickets.overall.allow("all"):
-            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "3600"})
+            return JSONResponse({"error": "rate_limited", **({"busy": True} if browser else {})}, status_code=429,
+                                headers={"Retry-After": "3600"})
         status, data = await read_json(request, MAX_REQUEST)
         if status != 200:
             return refuse(data, status)
+        if isinstance(data, dict) and data.get("kind") == SETUP_WEBSITE:
+            return await file_setup_website(request, who, data)
+        if browser:
+            return refuse("invalid", 422)      # the setup page files its own kind and nothing else, and is told nothing
         if request.state.body_size > MAX_FOLLOW_UP and not (isinstance(data, dict) and "diagnostics" in data):
             return refuse("too_large", 413)          # only the diagnostics may make a request this big
         try:
@@ -465,6 +581,33 @@ def install(app, tickets, address, staff_key="", judge=None):
         ticket_id, secret = tickets.create(message, email, install_id, version, diagnostics,
                                            verdict if verdict in VERDICTS else "unchecked", reason, app_version, kind)
         return no_store({"ticket_id": ticket_id, "secret": secret, "status": "open"}, 201)
+
+    async def file_setup_website(request, who, data):
+        """Talk to a person on tico.team/setup. The ticket is fixed text; the note and the plan go in its attachment,
+        with key-shaped strings removed before they are judged or kept. The answer is the reply page's link."""
+        if request.headers.get("origin") != SETUP_ORIGIN:
+            return refuse("forbidden", 403)
+        if request.state.body_size > MAX_SETUP_REQUEST:
+            return refuse("too_large", 413)
+        try:
+            ask = parse_setup_website(data)
+        except Invalid:
+            return refuse("invalid", 422)
+        limits = ((tickets.setup_sessions, ask["session_id"]), (tickets.setup_per_address, who),
+                  (tickets.setup_per_email, ask["email"].lower()), (tickets.setup_daily, "all"))
+        # Checked before any is counted, so a refusal by one limit does not use up the others.
+        if any(limiter.full(key) for limiter, key in limits):
+            return JSONResponse({"busy": True}, status_code=429, headers={"Retry-After": "86400", "Cache-Control": "no-store"})
+        for limiter, key in limits:
+            limiter.allow(key)
+        note, note_cut = scrub(ask["note"]) if ask["note"] else (None, False)
+        plan, plan_cut = scrub(ask["plan"]) if ask["plan"] else (None, False)
+        verdict, reason = await judge_setup(judge, note, plan)
+        attachment = {"note": note, "plan": plan} if note or plan else None
+        ticket_id, secret = tickets.create(setup_body(ask), ask["email"], None, None, verdict=verdict, reason=reason,
+                                           kind=SETUP_WEBSITE, attachment=attachment)
+        return no_store({"ticket_id": ticket_id, "reply_url": f"{public_url}/support/{ticket_id}#s={secret}",
+                         "keys_removed": note_cut or plan_cut})      # 200: what the setup page reads as sent
 
     @app.get("/v1/support/{ticket_id}")
     def ticket_for_person(request: Request, ticket_id: str):

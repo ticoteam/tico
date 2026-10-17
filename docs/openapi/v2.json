@@ -9771,6 +9771,118 @@
         ]
       }
     },
+    "/api/v2/org/order/{manager}": {
+      "get": {
+        "summary": "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the chart's order",
+        "operationId": "getReportOrder",
+        "parameters": [
+          {
+            "name": "manager",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Manager"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOrderView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      },
+      "put": {
+        "summary": "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under that manager, and a bot for its own)",
+        "operationId": "setReportOrder",
+        "parameters": [
+          {
+            "name": "manager",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Manager"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportOrder"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOrderView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/proposals": {
       "get": {
         "summary": "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it",
@@ -22879,6 +22991,80 @@
         "additionalProperties": false,
         "type": "object",
         "title": "RepoUpdate"
+      },
+      "ReportOrder": {
+        "properties": {
+          "reports": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Reports"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reports"
+        ],
+        "title": "ReportOrder",
+        "description": "A manager's direct reports in the order the team chart shows them: bot slugs and human ids (`bot:` or `human:`\nin front when one could be either). Reports left out keep their places."
+      },
+      "ReportOrderView": {
+        "type": "object",
+        "properties": {
+          "manager": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "can_order": {
+            "type": "boolean"
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "saved": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "saved"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "can_order",
+          "kind",
+          "manager",
+          "name",
+          "reports"
+        ],
+        "additionalProperties": true
       },
       "Repository": {
         "type": "object",

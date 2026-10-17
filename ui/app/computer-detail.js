@@ -27,14 +27,16 @@ function machineConnections(machine) {
     for (const [runtime, state] of Object.entries(p.runtimes || {})) {
       const bots = links.filter(b => b.profile === p.name && b.runtime === runtime).map(b => b.bot);
       // A login folder has a slot for every tool; only a tool it is signed in to, or that bots run on, is a connection.
-      if (!(state?.signed_in === true || bots.length || (state?.signed_in == null && (state?.account || state?.weekly)))) continue;
+      if (!(state?.signed_in === true || bots.length || machineSignedOut(machine, runtime, p.name)
+        || (state?.signed_in == null && (state?.account || state?.weekly)))) continue;
       rows.push({key: `profile:${p.name}:${runtime}`, runtime, name: p.display_name || p.name, profile: p, own: false, state: {...state}, bots});
     }
   }
   for (const [runtime, value] of Object.entries(runtimes)) {
     const bots = links.filter(b => !b.profile && b.runtime === runtime).map(b => b.bot);
     const auth = value?.authenticated;
-    if (!(auth === 'ready' || auth === 'rejected' || bots.length)) continue;
+    // Signed out from Tico (Sign out) stays a line, so it can sign in again or go back to the shared key.
+    if (!(auth === 'ready' || auth === 'rejected' || bots.length || machineSignedOut(machine, runtime))) continue;
     const reading = {signed_in: auth === 'ready' ? true : ['missing', 'rejected'].includes(auth) ? false : null,
       account: value.account, weekly: value.weekly, five_hour: value.five_hour};
     // The same provider account as a named subscription here: one line, one reading (the newer one). The server
@@ -116,6 +118,14 @@ function machineConnectionHTML(machine, conn, online, manage) {
     else if (command) action = ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
     else if (caps.api_keys === 'bot') action = ' <a class="machine-signin-link" href="#/credentials">Add key</a>';
   }
+  // Switch account / Sign out (or Use the shared key) per login, from ui/model-login.js; only while online. A line
+  // that is both the computer's login and a subscription names which login each pair acts on.
+  const login = (profile, signedIn) => manage && !conn.missing ? machineLoginActions(machine, online, conn.runtime, profile, signedIn) : '';
+  if (conn.own && conn.profile) {
+    const sub = login(conn.profile.name, conn.state.signed_in === true), own = login('', conn.auth === 'ready');
+    action += [sub && `<span class="computer-conn-login" data-login="${esc(conn.profile.name)}">Subscription${sub}</span>`,
+      own && '<span class="computer-conn-login" data-login="">Computer\'s login' + own + '</span>'].filter(Boolean).join('');
+  } else action += login(conn.profile ? conn.profile.name : '', conn.profile ? conn.state.signed_in === true : conn.auth === 'ready');
   const value = conn.value || {};
   const rejected = conn.auth === 'rejected'
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';

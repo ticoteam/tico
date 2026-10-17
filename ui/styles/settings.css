@@ -305,6 +305,7 @@ p:empty{display:none}
 .computer-conn{display:grid;gap:3px;padding:8px 0;font-size:var(--t-sm)}.computer-conn+.computer-conn{border-top:1px dashed var(--line)}
 .computer-conn-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:var(--t-base)}
 .computer-conn-signin,.computer-conn-tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;min-width:0}
+.computer-conn-login{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .computer-add{display:grid;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
 .computer-add-own{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .computer-detail-bots{margin:0 0 6px;padding-left:18px;display:grid;gap:2px}
@@ -326,7 +327,7 @@ p:empty{display:none}
 .model-login-code code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:var(--t-2xl);letter-spacing:.08em;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
 .model-login-paste{display:flex;gap:8px;margin-top:6px}.model-login-paste input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .model-login-status{margin:0;padding:4px 16px;font-size:var(--t-base);color:var(--muted)}
-.model-login-status[data-state=failed]{color:var(--fail)}.model-login-status[data-state=signed_in]{color:var(--ok)}
+.model-login-status[data-state=failed]{color:var(--fail)}.model-login-status[data-state=signed_in],.model-login-status[data-state=signed_out]{color:var(--ok)}
 .model-login-body pre{max-height:200px;overflow:auto;white-space:pre-wrap;background:var(--surface2);padding:8px;border-radius:6px;font-size:var(--t-sm)}
 .model-login-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px 16px}
 /* one row on a desktop: owner, kind, name, then the button; every control 32px */

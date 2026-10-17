@@ -1332,6 +1332,8 @@ def install_views(app, store, auth, mutate, task_view):
         company = providers.load(c, store.settings)
         rows = []
         access = auth.bot_accesses(c, who)
+        from .report_order import positions
+        places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
         # serves a person, and the UI shows it with the built-ins, apart from the org chart.
         from .onboarding import helper_templates, template_icons
@@ -1372,6 +1374,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                             "report_position": places.get("bot:" + slug),
                              "operator": registry["operator"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
@@ -1400,6 +1403,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
                          "team": P.team_of(slug, configs, people),
                          "org_parent": P.org_parent("bot", slug, people, configs, archived),
+                         "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
@@ -1468,8 +1472,11 @@ def install_views(app, store, auth, mutate, task_view):
             archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
             view = P.org_view(r, configs, archived)
             access = auth.bot_accesses(c, who)
+            from .report_order import positions
+            places = positions(c)
             return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived),
+                "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
                    if people_photos.may_have(store.settings, p.get("email"), p.get("photo")) else {}),
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
@@ -1523,7 +1530,7 @@ def install_views(app, store, auth, mutate, task_view):
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in auth.bot_accesses(c, who).items() if not a["see"]}
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
+                                 "accepts_member_bots,screen,performance,capabilities_json,readiness_at FROM runners ORDER BY created"):
                 # Every person sees every working computer; only an admin or its operator may change it, and only
                 # they read its signed-in accounts and own login's usage (#610, as in /v2/computers). Another member
                 # gets the bots they may see on it.
@@ -1558,7 +1565,9 @@ def install_views(app, store, auth, mutate, task_view):
                 # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
                 # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
                 # computer's own login is that subscription's account, so a member's page shows them as one too.
-                # `bot_connections`: the connection each of its bots actually runs on.
+                # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
+                # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
+                from .model_login import cleared_logins
                 profiles = subscriptions.computer_profiles(c, row, True)
                 same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
                 if not manage:
@@ -1569,6 +1578,7 @@ def install_views(app, store, auth, mutate, task_view):
                                  "may_manage": manage, "profiles": profiles, "same_account": same_account,
                                  "bot_connections": [link for link in subscriptions.connections(
                                      c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
+                                 "signed_out": cleared_logins(c, row["id"]),
                                  "inbox_only": row["id"] in kept_for_inbox,
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),

@@ -6,7 +6,7 @@ A subscription profile is a named provider login on a Computer. Credentials stay
 
 Open a computer on **Settings → Computers** to name and sign in subscriptions and see how much weekly allowance is left; each row's chips show it at a glance. Names are labels; Tico does not record who owns a subscription, only which provider account a login reports (below). Each bot can choose one in Bot settings; without a choice it runs on its computer's own login. Logins and credentials remain on the selected Computer.
 
-Open **Manage subscription**, edit **Name**, and choose **Save name** to change its display name without moving credential directories, changing assignments, or rewriting run history. Each Computer and local profile key has a distinct, stable connection ID, even when names match. Only the Computer operator or an administrator can rename it. Group defaults still use the immutable local profile key across their Computers; a display rename does not redirect them.
+In the computer's pop-up on **Settings → Computers**, open **Manage** on the subscription's line, edit **Name**, and choose **Save name** to change its display name without moving credential directories, changing assignments, or rewriting run history. Each Computer and local profile key has a distinct, stable connection ID, even when names match. Only the Computer operator or an administrator can rename it.
 
 Usage groups and filters subscriptions by this connection ID, showing the current display name and Computer. Recorded runs retain their execution Computer and local profile key, so moving a bot or renaming a subscription cannot move past usage to another connection. Older runs without an execution Computer are labelled **computer not recorded** instead of guessed from today's assignment.
 
@@ -16,7 +16,7 @@ Weekly reports are scoped to a Computer, profile and runtime. Codex reports its 
 
 The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week, never automatically become zero. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual provider reading. Shorter windows are shown on **Settings → Computers**, not here. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile.
 
-A Computer operator or administrator can open **Manage subscription** and use the provider’s **manual weekly report** form to copy the provider's percentage used and reset time. This is a labelled manual observation, not an editable provider quota. The newest manual or provider observation is shown. Clear manual report restores the last provider report, or unknown if none exists. This neither changes provider limits nor schedules or blocks bots, and introduces no new permissions.
+A Computer operator or administrator can open **Manage** on the subscription's line and use the provider's manual weekly reading form to copy the percentage left and the reset time. This is a labelled manual observation, not an editable provider quota. The newest manual or provider observation is shown. Clear manual report restores the last provider report, or unknown if none exists. This neither changes provider limits nor schedules or blocks bots, and introduces no new permissions.
 
 
 ### Signed-in account and usage windows
@@ -45,9 +45,52 @@ Profile directories separate provider logins. Browser-created profiles live outs
 
 The Engineering Manager template gives owners and admins an initial read grant to all enabled repositories. Member-created bots keep the team default. Its child-task and worktree instructions require phases 2 and 3 to ship first.
 
+### Signing out and switching accounts
+
+In a Computer's pop-up on **Settings → Computers** each signed-in Codex or Claude Code login, the Computer's own or a
+named subscription's, has **Switch account** and **Sign out**. A line that is both the Computer's login and a
+subscription on the same account names which login each pair acts on.
+The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
+and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
+
+- **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime and subscription
+  are that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
+  **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
+  signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. A
+  shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
+  is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
+  any signed-out login, until someone signs in again. A signed-out named subscription has **Sign in** on its row.
+- **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
+  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
+  account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
+  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
+  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
+  not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
+  are cleared.
+- A **Computer's own login that someone signed out stays signed out**. The company's model key given to **Every
+  computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
+  again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
+  Signing in again, or **Use the shared key** next to it, ends that. A named subscription never takes the shared key.
+
+None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches; `POST
+/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
+sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
+may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
+no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
+then sign in. Codex switches on a Mac as anywhere.
+
+After a sign-in, switch, sign-out or **Use the shared key**, the page looks again until the Computer has reported since
+the change finished (its heartbeat; `readiness_at` on the computer in `GET /api/v2/operations`) and that report shows
+the change, redrawing **Settings → Computers**, for about a minute.
+
 ### Refreshing weekly allowance
 
-On **AI providers**, a computer operator or administrator can choose **Refresh weekly
+In a Computer's pop-up on **Settings → Computers**, a computer operator or administrator can choose **Refresh
 usage** for a named Codex subscription. The computer reads the Codex app-server's
 [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server) endpoint in that
 profile. It does not start a model turn, consume a reset credit, change a subscription,
@@ -61,7 +104,7 @@ never means a fresh allowance or a repaired sign-in. Claude and other runtimes w
 a supported standalone weekly read use observations from normal runs or a manual
 provider reading. Missing percentages remain unknown, not zero.
 
-Starting a new sign-in through Tico invalidates earlier readings and in-flight refresh
+Starting a new sign-in, a switch or a sign-out through Tico invalidates earlier readings and in-flight refresh
 results for that profile/runtime. Replacing credentials outside Tico under the same
 local profile cannot currently be detected: refresh and confirm the provider reading
 after such a change. Usage reported by a turn that was already running during sign-in

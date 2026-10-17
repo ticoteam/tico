@@ -1,0 +1,4329 @@
+{
+ "format": "0.2",
+ "vocabulary": {
+  "steps": [
+   "chart",
+   "goals",
+   "team",
+   "rules",
+   "file"
+  ],
+  "departments": [
+   "core",
+   "leadership",
+   "engineering",
+   "product",
+   "marketing",
+   "sales",
+   "support",
+   "finance",
+   "operations",
+   "hr",
+   "legal"
+  ],
+  "teams": [
+   "leadership",
+   "engineering",
+   "product",
+   "marketing",
+   "sales",
+   "support",
+   "finance",
+   "operations",
+   "hr",
+   "legal"
+  ],
+  "signals": [
+   "sells_software",
+   "sells_to_businesses",
+   "sells_to_consumers",
+   "publishes_content",
+   "has_support_inbox",
+   "uses_tickets",
+   "has_pipeline",
+   "uses_crm",
+   "uses_github",
+   "uses_meetings",
+   "tracks_mentions",
+   "uses_slack",
+   "small_team"
+  ],
+  "rules": [
+   {
+    "id": "send",
+    "label": "Send email or messages outside the company"
+   },
+   {
+    "id": "publish",
+    "label": "Publish or post anything public"
+   },
+   {
+    "id": "spend",
+    "label": "Spend money or start a paid plan"
+   },
+   {
+    "id": "delete",
+    "label": "Delete data or close an account"
+   },
+   {
+    "id": "access",
+    "label": "Invite people or change who has access"
+   },
+   {
+    "id": "sign",
+    "label": "Sign or accept a contract"
+   }
+  ],
+  "review": [
+   {
+    "id": "one",
+    "label": "A person reviews each draft before it goes out"
+   },
+   {
+    "id": "two",
+    "label": "Two checks before code ships or anything goes public"
+   },
+   {
+    "id": "light",
+    "label": "Spot checks: bots act inside the rules, a person reviews weekly"
+   }
+  ],
+  "tools": [
+   {
+    "id": "mail",
+    "label": "Email"
+   },
+   {
+    "id": "calendar",
+    "label": "Calendar"
+   },
+   {
+    "id": "docs",
+    "label": "Docs and files"
+   },
+   {
+    "id": "meetings",
+    "label": "Meeting notes"
+   },
+   {
+    "id": "chat",
+    "label": "Team chat (Slack, Teams)"
+   },
+   {
+    "id": "web",
+    "label": "Web search"
+   },
+   {
+    "id": "github",
+    "label": "GitHub"
+   },
+   {
+    "id": "crm",
+    "label": "CRM"
+   }
+  ],
+  "harnesses": [
+   {
+    "id": "claude-code",
+    "name": "Claude Code"
+   },
+   {
+    "id": "codex",
+    "name": "Codex"
+   },
+   {
+    "id": "cursor",
+    "name": "Cursor"
+   },
+   {
+    "id": "openclaw",
+    "name": "OpenClaw"
+   },
+   {
+    "id": "hermes",
+    "name": "Hermes"
+   },
+   {
+    "id": "grok",
+    "name": "Grok"
+   },
+   {
+    "id": "devin",
+    "name": "Devin"
+   },
+   {
+    "id": "copilot",
+    "name": "GitHub Copilot"
+   },
+   {
+    "id": "chatgpt",
+    "name": "ChatGPT agent"
+   },
+   {
+    "id": "custom",
+    "name": "Custom agent"
+   }
+  ],
+  "directions": [
+   "up",
+   "down",
+   "range"
+  ]
+ },
+ "limits": {
+  "bots": 60,
+  "people": 40,
+  "goals": 20,
+  "removed": 20,
+  "pending": 10,
+  "chat": 40,
+  "id": 64,
+  "name": 80,
+  "role": 80,
+  "title": 80,
+  "reason": 300,
+  "about": 4000,
+  "summary": 1000,
+  "routine": 200,
+  "first_job": 200,
+  "goal_title": 200,
+  "measure": 80,
+  "unit": 40,
+  "chat_text": 4000,
+  "number": 1000000000000,
+  "seq": 1000000,
+  "draft_bytes": 300000
+ },
+ "actions": [
+  {
+   "name": "company_set",
+   "description": "Set the company's name, what it does, or the signals read from it.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "The company's name"
+     },
+     "about": {
+      "type": "string",
+      "description": "What the company does, in the visitor's words"
+     },
+     "signals": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "sells_software",
+        "sells_to_businesses",
+        "sells_to_consumers",
+        "publishes_content",
+        "has_support_inbox",
+        "uses_tickets",
+        "has_pipeline",
+        "uses_crm",
+        "uses_github",
+        "uses_meetings",
+        "tracks_mentions",
+        "uses_slack",
+        "small_team"
+       ]
+      },
+      "description": "Every signal that applies (replaces the list)"
+     }
+    },
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_add",
+   "description": "Add a bot to the chart from one of Tico's role templates, with the reason in the visitor's terms.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "template": {
+      "type": "string",
+      "description": "The role template's slug or name"
+     },
+     "reason": {
+      "type": "string",
+      "description": "Why, tied to what the visitor said"
+     },
+     "title": {
+      "type": "string",
+      "description": "A title other than the template's name, e.g. \"Reviewer 1\""
+     },
+     "start": {
+      "type": "string",
+      "enum": [
+       "now",
+       "later"
+      ],
+      "description": "Start now or later (default later)"
+     }
+    },
+    "required": [
+     "template",
+     "reason"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_remove",
+   "description": "Remove one bot from the chart. BotOps itself stays.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     }
+    },
+    "required": [
+     "bot"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_rename",
+   "description": "Give a bot a new title.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     },
+     "title": {
+      "type": "string",
+      "description": "The new title"
+     }
+    },
+    "required": [
+     "bot",
+     "title"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_set_reports_to",
+   "description": "Set who a bot reports to: a person, another bot, or \"you\" (the owner).",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     },
+     "to": {
+      "type": "string",
+      "description": "A person's or bot's id or name, or \"you\""
+     }
+    },
+    "required": [
+     "bot",
+     "to"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_set_start",
+   "description": "Mark a bot to start now or later.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     },
+     "start": {
+      "type": "string",
+      "enum": [
+       "now",
+       "later"
+      ],
+      "description": "now or later"
+     }
+    },
+    "required": [
+     "bot",
+     "start"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_set_routine",
+   "description": "Set a bot's first routine: what it does on a schedule, in a few words.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     },
+     "routine": {
+      "type": "string",
+      "description": "e.g. \"Weekly deal review · Mondays at 09:00 team time\""
+     }
+    },
+    "required": [
+     "bot",
+     "routine"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "bot_set_first_job",
+   "description": "Pick the one first job: the bot that does one real task soon after setup, and the task. Moves the marker from any other bot.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "bot": {
+      "type": "string",
+      "description": "The bot: its id on the chart (or its exact title)"
+     },
+     "job": {
+      "type": "string",
+      "description": "The task, in a sentence"
+     }
+    },
+    "required": [
+     "bot",
+     "job"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "team_remove",
+   "description": "Remove a whole team from the chart in one change (its bots; the visitor's own agents stay).",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string",
+      "enum": [
+       "leadership",
+       "engineering",
+       "product",
+       "marketing",
+       "sales",
+       "support",
+       "finance",
+       "operations",
+       "hr",
+       "legal"
+      ],
+      "description": "The team"
+     }
+    },
+    "required": [
+     "team"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "goal_add",
+   "description": "Add a goal: a title in the visitor's words, its owner, and how it is measured when known: the measure, unit and direction, then target and deadline (baseline if known), or min and max for a range.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string",
+      "description": "The goal in the visitor's words"
+     },
+     "owner": {
+      "type": "string",
+      "description": "A person's or bot's id or name, or \"you\". A person not on the team yet is added."
+     },
+     "measure": {
+      "type": "string",
+      "description": "What is counted, e.g. \"wholesale accounts\". Leave it out until the visitor has said which number and by when; the goal then shows its measure as not set yet. \"\" clears it."
+     },
+     "unit": {
+      "type": "string",
+      "description": "The unit, e.g. \"accounts\", \"%\", \"$\""
+     },
+     "direction": {
+      "type": "string",
+      "enum": [
+       "up",
+       "down",
+       "range"
+      ],
+      "description": "Which way is better: up, down, or range (stay between min and max)"
+     },
+     "target": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The target number (up or down)"
+     },
+     "baseline": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "Today's number, if the visitor knows it (up or down)"
+     },
+     "deadline": {
+      "type": "string",
+      "description": "When (up or down): a date (2027-03-01) or words like \"March 1\", \"by the end of June\", \"in 90 days\""
+     },
+     "min": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The lowest good value (range)"
+     },
+     "max": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The highest good value (range)"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "goal_edit",
+   "description": "Change a goal's title, owner or measure. Measure fields given replace the old measure; measure \"\" clears it.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "goal": {
+      "type": "string",
+      "description": "The goal's id"
+     },
+     "title": {
+      "type": "string",
+      "description": "The new title"
+     },
+     "owner": {
+      "type": "string",
+      "description": "The new owner"
+     },
+     "measure": {
+      "type": "string",
+      "description": "What is counted, e.g. \"wholesale accounts\". Leave it out until the visitor has said which number and by when; the goal then shows its measure as not set yet. \"\" clears it."
+     },
+     "unit": {
+      "type": "string",
+      "description": "The unit, e.g. \"accounts\", \"%\", \"$\""
+     },
+     "direction": {
+      "type": "string",
+      "enum": [
+       "up",
+       "down",
+       "range"
+      ],
+      "description": "Which way is better: up, down, or range (stay between min and max)"
+     },
+     "target": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The target number (up or down)"
+     },
+     "baseline": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "Today's number, if the visitor knows it (up or down)"
+     },
+     "deadline": {
+      "type": "string",
+      "description": "When (up or down): a date (2027-03-01) or words like \"March 1\", \"by the end of June\", \"in 90 days\""
+     },
+     "min": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The lowest good value (range)"
+     },
+     "max": {
+      "type": [
+       "number",
+       "null"
+      ],
+      "description": "The highest good value (range)"
+     }
+    },
+    "required": [
+     "goal"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "goal_remove",
+   "description": "Remove a goal.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "goal": {
+      "type": "string",
+      "description": "The goal's id"
+     }
+    },
+    "required": [
+     "goal"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "person_set",
+   "description": "Add a person, or change one already on the team.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "person": {
+      "type": "string",
+      "description": "The id of the person to change; leave out to add someone"
+     },
+     "name": {
+      "type": "string",
+      "description": "Their name"
+     },
+     "role": {
+      "type": "string",
+      "description": "Their role, e.g. \"Head of sales\""
+     },
+     "owner": {
+      "type": "boolean",
+      "description": "They own the company and sit at the top of the chart"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "agent_set",
+   "description": "Add an AI agent the company already runs, or change one already on the chart.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string",
+      "description": "The id of the agent to change; leave out to add one"
+     },
+     "runtime": {
+      "type": "string",
+      "enum": [
+       "claude-code",
+       "codex",
+       "cursor",
+       "openclaw",
+       "hermes",
+       "grok",
+       "devin",
+       "copilot",
+       "chatgpt",
+       "custom"
+      ],
+      "description": "What it runs on"
+     },
+     "job": {
+      "type": "string",
+      "description": "What it does for them"
+     }
+    },
+    "required": [
+     "runtime",
+     "job"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "rules_set_never",
+   "description": "Set what never happens without a person (replaces the list).",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "never": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "send",
+        "publish",
+        "spend",
+        "delete",
+        "access",
+        "sign"
+       ]
+      },
+      "description": "The rules that need a person"
+     }
+    },
+    "required": [
+     "never"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "rules_set_review",
+   "description": "Set how much review happens before something goes out.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "review": {
+      "type": "string",
+      "enum": [
+       "one",
+       "two",
+       "light"
+      ],
+      "description": "one, two or light"
+     }
+    },
+    "required": [
+     "review"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "rules_use_defaults",
+   "description": "Go back to Tico's default rules and tools.",
+   "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "tools_set",
+   "description": "Pick the tools to connect after setup (replaces the list). Never ask for passwords or keys.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "connect": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "mail",
+        "calendar",
+        "docs",
+        "meetings",
+        "chat",
+        "web",
+        "github",
+        "crm"
+       ]
+      },
+      "description": "The tools"
+     }
+    },
+    "required": [
+     "connect"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "step_go",
+   "description": "Move to one of the five tabs.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "step": {
+      "type": "string",
+      "enum": [
+       "chart",
+       "goals",
+       "team",
+       "rules",
+       "file"
+      ],
+      "description": "The tab"
+     }
+    },
+    "required": [
+     "step"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "undo",
+   "description": "Undo BotOps's last change.",
+   "input_schema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  }
+ ],
+ "starter_pack": {
+  "about": "Tico's starter pack: the chart every setup begins from, then tailored from the interview. `core` comes with every chart and is not counted in the 22. `team` groups the cards on the page (factory is the software factory, department engineering); a team's head reports to the owner and its members to the head. Where nothing the visitor said applies, a bot's reason is `reason`.",
+  "reason": "Part of Tico's starter pack.",
+  "core": [
+   {
+    "template": "coo"
+   },
+   {
+    "template": "botops"
+   }
+  ],
+  "bots": [
+   {
+    "team": "product",
+    "template": "product-lead"
+   },
+   {
+    "team": "factory",
+    "template": "engineering-lead"
+   },
+   {
+    "team": "factory",
+    "template": "pr-reviewer",
+    "title": "Builder"
+   },
+   {
+    "team": "factory",
+    "template": "pr-reviewer",
+    "title": "Reviewer 1"
+   },
+   {
+    "team": "factory",
+    "template": "pr-reviewer",
+    "title": "Reviewer 2"
+   },
+   {
+    "team": "factory",
+    "template": "issue-triage"
+   },
+   {
+    "team": "factory",
+    "template": "release-notes"
+   },
+   {
+    "team": "factory",
+    "template": "security-engineer"
+   },
+   {
+    "team": "factory",
+    "template": "docs-writer"
+   },
+   {
+    "team": "factory",
+    "template": "devops-engineer"
+   },
+   {
+    "team": "finance",
+    "template": "finance-lead"
+   },
+   {
+    "team": "finance",
+    "template": "bookkeeping"
+   },
+   {
+    "team": "finance",
+    "template": "ar-followup"
+   },
+   {
+    "team": "marketing",
+    "template": "marketing-lead"
+   },
+   {
+    "team": "marketing",
+    "template": "content"
+   },
+   {
+    "team": "marketing",
+    "template": "product-marketing"
+   },
+   {
+    "team": "sales",
+    "template": "sales-lead"
+   },
+   {
+    "team": "sales",
+    "template": "sales"
+   },
+   {
+    "team": "sales",
+    "template": "sdr-research"
+   },
+   {
+    "team": "support",
+    "template": "support-lead"
+   },
+   {
+    "team": "support",
+    "template": "support"
+   },
+   {
+    "team": "support",
+    "template": "customer-success"
+   }
+  ]
+ },
+ "roles": [
+  {
+   "slug": "account-manager",
+   "template": "account-manager",
+   "name": "Account Manager",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns existing customer accounts after the sale: renewals worked from 120 days out, expansion from usage and seat growth, and the renewal paperwork prepared for a human to price. It sends and signs nothing on its own.",
+   "when": "A team with recurring contracts whose renewals are handled in the last week and whose expansion depends on the customer asking.",
+   "tags": [
+    "b2b",
+    "renewals",
+    "expansion",
+    "upsell",
+    "account-planning",
+    "saas",
+    "subscription",
+    "services"
+   ],
+   "pains": [
+    "renewal quotes go out late or at last year's terms",
+    "we never ask happy customers to buy more",
+    "customers use more seats than they pay for",
+    "nobody owns the account once the deal closes"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_crm",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly renewal and expansion review · Tuesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "accounts-payable",
+   "template": "accounts-payable",
+   "name": "Accounts Payable Specialist",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Gets every bill paid once, on time and to the right account: each bill logged, matched to its order or contract and checked for duplicates and changed bank details. It proposes the weekly payment run, and requested payments use the necessary Tools and verified payment details.",
+   "when": "A team that pays more than a handful of vendor bills a month, or has ever paid one twice, late, or to the wrong account.",
+   "tags": [
+    "bills",
+    "vendors",
+    "payments",
+    "fraud-checks",
+    "smb",
+    "services",
+    "ecommerce",
+    "retail"
+   ],
+   "pains": [
+    "we paid the same bill twice",
+    "bills get lost in someone's inbox until the late notice",
+    "a vendor asked us to update their bank details by email",
+    "nobody knows what we owe vendors this month",
+    "late fees on bills we meant to pay"
+   ],
+   "recommend_when": [
+    "uses_email",
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Weekly payment run proposal · Tuesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "ar-followup",
+   "template": "ar-followup",
+   "name": "Accounts Receivable Specialist",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Gets overdue invoices paid: every Monday a one-page aging summary and a reminder ready for each overdue invoice, friendly first and firmer later. Each reminder goes out only within the requested work it.",
+   "when": "A team that invoices customers on terms and finds itself chasing payments late or not at all.",
+   "tags": [
+    "b2b",
+    "invoicing",
+    "collections",
+    "cash",
+    "services",
+    "saas",
+    "agency"
+   ],
+   "pains": [
+    "customers pay invoices late and nobody chases them",
+    "we forget to follow up on overdue invoices",
+    "chasing payments feels awkward",
+    "cash is tight because customers pay slowly",
+    "we can't see which invoices are overdue"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_email"
+   ],
+   "first_routine": "Weekly receivables reminders · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "benefits",
+   "template": "benefits",
+   "name": "Benefits Administrator",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps benefits administration on time: the enrollment calendar, every joiner, leaver and life event tracked to its deadline, and plain-language plan comparisons. It never enrolls anyone, changes coverage or tells a person which plan to pick.",
+   "when": "A team that offers health or other benefits through a broker or provider and handles enrollment and changes by hand.",
+   "tags": [
+    "benefits",
+    "open-enrollment",
+    "life-events",
+    "eligibility",
+    "smb",
+    "compliance"
+   ],
+   "pains": [
+    "open enrollment deadlines catch us out",
+    "a new hire's benefits start late",
+    "nobody can explain our plans in plain words",
+    "life event changes get missed"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Weekly benefits deadlines · Tuesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "billing",
+   "template": "billing",
+   "name": "Billing Specialist",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Gets every invoice out on time and right the first time: each invoice built from the signed contract, the usage or the hours, checked against terms, PO numbers and tax before it goes. Issue requested batches with your Tools; customer messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team that invoices customers from contracts, timesheets or usage, and loses days or payments to invoices that go out late or wrong.",
+   "tags": [
+    "invoicing",
+    "b2b",
+    "services",
+    "agency",
+    "saas",
+    "usage-based",
+    "contracts"
+   ],
+   "pains": [
+    "invoices go out late every month",
+    "customers send invoices back because the PO number is missing",
+    "we bill the wrong amount and have to credit it",
+    "we forgot to bill for work we delivered"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_crm",
+    "uses_docs"
+   ],
+   "first_routine": "Invoice run check · The 25th of each month at 09:00 team time, ahead of month-end invoicing",
+   "tools": [
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "board-updates",
+   "template": "board-updates",
+   "name": "Investor Relations Manager",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps investors informed: the monthly investor update written from goals, KPI readings and the finance figures a human supplies, metrics first, asks second, a short honest recap last. Messages to outsiders stay drafts until a person turns mail sending on in Tico, and no figure is invented.",
+   "when": "A team with investors or a board that expects a regular written update.",
+   "tags": [
+    "fundraising",
+    "investors",
+    "board",
+    "startup",
+    "venture"
+   ],
+   "pains": [
+    "writing the monthly investor update takes a day",
+    "we skip investor updates when things get busy",
+    "investors ask for numbers we scramble to find",
+    "board members ask what happened this month"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "has_pipeline"
+   ],
+   "first_routine": "Monthly investor update draft · The third of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "bookkeeping",
+   "template": "bookkeeping",
+   "name": "Bookkeeper",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the books current: a category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done each month. Requested entries use its Tools and evidence.",
+   "when": "A team whose books fall behind between the owner's other work, or whose accountant keeps asking for the same receipts.",
+   "tags": [
+    "smb",
+    "bookkeeping",
+    "month-end",
+    "services",
+    "ecommerce",
+    "saas",
+    "retail"
+   ],
+   "pains": [
+    "unsorted transactions pile up until month end",
+    "the month-end close drags on for days",
+    "we chase missing receipts every month",
+    "the books are weeks behind",
+    "the accountant keeps asking us the same questions"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Monthly close checklist · The 1st of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "botops",
+   "template": "botops",
+   "name": "BotOps",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "The engineer that sets up every other bot from the templates and keeps their repositories, instructions and readiness working.",
+   "when": "",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "brand",
+   "template": "brand",
+   "name": "Brand Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the team's brand written down and applied: voice, words, naming and visual rules, reviews of copy and assets against them, and a monthly audit of what went public. It changes no live page or asset itself.",
+   "when": "A team whose website, emails, decks and posts no longer sound or look like one team, or that is naming a new product.",
+   "tags": [
+    "brand",
+    "voice",
+    "naming",
+    "design",
+    "consistency",
+    "b2c",
+    "retail"
+   ],
+   "pains": [
+    "every team describes our team differently",
+    "our logo and colours are used wrong",
+    "new copy never sounds like us",
+    "we have no brand guidelines anyone follows"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "chief-of-staff",
+   "template": "chief-of-staff",
+   "name": "Chief of Staff",
+   "department": "leadership",
+   "lead": true,
+   "core": false,
+   "summary": "Turns the goals, tasks, bot updates and meetings already in Tico into a weekly brief for the owner, chases stalled goals, and drafts Monday's agenda. Internal only.",
+   "when": "",
+   "tags": [
+    "leadership",
+    "weekly-brief",
+    "goals",
+    "agenda",
+    "founder",
+    "smb"
+   ],
+   "pains": [
+    "I don't know what is really going on across the team",
+    "goals stall and nobody notices",
+    "the Monday meeting has no agenda",
+    "things I asked for fall through the cracks",
+    "status updates take hours to compile"
+   ],
+   "recommend_when": [],
+   "first_routine": "Weekly team brief · Fridays at 15:00 team time",
+   "tools": [
+    "calendar",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "community",
+   "template": "community",
+   "name": "Community Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the customer community answered and alive: finds unanswered questions, prepares sourced replies, spots champions and routes feedback, with one digest a week. Every public reply goes out.",
+   "when": "A team with a customer forum, Slack or Discord community, or user group where questions wait and the most helpful members go unthanked.",
+   "tags": [
+    "community",
+    "forum",
+    "advocacy",
+    "customers",
+    "saas",
+    "developer-tools",
+    "b2c"
+   ],
+   "pains": [
+    "questions in our community go unanswered for days",
+    "our customer forum has gone quiet",
+    "we don't know who our most helpful customers are",
+    "feedback posted in the community never reaches the product team"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_consumers",
+    "publishes_content",
+    "tracks_mentions"
+   ],
+   "first_routine": "Weekly community digest · Fridays at 11:00 team time",
+   "tools": [
+    "chat",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "compensation",
+   "template": "compensation",
+   "name": "Compensation Analyst",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps pay consistent and defensible: salary bands per role and level, a check of every offer and pay change against its band, the annual review pack, and pay equity checks for a person. Confidential; it never sets anyone's pay.",
+   "when": "A team of 25 or more that negotiates every offer from scratch, has to publish pay ranges, or wants to know its pay is fair before someone asks.",
+   "tags": [
+    "compensation",
+    "salary-bands",
+    "pay-equity",
+    "offers",
+    "pay-transparency",
+    "hiring"
+   ],
+   "pains": [
+    "every offer is negotiated from scratch",
+    "we don't know if we pay people fairly",
+    "job posts now need a pay range and we have none",
+    "the annual raise round is a spreadsheet mess"
+   ],
+   "recommend_when": [
+    "uses_docs"
+   ],
+   "first_routine": "Weekly offer and pay change check · Wednesdays at 11:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "compliance",
+   "template": "compliance",
+   "name": "Compliance Manager",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the compliance calendar: annual reports, licences, registered agent, regulatory filings and insurance renewals, each with an owner and proof it was done. Summaries for a human, not legal advice.",
+   "when": "A team registered in more than one place, holding licences or permits, or in a regulated trade, where a missed filing means a fine or a lapsed licence.",
+   "tags": [
+    "legal",
+    "compliance",
+    "filings",
+    "licences",
+    "insurance",
+    "regulated",
+    "smb",
+    "international"
+   ],
+   "pains": [
+    "we missed a state filing and paid a late fee",
+    "our business licence lapsed and nobody noticed",
+    "nobody knows which registrations we hold",
+    "insurance renewals come as a surprise"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "small_team",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly compliance calendar · Tuesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "content",
+   "template": "content",
+   "name": "Content Marketer",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Plans the next four weeks of posts and articles and writes one finished piece a week in the team's voice, ready to publish. Public messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team that publishes posts or articles and has no one with the hours to plan and draft them.",
+   "tags": [
+    "content",
+    "blog",
+    "seo",
+    "social",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "we don't post regularly",
+    "nobody has time to write our blog posts",
+    "we don't know what to write about",
+    "our content sounds generic",
+    "content ideas never turn into published pieces"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_consumers",
+    "small_team"
+   ],
+   "first_routine": "Weekly content plan · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "meetings",
+    "web"
+   ],
+   "default": true
+  },
+  {
+   "slug": "coo",
+   "template": "assistant",
+   "name": "Assistant",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Every human's private Assistant: finds meetings, docs, files and tasks, makes tasks, hands work to the right bot and asks BotOps for new ones, always as that human and never more. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
+   "when": "Built in: every human gets a private Assistant that finds things and does them for them, and it routes work nobody was named for (Slack, meetings).",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "corporate-secretary",
+   "template": "corporate-secretary",
+   "name": "Corporate Secretary",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the team's corporate records in order: board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and a cap table change log. Summaries for a human, not legal advice; it never signs.",
+   "when": "A team with a board, investors or more than one legal entity, where minutes, consents and entity records fall behind between fundraises.",
+   "tags": [
+    "legal",
+    "board",
+    "governance",
+    "entities",
+    "minutes",
+    "fundraising",
+    "cap-table"
+   ],
+   "pains": [
+    "our board minutes are months behind",
+    "we can't find the consent that approved the option grants",
+    "every fundraise starts with hunting for corporate records",
+    "nobody tracks which entity has which directors"
+   ],
+   "recommend_when": [
+    "small_team",
+    "uses_meetings",
+    "uses_docs"
+   ],
+   "first_routine": "Monthly entity and board calendar · The 3rd of each month at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "customer-success",
+   "template": "customer-success",
+   "name": "Customer Success Manager",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Owns customer health and adoption: a weekly brief of renewals due in 120 days, the accounts at risk and why, and the next touch for each. Messages go to customers only within the requested work them; price and contract stay with the Account Manager.",
+   "when": "A team with subscription or recurring customers whose renewals arrive faster than anyone prepares for them.",
+   "tags": [
+    "b2b",
+    "saas",
+    "subscription",
+    "health",
+    "adoption",
+    "renewals",
+    "qbr"
+   ],
+   "pains": [
+    "renewals sneak up on us with no plan",
+    "we find out a customer is unhappy when they cancel",
+    "nobody prepares for quarterly customer reviews",
+    "customer health lives in five different places"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_crm",
+    "sells_software"
+   ],
+   "first_routine": "Weekly renewal and health brief · Tuesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "developer-advocate",
+   "template": "developer-advocate",
+   "name": "Developer Advocate",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Speaks for the developers who build on the product: answers their public questions, writes runnable samples and tutorials, and keeps a ranked friction log for engineering and product. Public replies stay drafts until a person turns mail sending on in Tico.",
+   "when": "Offer to a team whose customers are developers: a public API, an SDK, a developer tool or an open-source project.",
+   "tags": [
+    "developer-tools",
+    "api",
+    "saas",
+    "community",
+    "content",
+    "open-source"
+   ],
+   "pains": [
+    "developers ask the same API questions on our forum and nobody answers",
+    "our SDK has no working examples",
+    "we don't know where developers get stuck integrating",
+    "our developer community has gone quiet"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "publishes_content"
+   ],
+   "first_routine": "Weekly developer pulse · Thursdays at 10:00 team time",
+   "tools": [
+    "chat",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "devops-engineer",
+   "template": "devops-engineer",
+   "name": "DevOps Engineer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the health of the build and deploy pipeline: finds flaky tests, slow and failing CI jobs and red-main streaks in GitHub Actions, and writes the fix plan for each, opening a pull request for a fix when asked. It never reruns, cancels, deploys or merges.",
+   "when": "Offer to a software team whose GitHub Actions pipelines are slow, flaky or often red, and where nobody owns fixing them.",
+   "tags": [
+    "saas",
+    "github",
+    "ci",
+    "flaky-tests",
+    "build-times",
+    "deploys",
+    "developer-tools"
+   ],
+   "pains": [
+    "our CI is flaky and people just hit rerun",
+    "builds take forever",
+    "the main branch is red and nobody knows why",
+    "deploys are scary so we do them rarely"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly CI health report · Tuesdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "dispatcher",
+   "template": "dispatcher",
+   "name": "Dispatcher",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Builds tomorrow's schedule for the field crews by skill, area and job length, flags clashes and unconfirmed jobs, and has each customer's arrival notice ready to use. Requested booking changes follow the scheduling rules and Tools.",
+   "when": "A service team (cleaning, repairs, installation, inspections) with a few crews or technicians and a schedule rebuilt by hand every evening.",
+   "tags": [
+    "field-service",
+    "scheduling",
+    "crews",
+    "technicians",
+    "cleaning",
+    "installation",
+    "services"
+   ],
+   "pains": [
+    "the schedule for tomorrow is rebuilt by hand every evening",
+    "technicians turn up without the right skills or parts",
+    "crews criss-cross town between jobs",
+    "customers don't know when the technician will arrive"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "small_team"
+   ],
+   "first_routine": "Tomorrow's dispatch plan · Weekdays at 15:00 team time",
+   "tools": [
+    "calendar",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "docs-writer",
+   "template": "docs-writer",
+   "name": "Technical Writer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the READMEs and API docs in the product repositories true to what shipped. Each week it finds pages that merged changes made wrong and writes the fix, ready for an engineer to commit.",
+   "when": "Offer when GitHub is connected and the product has READMEs, API reference or developer docs people rely on. Docs and answers are the Librarian's.",
+   "tags": [
+    "saas",
+    "developer-tools",
+    "api",
+    "documentation",
+    "github"
+   ],
+   "pains": [
+    "our README and API docs are out of date",
+    "docs don't match what we shipped",
+    "engineers hate writing documentation",
+    "new developers can't find how to do a task in our docs"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly docs drift report · Wednesdays at 10:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "email-marketing",
+   "template": "email-marketing",
+   "name": "Email Marketing Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Writes the next campaign email or nurture sequence with three subject lines, a preview line and a send checklist, ready to load. Customer messages stay drafts until a person turns mail sending on in Tico; requested schedules use your Tools.",
+   "when": "A team that emails customers or a newsletter list and wants the drafts written in its own voice, on time.",
+   "tags": [
+    "email",
+    "newsletter",
+    "lifecycle",
+    "ecommerce",
+    "b2c",
+    "subscription"
+   ],
+   "pains": [
+    "writing campaign emails takes days",
+    "our newsletter goes out too rarely",
+    "launch emails go out late or not at all",
+    "we send one email to the whole list",
+    "our email open rates keep dropping"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "publishes_content",
+    "uses_email"
+   ],
+   "first_routine": "Weekly email campaign draft · Tuesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "employee-experience",
+   "template": "employee-experience",
+   "name": "Employee Experience Manager",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the pulse survey rhythm and turns results into a short readout with themes and two or three proposed actions, keeps the recognition and milestones calendar, and plans team events. Results are only reported for groups of five or more.",
+   "when": "A team past about 20 people, often remote or split across sites, that wants to hear how people are doing before they resign.",
+   "tags": [
+    "engagement",
+    "surveys",
+    "recognition",
+    "culture",
+    "remote",
+    "events"
+   ],
+   "pains": [
+    "we only learn people are unhappy when they resign",
+    "survey results sit unread",
+    "work anniversaries go unnoticed",
+    "team events always fall to the same human"
+   ],
+   "recommend_when": [
+    "uses_slack",
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Weekly milestones and engagement actions · Thursdays at 10:00 team time",
+   "tools": [
+    "calendar",
+    "chat"
+   ],
+   "default": false
+  },
+  {
+   "slug": "engineering-lead",
+   "template": "engineering-lead",
+   "name": "Head of Engineering",
+   "department": "engineering",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the engineering group: a weekly summary from GitHub and the engineering bots (shipped, stuck pull requests, incidents, blockers), routing, and the next hire. Requested assignments and hires use your Tools.",
+   "when": "Offer when GitHub is connected and more than one human merges code.",
+   "tags": [
+    "saas",
+    "developer-tools",
+    "delivery",
+    "github",
+    "weekly-review",
+    "hiring"
+   ],
+   "pains": [
+    "I can't see what engineering shipped this week",
+    "nobody knows which pull requests are stuck",
+    "engineering status reports take me an hour to write",
+    "we don't track how long changes take to reach production",
+    "requests to engineering get lost between people"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Weekly engineering summary · Mondays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "engineering-manager",
+   "template": "engineering-manager",
+   "name": "Engineering Manager",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Plans changes, assigns child tasks to engineer bots, tracks pull requests and reports progress.",
+   "when": "Offer when engineer bots work across several repositories.",
+   "tags": [
+    "github",
+    "delivery",
+    "developer-tools"
+   ],
+   "pains": [
+    "Changes across repositories need one delivery plan",
+    "Stuck child tasks and pull requests need follow-up",
+    "Delivery reports miss dependencies between engineer tasks"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Daily delivery check · Daily at 09:00 team time",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "escalations",
+   "template": "escalations",
+   "name": "Escalations Manager",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Owns every escalated and VIP ticket until it is resolved: one named owner, a severity, the timeline, the engineering bug report and customer updates on a set cadence. Each update reaches the customer only within the requested work it.",
+   "when": "A team with key accounts or contractual support terms, where an escalated ticket bounces between support, engineering and sales and the customer hears nothing.",
+   "tags": [
+    "b2b",
+    "saas",
+    "enterprise",
+    "escalations",
+    "vip",
+    "sla",
+    "incident"
+   ],
+   "pains": [
+    "escalated tickets bounce between teams with no owner",
+    "our biggest customers wait days for an update",
+    "engineering gets vague escalations and asks the same questions back",
+    "we promised an update and forgot"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_support_inbox",
+    "uses_tickets",
+    "sells_software"
+   ],
+   "first_routine": "Daily escalation digest · Weekdays at 08:30 team time",
+   "tools": [
+    "chat",
+    "github",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "events",
+   "template": "events",
+   "name": "Event Marketing Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Plans each trade show, webinar and meetup from goal to follow-up, keeps the events calendar and checklists moving, and measures what every event returned in meetings and pipeline. It commits no money and sends nothing outside the stated rules.",
+   "when": "A team that goes to trade shows or runs webinars and meetups, and cannot say afterwards which ones were worth it.",
+   "tags": [
+    "events",
+    "trade-shows",
+    "webinars",
+    "field-marketing",
+    "b2b",
+    "pipeline"
+   ],
+   "pains": [
+    "event leads never get followed up",
+    "we don't know if trade shows pay off",
+    "every webinar is organised at the last minute",
+    "we book events without a goal or a budget"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly events review · Thursdays at 10:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "expense-auditor",
+   "template": "expense-auditor",
+   "name": "Expense Auditor",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Checks every expense report and team card charge against your written policy: missing receipts, out-of-policy items, duplicates and late claims, with one summary per owner. Requested actions use the necessary Tools and verified evidence.",
+   "when": "A team with cards or employee reimbursements where nobody has time to read every receipt before it is applied.",
+   "tags": [
+    "expenses",
+    "company-cards",
+    "travel",
+    "policy",
+    "remote",
+    "services",
+    "agency"
+   ],
+   "pains": [
+    "expense reports get approved without anyone reading them",
+    "team card receipts are missing at month end",
+    "we reimbursed the same dinner twice",
+    "nobody follows the travel policy"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Monthly expense audit · The 3rd of each month at 09:00 team time",
+   "tools": [
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "feedback-analyst",
+   "template": "feedback-analyst",
+   "name": "Customer Insights Analyst",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Turns every ticket, survey comment, review and call into one ranked list of customer themes with counts, quotes and trend, and files the top evidence with product. It never contacts a customer.",
+   "when": "A team whose customers talk in many places and whose product team hears little of it.",
+   "tags": [
+    "voice-of-customer",
+    "feedback",
+    "saas",
+    "b2b",
+    "b2c",
+    "surveys",
+    "reviews"
+   ],
+   "pains": [
+    "customer feedback is scattered across tools",
+    "we don't know why customers complain most",
+    "nobody reads the survey comments",
+    "product doesn't hear what customers actually say",
+    "feature requests are never counted"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "uses_email",
+    "has_support_inbox"
+   ],
+   "first_routine": "Weekly feedback report · Mondays at 08:00 team time",
+   "tools": [
+    "chat",
+    "mail",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "finance-lead",
+   "template": "finance-lead",
+   "name": "Head of Finance",
+   "department": "finance",
+   "lead": true,
+   "core": false,
+   "summary": "Runs finance for the owner: a weekly summary of cash and the 13-week outlook, the month-end close status, what is due in and out, and the finance calendar. It is read-only to the books and bank, and writes summaries for a human, never payments.",
+   "when": "A team of ten to two hundred people without a full-time finance lead, or whose founder is still the one who knows the cash position.",
+   "tags": [
+    "cash",
+    "month-end",
+    "runway",
+    "smb",
+    "startup",
+    "services",
+    "saas",
+    "ecommerce"
+   ],
+   "pains": [
+    "I don't know how much cash we'll have in two months",
+    "finance lives in the founder's head",
+    "we find out about a cash crunch too late",
+    "nobody owns the month-end close",
+    "finance deadlines sneak up on us"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly finance summary · Mondays at 08:30 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "general-counsel",
+   "template": "general-counsel",
+   "name": "General Counsel",
+   "department": "legal",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the team's legal desk: takes every legal request in one queue, reviews the contracts that matter, watches the compliance calendar and drafts policies for a human to adopt. Summaries for a human, not legal advice; requested sends and signatures use the necessary Tools.",
+   "when": "A team of ten to two hundred people with no in-house lawyer, or one lawyer who needs the queue, the calendar and the first drafts handled.",
+   "tags": [
+    "legal",
+    "contracts",
+    "compliance",
+    "policy",
+    "risk",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "legal questions arrive in five places and some are never answered",
+    "we only call a lawyer when something is already on fire",
+    "nobody owns our internal policies",
+    "I don't know which legal deadlines are coming up",
+    "outside counsel bills pile up for routine questions"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Weekly legal summary · Mondays at 08:30 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "goal-manager",
+   "template": "goal-manager",
+   "name": "Goal Manager",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Steward of every KPI. It computes each one on its cadence, posts the reading with its evidence, and says when data is stale or missing instead of guessing. Goals get their colour from their KPIs, pace and deadline; a colour a human set stays theirs. When a KPI slips it asks the goal's owner what is happening and records the answer. It flags vague, duplicate and unmeasured goals, and every change to a definition or a target is a proposal the owner confirms.",
+   "when": "Built in: keeps every KPI up to date with evidence, sets goals' colours from them, asks a goal's owner what is happening when one slips, and proposes clearer goals and measures.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "hr-business-partner",
+   "template": "hr-business-partner",
+   "name": "HR Business Partner",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the performance review cycle for managers: the timeline, a review pack per manager, calibration sheets that surface inconsistent ratings, and guidance for hard conversations. It never rates, decides about or advises on a named person's outcome.",
+   "when": "A team of 30 or more with several managers, a review cycle once or twice a year, and probation periods to keep track of.",
+   "tags": [
+    "performance",
+    "reviews",
+    "calibration",
+    "managers",
+    "probation",
+    "employee-relations"
+   ],
+   "pains": [
+    "review season takes over every manager's month",
+    "ratings mean different things on different teams",
+    "managers put off difficult conversations",
+    "reviews are written the night before from memory",
+    "probation periods end without anyone noticing"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_meetings"
+   ],
+   "first_routine": "Weekly performance cycle tracker · Wednesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "incident-scribe",
+   "template": "incident-scribe",
+   "name": "Site Reliability Engineer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns learning from incidents: builds the timeline while one runs, writes the blameless postmortem and the on-call handoff, and follows every action item to done with its owner and date.",
+   "when": "Offer to any team that runs software people depend on.",
+   "tags": [
+    "saas",
+    "incidents",
+    "reliability",
+    "on-call",
+    "postmortems"
+   ],
+   "pains": [
+    "postmortems never get written after an outage",
+    "nobody remembers the timeline of an incident",
+    "the same incident happens twice",
+    "incident action items get forgotten"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Weekly incident review · Mondays at 10:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "inventory",
+   "template": "inventory",
+   "name": "Inventory Planner",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Works out from sales and stock exports what to reorder, when and how much, using each item's reorder point and supplier lead time, and prepares the purchase orders for review. It never places an order.",
+   "when": "A team that sells physical products and runs out of best-sellers while cash sits in slow stock.",
+   "tags": [
+    "inventory",
+    "ecommerce",
+    "retail",
+    "manufacturing",
+    "hardware",
+    "purchasing",
+    "stock"
+   ],
+   "pains": [
+    "our best-sellers go out of stock every few weeks",
+    "cash is tied up in stock that doesn't sell",
+    "reordering is guesswork from a spreadsheet",
+    "a supplier's delay only shows up when the shelf is empty"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly reorder list · Mondays at 07:30 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "ip-paralegal",
+   "template": "ip-paralegal",
+   "name": "IP Paralegal",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps trademarks and domains alive and watched: renewal deadlines, look-alike filings and uses, clearance notes for new names, and IP assignments from contractors. Summaries for a human, not legal advice.",
+   "when": "A team whose brand, product names or domains matter, that is naming new products, or that pays contractors to create code, designs or content.",
+   "tags": [
+    "legal",
+    "trademarks",
+    "domains",
+    "brand",
+    "ip",
+    "ecommerce",
+    "consumer-brand",
+    "content"
+   ],
+   "pains": [
+    "we almost lost a domain because the card on file expired",
+    "someone is using a name very close to ours",
+    "we launch product names without checking them",
+    "contractors built our product and we never got the IP assigned"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "publishes_content"
+   ],
+   "first_routine": "Monthly IP watch · The 1st of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "issue-triage",
+   "template": "issue-triage",
+   "name": "QA Engineer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns product quality: triages and deduplicates new GitHub issues, checks each bug against the repro checklist, and writes the test plan and regression checklist for each release. Requested changes use the GitHub Tools; public comments stay drafts until a person turns mail sending on in Tico.",
+   "when": "Offer only when the team's GitHub is connected and it keeps product issues there.",
+   "tags": [
+    "saas",
+    "github",
+    "bugs",
+    "testing",
+    "regression",
+    "quality"
+   ],
+   "pains": [
+    "issues pile up untriaged",
+    "the same bug is reported again and again",
+    "reports come in without repro steps",
+    "we don't know what users are hitting most",
+    "engineers lose hours sorting issues instead of fixing them"
+   ],
+   "recommend_when": [
+    "uses_github"
+   ],
+   "first_routine": "Weekly issue digest · Mondays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": true
+  },
+  {
+   "slug": "it-support",
+   "template": "it-support",
+   "name": "IT Support Specialist",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Works every IT help request to a fix, sorted by impact, and prepares each access change for its owner. It also keeps the device list and runs the joiner and leaver checklists.",
+   "when": "A team of fifteen or more people with no IT person, where laptops, accounts and passwords land on whoever is nearest.",
+   "tags": [
+    "it",
+    "helpdesk",
+    "devices",
+    "access",
+    "onboarding",
+    "offboarding",
+    "remote"
+   ],
+   "pains": [
+    "IT questions go to whoever happens to be the most technical",
+    "a leaver still had access to our tools weeks later",
+    "new hires wait days for a laptop and their accounts",
+    "we don't know which laptops we own or who has them"
+   ],
+   "recommend_when": [
+    "small_team",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly IT page · Mondays at 09:30 team time",
+   "tools": [
+    "chat",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "learning",
+   "template": "learning",
+   "name": "Learning and Development Specialist",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Builds a learning plan per role from on-the-job work, learning from colleagues and courses, tracks mandatory training to its due dates, and prepares the new-manager curriculum. Training spend goes to a human for review.",
+   "when": "A team with mandatory training to keep current, first-time managers, or a training budget nobody plans.",
+   "tags": [
+    "training",
+    "compliance-training",
+    "managers",
+    "onboarding",
+    "skills",
+    "remote"
+   ],
+   "pains": [
+    "mandatory training lapses without anyone noticing",
+    "new managers learn on the job alone",
+    "the training budget goes unspent or on random courses",
+    "people don't know what to learn to grow"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Weekly training tracker · Thursdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "legal-ops",
+   "template": "legal-ops",
+   "name": "Legal Operations Manager",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the business side of legal work: the matter list, instructions to outside counsel, each law firm invoice checked against its engagement terms, and a monthly legal spend summary. Summaries for a human, not legal advice.",
+   "when": "A team that uses one or more outside law firms regularly, or whose legal bills arrive without anyone checking them against what was agreed.",
+   "tags": [
+    "legal",
+    "outside-counsel",
+    "legal-spend",
+    "matters",
+    "invoices",
+    "enterprise",
+    "b2b"
+   ],
+   "pains": [
+    "we pay law firm invoices without reading them",
+    "nobody knows how much we spend on lawyers",
+    "we can't say which legal matters are open",
+    "each law firm gets a different brief for the same kind of work"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Monthly legal spend summary · The 5th of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "legal-review",
+   "template": "legal-review",
+   "name": "Contracts Manager",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Reviews every contract the team is asked to sign against your own playbook and keeps the renewal and notice calendar for the ones already signed. Summaries for a human, not legal advice; it never signs, sends or negotiates.",
+   "when": "A team signing vendor, customer and partner contracts without in-house counsel.",
+   "tags": [
+    "legal",
+    "contracts",
+    "renewals",
+    "vendors",
+    "b2b",
+    "smb"
+   ],
+   "pains": [
+    "nobody reads the contracts before we sign",
+    "auto-renewals catch us by surprise",
+    "contract review waits on a lawyer for days",
+    "we don't know what we agreed to in old contracts"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Weekly contract calendar · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "librarian",
+   "template": "librarian",
+   "name": "Librarian",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`hub doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report.",
+   "when": "Built-in: answers questions about the team from its docs, with a citation for every claim, and says plainly when the docs do not cover it.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "listening",
+   "template": "listening",
+   "name": "Social Media Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Plans and prepares the team's social posts and sweeps public conversation every weekday for mentions, questions and competitor moves. Every post and reply goes out only within the requested work it.",
+   "when": "A team whose buyers talk in public (forums, review sites, social, news) and that wants to hear it without anyone scrolling.",
+   "tags": [
+    "social",
+    "listening",
+    "content",
+    "community",
+    "b2c",
+    "mentions"
+   ],
+   "pains": [
+    "we don't hear what people say about us online",
+    "we miss questions asked in public forums",
+    "competitor moves surprise us",
+    "customers complain in public before we know",
+    "nobody has time to watch social media and forums",
+    "our social accounts go quiet for weeks at a time"
+   ],
+   "recommend_when": [
+    "tracks_mentions",
+    "publishes_content",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekday morning sweep · Weekdays at 08:00 team time",
+   "tools": [
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "logistics",
+   "template": "logistics",
+   "name": "Logistics Coordinator",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Watches every shipment to delivery and works each carrier exception, with the customer update ready to use. It also files claims on time and checks carrier invoices against the agreed rates.",
+   "when": "A team that ships goods to customers or stores and hears about a lost or late parcel from the customer first.",
+   "tags": [
+    "shipping",
+    "ecommerce",
+    "retail",
+    "carriers",
+    "fulfillment",
+    "freight",
+    "wholesale"
+   ],
+   "pains": [
+    "customers tell us their parcel is late before we know",
+    "lost parcels take weeks to claim from the carrier",
+    "carrier invoices have charges nobody checks",
+    "we can't tell which carrier is actually on time"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly delivery and exceptions report · Mondays at 08:00 team time",
+   "tools": [
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "marketing-lead",
+   "template": "marketing-lead",
+   "name": "Head of Marketing",
+   "department": "marketing",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the marketing team's week: one summary of what moved, what is blocked and what is on the six-week calendar, routing for new requests, and the next role to hire. Requested assignments use the necessary Tools.",
+   "when": "A team with two or more marketing bots or humans who wants one weekly view of marketing instead of five separate reports.",
+   "tags": [
+    "marketing",
+    "weekly-summary",
+    "calendar",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "nobody knows what marketing shipped this week",
+    "marketing wins and blockers never reach leadership",
+    "campaigns and launches collide on the calendar",
+    "marketing priorities change every week and nothing is written down",
+    "we get five marketing reports and no overall picture"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "publishes_content"
+   ],
+   "first_routine": "Weekly marketing summary · Fridays at 14:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "marketing-ops",
+   "template": "marketing-ops",
+   "name": "Marketing Operations Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps marketing's data trustworthy: one tracking convention for every campaign link, leads with a source, a clean handoff of qualified leads to sales, and a weekly check of all three. Requested fixes use its Tools.",
+   "when": "A team running several campaigns into a CRM that cannot say where its customers came from, or whose marketing leads wait for sales.",
+   "tags": [
+    "marketing-ops",
+    "attribution",
+    "utm",
+    "lead-handoff",
+    "crm",
+    "b2b",
+    "saas"
+   ],
+   "pains": [
+    "our campaign links are tagged inconsistently",
+    "marketing leads wait days before sales touches them",
+    "we can't tell which campaign a customer came from",
+    "half our leads have no source in the CRM"
+   ],
+   "recommend_when": [
+    "uses_crm",
+    "has_pipeline",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly marketing data check · Mondays at 10:00 team time",
+   "tools": [
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "meeting-notes",
+   "template": "meeting-notes",
+   "name": "Project Coordinator",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Writes up every imported team meeting (summary, decisions, action items) and tracks each action item and project milestone until it is done. It creates requested tasks and tells the intended teammates; internal only.",
+   "when": "",
+   "tags": [
+    "meetings",
+    "projects",
+    "action-items",
+    "decisions",
+    "remote",
+    "services",
+    "agency"
+   ],
+   "pains": [
+    "meetings without follow-up",
+    "nobody remembers what we decided",
+    "action items get lost after the call",
+    "notes take an hour to write up",
+    "people who missed the meeting have no way to catch up"
+   ],
+   "recommend_when": [
+    "uses_meetings"
+   ],
+   "first_routine": "Meeting notes draft · After each imported team meeting (the meeting.ready event), after setup",
+   "tools": [
+    "chat",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "office-manager",
+   "template": "office-manager",
+   "name": "Office Manager",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the office: logs every facilities request to a fix, keeps supplies above their reorder level with orders ready to use, and prepares for visitors and office events. It never spends outside the requested work or Tools.",
+   "when": "A team with a physical office or studio of ten people or more and nobody whose job is to run it.",
+   "tags": [
+    "office",
+    "facilities",
+    "supplies",
+    "visitors",
+    "workplace",
+    "hybrid"
+   ],
+   "pains": [
+    "the office runs out of coffee and printer toner at the worst moment",
+    "office repairs get reported and then forgotten",
+    "visitors arrive and nobody expected them",
+    "nobody knows who to ask about the office"
+   ],
+   "recommend_when": [
+    "small_team"
+   ],
+   "first_routine": "Weekly office page · Mondays at 08:00 team time",
+   "tools": [
+    "calendar",
+    "chat",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "onboarding-specialist",
+   "template": "onboarding-specialist",
+   "name": "Customer Onboarding Specialist",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Takes every newly signed customer from handoff to first value: a written onboarding plan, the kickoff agenda, milestone tracking and a weekly list of customers who are stuck. Messages to customers leave only within the requested work them.",
+   "when": "A team whose new customers need setup, training or data moved before the product is useful, and where some go quiet in the first month.",
+   "tags": [
+    "b2b",
+    "saas",
+    "onboarding",
+    "implementation",
+    "subscription",
+    "smb",
+    "time-to-value"
+   ],
+   "pains": [
+    "new customers go quiet right after they sign",
+    "every kickoff call starts from scratch",
+    "we don't know which new accounts are stuck in setup",
+    "sales promises get lost in the handoff to onboarding"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_software",
+    "uses_crm",
+    "uses_meetings"
+   ],
+   "first_routine": "Weekly onboarding board · Mondays at 10:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "ops-manager",
+   "template": "ops-manager",
+   "name": "Operations Manager",
+   "department": "operations",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the team's register of recurring duties and a weekly checklist of what is due, overdue and blocked, chases quiet vendors and heads Operations. Anything that leaves the team goes out only when a person has turned mail sending on in Tico.",
+   "when": "A team where renewals, filings, access reviews and vendor chasing live in one human's head.",
+   "tags": [
+    "operations",
+    "vendors",
+    "renewals",
+    "checklists",
+    "admin",
+    "smb",
+    "services"
+   ],
+   "pains": [
+    "renewals and deadlines sneak up on us",
+    "recurring admin jobs depend on one human's memory",
+    "vendors go quiet and nobody follows up",
+    "nobody owns the team's checklists",
+    "we have no weekly view of what operations is doing"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly ops checklist and team summary · Mondays at 08:30 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "paid-media",
+   "template": "paid-media",
+   "name": "Paid Media Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Reviews every paid campaign each week against cost per result, finds the wasted spend and the search terms to exclude, and prepares each budget, keyword and ad change for review. Requested changes use its ad account Tools.",
+   "when": "A team spending on search or social ads every month without someone who reads the results closely each week.",
+   "tags": [
+    "paid-ads",
+    "search-ads",
+    "social-ads",
+    "ecommerce",
+    "b2b",
+    "b2c",
+    "performance"
+   ],
+   "pains": [
+    "we don't know which of our ads actually work",
+    "ad spend keeps rising and leads don't",
+    "nobody reads the search terms our ads show up for",
+    "our ads have run unchanged for months"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly paid media review · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "paralegal",
+   "template": "paralegal",
+   "name": "Paralegal",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the NDA desk: checks every inbound NDA against your standard, prepares outbound ones on your own template, and readies signature packets and the signed-contract index. Summaries for a human, not legal advice; it never signs or sends.",
+   "when": "A team that signs NDAs and standard agreements every week and has the owner or a salesperson handling each one by hand.",
+   "tags": [
+    "legal",
+    "nda",
+    "contracts",
+    "signatures",
+    "b2b",
+    "partners",
+    "smb"
+   ],
+   "pains": [
+    "every NDA waits on the owner to read it",
+    "we sign whatever NDA the other side sends",
+    "nobody can find the signed copy of an agreement",
+    "sales waits days for a simple NDA"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Weekday NDA desk · Weekdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "partnerships",
+   "template": "partnerships",
+   "name": "Partnerships Manager",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the partner channel: finds partners that fit, checks every deal registration against the rules of engagement, follows partner-sourced deals to close and lists referral fees owed. Requested payouts use Tools; outside messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team that sells with or through agencies, resellers, referral partners or integration partners and wants that channel run, not remembered.",
+   "tags": [
+    "b2b",
+    "partners",
+    "channel",
+    "resellers",
+    "referrals",
+    "integrations",
+    "co-selling",
+    "agencies"
+   ],
+   "pains": [
+    "partners send leads and nobody follows up",
+    "two partners claim the same deal",
+    "we don't know which partners actually bring revenue",
+    "referral fees are paid late or wrongly"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly partner pipeline review · Thursdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "payroll",
+   "template": "payroll",
+   "name": "Payroll Specialist",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Gets payroll right before it runs: a change summary for each pay run with joiners, leavers, pay changes, hours, bonuses and commissions, checked against HR records and the last run. Requested payroll actions use its Tools and evidence.",
+   "when": "A team whose payroll is run by a founder, an office manager or an outside provider from changes collected by hand.",
+   "tags": [
+    "payroll",
+    "hourly",
+    "hiring",
+    "smb",
+    "retail",
+    "field-service",
+    "services",
+    "remote"
+   ],
+   "pains": [
+    "payroll corrections after every run",
+    "a new hire missed their first paycheck",
+    "we paid someone after they left",
+    "collecting hours and bonuses before payroll is a scramble"
+   ],
+   "recommend_when": [
+    "small_team",
+    "uses_docs"
+   ],
+   "first_routine": "Pre-payroll change summary · Mondays at 09:00 team time: a full summary in a week with a payroll cut-off, a one-line status otherwise, after setup",
+   "tools": [
+    "calendar",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "people-hr",
+   "template": "people-hr",
+   "name": "HR Generalist",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Runs onboarding for every new hire, from the checklist before day one to the 90 day check-in, and answers policy questions from the team's own handbook with the page cited. Pay, leave, conduct and legal questions go straight to a named human.",
+   "when": "A team that onboards a few people a quarter and answers the same handbook questions by hand.",
+   "tags": [
+    "hiring",
+    "onboarding",
+    "handbook",
+    "policy",
+    "smb",
+    "remote"
+   ],
+   "pains": [
+    "new hires start with nothing ready",
+    "onboarding depends on who remembers",
+    "people ask HR the same handbook questions again and again",
+    "the handbook is out of date or nobody reads it",
+    "we forget the 30 60 90 day check-ins"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_slack",
+    "small_team"
+   ],
+   "first_routine": "Weekly onboarding tracker · Mondays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "chat",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "people-lead",
+   "template": "people-lead",
+   "name": "Head of People",
+   "department": "hr",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the people side of the team: a weekly summary of hires against plan, starters, leavers and deadlines, the people calendar, and policies written for the owner to review. It never decides anything about a named person.",
+   "when": "A team of 10 to 200 people with no full-time HR lead, or one HR human who wants the calendar, the plan and the people bots in one place.",
+   "tags": [
+    "hiring",
+    "headcount",
+    "policy",
+    "people-calendar",
+    "smb",
+    "remote",
+    "compliance"
+   ],
+   "pains": [
+    "nobody owns HR until something goes wrong",
+    "we hire without a headcount plan",
+    "review cycles and benefit deadlines sneak up on us",
+    "our policies were copied from somewhere years ago",
+    "people requests land with whoever is nearest"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly people summary · Mondays at 08:30 team time",
+   "tools": [
+    "calendar",
+    "chat",
+    "docs"
+   ],
+   "default": true
+  },
+  {
+   "slug": "people-ops",
+   "template": "people-ops",
+   "name": "People Operations Specialist",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Runs offboarding for every leaver through to the check that access is gone, and audits HR records against the roster and payroll. It prepares employment letters and verifications for a human to sign.",
+   "when": "A team where leavers keep access for weeks, HR records drift from reality, or letters and verifications wait on one busy human.",
+   "tags": [
+    "offboarding",
+    "hr-records",
+    "letters",
+    "compliance",
+    "smb",
+    "remote"
+   ],
+   "pains": [
+    "leavers keep access for weeks",
+    "HR records don't match payroll or the team chart",
+    "employment verification requests sit for days",
+    "nobody remembers to get the laptop back"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly people records check · Mondays at 10:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "pr",
+   "template": "pr",
+   "name": "PR Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the team's media list and coverage log, finds the story in each announcement, and prepares press releases and short targeted pitches for review. It never speaks to a journalist on the team's behalf.",
+   "when": "A team with news worth telling (launches, funding, customer milestones, research) and nobody who works with the press.",
+   "tags": [
+    "pr",
+    "media-relations",
+    "press",
+    "announcements",
+    "b2b",
+    "b2c",
+    "fundraising"
+   ],
+   "pains": [
+    "journalists never write about us",
+    "our announcements get no press coverage",
+    "nobody keeps a list of reporters who cover our space",
+    "we find out about our press coverage by accident"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "publishes_content",
+    "tracks_mentions"
+   ],
+   "first_routine": "Weekly PR review · Tuesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "pr-reviewer",
+   "template": "pr-reviewer",
+   "name": "Senior Software Engineer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Reviews every open pull request each weekday morning so none waits days for a first review: a summary, risks, questions and nits, blocking issues first, ready for a human to post. It posts a requested review when its Tools allow it; merging stays with a human.",
+   "when": "Offer when GitHub is connected and pull requests wait for a reviewer.",
+   "tags": [
+    "saas",
+    "github",
+    "code-review",
+    "quality",
+    "developer-tools"
+   ],
+   "pains": [
+    "pull requests wait days for a first review",
+    "code reviews are shallow or inconsistent",
+    "pull requests are too big to review properly",
+    "reviewers keep missing the same kind of mistake",
+    "senior engineers spend their day reviewing"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_slack"
+   ],
+   "first_routine": "Weekday review queue · Weekdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "pricing",
+   "template": "pricing",
+   "name": "Pricing Analyst",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Researches pricing and packaging: competitor price changes, the discounts actually given in closed deals, plan mix, and the impact of any price change being weighed. Requested changes use Tools; outside quotes stay drafts until a person turns mail sending on in Tico.",
+   "when": "A software team that has not revisited its prices in a year or more, or whose discounts are given deal by deal with no pattern.",
+   "tags": [
+    "saas",
+    "pricing",
+    "packaging",
+    "discounts",
+    "subscription",
+    "b2b",
+    "competitors"
+   ],
+   "pains": [
+    "we haven't looked at our prices in two years",
+    "discounts are given case by case with no pattern",
+    "we don't know what competitors charge now",
+    "a price change would surprise existing customers"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_businesses",
+    "uses_crm",
+    "has_pipeline"
+   ],
+   "first_routine": "Monthly pricing review · The 1st of each month at 09:00 team time",
+   "tools": [
+    "crm",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "privacy",
+   "template": "privacy",
+   "name": "Privacy Manager",
+   "department": "legal",
+   "lead": false,
+   "core": false,
+   "summary": "Reviews DPAs against your position, runs each data subject request to its deadline, and keeps the subprocessor list and records of processing current. Summaries for a human, not legal advice.",
+   "when": "A team that holds customer or user personal data, sells to businesses that send DPAs, or has customers in the EU, the UK or US states with privacy laws.",
+   "tags": [
+    "legal",
+    "privacy",
+    "gdpr",
+    "dpa",
+    "data-requests",
+    "saas",
+    "ecommerce",
+    "international"
+   ],
+   "pains": [
+    "customers send DPAs and nobody knows what to agree to",
+    "a data deletion request sat for weeks",
+    "our subprocessor list is out of date",
+    "we don't know what personal data we hold or where"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly privacy desk · Wednesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "procurement",
+   "template": "procurement",
+   "name": "Procurement Manager",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Compares three to five vendors for each purchase request using weighted criteria and total cost. Makes requested purchases with its Tools; vendor messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team where software and service purchases are chosen by whoever asked, with no shared way to compare them.",
+   "tags": [
+    "purchasing",
+    "vendors",
+    "software",
+    "rfq",
+    "security-review",
+    "smb"
+   ],
+   "pains": [
+    "we buy tools without comparing alternatives",
+    "choosing a vendor takes weeks of ad hoc research",
+    "we can't tell which vendor quote is really cheaper",
+    "vendor security questions get answered from scratch each time",
+    "purchase requests sit with nobody owning them"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly purchase requests digest · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "product-analyst",
+   "template": "product-analyst",
+   "name": "Product Analyst",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Answers product questions from the product's own data: adoption of what shipped, where new users drop off, how retention cohorts compare, and what an experiment really showed. Every number comes with its query.",
+   "when": "A software team that ships features without knowing who uses them, or where every data question waits on an engineer.",
+   "tags": [
+    "saas",
+    "analytics",
+    "adoption",
+    "retention",
+    "experiments",
+    "sql",
+    "mobile"
+   ],
+   "pains": [
+    "we don't know if anyone uses the feature we shipped",
+    "every data question waits a week for an engineer",
+    "A/B test results are argued, not read",
+    "we can't see where new users drop off"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly product usage readout · Wednesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "product-lead",
+   "template": "product-lead",
+   "name": "Head of Product",
+   "department": "product",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the product team's week: roadmap status, the decisions waiting on a human, what each product bot found, and evidence-scored proposals for what to build next. Requested roadmap changes use its Tools and sourced decisions.",
+   "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place.",
+   "tags": [
+    "saas",
+    "software",
+    "roadmap",
+    "prioritisation",
+    "discovery",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "nobody knows what's on the roadmap this quarter",
+    "every loud request jumps the queue",
+    "product decisions aren't written down anywhere",
+    "we can't say why we built what we built"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly product summary · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "product-manager",
+   "template": "product-manager",
+   "name": "Product Manager",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Turns a chosen problem into a one-page spec engineers can build from, with evidence, non-goals and testable acceptance criteria. Then it drives the spec to launch: open questions closed by named humans and a readiness checklist signed line by line.",
+   "when": "A software team where work starts before the problem is written down, or where launches slip because nobody owns the checklist.",
+   "tags": [
+    "saas",
+    "software",
+    "specs",
+    "prd",
+    "launches",
+    "acceptance-criteria"
+   ],
+   "pains": [
+    "engineers start building before the problem is clear",
+    "specs are missing or out of date",
+    "launches slip because nobody owns the checklist",
+    "requirements live in someone's head",
+    "QA finds out what 'done' means after the build"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly spec and launch review · Tuesdays at 10:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "product-marketing",
+   "template": "product-marketing",
+   "name": "Product Marketing Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Turns each planned launch into a positioning statement, messaging pillars and a launch brief with a tier and checklist, and keeps sales battlecards current. Nothing is announced outside the requested work or Tools.",
+   "when": "A team that ships features or new products and wants sales, marketing and support to say the same thing about them.",
+   "tags": [
+    "launches",
+    "positioning",
+    "competitive",
+    "saas",
+    "b2b",
+    "sales-enablement"
+   ],
+   "pains": [
+    "our launches go out with no plan",
+    "sales cannot explain how we differ from competitors",
+    "our positioning is unclear or keeps changing",
+    "customers do not understand what is new",
+    "sales battlecards are out of date"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_software",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly launch and positioning review · Mondays at 10:00 team time",
+   "tools": [
+    "crm",
+    "meetings",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "product-ops",
+   "template": "product-ops",
+   "name": "Product Operations Manager",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps one ledger of feature requests with the accounts behind each, runs the beta roster and the cross-team release calendar, and flags roadmap items with no owner, spec or date. Customer updates stay drafts until a person turns mail sending on in Tico.",
+   "when": "A software team where requests arrive from sales, support and customers in many places, and nobody can say who asked for what.",
+   "tags": [
+    "saas",
+    "feature-requests",
+    "betas",
+    "release-calendar",
+    "b2b",
+    "roadmap"
+   ],
+   "pains": [
+    "the same feature request is logged five different ways",
+    "we never tell customers when their request ships",
+    "beta customers are tracked in someone's spreadsheet",
+    "nobody knows what is releasing next month",
+    "roadmap items have no owner or date"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_businesses",
+    "uses_crm",
+    "uses_tickets"
+   ],
+   "first_routine": "Weekly product ops review · Wednesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "product-researcher",
+   "template": "product-researcher",
+   "name": "UX Researcher",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Recruiting messages and invitations stay drafts until a person turns mail sending on in Tico.",
+   "when": "Offer to a team that builds a product and talks to its users, in meetings or by interview.",
+   "tags": [
+    "ux-research",
+    "interviews",
+    "discovery",
+    "saas",
+    "usability",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "customer interviews pile up unread",
+    "we build features without knowing the real problem",
+    "we lack research to back a product decision",
+    "we can't compare our features with competitors"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly research digest · Thursdays at 10:00 team time",
+   "tools": [
+    "docs",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "recruiting",
+   "template": "recruiting",
+   "name": "Recruiter",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Fills the team's open roles: writes the job post, screens every application against the hiring manager's criteria, keeps every candidate answered, and runs the weekly pipeline. The hiring manager decides; messages and posts go out when a person has turned mail sending on in Tico.",
+   "when": "A team hiring a few roles a quarter with no recruiter, or one recruiter who wants the screening and follow-through covered.",
+   "tags": [
+    "hiring",
+    "smb",
+    "recruiting",
+    "job-posts",
+    "screening",
+    "remote"
+   ],
+   "pains": [
+    "writing job posts takes forever",
+    "we drown in applications for every opening",
+    "candidates wait too long to hear back",
+    "every interviewer asks different questions"
+   ],
+   "recommend_when": [
+    "uses_email",
+    "uses_docs",
+    "small_team"
+   ],
+   "first_routine": "Weekly hiring pipeline summary · Fridays at 10:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "recruiting-coordinator",
+   "template": "recruiting-coordinator",
+   "name": "Recruiting Coordinator",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit and chases scorecards until the debrief can happen. Candidate messages go out when a person has turned mail sending on in Tico.",
+   "when": "A team running more than a handful of interviews a week, where scheduling and feedback chasing eat the recruiter's or the manager's time.",
+   "tags": [
+    "hiring",
+    "interviews",
+    "scheduling",
+    "candidate-experience",
+    "remote"
+   ],
+   "pains": [
+    "interview scheduling is a game of email tag",
+    "candidates get rescheduled again and again",
+    "interview feedback arrives days late",
+    "interviewers walk in without the resume or the questions"
+   ],
+   "recommend_when": [
+    "uses_email",
+    "uses_meetings"
+   ],
+   "first_routine": "Daily interview logistics · Weekdays at 08:00 team time",
+   "tools": [
+    "calendar",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "release-notes",
+   "template": "release-notes",
+   "name": "Release Manager",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Gets each release ready: a readiness checklist with a go or no-go call, the changelog entry and plain-language release notes from merged pull requests, and a suggested version. After the owner approves a release, it tags it and rolls it out to the team's installs.",
+   "when": "Offer when GitHub is connected and the team ships a product people use.",
+   "tags": [
+    "saas",
+    "github",
+    "releases",
+    "changelog",
+    "mobile"
+   ],
+   "pains": [
+    "release notes are written by hand at the last minute",
+    "customers don't know what changed in each release",
+    "the changelog is out of date",
+    "we can't say what a release fixed"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "publishes_content"
+   ],
+   "first_routine": "Weekly release notes draft · Fridays at 14:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "reputation",
+   "template": "reputation",
+   "name": "Reputation Manager",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Reads the team's public review listings every Monday, logs every review and prepares one batch per surface of honest replies and rule-based flags. Nothing is posted or flagged outside the stated rules.",
+   "when": "A team whose buyers check review sites or Google before they buy, and that has reviews it cannot ignore.",
+   "tags": [
+    "reviews",
+    "reputation",
+    "b2c",
+    "retail",
+    "services",
+    "saas"
+   ],
+   "pains": [
+    "bad reviews are the first thing buyers see",
+    "we have too few reviews on the software review sites",
+    "unfair or fake reviews stay up",
+    "we don't know what is said about us on Yelp or Google",
+    "nobody answers our negative reviews"
+   ],
+   "recommend_when": [
+    "tracks_mentions",
+    "sells_to_consumers",
+    "publishes_content"
+   ],
+   "first_routine": "Weekly review sweep · Mondays at 09:00 team time",
+   "tools": [
+    "chat",
+    "crm",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "retention",
+   "template": "retention",
+   "name": "Retention Specialist",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Works every cancellation and downgrade request: records the reason, prepares the one save offer your written policy allows, and watches for customers likely to leave next. Offers and replies go out only within the requested work them, and a cancellation is never blocked.",
+   "when": "A subscription business, consumer or business, that loses customers without knowing why and answers cancellation requests one at a time.",
+   "tags": [
+    "subscription",
+    "b2c",
+    "b2b",
+    "saas",
+    "ecommerce",
+    "churn",
+    "cancellations",
+    "save-offers"
+   ],
+   "pains": [
+    "customers cancel and we never learn why",
+    "cancellation requests get a different answer from each human",
+    "we only notice a customer is leaving when the cancellation arrives",
+    "discounts to stop cancellations are handed out at random"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_support_inbox",
+    "uses_email"
+   ],
+   "first_routine": "Weekly retention report · Fridays at 10:00 team time",
+   "tools": [
+    "crm",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "returns",
+   "template": "returns",
+   "name": "Returns and Refunds Specialist",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Decides every return and refund request against your written policy and the order record, and prepares the reply and the refund for review. A weekly report shows which products come back and why.",
+   "when": "An online shop or retailer shipping physical goods, where return requests pile up in the inbox and refunds depend on who happens to answer.",
+   "tags": [
+    "ecommerce",
+    "retail",
+    "b2c",
+    "returns",
+    "refunds",
+    "dtc",
+    "physical-goods"
+   ],
+   "pains": [
+    "return requests pile up in the inbox",
+    "refunds take weeks and customers chase us",
+    "we can't tell which products come back most and why",
+    "we suspect some returns are abuse but can't prove it"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "has_support_inbox",
+    "uses_email"
+   ],
+   "first_routine": "Weekly returns report · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "revenue-accountant",
+   "template": "revenue-accountant",
+   "name": "Revenue Accountant",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Closes revenue each month: billing reconciled to the books, the deferred revenue schedule rolled forward and each new contract's recognition noted. It bridges recurring revenue and proposes journal entries for a human; it never posts.",
+   "when": "A subscription or contract business that bills annually or in advance, where deferred revenue is kept by hand in a spreadsheet at month end.",
+   "tags": [
+    "saas",
+    "subscription",
+    "deferred-revenue",
+    "month-end",
+    "b2b",
+    "annual-contracts"
+   ],
+   "pains": [
+    "deferred revenue lives in a spreadsheet only one human understands",
+    "billing and the books never agree at month end",
+    "we can't explain why MRR moved",
+    "auditors keep asking how we recognise revenue"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_businesses",
+    "uses_docs"
+   ],
+   "first_routine": "Monthly revenue close pack · The 2nd of each month at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "sales",
+   "template": "sales",
+   "name": "Account Executive",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Works every open deal from first meeting to signature: call follow-ups with a dated next step, mutual action plans, proposals and RFP answers. Messages to outsiders stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team whose sellers lose deals between meetings: follow-ups go late, proposals are written from scratch and nobody writes down the buyer's next step.",
+   "tags": [
+    "b2b",
+    "pipeline",
+    "proposals",
+    "rfp",
+    "closing",
+    "saas",
+    "services",
+    "enterprise"
+   ],
+   "pains": [
+    "follow-ups fall through the cracks",
+    "deals stall after the demo",
+    "every proposal is written from scratch",
+    "security questionnaires and RFPs eat days",
+    "nobody knows the buyer's next step or who signs"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm",
+    "uses_email"
+   ],
+   "first_routine": "Weekly deal review · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs",
+    "mail",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "sales-enablement",
+   "template": "sales-enablement",
+   "name": "Sales Enablement Manager",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Makes the sales team better every week: win/loss analysis of closed deals from calls and notes, talk tracks and objection answers that work, and a ramp plan for each new seller. It coaches the work, never grades the human.",
+   "when": "A team with three or more sellers, or hiring its next ones, that wants to learn from every closed deal instead of repeating the same losses.",
+   "tags": [
+    "b2b",
+    "win-loss",
+    "onboarding-reps",
+    "objection-handling",
+    "talk-tracks",
+    "coaching",
+    "saas",
+    "growing-team"
+   ],
+   "pains": [
+    "we don't know why we really lose deals",
+    "loss reasons in the CRM just say price",
+    "new sellers take months to ramp",
+    "every seller handles objections differently"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_meetings",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly win/loss notes · Fridays at 10:00 team time",
+   "tools": [
+    "crm",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "sales-engineer",
+   "template": "sales-engineer",
+   "name": "Sales Engineer",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Wins the technical side of deals: discovery on the buyer's systems, a demo script per prospect and proof-of-concept plans with agreed success criteria. Technical and security answers come from documented sources only.",
+   "when": "A team selling a technical product whose deals wait on integration questions, security reviews or a proof of concept.",
+   "tags": [
+    "b2b",
+    "saas",
+    "technical-sales",
+    "demos",
+    "proof-of-concept",
+    "security-reviews",
+    "integrations",
+    "enterprise"
+   ],
+   "pains": [
+    "prospects ask technical questions nobody in sales can answer",
+    "our demos show features instead of the buyer's workflow",
+    "proofs of concept drag on with no finish line",
+    "integration questions stall deals for weeks"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_software",
+    "has_pipeline",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly technical deal prep · Wednesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "sales-lead",
+   "template": "sales-lead",
+   "name": "Sales Manager",
+   "department": "sales",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the sales team's week: the pipeline review and forecast call, deal coaching notes, who takes each new lead or request, and which sales role to add next. It proposes; a human assigns and decides.",
+   "when": "A team with two or more sales bots or sellers that wants one weekly picture and one place requests are routed from.",
+   "tags": [
+    "b2b",
+    "pipeline",
+    "forecast",
+    "team-lead",
+    "coaching",
+    "routing",
+    "saas",
+    "services"
+   ],
+   "pains": [
+    "I can't tell which deals are really moving",
+    "our sales meeting is spent reading the CRM aloud",
+    "nobody sees the whole sales pipeline in one place",
+    "new leads sit unassigned for days"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly sales team summary · Mondays at 08:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "sales-ops",
+   "template": "sales-ops",
+   "name": "Sales Operations Manager",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the CRM trustworthy and the forecast honest: a weekly hygiene audit with a fix per exception, the pipeline and forecast roll-up, and the lead routing and territory rules. Requested CRM changes use your Tools.",
+   "when": "A team whose CRM data is trusted less each month, whose forecast is built by hand, or whose new leads sit unassigned.",
+   "tags": [
+    "b2b",
+    "crm",
+    "forecast",
+    "pipeline",
+    "lead-routing",
+    "territories",
+    "revops",
+    "data-quality"
+   ],
+   "pains": [
+    "our CRM data is stale and nobody trusts the forecast",
+    "deals have no next step or close date",
+    "duplicate contacts and leads keep piling up",
+    "the pipeline report takes hours to put together",
+    "nobody knows which rep a new lead belongs to"
+   ],
+   "recommend_when": [
+    "uses_crm",
+    "has_pipeline",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly CRM hygiene and pipeline report · Mondays at 06:30 team time",
+   "tools": [
+    "chat",
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "sdr-research",
+   "template": "sdr-research",
+   "name": "Sales Development Representative",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Books first meetings: qualifies inbound, researches and scores new leads, and runs the first-touch and follow-up sequence. Each booked meeting goes to the Account Executive, and messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team that gets or buys new leads and wants each one qualified, opened with something true and followed up until it books a meeting or says no.",
+   "tags": [
+    "b2b",
+    "outbound",
+    "inbound",
+    "prospecting",
+    "lead-qualification",
+    "meetings-booked",
+    "saas",
+    "smb"
+   ],
+   "pains": [
+    "new leads are never researched before we reach out",
+    "we cannot tell which new leads are worth a call",
+    "inbound leads wait a day for a first reply",
+    "our outreach is generic and gets ignored",
+    "leads go cold"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_email"
+   ],
+   "first_routine": "Weekday prospecting run · Weekdays at 07:30 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings",
+    "web"
+   ],
+   "default": true
+  },
+  {
+   "slug": "security-compliance",
+   "template": "security-compliance",
+   "name": "Security and Compliance Analyst",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the security controls calendar for an audit such as SOC 2 or ISO 27001, gathers the evidence each control needs on time, and runs the quarterly access reviews. Requested setting changes use its Tools.",
+   "when": "A team selling to larger customers that asks for SOC 2, ISO 27001 or long security questionnaires, with no one owning the evidence.",
+   "tags": [
+    "security",
+    "soc2",
+    "iso27001",
+    "audit",
+    "access-review",
+    "saas",
+    "enterprise"
+   ],
+   "pains": [
+    "audit evidence is scrambled together the week before the auditor arrives",
+    "we promised quarterly access reviews and skipped two",
+    "nobody tracks who has read and accepted our security policies",
+    "we can't say which vendors have been security reviewed"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_software",
+    "uses_docs"
+   ],
+   "first_routine": "Monthly evidence and controls page · The first of each month at 10:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "security-engineer",
+   "template": "security-engineer",
+   "name": "Security Engineer",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Works the security backlog: triages dependency alerts and advisories by exploitability and reachability, writes the patch plan, and flags credentials committed to the repositories. A human merges every fix.",
+   "when": "Offer to a software team whose repositories are on GitHub and whose dependency alerts pile up with nobody owning them.",
+   "tags": [
+    "saas",
+    "github",
+    "dependencies",
+    "vulnerabilities",
+    "secrets",
+    "regulated",
+    "enterprise"
+   ],
+   "pains": [
+    "dependabot alerts pile up and nobody looks at them",
+    "we can't tell which vulnerabilities actually matter",
+    "a customer security review asks how fast we patch",
+    "someone committed an API key to the repository"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly dependency and advisory report · Mondays at 08:00 team time",
+   "tools": [
+    "chat",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "seo-visibility",
+   "template": "seo-visibility",
+   "name": "SEO Specialist",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Tracks how the team shows up in search and in AI answers every week and hands over the three page fixes worth doing first, written ready to apply. It never edits a live page itself.",
+   "when": "A team whose buyers search or ask an AI assistant before they talk to anyone, and that has a website with content on it.",
+   "tags": [
+    "seo",
+    "ai-search",
+    "content",
+    "website",
+    "saas",
+    "ecommerce"
+   ],
+   "pains": [
+    "we don't know if AI assistants mention us",
+    "our website gets little organic traffic",
+    "competitors outrank us for what buyers search",
+    "nobody checks our pages for search problems",
+    "we don't know which pages to write to rank"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_businesses",
+    "sells_software"
+   ],
+   "first_routine": "Weekly search and AI visibility report · Mondays at 08:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "software-architect",
+   "template": "software-architect",
+   "name": "Software Architect",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the system's big decisions deliberate and written down. It reviews design docs and RFCs against the architecture, records each decision as an ADR and keeps a ranked technical debt register.",
+   "when": "Offer to a software team with several engineers or services, where big technical decisions are made in chat and forgotten, and technical debt is argued about rather than listed.",
+   "tags": [
+    "saas",
+    "github",
+    "architecture",
+    "design-docs",
+    "adr",
+    "tech-debt",
+    "scale"
+   ],
+   "pains": [
+    "big technical decisions are made in Slack and forgotten",
+    "nobody knows why the system is built this way",
+    "tech debt is argued about but never written down",
+    "design docs get no real feedback before we build"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly architecture review · Wednesdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "sourcer",
+   "template": "sourcer",
+   "name": "Sourcer",
+   "department": "hr",
+   "lead": false,
+   "core": false,
+   "summary": "Finds interested people for each open role from public professional profiles and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate.",
+   "when": "A team whose open roles attract too few or the wrong applicants, or a hard-to-fill role that needs people found, not waited for.",
+   "tags": [
+    "hiring",
+    "sourcing",
+    "outbound",
+    "referrals",
+    "passive-candidates",
+    "remote"
+   ],
+   "pains": [
+    "we only hear from people who apply",
+    "our hardest roles stay open for months",
+    "nobody has time to go looking for candidates",
+    "we ask for referrals once and forget"
+   ],
+   "recommend_when": [
+    "uses_email",
+    "small_team"
+   ],
+   "first_routine": "Weekly sourcing slate · Tuesdays at 09:00 team time",
+   "tools": [
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "spend-watcher",
+   "template": "spend-watcher",
+   "name": "FP&A Analyst",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps spending on plan: a weekly spend report on software and cloud, and each month budget against actual with the material variances explained and the forecast rolled forward. It never cancels or pays anything.",
+   "when": "A team with a budget nobody checks between board meetings, or software and cloud bills that grow faster than anyone notices.",
+   "tags": [
+    "budgeting",
+    "forecasting",
+    "saas-spend",
+    "cloud",
+    "smb",
+    "subscription"
+   ],
+   "pains": [
+    "software subscriptions nobody remembers signing up for",
+    "the cloud bill jumped and nobody knows why",
+    "we pay for seats nobody uses",
+    "renewals roll over before anyone checks them",
+    "nobody owns the software budget",
+    "we set a budget and never look at it again"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_slack",
+    "sells_software"
+   ],
+   "first_routine": "Weekly spend report · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "strategy-planning",
+   "template": "strategy-planning",
+   "name": "Strategy Analyst",
+   "department": "leadership",
+   "lead": false,
+   "core": false,
+   "summary": "Writes next quarter's plan and OKRs from the goals, updates and meetings already in Tico, and grades last quarter, for the owner to sign off. It never sets or changes a goal.",
+   "when": "A leadership team that wants a written quarterly plan without a month of planning meetings.",
+   "tags": [
+    "okrs",
+    "planning",
+    "quarterly",
+    "leadership",
+    "b2b"
+   ],
+   "pains": [
+    "we have no written plan for next quarter",
+    "our goals are vague and cannot be measured",
+    "quarterly planning takes weeks of meetings",
+    "nobody grades last quarter's results"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Quarterly plan and OKR draft · The first of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "support",
+   "template": "support",
+   "name": "Support Agent",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Works each support ticket to resolution: sorts it, finds the answer by asking the Librarian what the docs say, prepares the reply and chases what is still open. Every reply reaches the customer only within the requested work it.",
+   "when": "",
+   "tags": [
+    "support",
+    "helpdesk",
+    "tickets",
+    "email",
+    "b2c",
+    "b2b",
+    "ecommerce",
+    "saas"
+   ],
+   "pains": [
+    "support inbox is overflowing",
+    "customers wait too long for an answer",
+    "we answer the same questions again and again",
+    "we can't tell which problems are actually product bugs",
+    "only one human knows how to reply"
+   ],
+   "recommend_when": [
+    "has_support_inbox",
+    "uses_tickets",
+    "sells_to_consumers",
+    "uses_email"
+   ],
+   "first_routine": "Daily support queue · Weekdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "support-lead",
+   "template": "support-lead",
+   "name": "Head of Customer Support",
+   "department": "support",
+   "lead": true,
+   "core": false,
+   "summary": "Runs customer support as its head: a weekly summary of response times against target, the oldest waiting tickets and the decisions needed, with routing and hiring proposals. It never replies to a customer or assigns people on its own.",
+   "when": "A team with support work in more than one place or more than one bot, where nobody has the week's picture and nobody decides which support role to add next.",
+   "tags": [
+    "support",
+    "helpdesk",
+    "sla",
+    "backlog",
+    "coverage",
+    "b2c",
+    "b2b"
+   ],
+   "pains": [
+    "I have no weekly view of how support is doing",
+    "nobody owns the support backlog",
+    "old tickets sit for weeks with no owner",
+    "support has no weekend or holiday coverage",
+    "support numbers take an hour to pull together"
+   ],
+   "recommend_when": [
+    "has_support_inbox",
+    "uses_tickets",
+    "uses_email",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekly support summary · Mondays at 09:00 team time",
+   "tools": [
+    "chat",
+    "mail"
+   ],
+   "default": true
+  },
+  {
+   "slug": "support-ops",
+   "template": "support-ops",
+   "name": "Support Operations Specialist",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the help desk working: audits tags, routing rules, SLA policies and macros each month and prepares the exact changes that fix misroutes and stale replies. Apply requested changes with your Tools and verify the result.",
+   "when": "A support team on a help desk tool (Zendesk, Freshdesk, Help Scout, Intercom or similar) whose tags, rules and macros have grown faster than anyone maintains them.",
+   "tags": [
+    "helpdesk",
+    "routing",
+    "sla",
+    "macros",
+    "tagging",
+    "b2b",
+    "b2c",
+    "scale"
+   ],
+   "pains": [
+    "tickets land in the wrong queue",
+    "our help desk tags are a mess nobody trusts",
+    "nobody knows which automation rule did what",
+    "canned replies still quote the old policy",
+    "SLA timers in the help desk don't match what we promise"
+   ],
+   "recommend_when": [
+    "uses_tickets",
+    "has_support_inbox",
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Monthly help desk audit · The first Monday of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "support-qa",
+   "template": "support-qa",
+   "name": "Support Quality Analyst",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Scores a weekly sample of sent support replies against your own scorecard, finds the patterns behind the misses and prepares coaching notes for a human to give. It reads replies; it never edits a ticket or contacts a customer.",
+   "when": "A support team whose replies nobody reviews, or whose quality depends on who happens to answer.",
+   "tags": [
+    "support",
+    "quality",
+    "qa",
+    "coaching",
+    "scorecard",
+    "b2c",
+    "b2b"
+   ],
+   "pains": [
+    "we never review the replies we send",
+    "reply quality varies by who answers",
+    "we don't know if our support answers are accurate",
+    "new support hires get no feedback on their replies",
+    "we only find bad replies when a customer complains"
+   ],
+   "recommend_when": [
+    "has_support_inbox",
+    "uses_tickets",
+    "uses_email",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekly reply review · Fridays at 10:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "tax",
+   "template": "tax",
+   "name": "Tax Specialist",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the team ahead of its tax deadlines: a monthly calendar of filings and payments with their inputs, and a sales tax and VAT threshold watch by place. It gathers what the accountant needs; summaries for a human, not tax advice.",
+   "when": "A team that sells across states or countries, pays contractors, or has missed a filing because nobody owned the calendar.",
+   "tags": [
+    "tax",
+    "sales-tax",
+    "vat",
+    "ecommerce",
+    "international",
+    "contractors",
+    "compliance"
+   ],
+   "pains": [
+    "we missed a tax filing deadline",
+    "we don't know which states we owe sales tax in",
+    "contractor tax forms are a scramble every January",
+    "the accountant asks for the same documents every quarter"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "uses_docs"
+   ],
+   "first_routine": "Monthly tax calendar · The 1st of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "technical-support",
+   "template": "technical-support",
+   "name": "Technical Support Engineer",
+   "department": "support",
+   "lead": false,
+   "core": false,
+   "summary": "Takes the tickets frontline support cannot solve: reproduces the problem, reads the logs, finds a workaround and writes a bug report engineering can act on without asking back. Customer replies go out only within the requested work them.",
+   "when": "A software team whose support tickets often need technical digging (integrations, APIs, data problems) before anyone knows whether it is a bug.",
+   "tags": [
+    "saas",
+    "software",
+    "tier-2",
+    "bugs",
+    "b2b",
+    "developer-tools",
+    "api",
+    "integrations"
+   ],
+   "pains": [
+    "support can't tell a bug from a setup mistake",
+    "engineers get bug reports they can't reproduce",
+    "API and integration tickets sit for days",
+    "the same workaround gets rediscovered every month"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_tickets",
+    "uses_github",
+    "has_support_inbox"
+   ],
+   "first_routine": "Weekly tier 2 queue report · Thursdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "travel",
+   "template": "travel",
+   "name": "Travel Coordinator",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Plans each business trip within the travel policy: compares flight, rail and hotel options, prepares the booking for review, writes the itinerary and checks documents. It never books or pays on its own.",
+   "when": "A team whose people travel for sales, events or client work every month and book it themselves, over budget and at the last minute.",
+   "tags": [
+    "travel",
+    "trips",
+    "events",
+    "field-sales",
+    "policy",
+    "international"
+   ],
+   "pains": [
+    "everyone books their own travel at the last minute",
+    "trips cost more than our travel policy allows",
+    "someone arrived without the right visa or passport validity",
+    "we don't know who is travelling where this month"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_email"
+   ],
+   "first_routine": "Weekly trips page · Mondays at 10:00 team time",
+   "tools": [
+    "calendar",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "ux-writer",
+   "template": "ux-writer",
+   "name": "UX Writer",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Writes the words in the product from each spec: button labels, error messages, empty states and onboarding copy. It reviews every pull request that changes user-facing text against the glossary, and an engineer posts the review.",
+   "when": "A software team whose interface copy is written by whoever builds the screen, so the same thing has three names and errors blame the user.",
+   "tags": [
+    "saas",
+    "ux-copy",
+    "microcopy",
+    "error-messages",
+    "mobile",
+    "terminology"
+   ],
+   "pains": [
+    "error messages blame the user",
+    "the same thing has three names in our app",
+    "button labels are written by whoever builds the screen",
+    "empty screens tell users nothing"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly interface copy review · Thursdays at 10:00 team time",
+   "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "vendor-manager",
+   "template": "vendor-manager",
+   "name": "Vendor Manager",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the register of every vendor the team pays, with owner, risk tier and notice date, and opens each renewal 90 days out with a keep, renegotiate or exit brief. It never renews, cancels or signs.",
+   "when": "A team with twenty or more vendors and contracts, where auto-renewals and weak suppliers are noticed only after the invoice.",
+   "tags": [
+    "vendors",
+    "contracts",
+    "renewals",
+    "suppliers",
+    "risk",
+    "smb",
+    "services"
+   ],
+   "pains": [
+    "a vendor contract auto-renewed before anyone looked at it",
+    "we have no list of who our suppliers are and who owns each one",
+    "nobody reviews whether a vendor is actually delivering",
+    "we only learn a vendor holds our data when something goes wrong"
+   ],
+   "recommend_when": [
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Weekly vendor and renewals page · Tuesdays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": false
+  }
+ ]
+}

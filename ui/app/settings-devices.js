@@ -275,6 +275,7 @@ function machineUsageHTML(runtime, state, name, where = 'this computer') {
 // when the computer last reported).
 function machineSignInHTML(machine, online, name, auth, value) {
   const checked = machine.last_seen ? ` · last checked ${ago(machine.last_seen)}` : '';
+  if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
   if (auth === 'ready') return `${machineAccountHTML(value.account, name, value.detail)}${online ? '' : ` <span class="muted">${esc(checked.slice(3))}</span>`}`;
   if (auth === 'rejected') return `<span class="pill fail" title="${esc(value.detail || '')}">Login expired or rejected</span>`;
   if (auth === 'missing') return `<span class="pill fail" title="${esc(value.detail || '')}">Signed out</span>`;
@@ -282,6 +283,12 @@ function machineSignInHTML(machine, online, name, auth, value) {
   if (auth === 'failed') return couldNot;
   return online ? `<span class="pill waiting" title="${esc(value.detail || '')}">Checking…</span>` : couldNot;
 }
+// A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
+const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
+// Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
+const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
+  runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
+  platform: machine.platform || ''}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';

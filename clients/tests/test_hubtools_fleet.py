@@ -56,6 +56,18 @@ def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
     assert "hub_group_update" in hubtools.AUDIENCE and "assistant" not in hubtools.offered_to(fn["hub_group_update"])
 
 
+def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
+    fn = hubtools.BY_NAME["hub_org_order"]["fn"]
+    api = _Groups()
+    fn(api, {"manager": "engineering-lead"})
+    fn(api, {"manager": "human:ana", "set": ["bot:cmo", "ben"]})
+    assert [call for call in api.calls if call[1] != "me"] == [
+        ("GET", "org/order/engineering-lead", None), ("PUT", "org/order/human:ana", {"reports": ["bot:cmo", "ben"]}, False)]
+    botops = _Groups("bot:botops")
+    fn(botops, {"manager": "cmo", "set": ["writer"]})
+    assert botops.calls[-1][:2] == ("PUT", "org/order/cmo") and botops.calls[-1][3] is True
+
+
 def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
     fn = hubtools.BY_NAME
     entry = {"bot": "inbox-manager", "service": "gmail", "can": "read,draft,send", "identity": "a@acme.example"}

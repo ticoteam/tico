@@ -110,6 +110,12 @@ STABLE = [
      "Rename a group, move it under another (`parent`, empty for the top) and add or remove teammates (owners and admins)", "Group"),
     ("/api/v2/groups/{gid}", "delete", "Team chart", "deleteGroup",
      "Remove a group; the groups and teammates in it move up to its parent (owners and admins)", None),
+    ("/api/v2/org/order/{manager}", "get", "Team chart", "getReportOrder",
+     "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the "
+     "chart's order", "ReportOrderView"),
+    ("/api/v2/org/order/{manager}", "put", "Team chart", "setReportOrder",
+     "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under "
+     "that manager, and a bot for its own)", "ReportOrderView"),
     ("/api/v2/bots", "get", "Bots", "listBots",
      "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
      "BotList"),
@@ -600,6 +606,10 @@ SCHEMAS = {
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
                   "bots": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),
+    "ReportOrderView": obj({"manager": "s", "kind": "s", "name": "s", "can_order": "b",
+                            "reports": items(obj({"id": "s", "kind": "s", "name": "s", "saved": "b"},
+                                                 required=["id", "kind", "name", "saved"]))},
+                           required=["manager", "kind", "name", "can_order", "reports"]),
     "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "org_groups": "a", "teams": "o"}),
     "BotList": items(ref("Bot")),
     "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),

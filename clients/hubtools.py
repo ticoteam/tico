@@ -903,10 +903,14 @@ def task_restore(api, args):
     return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
-@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",
+@tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
+      "changes labels on a task it owns, asked for or whose type it manages; a public roadmap label also needs an "
+      "approved publish approval (hub_task_publication_preview with the labels the task keeps), and goal:on/goal:off "
+      "need a person.",
       {"id": TASK_ID,
        "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
-       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"}, "on_behalf_of": ASKED},
+       "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"},
+       "approval_id": _s("Exact publish approval for a public roadmap label"), "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_label(api, args):
     current = api.get("tasks/" + args["id"])["task"]
@@ -917,7 +921,10 @@ def task_label(api, args):
         x = str(x).strip().lower()
         if x and x not in labels:
             labels.append(x)
-    return _asked(api, args).post("tasks/" + args["id"], {"version": current["version"], "labels": labels}, key=_key(args))
+    body = {"version": current["version"], "labels": labels}
+    if args.get("approval_id"):
+        body["approval_id"] = args["approval_id"]
+    return _asked(api, args).post("tasks/" + args["id"], body, key=_key(args))
 
 
 @tool("hub_task_link", "Attach a link to a task: the pull request you opened (this is what moves a "
@@ -1902,6 +1909,9 @@ def routine_run(api, args):
                                        "check model; own (default): its own model"},
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
+       "update_subscriptions": {"type": "array", "items": {"type": "string", "enum": ["templates", "tico"]},
+                                "description": "Subscribe to updates, as quiet notes for its next run: templates "
+                                               "(its template's changes), tico (Tico releases); [] for none"},
        "status": {"type": "string", "enum": ["active", "paused", "planned"]}},
       required=("slug",), writes=True)
 def bot_set(api, args):
@@ -1913,7 +1923,7 @@ def bot_set(api, args):
         row = api.get(f"bots/{args['slug']}/access", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
-    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream") if args.get(k) is not None}
+    change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
     return api.post(f"bots/{args['slug']}/definition",
                     {**change, "expected_revision": row["revision"],
                      **({"on_behalf_of": on_behalf} if delegated else {})}, key=_key(args))
@@ -2072,6 +2082,21 @@ def group_update(api, args):
         return who.post("groups", body, key=_key(args))
     body = {"add": add, "remove": remove, **{k: args[k] for k in ("name", "parent") if args.get(k) is not None}}
     return who.patch(f"groups/{args['group']}", body, key=_key(args))
+
+
+@tool("hub_org_order", "A manager's direct reports, humans and bots, in the order the team chart shows them (placed ones "
+      "first, then the rest: humans, then by name). With `set`, put them in that order, as the person who asked you: "
+      "whoever may put reports under that manager may order them, and a bot orders its own reports. Reports left out "
+      "keep their places, so naming two swaps those two. Who reports to whom does not change. Answers with the order.",
+      {"manager": _s("The manager: a bot's slug or a human's id (`bot:` or `human:` in front when one could be either)"),
+       "set": {"type": "array", "items": {"type": "string"},
+               "description": "Its direct reports in the new order: bot slugs and human ids"}},
+      required=("manager",), writes=True)
+def org_order(api, args):
+    path = "org/order/" + quote(str(args["manager"]).strip(), safe=":")
+    if not args.get("set"):
+        return api.get(path)
+    return _as_person(api).call("PUT", path, {"reports": list(args["set"])}, _key(args))
 
 
 # ----------------------------------------------------------------------------- BotOps: what the app can do, as the requester

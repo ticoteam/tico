@@ -233,6 +233,56 @@ function orgMayMove(key) { const mine = orgMine(); return mine === null || mine.
 // Owners and admins also drag a human or a bot into a group (onto its row, or onto "No group" to take it out), and a
 // group into another group to nest it (backend/groups.py holds the rule).
 const orgMayDrag = key => key.startsWith('g:') ? orgCanGroups() : orgMayMove(key) || orgCanGroups();
+// A manager's reports keep the order they are put in (backend/report_order.py). Whoever may put reports under that
+// manager orders them: the owner, the manager or someone it reports up to, and the person who runs a bot manager.
+const orgMeId = () => mePerson()?.id || S.me?.id || '';
+const orgBot = key => key.startsWith('b:') ? (S.emps || []).find(e => e.name === key.slice(2)) : null;
+const orgName = key => key.startsWith('p:') ? ((S.people || []).find(p => p.id === key.slice(2))?.name || key.slice(2))
+  : (orgBot(key)?.display_name || key.slice(2));
+const orgMayOrder = manager => /^[pb]:/.test(manager) &&
+  (S.me?.role === 'owner' || orgMayMove(manager) || (!!orgMeId() && orgBot(manager)?.operator === orgMeId()));
+// Dropping onto another human or bot changes whom it reports to, under the reports_to rules (app.person_update,
+// SettingsAdmin.update_bot): a human is moved by someone they report up to, and only under that person or their
+// reports; a bot by whoever may manage it, under any human, or a bot they manage or run. The reason when not.
+function orgMoveRefusal(from, to) {
+  if (from.startsWith('p:') && to.startsWith('b:')) return 'A human reports to a human, not to a bot.';
+  const mayChange = from.startsWith('p:') ? orgMayMove(from) : S.me?.role === 'owner' || !!orgBot(from)?.can_manage || orgMayMove(from);
+  if (!mayChange) return `You can't change who ${orgName(from)} reports to.`;
+  const mayPut = S.me?.role === 'owner' || (to.startsWith('p:') ? from.startsWith('b:') || orgMayMove(to)
+    : orgMayMove(to) || (!!orgMeId() && orgBot(to)?.operator === orgMeId()));
+  return mayPut ? '' : `You can't put ${orgName(from)} under ${orgName(to)}: only under yourself or someone who reports up to you.`;
+}
+const orgOrderId = key => (key.startsWith('p:') ? 'human:' : 'bot:') + key.slice(2);
+// The reports in the order the tree shows them, as the server names them; the ones not in the tree keep their places.
+const orgOrderKeys = parent => [...$('#tree').querySelectorAll('[data-org-place]')].filter(n => n.dataset.orgIn === parent).map(n => n.dataset.org);
+async function orgOrderSave(parent, keys, focus) {
+  ORG_MENU = null;
+  try {
+    await put(`/v2/org/order/${encodeURIComponent(orgOrderId(parent))}`, {reports: keys.map(orgOrderId)});
+    await refresh(true);
+  } catch (e) { toast(e.message, true); }
+  renderTree();
+  if (focus) $('#tree').querySelector(`[data-org-menu="${CSS.escape(focus)}"]`)?.focus();
+}
+function orgReorder(key, at, where, parent) {
+  const keys = orgOrderKeys(parent).filter(k => k !== key), i = keys.indexOf(at);
+  if (i < 0) return;
+  keys.splice(where === 'after' ? i + 1 : i, 0, key);
+  return orgOrderSave(parent, keys);
+}
+// One place up or down among the rows beside it (a group shows some of a manager's reports): it swaps places with that
+// neighbour in the manager's whole order.
+function orgMoveStep(key, parent, step) {
+  const keys = orgOrderKeys(parent), node = $('#tree').querySelector(`[data-org-place][data-org="${CSS.escape(key)}"]`);
+  const near = [...(node?.closest('ul')?.children || [])].map(li => li.querySelector(':scope > .noderow > [data-org-place]'))
+    .filter(n => n?.dataset.orgIn === parent).map(n => n.dataset.org);
+  const i = near.indexOf(key), j = i + step;
+  if (i < 0 || j < 0 || j >= near.length) return;
+  const x = keys.indexOf(key), y = keys.indexOf(near[j]);
+  [keys[x], keys[y]] = [keys[y], keys[x]];
+  return orgOrderSave(parent, keys, key);
+}
+let ORG_MENU = null;                       // the key whose Move menu is open
 async function orgDrop(from, to) {
   const isGroup = to.startsWith('g:');
   if (from.startsWith('g:')) {
@@ -259,11 +309,20 @@ async function orgDrop(from, to) {
 function orgDragWire(tree) {
   if (!tree || tree.dataset.orgDrag) return;              // the tree is redrawn often; its listeners are added once
   tree.dataset.orgDrag = '1';
-  let dragging = null;
-  const clear = () => tree.querySelectorAll('.drop-target').forEach(n => n.classList.remove('drop-target'));
+  let dragging = null, draggingIn = '';
+  const marks = ['drop-target', 'drop-before', 'drop-after', 'drop-refused'];
+  const clear = () => tree.querySelectorAll(marks.map(m => '.' + m).join(',')).forEach(n => n.classList.remove(...marks));
+  // The top or bottom third of a fellow report puts the dragged one before or after it; the middle, as anywhere
+  // else, makes it report there.
+  const zone = (target, ev) => {
+    if (!draggingIn || target.dataset.orgIn !== draggingIn || !target.hasAttribute('data-org-place')) return '';
+    const box = target.getBoundingClientRect(), y = (ev.clientY - box.top) / (box.height || 1);
+    return y < 1 / 3 ? 'before' : y > 2 / 3 ? 'after' : '';
+  };
   tree.addEventListener('dragstart', ev => {
     const node = ev.target.closest('[data-org][draggable="true"]'); if (!node) return;
-    dragging = node.dataset.org; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dragging);
+    dragging = node.dataset.org; draggingIn = node.hasAttribute('data-org-place') ? node.dataset.orgIn : '';
+    ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', dragging);
     node.classList.add('dragging'); tree.classList.add('org-dragging');
   });
   tree.addEventListener('dragend', ev => { ev.target.closest?.('[data-org]')?.classList.remove('dragging'); tree.classList.remove('org-dragging'); clear(); dragging = null; });
@@ -271,18 +330,22 @@ function orgDragWire(tree) {
     const target = ev.target.closest('[data-org]'); if (!target || !dragging || target.dataset.org === dragging) return;
     const to = target.dataset.org;
     if (target.hasAttribute('data-helper')) return;       // built-in and message bots are not on the chart
-    if (to.startsWith('g:') ? !orgCanGroups() : dragging.startsWith('g:') || !orgMayMove(dragging)) return;
-    if (dragging.startsWith('p:') && !to.startsWith('p:') && !to.startsWith('g:')) return;   // a person reports to a person
+    const where = zone(target, ev);
+    if (!where && (to.startsWith('g:') ? !orgCanGroups() : dragging.startsWith('g:'))) return;
     ev.preventDefault(); ev.dataTransfer.dropEffect = 'move';
-    clear(); target.classList.add('drop-target');
+    // A move the viewer may not make still drops, to say why; nothing moves.
+    clear(); target.classList.add(where ? 'drop-' + where : !to.startsWith('g:') && orgMoveRefusal(dragging, to) ? 'drop-refused' : 'drop-target');
   });
-  tree.addEventListener('dragleave', ev => { ev.target.closest?.('[data-org]')?.classList.remove('drop-target'); });
+  tree.addEventListener('dragleave', ev => { ev.target.closest?.('[data-org]')?.classList.remove(...marks); });
   tree.addEventListener('drop', async ev => {
     const target = ev.target.closest('[data-org]'); if (!target || !dragging || target.hasAttribute('data-helper')) return;
     ev.preventDefault();
-    const from = dragging, to = target.dataset.org; dragging = null;
+    const from = dragging, to = target.dataset.org, where = zone(target, ev), parent = draggingIn; dragging = null;
     clear(); tree.classList.remove('org-dragging');
     if (from === to) return;
+    if (where) return orgReorder(from, to, where, parent);
+    const refused = !to.startsWith('g:') && orgMoveRefusal(from, to);
+    if (refused) { toast(refused, true); return; }
     try { await orgDrop(from, to); } catch (e) { toast(e.message, true); }
   });
 }
@@ -478,26 +541,44 @@ function renderTree() {
     (c.kind === 'bot' && (stateOf(c.name) === 'needs' || needsMeCount(c.name) || subtreeNeeds('b:' + c.name))) ||
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
-  const isTemp = e => e.kind === 'bot' && isTempBot(e);
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : (n.display_name || '').replace(TEMP_RE, '');
   const sources = {};
   for (const r of inboxNavRows()) (sources[r.bot] ||= []).push(r);
   INBOX_PLACED = new Set();
-  const rec = (parent, depth) => (byParent[parent] || []).slice()
-    .sort((a, b) => {
+  const rec = (parent, depth) => {
+    const placed = byReportOrder(parent);
+    const sorted = (byParent[parent] || []).slice().sort((a, b) => {
       if (!!a.helpers !== !!b.helpers) return a.helpers ? 1 : -1;        // built-in and message groups come last
       // A group's own humans and bots come first, then the groups nested in it.
       if ((a.kind === 'group') !== (b.kind === 'group')) return a.kind === 'group' ? 1 : -1;
       if (a.kind === 'group' && b.kind === 'group') return (a.order || 0) - (b.order || 0);
-      if ((a.kind === 'person') !== (b.kind === 'person')) return a.kind === 'person' ? -1 : 1;
-      if (isTemp(a) !== isTemp(b)) return isTemp(a) - isTemp(b);
+      if (placed(a, b)) return placed(a, b);               // a manager's reports in the order someone put them
       if (a.kind === 'bot' && b.kind === 'bot' && isHelperBot(a) && isHelperBot(b) && helperRank(a) !== helperRank(b)) return helperRank(a) - helperRank(b);
-      if (a.kind === 'bot' && b.kind === 'bot' && byBotOrder(a, b)) return byBotOrder(a, b);
-      return nameOf(a).localeCompare(nameOf(b));
-    })
-    .map(node => row(node, depth)).join('');
+      return chartFallback(a, b);                          // then the chart's own order, as on the server
+    });
+    // The reports here that the viewer may put in order, per manager: a manager's own rows, or in a group the members
+    // that share one. Each gets a place to drop before or after, and Move up and Move down.
+    const lists = {};
+    for (const n of sorted) {
+      if (n.kind !== 'person' && (n.kind !== 'bot' || isHelperBot(n))) continue;
+      const manager = orgReportsTo(n);
+      if (manager && (manager === parent || parent.startsWith('g:')) && orgMayOrder(manager))
+        (lists[manager] ||= []).push(n.kind === 'person' ? 'p:' + n.id : 'b:' + n.name);
+    }
+    const at = n => { const manager = orgReportsTo(n), list = lists[manager] || []; return {parent: manager, order: list.length > 1 ? list : []}; };
+    return sorted.map(node => row(node, depth, false, at(node))).join('');
+  };
+  // A report's place among its manager's reports: its drop zones and its Move menu.
+  const placeAttrs = (key, at) => at.order.includes(key) ? ` data-org-in="${esc(at.parent)}" data-org-place` : '';
+  const moveMenu = (key, name, at) => {
+    const i = at.order.indexOf(key); if (i < 0) return '';
+    const open = ORG_MENU === key;
+    return `<span class="org-order${open ? ' open' : ''}"><button type="button" class="org-tool" data-org-menu="${esc(key)}" data-org-in="${esc(at.parent)}" aria-haspopup="menu" aria-expanded="${open}" title="Move" aria-label="Move ${esc(name)}"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`
+      + (open ? `<span class="org-order-menu" role="menu" aria-label="Move ${esc(name)}"><button type="button" role="menuitem" data-org-step="-1"${i === 0 ? ' disabled' : ''}>Move up</button><button type="button" role="menuitem" data-org-step="1"${i === at.order.length - 1 ? ' disabled' : ''}>Move down</button></span>` : '')
+      + '</span>';
+  };
   // flat: the history list, one row per bot and person, no children and nothing to drag
-  const row = (node, depth, flat = false) => {
+  const row = (node, depth, flat = false, at = {parent: '', order: []}) => {
     if (node.kind === 'group') {
       const key = 'g:' + node.id, manage = !node.helpers && orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
@@ -514,9 +595,10 @@ function renderTree() {
       const p = node.person, key = 'p:' + p.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(p.name || p.id)}">›</button>` : ''}
-        <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${!flat && orgMayDrag(key) ? ' draggable="true"' : ''}>
+        <a class="node person ${curPerson === p.id ? 'cur' : ''}" href="#/person/${encodeURIComponent(p.id)}" title="${esc(personTitle(p))}"${curPerson === p.id ? ' aria-current="page"' : ''} data-org="p:${esc(p.id)}"${placeAttrs(key, at)}${!flat && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
           ${personAvatar(p, depth ? 16 : 20)}<span class="nm">${esc(firstName(p.name) || p.id)}</span>
           ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}</a>
+        ${moveMenu(key, p.name || p.id, at)}
         ${!flat && p.id === myId && MY_AGENT === false ? '<button type="button" class="org-connect" data-connect-agent title="Connect Grok Bot, Muse or another agent">Connect</button>' : ''}
         ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
@@ -527,11 +609,11 @@ function renderTree() {
     if (own) INBOX_PLACED.add(e.name);
     return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
       ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(e.display_name)}">›</button>` : ''}
-      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : ''}${!flat && !helper && orgMayDrag(key) ? ' draggable="true"' : ''}>
+      <a class="node ${e.status} ${curBot === e.name ? 'cur' : ''} ${st}" href="#/bot/${e.name}"${curBot === e.name ? ' aria-current="page"' : ''} data-org="b:${esc(e.name)}"${helper ? ' data-helper' : placeAttrs(key, at)}${!flat && !helper && (orgMayDrag(key) || at.order.includes(key)) ? ' draggable="true"' : ''}>
         ${avatar(e.name, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${treeLimitMark(e.name)}${treeBadge(n, st)}</a></div>
+        ${treeLimitMark(e.name)}${treeBadge(n, st)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };
@@ -556,8 +638,34 @@ function renderTree() {
   renderInboxNav();                                   // after the tree, which places what it can
   orgDragWire($('#tree'));
   orgGroupFieldWire();
+  // The Move menu by keyboard: arrows between its items, Escape back to its button.
+  $('#tree').onkeydown = ev => {
+    const menu = ev.target.closest('.org-order-menu'); if (!menu) return;
+    const items = [...menu.querySelectorAll('button:not([disabled])')], i = items.indexOf(ev.target);
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); items[(i + (ev.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
+    if (ev.key === 'Escape') {
+      ev.preventDefault(); ev.stopPropagation();
+      const key = ORG_MENU; ORG_MENU = null; renderTree();
+      $('#tree').querySelector(`[data-org-menu="${CSS.escape(key)}"]`)?.focus();
+    }
+  };
   $('#tree').onclick = ev => {
     if (ev.target.closest('[data-connect-agent]')) { ev.preventDefault(); window.connectAgent?.(); return; }
+    const opener = ev.target.closest('[data-org-menu]'), step = ev.target.closest('[data-org-step]');
+    if (step) {
+      ev.preventDefault();
+      const btn = step.closest('.org-order').querySelector('[data-org-menu]');
+      void orgMoveStep(btn.dataset.orgMenu, btn.dataset.orgIn, Number(step.dataset.orgStep));
+      return;
+    }
+    if (opener) {
+      ev.preventDefault();
+      const key = opener.dataset.orgMenu; ORG_MENU = ORG_MENU === key ? null : key; renderTree();
+      const tree = $('#tree');
+      (tree.querySelector('.org-order-menu button:not([disabled])') || tree.querySelector(`[data-org-menu="${CSS.escape(key)}"]`))?.focus();
+      return;
+    }
+    if (ORG_MENU) { ORG_MENU = null; renderTree(); }
     const remove = ev.target.closest('[data-group-delete]');
     if (remove) { ev.preventDefault(); void orgGroupDelete(remove.dataset.groupDelete); return; }
     const add = ev.target.closest('[data-group-add]'), rename = ev.target.closest('[data-group-rename]');

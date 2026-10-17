@@ -775,9 +775,9 @@ class Execution:
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         c.execute("UPDATE runners SET last_seen=?,awake_since=?,version=?,platform=coalesce(nullif(platform,''),?),"
-                  "capacity=?,readiness_json=?,capabilities_json=? WHERE id=?",
-                  (H.now(), awake_since, body.version, body.platform, body.capacity,
-                   encode(readiness), encode(sorted(set(body.capabilities))), who.runner_id))
+                  "capacity=?,readiness_json=?,capabilities_json=?,readiness_at=? WHERE id=?",
+                  (now, awake_since, body.version, body.platform, body.capacity,
+                   encode(readiness), encode(sorted(set(body.capabilities))), now, who.runner_id))
         if not offered_before and screen.CAPABILITY in body.capabilities:
             screen.first_offer(c, who.runner_id)
         from . import bot_tools
