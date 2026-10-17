@@ -135,15 +135,8 @@ async function signInAndReturn(page, state, seen, press) {
         state.mode = 'stream';
         await page.evaluate(() => LIVE.es.close() || LIVE.es.onerror());     // the five-minute stream ends
         await signedOutAndStill(page, seen);
-        state.mode = 'redirect';
-        // Sign in again: a top-level visit to this address, which the proxy sends to its login.
-        await page.click('#signed-out button');
-        await until('a top-level visit to this address', () => seen.top);
-        assert.equal(seen.top, 'https://tico-ui.test/');
-        state.mode = 'ok';
-        // Back from the login, at the address without its # (the server never saw it).
-        await page.goto('https://tico-ui.test/');
-        await page.waitForFunction(() => location.hash === '#/bot/ops/chat');
+        // Sign in again: a top-level visit to this address, which the proxy sends to its login, then back.
+        await signInAndReturn(page, state, seen, () => page.click('#signed-out button'));
         await page.waitForFunction(() => document.querySelector('.p-text')?.value === 'Half-written reply to Ops');
         await box();
         await page.waitForFunction(() => document.querySelector('textarea[aria-label="Message"]').value === 'A comment on the task');
