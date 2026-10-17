@@ -45,3 +45,20 @@ def test_retired_models_remain_readable_but_cannot_be_new_choices(model, runtime
     with pytest.raises(P.ProviderError) as refused:
         P.complete_choice(company["enabled"], runtime, model)
     assert refused.value.status == 422 and "retired" in refused.value.detail
+
+
+def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none(api):
+    """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"); a bot with
+    no effort of its own sends none, so the hover stops at the model."""
+    from backend.store import encode
+    from backend.tests.test_api import put
+    put(api, "providers", {"enabled": ["openai", "anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "expected_revision": 0})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(
+            {"name": "ops", "status": "active", "runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high"}),))
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "status": "active"}),))
+        c.execute("UPDATE bots SET effort='' WHERE slug='cpo'")
+    rows = {row["name"]: row for row in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()}
+    ops, cpo = rows["ops"], rows["cpo"]
+    assert (ops["resolved_runtime"], ops["resolved_model"], ops["resolved_effort"]) == ("codex", "gpt-6.1-sol", "high")
+    assert (cpo["resolved_runtime"], cpo["resolved_model"], cpo["resolved_effort"]) == ("claude", "claude-opus-5-5", "")

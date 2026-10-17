@@ -46,6 +46,10 @@ All notable changes to Tico are recorded here. The format follows
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
 
 ### Changed
+- Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
+  "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
+  set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
+  everywhere a model is named.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
