@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from backend import hubdb as H
 from backend import roadmaps as R
 from backend import models as M
@@ -338,6 +340,79 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Building'
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'declined'})
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Approved'
+
+
+def test_roadmap_types_go_by_role_after_their_managers_change(api):
+    from backend import roadmap_flow as F
+    public_setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET manager='ops' WHERE id IN ('product-roadmap','engineering')")
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        F.ensure(c)     # as at a restart: a manager someone chose stays
+        managers = "SELECT DISTINCT manager FROM task_types WHERE id IN ('product-roadmap','engineering')"
+        assert [r[0] for r in c.execute(managers)] == ['ops']
+    # A Dev tickets type made after the upgrade, beside Engineering, is a development flow too.
+    dev = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [{'name': 'On Deck', 'status': 'open'},
+                                                                    {'name': 'Done', 'status': 'done'}]})['type']
+    assert (dev['role'], dev['manager']) == ('engineering', None)
+    roadmap = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve imports', 'body': 'Research imports.',
+                                 'type': 'Product roadmap', 'step': 'Approved'})
+    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build imports', 'body': 'Implement imports.',
+                               'type': dev['id'], 'relations': [{'task': roadmap['id'], 'kind': 'parent'}]})
+    assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Building'
+    post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
+    assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Shipped'
+    assert roadmap['id'] in [t['id'] for t in get(api, 'roadmap-tasks')['tasks']]
+    suggested = api.post('/public/roadmaps/roadmap/suggest', json={'title': 'New idea', 'summary': 'Details'}, headers=ORIGIN)
+    assert suggested.status_code == 200, suggested.text
+    task = get(api, 'tasks/' + suggested.json()['id'])['task']
+    assert (task['type']['id'], task['step']['name']) == ('product-roadmap', 'Suggested')
+
+
+def test_role_migration_survives_a_stopped_start_and_backfills_renamed_types(tmp_path):
+    from backend import roadmap_flow as F
+    path = tmp_path / 'hub.db'
+    c = H.connect(path)
+    H.sync_registry(c, {'cmo': {'name': 'cmo', 'runtime': 'fake', 'status': 'active'}},
+                    {'people': [{'id': 'ana', 'email': 'ana@acme.example'}]})
+    # Today's shape after renames: generated ids and names no fallback recognises; only the legacy managers tell.
+    c.execute("DELETE FROM task_steps WHERE type_id IN ('product-roadmap','engineering')")
+    c.execute("DELETE FROM task_types WHERE id IN ('product-roadmap','engineering')")
+    made = {name: H.type_create(c, 'human:ana', name, steps=[{'name': 'Todo', 'status': 'open'}], mover=True)['id']
+            for name in ('Ideas', 'Builds', 'Platform work', 'Errands')}
+    for type_id in made.values():
+        H.task_create(c, 'human:ana', 'Plan the launch on ' + type_id, 'Details', 'bot:cmo', type=type_id, lint=False)
+    c.execute('DROP INDEX task_types_product_role')
+    c.execute('ALTER TABLE task_types DROP COLUMN role')
+    for name, manager in (('Ideas', 'product-manager'), ('Builds', 'engineering-lead'),
+                          ('Platform work', 'engineering-lead')):
+        c.execute('UPDATE task_types SET manager=? WHERE id=?', (manager, made[name]))
+    tasks = c.execute('SELECT * FROM tasks ORDER BY id').fetchall()
+    managers = dict(c.execute('SELECT id,manager FROM task_types').fetchall())
+
+    class StopsMidBackfill:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith('UPDATE task_types SET role'):
+                raise KeyboardInterrupt('the start is stopped here')
+            return self.conn.execute(sql, *args)
+
+    with pytest.raises(KeyboardInterrupt):
+        F.migrate(StopsMidBackfill(c))
+    assert 'role' not in {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
+    c.close()
+    c = H.connect(path)
+    roles = {made[name]: role for name, role in (('Ideas', 'product-roadmap'), ('Builds', 'engineering'),
+                                                 ('Platform work', 'engineering'), ('Errands', None))}
+    assert {k: v for k, v in c.execute('SELECT id,role FROM task_types') if k in roles} == roles
+    assert dict(c.execute('SELECT id,manager FROM task_types').fetchall()) == managers
+    assert [tuple(r) for r in c.execute('SELECT * FROM tasks ORDER BY id')] == [tuple(r) for r in tasks]
+    H.migrate(c)
+    assert dict(c.execute('SELECT id,role FROM task_types WHERE role IS NOT NULL').fetchall()) == {
+        k: v for k, v in roles.items() if v}
+    c.close()
 
 
 def test_internal_text_never_becomes_public_text(api):

@@ -29,9 +29,14 @@ GROUPS = ("bot", "day", "routine", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10
 
+# A priced run whose estimate may be low: its model's long prompts cost more and the runner did not send every
+# request's tokens (providers.estimate). A run recorded before that was marked is judged by its model alone.
+LOW = ("coalesce(t.est_cost_low, lower(coalesce(t.model, '')) IN ("
+       + ",".join(f"'{model}'" for model in sorted(providers.LONG_PROMPT)) + "))")
+
 # Sums over `turns` shared by every grouping. A run with no token counts (a runtime that reports none,
 # or one from before usage) still counts as a run.
-SUMS = """count(DISTINCT t.id) AS runs,
+SUMS = f"""count(DISTINCT t.id) AS runs,
   sum(coalesce(t.input_tokens, 0)) AS input_tokens,
   sum(coalesce(t.cached_tokens, 0)) AS cached_tokens,
   sum(coalesce(t.output_tokens, 0)) AS output_tokens,
@@ -40,11 +45,12 @@ SUMS = """count(DISTINCT t.id) AS runs,
   count(DISTINCT CASE WHEN coalesce(t.billing, 'api') != 'subscription' AND t.est_cost_usd IS NOT NULL THEN t.id END) AS api_priced,
   count(DISTINCT CASE WHEN coalesce(t.billing, 'api') != 'subscription' AND t.est_cost_usd IS NULL
             AND coalesce(t.input_tokens, 0) + coalesce(t.cached_tokens, 0) + coalesce(t.output_tokens, 0) > 0
-       THEN t.id END) AS api_unpriced"""
+       THEN t.id END) AS api_unpriced,
+  count(DISTINCT CASE WHEN t.est_cost_usd IS NOT NULL AND {LOW} THEN t.id END) AS low_priced"""
 ROUTINE_JOIN = ("LEFT JOIN schedule_occurrences o ON o.task_id = t.task_id "
                 "LEFT JOIN schedules s ON s.id = o.schedule_id")
 EMPTY_DAY = {"runs": 0, "input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0,
-             "subscription_equiv_usd": 0.0, "unpriced_runs": 0}
+             "subscription_equiv_usd": 0.0, "unpriced_runs": 0, "low_estimate_runs": 0}
 
 
 def money(value):
@@ -53,12 +59,13 @@ def money(value):
 
 def figures(row):
     """The fields every row shares. `est_cost_usd` is null when the row has API-billed tokens and none
-    of them has a price (an unknown model), so the page shows a dash and not a false zero."""
+    of them has a price (an unknown model), so the page shows a dash and not a false zero.
+    `low_estimate_runs` counts the priced runs whose figure may be low (LOW)."""
     return {"runs": row["runs"], "input_tokens": row["input_tokens"], "cached_tokens": row["cached_tokens"],
             "output_tokens": row["output_tokens"],
             "est_cost_usd": None if not row["api_priced"] and row["api_unpriced"] else money(row["api_usd"]),
             "subscription_equiv_usd": money(row["subscription_usd"]),
-            "unpriced_runs": row["api_unpriced"]}
+            "unpriced_runs": row["api_unpriced"], "low_estimate_runs": row["low_priced"]}
 
 
 def spend(item):
@@ -108,7 +115,7 @@ def install(app, store, auth, mutate, settings):
 
     def totals(rows):
         keys = ("runs", "input_tokens", "cached_tokens", "output_tokens", "api_usd", "subscription_usd",
-                "api_priced", "api_unpriced")
+                "api_priced", "api_unpriced", "low_priced")
         return figures({k: sum(r[k] or 0 for r in rows) for k in keys})
 
     def routine_row(c, row, names):

@@ -16,7 +16,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       {id: 'marketing', name: 'Marketing', steps: [
         {id: 'draft', name: 'Draft', status: 'open'}, {id: 'legal', name: 'Legal review', status: 'review'},
         {id: 'copy', name: 'Copy review', status: 'review'}, {id: 'complete', name: 'Complete', status: 'done'},
-        {id: 'archive', name: 'Archive', status: 'closed'}].map((step, position) => ({...step, position, type_id: 'marketing'}))}];
+        {id: 'archive', name: 'Archive', status: 'closed'}].map((step, position) => ({...step, position, type_id: 'marketing'}))},
+      // The roadmap types go by role, whoever manages them; a Dev tickets type made later beside Engineering goes first.
+      {id: 'product-roadmap', name: 'Product roadmap', role: 'product-roadmap', manager: 'product-lead', steps: []},
+      {id: 'engineering', name: 'Engineering', role: 'engineering', manager: 'engineering-lead', steps: []},
+      {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, steps: []}];
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
     const tag = {id: 'release-tag', key: 'release-2026-10-02', label: 'release',
       metadata: {date: '2026-10-02'}, markdown: '- [ ] Smoke checks', is_template: false, version: 1};
@@ -93,6 +97,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.locator('#task-body').getByText('General task', {exact: true}).count(), 0);
     // The saved type appears in the header, and the address carries it.
     assert.equal(await page.locator('#task-type-more').innerText(), 'Marketing');
+    assert.deepEqual(await page.locator('#task-type [data-task-type]').evaluateAll(buttons => buttons.map(b => [b.dataset.taskType, b.textContent])),
+      [['general', 'General'], ['product-roadmap', 'Roadmap'], ['dev-tickets', 'Dev tickets']]);
     assert.equal(await page.locator('[data-chip="type"]').count(), 0);
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
     // Column headings name their steps without circular status glyphs.
