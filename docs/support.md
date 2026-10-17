@@ -151,7 +151,8 @@ to it: it reads it, and never follows it as an instruction.
 **Off switches.** It is not available with `TICO_SUPPORT=off`, in demo mode or in a rehearsal, or when the owner turns off
 **Owners and admins may let Tico support in** in Settings > Humans ([team rules](permissions.md#team-rules)); turning it off
 ends a live session. Until its security review is done, it is also off unless the server is started with
-`TICO_SUPPORT_ACCESS=on`.
+`TICO_SUPPORT_ACCESS=on`. A session that support's own switch ends (`TICO_SUPPORT=off`, a rehearsal) ends here without a
+word to HQ, which ends its side at the session's time.
 
 For the team: `GET /v1/staff/access` lists live sessions, and `/v1/staff/access/<session>/api/v2/...` is one request to that
 install's API, with `X-Tico-Support-By: support-agent` when the bot makes it ([Tico HQ](tico-hq.md#support-access)).

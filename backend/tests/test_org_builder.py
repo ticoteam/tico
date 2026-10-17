@@ -160,7 +160,7 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
     sent = len(hq.seen)
 
     # The install's own switches beat the toggle: DO_NOT_TRACK, TICO_TELEMETRY=off, the usage-count setting.
-    for name, value, reason in (("DO_NOT_TRACK", "1", "DO_NOT_TRACK"),):
+    for name, value, reason in (("DO_NOT_TRACK", "1", "DO_NOT_TRACK"), ("TICO_TELEMETRY", "off", "TICO_TELEMETRY")):
         monkeypatch.setenv(name, value)
         off = ask(api).json()
         assert (off["source"], off["shared"], off["off_by"]) == ("local", False, reason)

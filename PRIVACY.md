@@ -316,7 +316,7 @@ request. HQ carries each request and its answer through its memory without stori
 tier, start, end) and the same one-line record of each request, with the ticket, until the ticket is deleted. The Support
 Agent treats everything it reads from your Tico as untrusted data, never as instructions. The whole feature is off unless the
 server runs with `TICO_SUPPORT_ACCESS=on`, and also with `TICO_SUPPORT=off`, in demo mode and when the owner's team rule is
-off.
+off. With `TICO_SUPPORT=off` or in a rehearsal, a session that was live ends without the install sending HQ anything.
 
 ### Support diagnostics
 

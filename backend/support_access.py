@@ -279,7 +279,8 @@ def pull_once(app, wait=PULL_WAIT):
     if not row:
         return False
     if row["expires_at"] <= H.now() or reason:
-        if end(store, row, "", "expired" if not reason else "turned_off"):
+        # Support itself off (TICO_SUPPORT, demo, rehearsal) sends nothing at all; HQ ends its side at the session's time.
+        if end(store, row, "", "expired" if not reason else "turned_off") and not support.off_reason(settings):
             _tell_hq_ended(app, row)
         return False
     ticket = _ticket(store, row)

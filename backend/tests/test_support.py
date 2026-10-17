@@ -145,9 +145,17 @@ def test_demo_mode_and_the_off_switch_refuse_everything(environment, hq, monkeyp
         assert call().status_code == 409
     assert api.get("/api/v2/support/tickets", headers=signed_in()).json() == {"enabled": False, "tickets": [], "unread": 0}
     assert hq.seen == []
-    monkeypatch.setenv("TICO_SUPPORT", "off")
+    # A ticket filed while support was on: once it is off, nothing about it, or anything else, reaches HQ.
     api = environment()
-    assert file(api).status_code == 409 and hq.seen == []
+    ticket = "/api/v2/support/tickets/" + file(api).json()["id"]
+    hq.seen.clear()
+    monkeypatch.setenv("TICO_SUPPORT", "off")
+    for call in (lambda: file(api), lambda: api.get("/api/v2/support/compose", headers=signed_in()),
+                 lambda: api.post("/api/v2/support/tickets/refresh", headers=signed_in()),
+                 lambda: api.post(ticket + "/messages", json={"message": "hi"}, headers=signed_in()),
+                 lambda: api.delete(ticket, headers=signed_in())):
+        assert call().status_code == 409
+    assert hq.seen == []
 
 
 def test_only_a_signed_in_person_may_file(environment, hq):
