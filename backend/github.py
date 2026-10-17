@@ -55,15 +55,21 @@ def _links_for(c, url):
                             ((match.group(1) + "/" + match.group(2)).lower(), int(match.group(3)))))
 
 
-def queue_wake(c, task, item):
-    """Keep one bounded, durable burst per task; the scheduler sends it within three minutes."""
+def queue_wake(c, task, item, batch=None):
+    """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
+
+    `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a failing check
+    nobody waits on), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
+    one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once."""
     from .repositories import metadata, save_metadata
     key = "github-task-wake:" + task["id"]
     burst = metadata(c, key)
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
-    save_metadata(c, key, {"due": burst.get("due") or H.shift(H.now(), seconds=170), "items": items})
+    kind = batch if not burst or burst.get("batch") == batch else None
+    save_metadata(c, key, {"due": burst.get("due") or H.shift(H.now(), seconds=170), "items": items,
+                           **({"batch": kind} if kind else {})})
 
 
 def fire_once(detail, item):
@@ -86,7 +92,8 @@ def flush_wakes(c):
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
-                H._wake(c, task, task["owner"], "\n".join(burst.get("items", [])))
+                H._wake(c, task, task["owner"], "\n".join(burst.get("items", [])),
+                        {"wake_batch": burst["batch"]} if burst.get("batch") else None)
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"):
                 sent.append(task["id"])
@@ -200,7 +207,8 @@ def pull_request(c, payload, review_role="", release_repo=""):
             queue_wake(c, task, detail["wake_once_fired"]["item"])
         if (state == "closed" and link["state"] != state
                 or conflict_wake):
-            queue_wake(c, task, item)
+            # Closed without merging is news; a conflict is a blocker on the bot's own work.
+            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     return {"pr": url, "action": action, "tasks": len(links)}
@@ -254,7 +262,7 @@ def pr_signal(c, event, payload):
         detail = H._json(link.get("detail_json"), {}) or {}
         fields = {}
         label = link["title"]
-        wake = False
+        wake, batch = False, None
         if event in ("check_run", "check_suite", "status"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
@@ -265,6 +273,7 @@ def pr_signal(c, event, payload):
             name = (_suite_key(signal, signal) if event == "check_suite"
                     else str(signal.get("name") or signal.get("context") or "Checks")[:200])
             wake = state == "failing" and checks.get(name) != "failing"
+            batch = "ci"
             left_pending = checks.get(name) == "pending" and state != "pending"
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
@@ -291,7 +300,7 @@ def pr_signal(c, event, payload):
                 done = (f"Checks finished on {label}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
                         f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                 if fire_once(detail, done):
-                    wake, item = True, done
+                    wake, item, batch = True, done, None
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -310,11 +319,12 @@ def pr_signal(c, event, payload):
             wake = fresh and payload.get("action") != "dismissed" and (
                 state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
             item = f"Review {state.replace('_', ' ')} on {label}"
+            batch = "review"
             if fresh and payload.get("action") == "submitted" and state in ("approved", "changes_requested"):
                 who = str((review.get("user") or {}).get("login") or "")
                 done = item + (f" by {who}" if who else "") + " " + str(review.get("html_url") or link["url"])
                 if fire_once(detail, done):
-                    wake, item = True, done
+                    wake, item, batch = True, done, None
         else:
             action = payload.get("action")
             if action not in ("created", "deleted"):
@@ -331,6 +341,7 @@ def pr_signal(c, event, payload):
             fields["pending_comments"] = max(0, (link.get("pending_comments") or 0) + (1 if action == "created" else -1))
             wake = action == "created" and not _own_comment(c, task, payload, "comment", detail)
             item = f"{fields['pending_comments']} review comments on {label}"
+            batch = "review"
         changed = any(value != link.get(field) for field, value in fields.items())
         fields.update(detail_json=json.dumps(detail), updated=H.now())
         if changed:
@@ -338,7 +349,7 @@ def pr_signal(c, event, payload):
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
                   (*fields.values(), link["id"]))
         if wake:
-            queue_wake(c, task, item)
+            queue_wake(c, task, item, batch)
     return {"tasks": len({l["task_id"] for l in links})}
 
 

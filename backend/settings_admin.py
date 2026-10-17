@@ -15,6 +15,7 @@ from . import placement
 from . import providers
 from . import rooms
 from . import shared_bots
+from . import wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -190,6 +191,8 @@ class SettingsAdmin:
                 "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
                 "effort": effective.get("reasoning_effort") or row["effort"],
                 "compact_at": compact_at(effective),
+                # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
+                "wake": wake_presets.effective(_json(config["config_json"], {}) or {}),
                 "session": effective.get("session"),
                 "subtask_session": effective.get("subtask_session"),
                 "task_goal": effective.get("task_goal"),
@@ -313,7 +316,7 @@ class SettingsAdmin:
                   "harness": harness, "reasoning_effort": effort, "thread_mode": body.thread_mode, "shared": body.shared,
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
-                  "model_managed_by": "cloud"}
+                  "model_managed_by": "cloud", "wake_preset": wake_presets.NEW_BOT_PRESET}
         if body.template:
             config["template"] = body.template
             if privileged:
@@ -623,6 +626,8 @@ class SettingsAdmin:
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
+        if field == "wake_preset":
+            return wake_presets.preset_of(_json(config["config_json"], {}))
         if field == "placement":
             row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator AS runner_operator "
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
@@ -1047,6 +1052,27 @@ class SettingsAdmin:
         self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
+
+    def set_wake_preset(self, c, who, bot, body):
+        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
+        one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
+        picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
+        self._manager(c, who, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        before = self.snapshot(c, bot, "wake_preset")
+        declared = _json(config["config_json"], {}) or {}
+        if body.wake_preset == wake_presets.CURRENT:
+            declared.pop("wake_preset", None)
+        else:
+            declared["wake_preset"] = body.wake_preset
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        wake_presets.replan(c, bot)
+        self.record(c, who.actor, bot, "wake_preset", before, body.wake_preset)
+        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": body.wake_preset})
+        return {"bot": bot, "wake_preset": body.wake_preset, "wake": wake_presets.effective(declared),
+                "revision": config["revision"] + 1}
 
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):

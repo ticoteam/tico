@@ -8,7 +8,7 @@ import time
 
 from clients import sessions
 
-from . import check_models, inbox_isolation, providers, routines, runner_versions, screen, usage_limits
+from . import check_models, inbox_isolation, providers, routines, runner_versions, screen, usage_limits, wake_presets
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -600,7 +600,7 @@ def bot_refusal(c, settings, runner_id, bot):
     at_share = mine and mine >= turn_limit(turn_share(c, runner_id, runner["capacity"]), runner["capacity"], False)
     followed, first = follow(c, bot, config), None
     for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' "
+                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
                          "ORDER BY j.created,j.id", (bot,)).fetchall():
         if not job["free"]:
             why = "uncertain"
@@ -1059,7 +1059,7 @@ class Execution:
         for row in c.execute(f"SELECT a.bot,bc.config_json,{DRAINING_SQL} draining FROM assignments a "
                              "JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
-                             "AND EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued')",
+                             "AND EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued' AND j.held=0)",
                              (who.runner_id, body.bot, body.bot)).fetchall():
             bot = row["bot"]
             why, config = claim_refusal(c, self.store.settings, runner, bot, row["config_json"], row["draining"], ready,
@@ -1078,7 +1078,8 @@ class Execution:
         candidates = c.execute(
             "SELECT j.*,a.generation FROM jobs j JOIN assignments a ON a.bot=j.bot "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.state='queued' AND j.bot IN ({marks}) AND a.runner_id=? "
+            # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
+            f"WHERE j.state='queued' AND j.held=0 AND j.bot IN ({marks}) AND a.runner_id=? "
             f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
@@ -1247,6 +1248,9 @@ class Execution:
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
+        # What woke this turn and the wake preset in force, for its run record (backend/wake_presets.py).
+        job = c.execute("SELECT wake_preset,wake_class,hold_until FROM jobs WHERE id=?", (row["id"],)).fetchone()
+        c.execute("UPDATE attempts SET wake_json=? WHERE id=?", (json.dumps(wake_presets.record(c, job, msg)), aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
         if check:
             check_models.handed(c, aid, task["id"], check)

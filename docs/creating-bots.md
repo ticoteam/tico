@@ -68,7 +68,7 @@ New tasks and chats addressed to the original go to your active branch while bra
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status;
+A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status (and, coming soon, its own **Wakes**);
 change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`hub bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#subtasks-and-prs)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -564,6 +564,16 @@ Levers set in **Settings → Bots**, not in the repository:
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
+- **Wakes** (Coming soon): how soon news starts a run. **Token saver**, the default for a new bot, holds
+  nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
+  sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
+  at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
+  every 15 minutes. **Current behaviour**, which every bot made before presets keeps until someone picks
+  one, wakes on each piece of news as it arrives. In every preset, these wake the bot at once, and only once
+  however often the event repeats: a person's message, an assignment, a question, something it waits on
+  resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
+  permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
+  in a task's **Runs** says what woke it. A branch picks its own.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in
