@@ -154,6 +154,9 @@ async function roadmapRankingLoad(state) {
 }
 // Set by the #/settings/roadmap route (Health's fix link): bring the Public roadmap card into view once it is drawn.
 let ROADMAP_SETTINGS_REVEAL = false;
+// Display names of a chosen bot the roster leaves out (archived bots are not in /employees), read on mount.
+const ROADMAP_BOT_NAMES = {};
+const roadmapBotName = slug => ROADMAP_BOT_NAMES[slug] || botDisplayName(slug);
 // suggestions_receiver (backend/roadmaps.py) resolves Automatic on the server; the screen only says what it answered.
 function roadmapReceiverText(settings) {
   const receiver = settings.suggestions_receiver || {}, to = receiver.bot ? receiver.name || receiver.bot : '';
@@ -164,14 +167,14 @@ function roadmapReceiverText(settings) {
 }
 function roadmapReceiverOptions(settings) {
   const chosen = settings.suggestions_bot || '', source = settings.suggestions_receiver?.source;
-  const active = (S.emps || []).filter(e => e.status === 'active' && (!isHiddenBot(e.name) || e.name === chosen))
+  const active = (S.emps || []).filter(e => e.status === 'active')
     .map(e => ({slug: e.name, name: botDisplayName(e.name)})).sort((a, b) => a.name.localeCompare(b.name));
   const option = (value, text, extra = '') => `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}${extra}>${esc(text)}</option>`;
   // A chosen bot that stopped being active stays visible as itself, never as a blank or as Automatic.
   const gone = !chosen || active.some(bot => bot.slug === chosen) ? ''
-    : source === 'chosen' ? option(chosen, settings.suggestions_receiver.name || botDisplayName(chosen)) : (() => {
+    : source === 'chosen' ? option(chosen, settings.suggestions_receiver.name || roadmapBotName(chosen)) : (() => {
     const state = source === 'chosen_archived' ? 'archived' : ({paused: 'paused', planned: 'setting up', quarantined: 'quarantined'})[(S.emps || []).find(e => e.name === chosen)?.status] || 'not active';
-    return option(chosen, `${botDisplayName(chosen)} (${state})`, ' disabled');
+    return option(chosen, `${roadmapBotName(chosen)} (${state})`, ' disabled');
   })();
   return option('', chosen ? 'Automatic' : roadmapReceiverText(settings)) + gone + active.map(bot => option(bot.slug, bot.name)).join('');
 }
@@ -202,8 +205,12 @@ function roadmapSettingsRender(host, settings, tags) {
 function roadmapSettingsReveal(host) {
   if (!ROADMAP_SETTINGS_REVEAL || host.dataset.loaded !== 'yes') return;
   ROADMAP_SETTINGS_REVEAL = false;
-  host.scrollIntoView({block: 'start'});
-  $('select[name=suggestions_bot]', host)?.focus({preventScroll: true});
+  // After the frame: route() resets #main's scroll once the page is drawn, which would undo a scroll made now.
+  requestAnimationFrame(() => {
+    if (!host.isConnected) return;
+    host.scrollIntoView({block: 'start'});
+    $('select[name=suggestions_bot]', host)?.focus({preventScroll: true});
+  });
 }
 async function roadmapSettingsMount() {
   const host = $('#settings-roadmaps');
@@ -212,6 +219,9 @@ async function roadmapSettingsMount() {
   host.dataset.loaded = 'loading';
   try {
     const [settings, tags] = await Promise.all([get('/v2/roadmaps/settings'), get('/v2/tags')]);
+    const chosen = settings.suggestions_bot;
+    if (chosen && !(S.emps || []).some(e => e.name === chosen))
+      ROADMAP_BOT_NAMES[chosen] = await get('/v2/bots/' + encodeURIComponent(chosen)).then(bot => bot.display_name || '', () => '');
     if (!host.isConnected) return;
     roadmapSettingsRender(host, settings, tags);
     host.dataset.loaded = 'yes';
