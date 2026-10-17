@@ -12,7 +12,7 @@ import difflib
 import re
 
 from . import draft as D
-from .keys import scrub_all
+from .keys import scrub, scrub_all
 
 SPEC = {row["name"]: row for row in D.SPEC["actions"]}
 BY_SLUG = {role["slug"]: role for role in D.ROLES}
@@ -631,7 +631,9 @@ class Turn:
         if name == "undo":
             return self._undo(args)
         if name not in ACTIONS:
-            return {"ok": False, "refused": "There's no action called %s." % str(name)[:40]}
+            name, hit = scrub(str(name))
+            self.keys_removed = self.keys_removed or hit
+            return {"ok": False, "refused": "There's no action called %s." % name[:40]}
         args, hit = scrub_all(args)
         self.keys_removed = self.keys_removed or hit
         error = schema_error(SPEC[name]["input_schema"], args)

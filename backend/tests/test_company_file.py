@@ -211,6 +211,105 @@ def test_10_key_shaped_strings_never_reach_the_draft_or_the_file():
     assert C.scrub("The token is optional; the api key is set on your install.")[1] is False
 
 
+# Every label the scrubber knows, each value length a pasted password can have, in each way a value is written.
+LABELS = ["password", "passwd", "passcode", "pwd", "PWD", "secret", "token", "api_key", "api key", "API-Key", "access_key",
+          "client_secret", "client secret", "private_key", "private key"]
+FORMS = ["{l}: {v}", "{l}={v}", "{l} = {v}", '"{l}": "{v}"', '{{"{l}":"{v}", "name": "Ann"}}', "{{'{l}': '{v}'}}",
+         "{l}: '{v}'", '{{\\"{l}\\": \\"{v}\\", \\"name\\": \\"Ann\\"}}']
+
+
+@pytest.mark.parametrize("label", LABELS)
+@pytest.mark.parametrize("size", [1, 2, 3, 4])
+@pytest.mark.parametrize("form", FORMS)
+def test_10_every_assigned_credential_value_is_removed_whatever_its_length(label, size, form):
+    text = "Here: " + form.format(l=label, v="Qzxw"[:size]) + " thanks"
+    out, hit = C.scrub(text)
+    assert hit and out == "Here: " + form.format(l=label, v="[removed]") + " thanks"
+    assert C.scrub(out) == (out, False)
+
+
+@pytest.mark.parametrize("text, out", [
+    ('{"password": "a\\"b c", "name": "Ann"}', '{"password": "[removed]", "name": "Ann"}'),
+    ('{"secret": "ab\\\\", "name": "Ann"}', '{"secret": "[removed]", "name": "Ann"}'),
+    ('{"token": "a\\\\\\"b", "name": "Ann"}', '{"token": "[removed]", "name": "Ann"}'),
+    ("{'pwd': 'it\\'s', 'name': 'Ann'}", "{'pwd': '[removed]', 'name': 'Ann'}"),
+    ("secret: 'it''s here', name: Ann", "secret: '[removed]', name: Ann"),
+    ('{\\"api_key\\": \\"a b\\", \\"name\\": \\"Ann\\"}', '{\\"api_key\\": \\"[removed]\\", \\"name\\": \\"Ann\\"}'),
+    ('password: "ab cd\nname: Ann', "password: [removed]\nname: Ann"),
+    ("password: ab, name: Ann; role: CEO}", "password: [removed], name: Ann; role: CEO}"),
+    ("the password is Qz", "the password is [removed]"),
+    ("token: 1234", "token: [removed]"), ('{"token": "5"}', '{"token": "[removed]"}'), ("secret: 5", "secret: [removed]"),
+])
+def test_10_a_quoted_value_goes_whole_past_escapes_and_its_neighbours_stay(text, out):
+    assert C.scrub(text) == (out, True)
+    assert C.scrub(out) == (out, False)
+
+
+@pytest.mark.parametrize("text", [
+    "The token is optional", "the api key is set on your install", "Our secret is good coffee", "token: 5 per user",
+    "Token: 120 a day", '{"token": 12}', "password:\nname: Ann", '{"password": ""}', "password: [removed]",
+    '{"password": "[removed]"}', "Keys are connected later; no tokens or passwords here.",
+])
+def test_10_prose_counts_and_removed_marks_are_left_alone(text):
+    assert C.scrub(text) == (text, False)
+
+
+def test_10_short_values_are_cut_at_every_door_and_each_one_is_reported():
+    def about(text):
+        draft = started()
+        draft["company"]["about"] = text
+        return draft
+
+    # The draft as sent: a text field, the chat and the undo copy, each on its own.
+    turn = C.Turn(about('{"secret": "Qz"}'), TODAY)
+    assert turn.keys_removed and turn.finish()["company"]["about"] == '{"secret": "[removed]"}'
+    turn = C.Turn(started(chat=[{"who": "me", "text": 'api_key="Qz"'}]), TODAY)
+    assert turn.keys_removed and turn.finish()["chat"][0]["text"] == 'api_key="[removed]"'
+    sent = started()
+    sent["undo"] = D.content(about("token: Qz"))
+    turn = C.Turn(sent, TODAY)
+    assert turn.keys_removed and turn.apply("undo", {})["ok"]
+    assert turn.finish()["company"]["about"] == "token: [removed]"
+    # An action's input, and the refusal naming an action that doesn't exist.
+    turn = C.Turn(started(), TODAY)
+    result = turn.apply("company_set", {"about": "client secret: Qz"})
+    assert turn.keys_removed and "Qz" not in json.dumps(result)
+    assert turn.finish()["company"]["about"] == "client secret: [removed]"
+    turn = C.Turn(started(), TODAY)
+    result = turn.apply(OPENAI, {})
+    assert turn.keys_removed and not result["ok"] and OPENAI[:12] not in result["refused"]
+    turn = C.Turn(started(), TODAY)
+    result = turn.apply("company_set", {OPENAI: "x"})
+    assert turn.keys_removed and not result["ok"] and OPENAI[:12] not in result["refused"]
+    # validate, reading a file, and writing one straight from a page draft.
+    assert C.validate(about("pwd: Qz"))["company"]["about"] == "pwd: [removed]"
+    clean = C.to_yaml(started(), CREATED)
+    assert 'about: ""' in clean
+    read = C.from_yaml(clean.replace('about: ""', 'about: "{\\"password\\": \\"Qz\\"}"'))
+    assert read["company"]["about"] == '{"password": "[removed]"}'
+    direct = started()
+    direct["people"] = [{"id": "maya", "name": "Maya", "role": "secret=Qz", "dept": None, "owner": True}]
+    assert yaml.safe_load(C.to_yaml(direct, CREATED))["people"][0]["role"] == "secret=[removed]"
+
+
+def test_10_scrubbing_copies_and_a_second_pass_finds_nothing():
+    draft = started(chat=[{"who": "me", "text": "password: Qz and " + OPENAI}])
+    draft["company"]["about"] = '{"token": "a\\"b"}'
+    draft["extra_" + GITHUB] = 1
+    sent = copy.deepcopy(draft)
+    once, hit = C.scrub_all(draft)
+    assert hit and draft == sent and GITHUB not in json.dumps(once)
+    assert C.scrub_all(once) == (once, False)
+    del draft["extra_" + GITHUB]
+    sent = copy.deepcopy(draft)
+    turn = C.Turn(draft, TODAY)
+    turn.apply("company_set", {"name": "pwd: Qz"})
+    out = turn.finish()
+    assert draft == sent and C.scrub_all(out) == (out, False)
+    assert C.Turn(out, TODAY).keys_removed is False
+    assert C.from_yaml(C.to_yaml(out, CREATED))["company"] == out["company"]
+
+
 BAD = [
     ("nonsense", {}), ("bot_add", {"template": "bookkeeping"}), ("bot_add", {"template": "bookkeeping", "reason": ""}),
     ("bot_add", {"template": "bookkeeping", "reason": "x", "colour": "red"}),

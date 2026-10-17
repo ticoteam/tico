@@ -23,11 +23,18 @@ PATTERNS = [re.compile(p) for p in (
     r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",   # JWTs
     r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{16,}=*",
 )]
-# The label may be quoted, as a JSON or YAML key is: {"password": "x"}.
+# The label may be quoted, as a JSON or YAML key is: {"password": "x"}, or {\"password\": \"x\"} inside a JSON string.
+# A quoted value runs to its closing quote, past escaped (or, in YAML, doubled) ones, or to the end of the line when it
+# has none; separator and value stay on the label's line.
 LABELLED = re.compile(r"(?i)(\b(?:password|passwd|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|"
-                      r"client[ _-]?secret|private[ _-]?key)\b[\"']?\s*(?:[:=]|\bis\b)\s*)(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+                      r"client[ _-]?secret|private[ _-]?key)\b(?:\\?[\"'])?[ \t]*(?:[:=]|\bis\b)[ \t]*)"
+                      r"(\\\"(?:(?!\\\").)*\\\"|\"(?:[^\"\\\n]|\\.)*(?:\"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.|'')*(?:'|(?=\n)|\Z)|"
+                      r"(?!\[removed\])[^\s,;}\]]+)")
 PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
 LABELLED_IS = re.compile(r"(?i)\bis\b")
+# "token: 5 per user" is a count, not a token: one to three digits after a bare `token` label are kept.
+COUNT = re.compile(r"(?i)token\W*$")
+QUOTES = ('\\"', '"', "'")
 # A long run of token characters with letters and digits mixed, and close to random.
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
 
@@ -44,16 +51,14 @@ def _random(word):
 
 def _labelled(match):
     label, value = match.group(1), match.group(2)
-    password = PASSWORD.match(label)
     # "the token is optional": with "is", only a password-like label counts.
-    if LABELLED_IS.search(label) and not password:
+    if LABELLED_IS.search(label) and not PASSWORD.match(label):
         return match.group(0)
-    quoted = value[:1] in "\"'" and len(value) > 1
-    inner = value[1:-1] if quoted else value
-    # A password of any length goes; another label needs a value long enough to be a key ("token: 5" is a count).
-    if not inner or (len(inner) < 4 and not password):
+    quote = next((q for q in QUOTES if len(value) >= 2 * len(q) and value.startswith(q) and value.endswith(q)), "")
+    inner = value[len(quote):len(value) - len(quote)]
+    if not inner or inner == MARK or (not quote and inner.isdigit() and len(inner) <= 3 and COUNT.search(label)):
         return match.group(0)
-    return label + (value[0] + MARK + value[0] if quoted else MARK)
+    return label + quote + MARK + quote
 
 
 def scrub(text):
@@ -76,6 +81,8 @@ def scrub_all(value):
         pairs = [scrub_all(item) for item in value]
         return [item for item, _ in pairs], any(hit for _, hit in pairs)
     if isinstance(value, dict):
-        pairs = {key: scrub_all(item) for key, item in value.items()}
-        return {key: item for key, (item, _) in pairs.items()}, any(hit for _, hit in pairs.values())
+        # Keys too: a refusal can name a field it doesn't know.
+        pairs = [(scrub(key) if isinstance(key, str) else (key, False), scrub_all(item)) for key, item in value.items()]
+        return ({key: item for (key, _), (item, _) in pairs},
+                any(key_hit or hit for (_, key_hit), (_, hit) in pairs))
     return value, False
