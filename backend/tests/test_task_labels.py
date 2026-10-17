@@ -87,6 +87,12 @@ def test_a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_man
     ops = bot_token(api, "ops")
     assert label(api, ticket["id"], ["qa"], ops)["labels"] == ["qa"]      # the type's manager
     assert label(api, hidden["id"], ["qa"], ops)["labels"] == ["qa"]      # its own private task
+    # The manager's right is to labels only, and holds on a type whose bots do not work it.
+    post(api, "task-types/Engineering", {"bots": "parties"})
+    assert label(api, ticket["id"], ["qa", "area-exports"], ops)["labels"] == ["qa", "area-exports"]
+    r = api.post("/api/v2/tasks/" + ticket["id"], json={"version": get(api, "tasks/" + ticket["id"])["task"]["version"],
+                                                      "labels": ["qa"], "due": "2026-12-01T00:00:00Z"}, headers=headers(ops))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
 
 
 def test_a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):

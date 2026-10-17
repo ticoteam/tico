@@ -2960,6 +2960,11 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
 
 
+def type_manager(conn, row):
+    """The slug of the bot that manages this task's type (task_types.manager), or None."""
+    return (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
+
+
 def _label_writer(conn, actor, row, labels, approval_id=None):
     """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
     on a task it manages, one it owns or asked for or whose type it manages (task_types.manager), and nothing
@@ -2973,8 +2978,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     if not changed:
         return False
     slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
-    manager = (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get("manager")
-    if actor not in (row["owner"], row["requester"]) and manager != slug:
+    if actor not in (row["owner"], row["requester"]) and type_manager(conn, row) != slug:
         refuse(conn, actor, "label",
                f"{slug} changes labels only on a task it owns, asked for or whose type it manages; labels on "
                f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
@@ -4197,6 +4201,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     mine = mine or bool(delegated) or task_ancestor_party(conn, actor, row) or type_bot_works(conn, actor, row)
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+    labels_only = labels is not None and not clear_size and all(v is None for v in (
+        status, note, owner, due, body, lane, rank, goal_id, type, step, step_rank, number, title, private,
+        waiting_on, roles, visibility, public_title, public_summary, size))
+    # The bot that manages the task's type may change its labels whatever the type's `bots` setting
+    # (_label_writer decides which); nothing else on the task becomes its to change.
+    mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and type_manager(conn, row) == actor_id(actor)
     if not mine and not mover and actor != KEEPER:
         refuse(conn, actor, "identity", f"{task_id} is not yours to change")
     state_change = status is not None or type is not None or step is not None
