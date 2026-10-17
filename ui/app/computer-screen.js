@@ -47,7 +47,7 @@ function botScreenState(slug) {
   const e = (S.emps || []).find(x => x.name === slug);
   const id = e?.machine?.runner_id, machine = screenMachine(id);
   if (!machine) return {state: e?.agent ? 'external' : 'none'};
-  const base = {id, machine, operator: botPersonName(machine.operator), may: screenMayOpen(machine)};
+  const base = {id, machine, operator: machine.operator ? botPersonName(machine.operator) : '', may: screenMayOpen(machine)};
   const platform = e.machine.platform || '';
   if (platform && platform !== 'linux' && !machine.screen_available) return {...base, state: 'linux_only'};
   if (!e.online) return {...base, state: 'offline'};
@@ -59,13 +59,14 @@ const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
 // Docker: `screen on` inside the runner's container turns it on live and saves it in runner.json on the runner-home
 // volume, so it survives updates. A non-empty TICO_SCREEN in .env wins over runner.json; the fallback rewrites that
 // line and recreates the container, which cuts off a running turn.
-const SCREEN_DOCKER_CMD = 'docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on';
-const SCREEN_DOCKER_ENV_CMD = "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose -f runner.compose.yaml up -d";
+const SCREEN_DOCKER_CMD = 'sudo docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on';
+// install.sh writes .env as root, mode 600, so the fallback edits it with sudo; `up -d runner` recreates the runner only.
+const SCREEN_DOCKER_ENV_CMD = "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml up -d runner";
 const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
 const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
 function botScreenRowHTML(slug) {
   const s = botScreenState(slug);
-  const ask = `Ask ${esc(s.operator)} or an admin to turn it on in Settings > Computers.`;
+  const ask = `Ask ${s.operator ? `${esc(s.operator)} or an admin` : 'an admin'} to turn it on in Settings > Computers.`;
   const status = text => `<span class="bot-screen-status">${text}</span>`;
   const body = {
     ready: () => `<a class="bot-screen-open" href="${screenHref(s.id)}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine.screen === 'control' ? 'Control' : 'View'}`)}`,
@@ -74,13 +75,13 @@ function botScreenRowHTML(slug) {
       : `<span class="settings-cell-note">${ask}</span>`),
     not_offered: () => status("This computer's screen isn't turned on.") + (s.may
       ? `<div class="bot-screen-steps"><p>Docker: in the runner's folder on the computer (<code>/opt/tico-runner</code> unless you chose another), turn it on live. Nothing restarts, so no running turn is cut off:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
-          <p>If the runner's <code>.env</code> says <code>TICO_SCREEN=0</code>, that wins over this. Then set <code>TICO_SCREEN=1</code> there instead, once the computer is idle: this restarts the runner and cuts off a running turn.</p>${screenCmdHTML(SCREEN_DOCKER_ENV_CMD, 'Docker .env')}
+          <p>If the runner is too old for that command, or its <code>.env</code> says <code>TICO_SCREEN=0</code> (which wins over it), set <code>TICO_SCREEN=1</code> in <code>.env</code> instead, once the computer is idle: this restarts the runner and cuts off a running turn.</p>${screenCmdHTML(SCREEN_DOCKER_ENV_CMD, 'Docker .env')}
           <p>A Linux checkout:</p>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}
           <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">How to turn on the screen</a></div>`
       : `<span class="settings-cell-note">${ask.replace('in Settings > Computers', 'on the computer')}</span>`),
     linux_only: () => status('Screen is Linux only for now.'),
     offline: () => status("This computer is offline. Screen works when it's back."),
-    not_allowed: () => status(`Only ${esc(s.operator)} and admins can open this computer's screen.`),
+    not_allowed: () => status(s.operator ? `Only ${esc(s.operator)} and admins can open this computer's screen.` : "Only admins can open this computer's screen."),
     none: () => status('This bot has no computer yet.'),
     external: () => status("This bot runs outside Tico's computers, so there is no screen to show."),
   }[s.state]();

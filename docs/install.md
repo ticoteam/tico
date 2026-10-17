@@ -601,11 +601,12 @@ allowed, take control. The computer itself decides whether it offers one:
   instead. A runner installed before this default has no such line and keeps its screen off until you turn it on.
   To turn it on later, run this in the runner's folder; it takes effect live, with no restart, so no running turn is
   cut off, and it is saved in `runner.json` on the `runner-home` volume, so it survives updates:
-  `docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on`
+  `sudo docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on`
   (`screen off` and `screen status` too). A non-empty `TICO_SCREEN` in `.env` wins over that setting, so with
-  `TICO_SCREEN=0` there the command changes nothing: set the line to `1` and run
-  `docker compose -f runner.compose.yaml up -d`, once the computer is idle, since that recreates the container and
-  cuts off a running turn. `install.sh --runner --screen` writes `TICO_SCREEN=1` too.
+  `TICO_SCREEN=0` there the command changes nothing. Then, or on a runner too old for that command, set the line to `1`
+  (`.env` is root's, mode 600, so edit it with sudo) and run `sudo docker compose -f runner.compose.yaml up -d runner`,
+  once the computer is idle, since that recreates the runner's container and cuts off a running turn.
+  `install.sh --runner --screen` writes `TICO_SCREEN=1` too.
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 

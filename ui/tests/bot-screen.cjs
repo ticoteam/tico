@@ -27,7 +27,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         bot('linux', true, computer('c-linux')),
         bot('mac', true, computer('c-mac', {platform: 'darwin'})),
         bot('offline', false, computer('c-offline', {screen: 'view', screen_available: true})),
-        bot('none', false, null)];
+        bot('none', false, null),
+        bot('unowned', true, computer('c-unowned', {operator: null, screen: 'view', screen_available: true}))];
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;
         const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -83,10 +84,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual([row.state, row.header], ['not_offered', 0]);
     // Docker's main step is live (no restart); the .env fallback says it cuts off a running turn and when it is needed.
     assert.match(row.text, /^This computer's screen isn't turned on\. Docker: .* turn it on live\. Nothing restarts, so no running turn is cut off:/);
-    assert.match(row.text, /If the runner's \.env says TICO_SCREEN=0, that wins over this\. .*once the computer is idle: this restarts the runner and cuts off a running turn\./);
+    assert.match(row.text, /If the runner is too old for that command, or its \.env says TICO_SCREEN=0 \(which wins over it\), .*once the computer is idle: this restarts the runner and cuts off a running turn\./);
     assert.deepEqual(await admin.page.locator('#bot-screen-row [data-screen-copy]').evaluateAll(els => els.map(el => el.dataset.screenCopy)),
-      ['docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on',
-       "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose -f runner.compose.yaml up -d",
+      ['sudo docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on',
+       "sudo sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 | sudo tee -a .env >/dev/null && sudo docker compose -f runner.compose.yaml up -d runner",
        'scripts/tico screen on']);
     assert.equal(await admin.page.locator('#bot-screen-row a[href$="docs/install.md#screen"]').count(), 1);
     await admin.page.evaluate(() => { window.__copied = []; navigator.clipboard.writeText = async value => { window.__copied.push(value); }; });
@@ -123,6 +124,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     row = await member.open('linux');
     assert.deepEqual([row.state, row.text], ['not_offered', "This computer's screen isn't turned on. Ask Sam or an admin to turn it on on the computer."]);
     assert.equal(await member.page.locator('[data-screen-copy]').count(), 0);
+    // A computer with no operator names admins alone.
+    row = await member.open('unowned');
+    assert.deepEqual([row.state, row.text], ['not_allowed', "Only admins can open this computer's screen."]);
     assert.deepEqual(member.writes, []);
     assert.deepEqual(member.errors, []);
     await member.page.close();
