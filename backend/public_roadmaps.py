@@ -135,7 +135,7 @@ def suggestions_full(c, manager):
     first refusal of a day tells the bot that receives them, which reviews them, rather than leaving the form refusing unseen."""
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
-                        "JOIN task_types ty ON ty.id=t.type_id WHERE ty.manager='product-manager' AND s.name='Suggested' "
+                        "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name='Suggested' "
                         "AND t.requester=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
     if waiting < limit:
         return False
@@ -262,8 +262,8 @@ def install(app, store, auth, mutate):
         with public_write(store) as c:
             require_label(c, label)
             receiver = R.suggestions_receiver(c)[0]
-            from .roadmap_flow import managed_type
-            product_type = managed_type(c, 'product-manager')
+            from .roadmap_flow import PRODUCT, role_type
+            product_type = role_type(c, PRODUCT)
             # Before either limit: a visitor turned away for want of a receiver hears that, whatever the queue
             # or their allowance, and spends nothing.
             if not receiver or not product_type:

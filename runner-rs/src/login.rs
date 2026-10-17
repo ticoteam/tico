@@ -206,6 +206,8 @@ impl Session {
             i.code.clear();
         }
         log(&format!("Tico runner: {} sign-in {state}", self.runtime));
+        // Whatever the verdict, the next heartbeat asks the profile's CLI again instead of a cached answer.
+        crate::profiles::forget_report();
         if state == "signed_in" {
             let name = if self.profile.is_empty() { default_profile } else { &self.profile };
             runner.sign_in.clear_rejection(&self.runtime, name);
@@ -483,7 +485,7 @@ impl Logins {
     fn begin(&mut self, runner: &Arc<Runner>, work: &Value) {
         let s = Session::new(work);
         // Read again: a profile `profile add` (or a sign-in) made since start is in the file, not in memory.
-        let mut config = Config::load(&runner.config.path).unwrap_or_else(|_| runner.config.clone());
+        let mut config = runner.config_now();
         let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         if crate::harness_tools::login_command(&s.runtime).is_none() {
@@ -500,7 +502,9 @@ impl Logins {
                     self.sessions.insert(s.id.clone(), s);
                     return;
                 }
-                config = Config::load(&runner.config.path).unwrap_or(config);
+                config = runner.config_now();
+                // Listed at the next heartbeat as not signed in; a failed or abandoned sign-in leaves it so, never hidden.
+                runner.events.ask(&["heartbeat"]);
             }
             let (s2, r2, lifetime) = (s.clone(), runner.clone(), self.lifetime);
             std::thread::spawn(move || run_session(s2, r2, config, lifetime));
@@ -555,8 +559,8 @@ impl Logins {
                     let mut i = s.inner.lock().unwrap();
                     i.taken = i.taken && body.get("code_taken").is_none();
                 }
-                if body["state"] == "signed_in" {
-                    runner.events.ask(&["heartbeat"]); // let readiness show it now
+                if s.inner.lock().unwrap().finished {
+                    runner.events.ask(&["heartbeat"]); // let readiness and the profiles show the verdict now
                 }
             }
             let i = s.inner.lock().unwrap();

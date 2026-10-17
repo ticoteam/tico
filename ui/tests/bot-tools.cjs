@@ -166,7 +166,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await list.locator('details').evaluateAll(els => els.forEach(el => { el.open = true; }));
       assert.equal(await repos.locator('.bt-repo').count(), 4);
       const text = await list.innerText();
-      for (const expected of ['GPT-6-luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
+      for (const expected of ['GPT 6 Luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
         'funnels only', 'Credential missing on Test Mac', '#ops, #launch', 'SLACK_TOKEN', 'nothing to check', 'account 3'])
         assert(text.includes(expected), scheme + ': the list says ' + expected + '\n' + text);
       assert.equal(await list.locator('[data-tool=repo] a').getAttribute('href'), 'https://github.com/acme-co/emp-cmo');

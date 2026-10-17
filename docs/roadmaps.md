@@ -2,7 +2,13 @@
 
 Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
 Suggested → Exploring → Spec → Approved → Building → Shipped (or Declined); Engineering (or an existing Dev tickets
-type, as in [The software factory](software-factory.md)) uses the development flow. Every type starts private. A task is public only once someone publishes it with a
+type, as in [The software factory](software-factory.md)) uses the development flow. Tico knows these types by their
+role (`role` in `hub task types`: `product-roadmap` and `engineering`), not by the bot that manages them, so archiving
+that bot or handing the type to another keeps the roadmap and its Approved → Building → Shipped sync working. A type
+keeps its role when renamed. A type named Dev tickets gets the engineering role when it is created or renamed to that,
+even beside Engineering; both then count as a roadmap item's development work. An install from before roles gives them
+once on upgrade, to the types the Product Manager and Head of Engineering managed and to Engineering; no task changes.
+Every type starts private. A task is public only once someone publishes it with a
 public title written for it: the internal title and body are never copied into the public text. A type set to
 default public publishes a new task only when its public title is given at creation; without one the task starts
 private. A bot (or the Assistant or BotOps acting for a person) cannot create a task with public text or as public;
@@ -80,6 +86,17 @@ per IP per UTC day across every roadmap (default 10, configurable in settings); 
 429. Failed writes roll back their charge. The server uses the connection IP, with forwarded IPs
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
 a /64 bucket; an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as its IPv4 address.
+
+While at least one public label is enabled, **Settings > Health** tells owners and admins when suggestions don't reach
+the bot they expect, from the same rule that routes them:
+- **No bot receives roadmap suggestions**: visitors are being turned away. Choose an active bot, or make a Product
+  Manager or Head of Product bot active for Automatic.
+- **The bot chosen for roadmap suggestions is archived; suggestions now go to *name***, or **isn't active** when it is
+  paused, quarantined or planned. Make the chosen bot active again, or choose another bot or Automatic.
+
+Each links to Settings > Tasks > Public roadmap and clears by itself: the first once any bot receives suggestions,
+the second once the chosen bot is active again or another choice is saved. With no
+enabled label neither shows, and when the fallback finds no bot either, only the first one shows.
 
 ## Internal work
 
