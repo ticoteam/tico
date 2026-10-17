@@ -80,7 +80,8 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_hq_has_a_current_copy():
-    """Every department's head is a card in it, and hq/catalog.json and hq/recruit_rank.py are what
+    """Every department's head is a card in it, and hq/catalog.json, hq/recruit_rank.py, the setup page's draft engine
+    (backend/company_file/roles.json, hq/company_file, hq/onboarding-actions.json) are what
     scripts/build_catalog_json.py builds today, with the same version the server computes."""
     settings = SimpleNamespace(catalog_dir=ROOT / "templates" / "catalog")
     built = recruit.catalog(settings)
