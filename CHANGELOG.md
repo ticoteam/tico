@@ -8,6 +8,12 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Public roadmaps: choose which bot receives visitor suggestions with `suggestions_bot` in roadmap settings
+  (`hub roadmap settings --suggestions-bot SLUG`, or `--automatic`), owners and admins only. Automatic, the default,
+  is today's Product Manager rule, then a Head of Product bot, so a team without a Product Manager still takes
+  suggestions; an archived bot never gets them. Reading the settings shows the bot suggestions go to now. With no
+  receiving bot a visitor gets "Suggestions aren't being accepted right now." instead of an internal setup error,
+  and trying to change a task type's manager says where to choose the bot instead.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.

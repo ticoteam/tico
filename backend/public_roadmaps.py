@@ -33,6 +33,8 @@ class RoadmapSettings(Contract):
     action_limit: int | None = Field(default=None, ge=1, le=10000)
     suggestion_limit: int | None = Field(default=None, ge=1, le=1000)
     bot_public_approval: bool | None = None
+    # A bot slug, or null for Automatic (R.suggestions_receiver).
+    suggestions_bot: str | None = Field(default=None, max_length=200)
 
 
 class PublicRequester(Contract):
@@ -130,7 +132,7 @@ def charge(c, request):
 
 def suggestions_full(c, manager):
     """Whether visitor suggestions waiting at Suggested are at their overall cap. A few addresses can fill it, so the
-    first refusal of a day tells the Product Manager, who reviews them, rather than leaving the form refusing unseen."""
+    first refusal of a day tells the bot that receives them, which reviews them, rather than leaving the form refusing unseen."""
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
                         "JOIN task_types ty ON ty.id=t.type_id WHERE ty.manager='product-manager' AND s.name='Suggested' "
@@ -147,17 +149,19 @@ def suggestions_full(c, manager):
     return True
 
 
-def record_suggestion(c, request, body, label, manager):
+# A visitor learns nothing of the team's setup; Health tells the team.
+NOT_ACCEPTING = "Suggestions aren't being accepted right now."
+
+
+def record_suggestion(c, request, body, label, receiver):
     charge(c, request)
-    if not manager:
-        raise Problem('setup', 'Product Manager is not configured', 409)
     from .roadmap_flow import managed_type
     product_type = managed_type(c, 'product-manager')
-    if not product_type:
-        raise Problem('setup', 'Product roadmap type is not configured', 409)
+    if not receiver or not product_type:
+        raise Problem('setup', NOT_ACCEPTING, 409)
     try:
         row = H.task_create(c, H.KEEPER, body.title,
-                            'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary, 'bot:' + manager[0],
+                            'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary, 'bot:' + receiver,
                             type=product_type, step='Suggested', labels=[label], visibility='private',
                             lint=False, allow_planned=True, next_run=True, deduplicate=False)
     except H.Refused:
@@ -201,7 +205,7 @@ def install(app, store, auth, mutate):
     def read_settings(request: Request):
         auth.domain(request.state.identity)
         with store.read() as c:
-            return R.settings(c)
+            return R.settings_view(c)
 
     @app.post('/api/v2/roadmaps/settings')
     def write_settings(request: Request, body: RoadmapSettings):
@@ -211,8 +215,13 @@ def install(app, store, auth, mutate):
             if auth.company_role(who) not in ('owner', 'admin'):
                 raise Problem('forbidden', 'Only owners and admins change roadmap settings', 403)
             updates = body.model_dump(exclude_unset=True)
-            if not updates or any(value is None for value in updates.values()):
+            if not updates or any(value is None for key, value in updates.items() if key != 'suggestions_bot'):
                 raise Problem('settings', 'Provide explicit roadmap settings', 422)
+            chosen = updates.get('suggestions_bot')
+            if chosen is not None:
+                chosen = updates['suggestions_bot'] = chosen.removeprefix('bot:')
+                if not H._one(c, "SELECT 1 FROM bots WHERE slug=? AND state<>'archived'", (chosen,)):
+                    raise Problem('suggestions_bot', f'No active bot {chosen!r}: choose an active bot, or null for Automatic', 422)
             value = {**R.settings(c), **updates}
             for label in value['labels']:
                 if len(label) > 200 or '/' in label or not H.tag_by_key(c, label) or H.tag_by_key(c, label)['is_template']:
@@ -227,7 +236,7 @@ def install(app, store, auth, mutate):
             c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) "
                       'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (json.dumps(value),))
             H.event(c, who.actor, 'roadmaps.settings', '', value)
-            return value
+            return R.settings_view(c)
         return mutate(request, body, work)
 
     @app.head('/public/roadmaps/{label}')
@@ -256,13 +265,11 @@ def install(app, store, auth, mutate):
         R.spam_check(body.summary, 'Summary', 8000, required=False)
         with public_write(store) as c:
             require_label(c, label)
-            manager = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                                "WHERE json_extract(bc.config_json,'$.template')='product-manager' "
-                                "AND b.state IN ('active','planned') ORDER BY bc.bot LIMIT 1").fetchone()
-            full = suggestions_full(c, manager and manager[0])
+            receiver = R.suggestions_receiver(c)[0]
+            full = suggestions_full(c, receiver)
             if not full:
-                row, token = record_suggestion(c, request, body, label, manager)
-        if full:   # refused once the transaction is in, so the notice to the Product Manager is kept
+                row, token = record_suggestion(c, request, body, label, receiver)
+        if full:   # refused once the transaction is in, so the notice to the receiving bot is kept
             raise Problem('rate_limit', 'Too many suggestions are waiting for review; try again later', 429)
         return {'id': row['id'], 'requester_token': token['requester_token']}
 
