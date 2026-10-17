@@ -688,8 +688,18 @@ def test_a_grok_turn_gets_only_its_declared_mcp_servers_never_the_operators(api,
 
 
 # What Cloudflare's bot protection refuses before a request reaches Tico: no user agent, or a library's default one.
-DEFAULT_AGENTS = ("python-requests", "python-urllib", "python-httpx", "aiohttp", "go-http-client", "curl/", "wget/",
-                  "okhttp", "java/", "node", "undici", "axios", "libwww-perl")
+# Matched on every product token, since a default can lead with another (aiohttp's is `Python/3.12 aiohttp/3.10.11`).
+DEFAULT_AGENTS = ("python-requests/", "python-urllib/", "python-httpx/", "aiohttp/", "go-http-client/", "curl/",
+                  "wget/", "okhttp/", "java/", "node", "undici", "axios/", "libwww-perl/")
+
+
+def refused_agent(agent):
+    return not agent or any(token.lower().startswith(DEFAULT_AGENTS) for token in agent.split())
+
+
+def status_of(response):
+    parts = response.split(b"\r\n", 1)[0].split(b" ")
+    return int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
 
 
 class RefusingProxy:
@@ -701,20 +711,30 @@ class RefusingProxy:
         host, port = upstream.removeprefix("http://").rsplit(":", 1)
         self.upstream = (host, int(port))
         self.listener = socket.create_server(("127.0.0.1", 0))
+        self.listener.settimeout(0.1)       # accept wakes to see `stopping`: closing the socket does not interrupt it
         self.url = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
-        self.refused, self.passed = [], []
-        threading.Thread(target=self.accept, daemon=True).start()
+        self.refused, self.passed, self.workers = [], [], []
+        self.stopping = threading.Event()
+        self.acceptor = threading.Thread(target=self.accept, daemon=True)
+        self.acceptor.start()
 
     def close(self):
+        self.stopping.set()
+        for thread in [self.acceptor, *self.workers]:
+            thread.join(timeout=10)
         self.listener.close()
+        assert not any(t.is_alive() for t in [self.acceptor, *self.workers]), "the proxy's threads did not stop"
 
     def accept(self):
-        while True:
+        while not self.stopping.is_set():
             try:
                 client, _ = self.listener.accept()
-            except OSError:
-                return
-            threading.Thread(target=self.serve, args=(client,), daemon=True).start()
+            except TimeoutError:
+                continue
+            client.settimeout(None)
+            worker = threading.Thread(target=self.serve, args=(client,), daemon=True)
+            self.workers.append(worker)
+            worker.start()
 
     def serve(self, client):
         with client:
@@ -730,7 +750,7 @@ class RefusingProxy:
             fields = [f for f in fields if f.split(":", 1)[0].strip().lower() not in ("connection", "keep-alive")]
             agent = next((f.split(":", 1)[1].strip() for f in fields if f.lower().startswith("user-agent:")), "")
             path = target.split("?", 1)[0]
-            if not agent or agent.lower().startswith(DEFAULT_AGENTS):
+            if refused_agent(agent):
                 self.refused.append((method, path, agent))
                 client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 return
@@ -740,11 +760,18 @@ class RefusingProxy:
                 # The rest of a request body, and the client hanging up.
                 threading.Thread(target=self.pump, args=(client, upstream), daemon=True).start()
                 try:
-                    first = upstream.recv(65536)
-                    self.passed.append((method, path, agent, int(first.split(b" ", 2)[1]) if first else 0))
-                    while first:
-                        client.sendall(first)
-                        first = upstream.recv(65536)
+                    response = b""
+                    while b"\r\n" not in response:        # the whole status line, however the reads split it
+                        chunk = upstream.recv(65536)
+                        if not chunk:
+                            break
+                        response += chunk
+                    self.passed.append((method, path, agent, status_of(response)))
+                    while response:
+                        client.sendall(response)
+                        response = upstream.recv(65536)
+                    # A shutdown, not just a close: the pump blocked reading the client would hold the connection open.
+                    client.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
 
@@ -761,6 +788,44 @@ class RefusingProxy:
             pass
 
 
+def test_the_refusing_proxy_refuses_each_default_agent_and_reads_a_split_status_line():
+    """The proxy itself, against an upstream that sends its status line in two writes."""
+    upstream = socket.create_server(("127.0.0.1", 0))
+
+    def answer():
+        while True:
+            try:
+                conn, _ = upstream.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(65536)
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                conn.sendall(b"HTTP/1.1 2")
+                time.sleep(0.2)
+                conn.sendall(b"00 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+
+    threading.Thread(target=answer, daemon=True).start()
+    proxy = RefusingProxy(f"http://127.0.0.1:{upstream.getsockname()[1]}")
+
+    def status(agent):
+        with socket.create_connection(proxy.listener.getsockname()) as conn:
+            conn.sendall(f"GET /api/v2/me HTTP/1.1\r\nHost: acme.example\r\n{agent}\r\n".encode())
+            reply = b""
+            while chunk := conn.recv(65536):
+                reply += chunk
+        return status_of(reply)
+
+    agents = ["", "python-requests/2.32.3", "Python-urllib/3.12", "python-httpx/0.27.0", "Python/3.12 aiohttp/3.10.11",
+              "Go-http-client/1.1", "Tico-Client/0.2.1"]
+    try:
+        assert [status(f"User-Agent: {a}\r\n" if a else "") for a in agents] == [403] * 6 + [200]
+        assert proxy.passed == [("GET", "/api/v2/me", "Tico-Client/0.2.1", 200)]
+    finally:
+        proxy.close()
+        upstream.close()
+
+
 def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_through(api, live, tmp_path,
                                                                                         rust_binary):
     """A real install sits behind Cloudflare, which refuses a library's default user agent: v0.3.28's runners silently
@@ -772,6 +837,7 @@ def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_
         machine.start()
         msg = post(api, "chat/ops", {"text": "Please answer locally"})
         assert until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply")["body"] == "Acme reply."
+        until(lambda: machine.attempts() and machine.attempts()[-1]["state"] == "completed", "the completed attempt")
         events = "/api/v2/runners/me/events"
         until(lambda: any(r[1] == events for r in proxy.passed + proxy.refused), "the event stream request")
         hub = subprocess.run([sys.executable, str(ROOT / "scripts" / "hub"), "whoami"], capture_output=True, text=True,
