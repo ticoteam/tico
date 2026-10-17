@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from backend.granola_mcp import GranolaMCP
 from backend.tests.test_granola_mcp import BASE, Provider, api, headers  # noqa: F401
 from scripts import granola_live_check
 
@@ -141,21 +142,100 @@ def test_the_live_check_skips_without_a_credential(monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("SKIP")
 
 
-def test_a_recording_keeps_the_shape_and_drops_people_and_tokens():
-    real = {"token": {"status": 200, "headers": {}, "json": {"access_token": "live-access", "refresh_token": "live-refresh",
-                                                             "expires_in": 3600}},
-            "initialize": {"status": 200, "headers": {"Mcp-Session-Id": "live-session"}, "json": {"result": {}}},
-            "get_meetings": {"status": 200, "headers": {}, "json": {"result": {"content": [{"type": "text", "text": (
-                'Here are the notes:\n<meetings_data count="1"><meeting id="8f14e45f-ceea-467f-a0e6-7a1f2b3c4d5e" '
-                'title="Board prep with Dana"><known_participants>Dana Reyes from Initech <dana@initech.example>'
-                '</known_participants><summary>Raise at $12M</summary></meeting></meetings_data>')}]}}}}
-    scrubbed = granola_live_check.scrub(real)
-    text = json.dumps(scrubbed)
-    for secret in ("live-access", "live-refresh", "live-session", "Dana", "Initech", "dana@", "$12M", "Board prep",
-                   "8f14e45f"):
-        assert secret not in text
-    assert scrubbed["token"]["json"]["expires_in"] == 3600
-    assert granola_live_check.shape_problems("get_meetings", scrubbed["get_meetings"]) == []
+S = "zq%02d"   # unique made-up markers: none may reach a recording
+
+
+def meetings_answer(text=None, structured=None, blocks=1):
+    result = {"structuredContent": structured} if structured is not None else {
+        "content": [{"type": "text", "text": text}] + [{"type": "text", "text": S % 90 + " extra"}] * (blocks - 1)}
+    return {"status": 200, "headers": {"content-type": "application/json; charset=" + S % 91, "x-trace": S % 92},
+            "json": {"jsonrpc": "2.0", "id": S % 93, "result": result}}
+
+
+XML_FORMS = {
+    "title element, aliases, attendee forms, private notes, prose around": (
+        f'{S % 1} intro\n<meetings_data count="2"><meeting id="{S % 2}" date="{S % 3}"><title>{S % 4}</title>'
+        f'<attendees><attendee name="{S % 5}" email="{S % 6}@x.example"/><attendee><name>{S % 7}</name>'
+        f'<email>{S % 8}@x.example</email></attendee><attendee>{S % 9}</attendee></attendees>'
+        f'<enhanced_notes>{S % 10} < 15% & {S % 11}@x.example</enhanced_notes><private_notes>{S % 12}</private_notes>'
+        f'<raw_notes>{S % 13}</raw_notes><note_taker_notes>{S % 14}</note_taker_notes><{S % 15}>{S % 16}</{S % 15}>'
+        f"</meeting><meeting id='{S % 17}' title='{S % 18}'><ai_summary>{S % 19}</ai_summary></meeting>"
+        f'<next_cursor>{S % 20}</next_cursor></meetings_data>\n{S % 21} trailer', 3, 2),
+    "single-quoted titles, known_participants, each summary alias": (
+        "<meetings>" + "".join(f"<meeting id='{S % (30 + n)}' title='{S % (40 + n)}'><known_participants>\n"
+                               f"{S % (50 + n)} (note creator) from {S % (60 + n)} <{S % (70 + n)}@x.example>\n"
+                               f"</known_participants><{tag}>{S % (80 + n)}</{tag}></meeting>"
+                               for n, tag in enumerate(granola_live_check.SUMMARIES)) + "</meetings>", 1, 5),
+    "referral example": (f'<meetings><meeting id="00000000-0000-4000-8000-000000000001"><title>{S % 22}</title>'
+                         f'<enhanced_notes>{S % 23}</enhanced_notes><attendees><attendee name="{S % 24}" /></attendees>'
+                         "</meeting></meetings>", 1, 1),
+}
+
+
+@pytest.mark.parametrize("raw,people,count", XML_FORMS.values(), ids=list(XML_FORMS))
+def test_a_recorded_xml_answer_keeps_its_shape_and_nothing_granola_wrote(raw, people, count):
+    original = GranolaMCP.content(meetings_answer(raw)["json"]["result"])["meetings"]
+    made = granola_live_check.scrub({"get_meetings": meetings_answer(raw, blocks=2)})
+    assert "zq" not in json.dumps(made)
+    rows = GranolaMCP.content(made["get_meetings"]["json"]["result"])["meetings"]
+    assert len(rows) == len(original) == count
+    assert [bool(GranolaMCP.item(r)) for r in rows] == [bool(GranolaMCP.item(r)) for r in original]
+    assert len(rows[0]["attendees"]) == people
+    assert made["get_meetings"]["headers"] == {"content-type": "application/json"}
+
+
+@pytest.mark.parametrize("as_text", [False, True])
+def test_a_recorded_json_answer_keeps_its_shape_and_nothing_granola_wrote(as_text):
+    rows = [{"note_id": S % 1, "title": S % 2, "summary": {"markdown": S % 3}, "participants": [S % 4, {"name": S % 5}],
+             "web_url": "https://x.example/" + S % 6, S % 7: S % 8, "nested": json.dumps({"title": S % 9})},
+            {"meeting_id": S % 10, "ai_summary": 'quote " ' + S % 11, "attendees": [{"name": S % 12, "email": S % 13}]}]
+    body = {"meetings": rows, "next_cursor": S % 14}
+    answer = meetings_answer(json.dumps(body)) if as_text else meetings_answer(structured=body)
+    exchange = {**answer, "events": [answer["json"], {"jsonrpc": "2.0", "method": S % 15, "params": {"x": S % 16}}]}
+    del exchange["json"]
+    made = granola_live_check.scrub({"get_meetings": exchange})
+    assert "zq" not in json.dumps(made)
+    first = made["get_meetings"]["events"][0]["result"]
+    assert ("content" in first) is as_text and ("structuredContent" in first) is not as_text
+    parsed = GranolaMCP.content(first)
+    assert parsed["next_cursor"] == "cursor-placeholder" and len(parsed["meetings"]) == 2
+    assert all(GranolaMCP.item(r).notes for r in parsed["meetings"])
+
+
+def test_tool_descriptions_unknown_fields_and_errors_are_made_up_but_still_classified():
+    tools = {"status": 200, "headers": {"mcp-session-id": S % 1, "retry-after": S % 2}, "json": {"jsonrpc": "2.0", "id": 1,
+             "result": {"tools": [{"name": "get_meetings", "description": S % 3, "inputSchema": {"type": "object",
+              "properties": {"meeting_ids": {"type": "array", "maxItems": 10, "description": S % 4},
+                             S % 5: {"type": "string", "enum": ["last_30_days", S % 6]}}, "required": ["meeting_ids", S % 5]}},
+              {"name": S % 7, "description": S % 8}]}}}
+    error = {"status": 200, "headers": {}, "json": {"jsonrpc": "2.0", "id": 2, "error": {"code": -32000,
+             "message": f"Rate limit exceeded for {S % 9}", "data": S % 10}}}
+    tool_error = {"status": 200, "headers": {}, "json": {"jsonrpc": "2.0", "id": 3, "result": {"isError": True,
+                  "content": [{"type": "text", "text": f"{S % 11} slow down"}]}}}
+    made = granola_live_check.scrub({"tools_list": tools, "rate_limit_rpc_error": error, "rate_limit_tool_error": tool_error})
+    assert "zq" not in json.dumps(made)
+    schema = made["tools_list"]["json"]["result"]["tools"][0]["inputSchema"]
+    assert schema["properties"]["meeting_ids"] == {"type": "array", "maxItems": 10}
+    assert schema["required"] == ["meeting_ids", "param_2"]
+    assert granola_live_check.check_fixture_exchanges({k: v for k, v in made.items() if k != "tools_list"}) == []
+
+
+@pytest.mark.parametrize("answer", [
+    meetings_answer(S % 1 + " no meetings here"),
+    {"status": 200, "headers": {}, "text": S % 2},
+    {"status": 200, "headers": {}, "json": {"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": "x",
+     "inputSchema": json.loads('{"items":' * 12 + "{}" + "}" * 12)}]}}},
+], ids=["unparseable notes", "not JSON", "schema too deep"])
+def test_a_shape_it_cannot_rebuild_writes_nothing_and_names_only_the_category(tmp_path, monkeypatch, capsys, answer):
+    name = "tools_list" if "tools" in json.dumps(answer) else "get_meetings"
+    (tmp_path / "mcp_shapes.json").write_text("kept")
+    monkeypatch.setattr(granola_live_check, "live_mcp", lambda token: ({name: answer}, []))
+    monkeypatch.setenv("GRANOLA_MCP_TOKEN", "fake-access-sensitive")
+    monkeypatch.delenv("GRANOLA_API_KEY", raising=False)
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    assert "CANNOT RECORD" in out and "zq" not in out
+    assert [p.name for p in tmp_path.iterdir()] == ["mcp_shapes.json"] and (tmp_path / "mcp_shapes.json").read_text() == "kept"
 
 
 def live_granola(notes="get_meetings", throttle=None, public=None):
@@ -218,4 +298,4 @@ def test_a_new_recording_replays_compressed_through_the_real_client(api, live, m
     provider.sync()
     status = api.get(BASE, headers=headers("ana-test")).json()
     assert not status["last_error"] and status["imported_count"] == 2 and status["skipped"] == 0
-    assert set(imported(api).values()) == {"Scrubbed summary"}
+    assert set(imported(api).values()) == {granola_live_check.NOTE % 1, granola_live_check.NOTE % 2}

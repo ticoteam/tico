@@ -10,8 +10,10 @@ Each part is skipped when its credential is not set, so with neither it prints S
 It never gates a release: run it by hand or on a schedule, and read a DRIFT as "update the fixtures in
 backend/tests/fixtures/granola/ and the parser", not as a broken build.
 
---record DIR writes the answers it saw to DIR/mcp_shapes.json in the fixture format, scrubbed: ids, titles,
-names, emails and notes become placeholders and no token or cookie is written. Read the file before committing it.
+--record DIR writes DIR/mcp_shapes.json in the fixture format, rebuilt rather than copied: it keeps the shape of
+each answer (status, encoding, JSON or event stream, XML-like or JSON notes, which tags and fields carry them, how
+many meetings and people) and fills it with made-up ids, names, titles and notes. No value Granola sent is written. An
+answer it cannot rebuild is refused and nothing is written. Read the file before committing it all the same.
 
 A probe Granola rate-limits is waited out once (its Retry-After, at most a minute); if it is throttled again, that
 probe is reported INCOMPLETE and the run never says OK. The throttle's own shape is still checked.
@@ -34,9 +36,6 @@ from backend.granola_mcp import MCP, GranolaError, GranolaMCP  # noqa: E402
 
 PUBLIC_API = "https://public-api.granola.ai/v1"
 KEPT_HEADERS = ("content-type", "content-encoding", "mcp-session-id", "retry-after")
-SECRETS = ("access_token", "refresh_token", "device_code", "id_token", "client_id")
-PERSONAL = ("name", "title", "summary", "summary_markdown", "summary_text", "notes", "private_notes", "transcript",
-            "speaker", "company", "email")
 RETRY_WAIT, RETRY_WAIT_MAX = 20, 60    # one wait-and-retry for a throttled probe, never longer than this
 TRANSPORT = None                       # tests replace the network; None is the real one
 SLEEP = time.sleep
@@ -124,7 +123,10 @@ AUTH_EXCHANGES = {"register": ("client_id",), "device_authorization": ("device_c
 
 def check_fixture(path):
     """Every problem in a fixture file, as 'exchange: problem' lines."""
-    exchanges = json.loads(Path(path).read_text())["exchanges"]
+    return check_fixture_exchanges(json.loads(Path(path).read_text())["exchanges"])
+
+
+def check_fixture_exchanges(exchanges):
     return [problem for name, exchange in exchanges.items() for problem in shape_problems(name, exchange)]
 
 
@@ -246,59 +248,264 @@ def live_public_api(key, timeout=30):
 
 
 # ---- scrub ----
+# A recording is rebuilt, not filtered: every value in it is either a fixed protocol literal from the lists below, a
+# count or limit, or made-up wording. Nothing Granola sent is copied, so a field nobody listed cannot carry a person's
+# text into a fixture. A shape that cannot be rebuilt this way is refused before anything is written.
+
+class Unrecordable(Exception):
+    """A fixed category name; never the provider's text."""
+
+
+TOOLS = ("list_meetings", "get_meetings", "get_meeting_transcript", "get_account_info")
+ARGUMENTS = ("since", "until", "start_date", "end_date", "after", "before", "created_after", "time_range",
+             "custom_start", "custom_end", "date_range", "start", "end", "from", "to", "involvement", "captured_by_me",
+             "cursor", "limit", "page_size", "meeting_ids", "ids", "note_ids", "meeting_id")
+SCHEMA_TYPES = ("object", "array", "string", "integer", "number", "boolean", "null")
+FORMATS = ("date", "date-time")
+RANGES = ("custom", "last_30_days", "last_7_days", "this_week", "last_week", "this_month", "last_month", "today",
+          "yesterday")
+SUMMARIES = ("summary_markdown", "summary_text", "ai_summary", "enhanced_notes", "summary")
+WRAPPERS = ("meetings_data", "meetings", "notes")
+CONTENT_TYPES = ("application/json", "text/event-stream")
+ENCODINGS = ("gzip", "br", "deflate", "identity")
+RATE_LIMIT_TEXT = "Rate limit exceeded. Please slow down requests."
+PLAN_TEXT = "Transcripts are only available to paid Granola tiers"
+INTRO = "Synthetic provider introduction:\n"
+NOTE = "## Notes\n- Synthetic note %d: budget < 15%% & plan approved"
+DEPTH = 8
+
 
 def scrub(exchanges):
-    """Placeholders for everything personal; structure, tags, attribute names and provider wording are kept."""
-    ids, people = {}, {}
+    """The recording rebuilt from made-up values, keeping the shape Tico reads; raises Unrecordable."""
+    ids = {}
 
-    def placeholder_id(match):
-        return ids.setdefault(match[0], "00000000-0000-4000-8000-%012d" % (len(ids) + 1))
+    def synthetic_id(value):
+        return ids.setdefault(str(value), "00000000-0000-4000-8000-%012d" % (len(ids) + 1))
 
-    def person(match):
-        return people.setdefault(match[0].lower(), "person%d@example.com" % (len(people) + 1))
+    def schema(value, depth=0):
+        if depth > DEPTH or not isinstance(value, dict):
+            raise Unrecordable("tool schema too deep or not an object")
+        out = {}
+        kind = value.get("type")
+        if kind is not None:
+            kinds = kind if isinstance(kind, list) else [kind]
+            out["type"] = kind if all(k in SCHEMA_TYPES for k in kinds) else "string"
+        if isinstance(value.get("format"), str) and value["format"] in FORMATS:
+            out["format"] = value["format"]
+        names = {}
+        if isinstance(value.get("properties"), dict):
+            for index, (key, spec) in enumerate(value["properties"].items()):
+                names[key] = key if key in ARGUMENTS else f"param_{index + 1}"
+            out["properties"] = {names[k]: schema(v, depth + 1) for k, v in value["properties"].items()}
+        if isinstance(value.get("required"), list):
+            out["required"] = [names.get(k, "param_required") for k in value["required"] if isinstance(k, str)]
+        if isinstance(value.get("enum"), list):
+            out["enum"] = [v if v in RANGES else f"option_{i + 1}" for i, v in enumerate(value["enum"])]
+        if isinstance(value.get("items"), dict):
+            out["items"] = schema(value["items"], depth + 1)
+        for key in ("minItems", "maxItems"):
+            if isinstance(value.get(key), int) and not isinstance(value[key], bool) and 0 <= value[key] <= 10_000:
+                out[key] = value[key]
+        if isinstance(value.get("additionalProperties"), bool):
+            out["additionalProperties"] = value["additionalProperties"]
+        return out
 
-    def text(value):
-        value = re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", placeholder_id, value)
-        value = re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", person, value)
-        value = re.sub(r'\btitle="[^"]*"', 'title="Meeting"', value)
-        value = re.sub(r"<(summary|notes|private_notes|transcript)([^>]*)>.*?</\1>",
-                       lambda m: f"<{m[1]}{m[2]}>Scrubbed {m[1]}</{m[1]}>", value, flags=re.S)
-        value = re.sub(r"(<known_participants>).*?(</known_participants>)",
-                       lambda m: m[1] + "\n  Person (note creator) from Company <person@example.com>\n  " + m[2],
-                       value, flags=re.S)
-        return value
+    def tool_error(name, result):
+        if GranolaMCP.rate_limited(result):
+            text = RATE_LIMIT_TEXT
+        elif name == "transcript" and re.search(r"paid|upgrade|business|enterprise", encode_text(result), re.I):
+            text = PLAN_TEXT
+        else:
+            text = "Synthetic tool error."
+        return {"isError": True, "content": [{"type": "text", "text": text}]}
 
-    def walk(value, key=None, meetings=True):
-        if isinstance(value, dict):
-            return {k: walk(v, k, meetings) for k, v in value.items()}
-        if isinstance(value, list):
-            return [walk(v, None, meetings) for v in value]
-        if isinstance(value, str):
-            if key == "id" and value != "<request id>":
-                return placeholder_id([value])
-            if key in SECRETS:
-                return f"<{key}>"
-            if key and key.lower() == "mcp-session-id":
-                return "session-placeholder"
-            if meetings and key in PERSONAL:
-                return f"Scrubbed {key}"
-            return text(value)
-        return value
+    def has_notes(row):
+        try:
+            return GranolaMCP.item(row) is not None
+        except GranolaError:      # a row without an id: Tico skips it, and so does the rebuilt one
+            return False
 
-    # Tool and server descriptions name no one; everywhere else a name, title or note is a person's.
-    def request_id(message):
-        # The JSON-RPC id is the request's own; the replay puts the new request's id back in its place.
-        return {**message, "id": "<request id>"} if isinstance(message, dict) and "jsonrpc" in message else message
+    def form_of(result):
+        if isinstance(result.get("structuredContent"), (dict, list)):
+            return "structured", None
+        blocks = [b for b in result.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+        if not blocks:
+            raise Unrecordable("result without text or structured content")
+        raw = blocks[0].get("text", "")
+        if not isinstance(raw, str):
+            raise Unrecordable("text block that is not text")
+        try:
+            json.loads(raw)
+            return "json_text", raw
+        except ValueError:
+            return "xml_text", raw
+
+    def meetings(result):
+        form, raw = form_of(result)
+        try:
+            value = GranolaMCP.content(result)
+        except GranolaError:
+            raise Unrecordable("meetings answer Tico cannot parse") from None
+        rows = value.get("meetings") if isinstance(value, dict) else None
+        if not isinstance(rows, list) or len(rows) > 100 or not all(isinstance(r, dict) for r in rows):
+            raise Unrecordable("meetings answer without a meeting list")
+        made = []
+        for index, row in enumerate(rows, 1):
+            people = row.get("attendees") or row.get("participants") or []
+            made.append({"id": synthetic_id(row.get("note_id") or row.get("id") or row.get("meeting_id") or index),
+                         "title": f"Meeting {index}", "people": min(len(people) if isinstance(people, list) else 0, 20),
+                         "notes": has_notes(row)})
+        cursor = "cursor-placeholder" if isinstance(value, dict) and value.get("next_cursor") else None
+        if form == "xml_text":
+            text = render_xml(raw, made, cursor)
+            return {"content": [{"type": "text", "text": text}]}
+        summary = next((k for k in SUMMARIES if any(k in r for r in rows)), "summary")
+        nested = any(isinstance(r.get(summary), dict) for r in rows)
+        people_key = "participants" if any("participants" in r for r in rows) else "attendees"
+        listed = [{"id": m["id"], "title": m["title"], "date": "2026-10-01T16:00:00Z",
+                   people_key: [{"name": f"Person {p}", "email": f"person{p}@example.com"} for p in range(1, m["people"] + 1)],
+                   **({summary: {"markdown": NOTE % i} if nested else NOTE % i} if m["notes"] else {})}
+                  for i, m in enumerate(made, 1)]
+        body = {"meetings": listed, **({"next_cursor": cursor} if cursor else {})}
+        if form == "structured":
+            return {"structuredContent": body}
+        return {"content": [{"type": "text", "text": json.dumps(body)}]}
+
+    def render_xml(raw, made, cursor):
+        start = re.search(r"<(meetings_data|meetings|notes|meeting|note)\b", raw)
+        wrapper = start[1] if start and start[1] in WRAPPERS else "meetings"
+        element_titles = bool(re.search(r"<title\b", raw))
+        quote = "'" if re.search(r"\btitle\s*=\s*'", raw) and not element_titles else '"'
+        summary = next((k for k in SUMMARIES if re.search(r"<%s\b" % k, raw)), "summary")
+        known = "<known_participants" in raw
+        private = bool(re.search(r"<(private_notes|raw_notes|note_taker_notes)\b", raw))
+        out = [INTRO] if start and raw[:start.start()].strip() else []
+        out.append(f'<{wrapper} count="{len(made)}">')
+        for i, m in enumerate(made, 1):
+            title = "" if element_titles else f" title={quote}{m['title']}{quote}"
+            out.append(f'<meeting id="{m["id"]}"{title} date="Oct 1, 2026 4:00 PM">')
+            if element_titles:
+                out.append(f"  <title>{m['title']}</title>")
+            people = [(f"Person {p}", f"person{p}@example.com") for p in range(1, m["people"] + 1)]
+            if people and known:
+                out.append("  <known_participants>\n" + "\n".join(f"  {n} from Company <{e}>" for n, e in people)
+                           + "\n  </known_participants>")
+            elif people:
+                out.append("  <attendees>" + "".join(f'<attendee name="{n}" email="{e}"/>' for n, e in people)
+                           + "</attendees>")
+            if m["notes"]:
+                out.append(f"  <{summary}>\n{NOTE % i}\n</{summary}>")
+            if private:
+                out.append("  <private_notes><summary>Synthetic private note</summary></private_notes>")
+            out.append("</meeting>")
+        if cursor:
+            out.append(f"<next_cursor>{cursor}</next_cursor>")
+        out.append(f"</{wrapper}>")
+        return "\n".join(out)
+
+    def transcript(result):
+        form, raw = form_of(result)
+        try:
+            GranolaMCP.content(result, allow_text=True)
+        except GranolaError:
+            raise Unrecordable("transcript Tico cannot parse") from None
+        if form == "structured":
+            return {"structuredContent": {"transcript": "Person 1: Synthetic line"}}
+        if form == "xml_text" and "<transcript" in raw:
+            intro = INTRO if raw[:raw.index("<transcript")].strip() else ""
+            text = intro + '<transcript meeting_id="%s">[00:00:15] Person 1: Synthetic line</transcript>' % synthetic_id("t")
+            return {"content": [{"type": "text", "text": text}]}
+        return {"content": [{"type": "text", "text": "Person 1: Synthetic line"}]}
+
+    def result_of(name, result):
+        if not isinstance(result, dict):
+            raise Unrecordable("result that is not an object")
+        if result.get("isError"):
+            return tool_error(name, result)
+        if name == "initialize":
+            version = result.get("protocolVersion")
+            if not isinstance(version, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", version):
+                raise Unrecordable("initialize without a protocol version")
+            return {"protocolVersion": version, "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "granola", "version": "0"}}
+        if name == "tools_list":
+            tools = [t for t in result.get("tools", []) if isinstance(t, dict)]
+            return {"tools": [{"name": t.get("name") if t.get("name") in TOOLS else f"other_tool_{i + 1}",
+                               "description": "Synthetic description.", "inputSchema": schema(t.get("inputSchema") or {})}
+                              for i, t in enumerate(tools[:50])]}
+        if name in ("list_meetings", "get_meetings", "get_meetings_event_stream"):
+            return meetings(result)
+        if name == "transcript":
+            return transcript(result)
+        raise Unrecordable("an answer the recorder does not know")
+
+    def message_of(name, message):
+        if not isinstance(message, dict):
+            raise Unrecordable("message that is not an object")
+        if "jsonrpc" not in message:
+            if name == "rate_limit_http_429":
+                return {"error": RATE_LIMIT_TEXT}
+            raise Unrecordable("answer that is not JSON-RPC")
+        out = {"jsonrpc": "2.0"}
+        if "id" in message:
+            out["id"] = "<request id>"
+        if "error" in message:
+            code = message["error"].get("code") if isinstance(message["error"], dict) else None
+            out["error"] = {"code": code if isinstance(code, int) and not isinstance(code, bool) and -32768 <= code <= 599
+                            else -32000,
+                            "message": RATE_LIMIT_TEXT if GranolaMCP.rate_limited(message["error"]) else "Synthetic error."}
+        elif "result" in message:
+            out["result"] = result_of(name, message["result"])
+        return out
+
+    def headers_of(headers):
+        out = {}
+        for key, value in headers.items():
+            key = key.lower()
+            if key == "content-type":
+                kind = next((t for t in CONTENT_TYPES if t in str(value).lower()), None)
+                if kind:
+                    out[key] = kind
+            elif key == "content-encoding" and str(value).lower() in ENCODINGS:
+                out[key] = str(value).lower()
+            elif key == "mcp-session-id":
+                out[key] = "session-placeholder"
+            elif key == "retry-after":
+                out[key] = str(value) if re.fullmatch(r"\d{1,5}", str(value)) else "5"
+        return out
 
     out = {}
     for name, exchange in exchanges.items():
-        exchange = dict(exchange)
-        if "json" in exchange:
-            exchange["json"] = request_id(exchange["json"])
+        status = exchange.get("status")
+        if not isinstance(status, int) or not 100 <= status <= 599:
+            raise Unrecordable("answer without an HTTP status")
+        made = {"status": status, "headers": headers_of(exchange.get("headers") or {})}
         if "events" in exchange:
-            exchange["events"] = [request_id(e) for e in exchange["events"]]
-        out[name] = walk(exchange, meetings=name not in ("initialize", "tools_list"))
+            made["events"] = [message_of(name, e) for e in exchange["events"][:20]]
+        elif "json" in exchange:
+            made["json"] = message_of(name, exchange["json"])
+        elif "text" in exchange:
+            raise Unrecordable("answer that is not JSON")
+        out[name] = made
     return out
+
+
+def encode_text(value):
+    return json.dumps(value, default=str)
+
+
+def write_recording(directory, exchanges):
+    """Rebuild first, then replace the file in one step: a refused recording writes nothing."""
+    made = json.dumps({"about": ["Recorded by scripts/granola_live_check.py --record and rebuilt from made-up values:",
+                                 "only the shape of Granola's answers is kept."], "exchanges": scrub(exchanges)},
+                      indent=2) + "\n"
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / "mcp_shapes.json"
+    temporary = directory / ".mcp_shapes.json.partial"
+    temporary.write_text(made)
+    os.replace(temporary, target)
+    return target
 
 
 def main(argv=None):
@@ -320,11 +527,15 @@ def main(argv=None):
                 if name not in exchanges and not any(item.startswith(name + ":") for item in unchecked):
                     problems.append(f"{name}: no answer recorded")
             if args.record:
-                Path(args.record).mkdir(parents=True, exist_ok=True)
-                out = Path(args.record) / "mcp_shapes.json"
-                out.write_text(json.dumps({"about": ["Recorded by scripts/granola_live_check.py --record; scrubbed."],
-                                           "exchanges": scrub(exchanges)}, indent=2) + "\n")
-                print(f"recorded {len(exchanges)} answers to {out}; read it before committing")
+                try:
+                    out = write_recording(args.record, exchanges)
+                    print(f"recorded {len(exchanges)} answers, rebuilt from made-up values, to {out}")
+                except Unrecordable as exc:
+                    print(f"CANNOT RECORD: {exc}; nothing was written")
+                    return 2
+                except Exception as exc:  # a recorder fault is never reported as Granola's
+                    print(f"CANNOT RECORD: recorder error ({type(exc).__name__}); nothing was written")
+                    return 2
         else:
             print("SKIP MCP: GRANOLA_MCP_TOKEN is not set")
         if key:
