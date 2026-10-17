@@ -41,6 +41,9 @@ All notable changes to Tico are recorded here. The format follows
   suggestions; an archived bot never gets them. Reading the settings shows the bot suggestions go to now. With no
   receiving bot a visitor gets "Suggestions aren't being accepted right now." instead of an internal setup error,
   and trying to change a task type's manager says where to choose the bot instead.
+- Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
+  suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
+  shows only while a public label is enabled and clears by itself.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.

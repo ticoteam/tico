@@ -81,6 +81,17 @@ per IP per UTC day across every roadmap (default 10, configurable in settings); 
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
 a /64 bucket; an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as its IPv4 address.
 
+While at least one public label is enabled, **Settings > Health** tells owners and admins when suggestions don't reach
+the bot they expect, from the same rule that routes them:
+- **No bot receives roadmap suggestions**: visitors are being turned away. Choose an active bot, or make a Product
+  Manager or Head of Product bot active for Automatic.
+- **The bot chosen for roadmap suggestions is archived; suggestions now go to *name***, or **isn't active** when it is
+  paused, quarantined or planned. Make the chosen bot active again, or choose another bot or Automatic.
+
+Each links to Settings > Tasks > Public roadmap and clears by itself: the first once any bot receives suggestions,
+the second once the chosen bot is active again or another choice is saved. With no
+enabled label neither shows, and when the fallback finds no bot either, only the first one shows.
+
 ## Internal work
 
 Tasks show Requested by, with external and teammate requesters separately. Contacts, organization,
