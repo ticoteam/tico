@@ -1,5 +1,7 @@
 """Roadmap privacy boundaries and the existing parent/child flow."""
 
+import pytest
+
 from backend import hubdb as H
 from backend.tests.test_tasks_board import api, get, headers, post
 
@@ -271,31 +273,49 @@ def test_roadmap_types_go_by_role_after_their_managers_change(api):
     assert (task['type']['id'], task['step']['name']) == ('product-roadmap', 'Suggested')
 
 
-def test_role_migration_backfills_today_s_types_and_rewrites_no_task(tmp_path):
+def test_role_migration_survives_a_stopped_start_and_backfills_renamed_types(tmp_path):
+    from backend import roadmap_flow as F
     path = tmp_path / 'hub.db'
     c = H.connect(path)
     H.sync_registry(c, {'cmo': {'name': 'cmo', 'runtime': 'fake', 'status': 'active'}},
                     {'people': [{'id': 'ana', 'email': 'ana@acme.example'}]})
-    c.execute("DELETE FROM task_steps WHERE type_id='engineering'")
-    c.execute("DELETE FROM task_types WHERE id='engineering'")
-    dev = H.type_create(c, 'human:ana', 'Dev tickets', steps=[{'name': 'Todo', 'status': 'open'}], mover=True)
-    for type_id in ('product-roadmap', dev['id'], 'general'):
+    # Today's shape after renames: generated ids and names no fallback recognises; only the legacy managers tell.
+    c.execute("DELETE FROM task_steps WHERE type_id IN ('product-roadmap','engineering')")
+    c.execute("DELETE FROM task_types WHERE id IN ('product-roadmap','engineering')")
+    made = {name: H.type_create(c, 'human:ana', name, steps=[{'name': 'Todo', 'status': 'open'}], mover=True)['id']
+            for name in ('Ideas', 'Builds', 'Platform work', 'Errands')}
+    for type_id in made.values():
         H.task_create(c, 'human:ana', 'Plan the launch on ' + type_id, 'Details', 'bot:cmo', type=type_id, lint=False)
-    # Today's shape: no role; Dev tickets managed by its lead, the roadmap already moved to another bot.
     c.execute('DROP INDEX task_types_product_role')
     c.execute('ALTER TABLE task_types DROP COLUMN role')
-    c.execute("UPDATE task_types SET manager='engineering-lead' WHERE id=?", (dev['id'],))
-    c.execute("UPDATE task_types SET manager='product-lead' WHERE id='product-roadmap'")
+    for name, manager in (('Ideas', 'product-manager'), ('Builds', 'engineering-lead'),
+                          ('Platform work', 'engineering-lead')):
+        c.execute('UPDATE task_types SET manager=? WHERE id=?', (manager, made[name]))
     tasks = c.execute('SELECT * FROM tasks ORDER BY id').fetchall()
     managers = dict(c.execute('SELECT id,manager FROM task_types').fetchall())
+
+    class StopsMidBackfill:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith('UPDATE task_types SET role'):
+                raise KeyboardInterrupt('the start is stopped here')
+            return self.conn.execute(sql, *args)
+
+    with pytest.raises(KeyboardInterrupt):
+        F.migrate(StopsMidBackfill(c))
+    assert 'role' not in {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
     c.close()
     c = H.connect(path)
-    assert dict(c.execute('SELECT id,role FROM task_types').fetchall()) == {
-        'general': None, 'product-roadmap': 'product-roadmap', dev['id']: 'engineering'}
+    roles = {made[name]: role for name, role in (('Ideas', 'product-roadmap'), ('Builds', 'engineering'),
+                                                 ('Platform work', 'engineering'), ('Errands', None))}
+    assert {k: v for k, v in c.execute('SELECT id,role FROM task_types') if k in roles} == roles
     assert dict(c.execute('SELECT id,manager FROM task_types').fetchall()) == managers
     assert [tuple(r) for r in c.execute('SELECT * FROM tasks ORDER BY id')] == [tuple(r) for r in tasks]
     H.migrate(c)
-    assert c.execute("SELECT count(*) FROM task_types WHERE role IS NOT NULL").fetchone()[0] == 2
+    assert dict(c.execute('SELECT id,role FROM task_types WHERE role IS NOT NULL').fetchall()) == {
+        k: v for k, v in roles.items() if v}
     c.close()
 
 

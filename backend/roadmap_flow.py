@@ -26,21 +26,32 @@ def _dev(row):
 def migrate(c):
     """Give the Product roadmap and Dev tickets types their role, once. The roadmap is the type its legacy bot
     manages, else the type with the role's own id; engineering goes to every type its legacy bot manages (each
-    counted for the roadmap before) and to the Engineering type. Nothing else on any type or task changes."""
-    from . import hubdb as H
-    columns = {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
-    if 'role' not in columns:
-        H.add_column(c, 'task_types', 'role', 'TEXT')
+    counted for the roadmap before) and to the Engineering type. Nothing else on any type or task changes.
 
-        def ids(sql, *args):
-            return [r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created,id', args)]
-        managed = (lambda role: ids('manager=?', LEGACY_MANAGERS[role])) if 'manager' in columns else (lambda role: [])
-        for role, chosen in ((PRODUCT, (managed(PRODUCT) or ids('id=?', PRODUCT))[:1]),
-                             (ENGINEERING, managed(ENGINEERING) + ids('id=?', ENGINEERING))):
-            for ident in chosen:
-                c.execute('UPDATE task_types SET role=? WHERE id=? AND role IS NULL', (role, ident))
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS task_types_product_role ON task_types(role) WHERE role='product-roadmap'")
-    claim(c)
+    The column, its backfill and the index commit together: startup runs in autocommit, and a start stopped after
+    the column alone would see it next time and never backfill a renamed type that claim() can't recognise."""
+    from . import hubdb as H
+    c.execute('SAVEPOINT roadmap_roles')
+    try:
+        columns = {r[1] for r in c.execute('PRAGMA table_info(task_types)')}
+        if 'role' not in columns:
+            H.add_column(c, 'task_types', 'role', 'TEXT')
+
+            def ids(sql, *args):
+                return [r[0] for r in c.execute('SELECT id FROM task_types WHERE ' + sql + ' ORDER BY created,id', args)]
+            managed = (lambda role: ids('manager=?', LEGACY_MANAGERS[role])) if 'manager' in columns else (lambda role: [])
+            for role, chosen in ((PRODUCT, (managed(PRODUCT) or ids('id=?', PRODUCT))[:1]),
+                                 (ENGINEERING, managed(ENGINEERING) + ids('id=?', ENGINEERING))):
+                for ident in chosen:
+                    c.execute('UPDATE task_types SET role=? WHERE id=? AND role IS NULL', (role, ident))
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS task_types_product_role ON task_types(role) "
+                  "WHERE role='product-roadmap'")
+        claim(c)
+    except BaseException:  # an interrupted start too: releasing a half-done backfill would commit it
+        c.execute('ROLLBACK TO roadmap_roles')
+        raise
+    finally:
+        c.execute('RELEASE roadmap_roles')
 
 
 def claim(c):
