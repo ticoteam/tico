@@ -30,6 +30,8 @@ function updCacheRead(state) {
   try { return JSON.parse(sessionStorage.getItem(UPD_CACHE(state)) || 'null'); } catch { return null; }
 }
 function updCacheWrite(state, data) {
+  // An update opened from a From: link belongs to this visit only; the next visit's first paint shows the feed.
+  if (state.linked?.size && data?.updates) data = {...data, updates: data.updates.filter(u => !state.linked.has(u.id))};
   try { sessionStorage.setItem(UPD_CACHE(state), JSON.stringify(data)); } catch {}
 }
 function updCacheClear() {
@@ -50,7 +52,7 @@ function pageUpdates() {
   // "a filter at the top, on by default, to only show my bots" (the bots I own), in List and Archive.
   const {mine, layout, scope} = updPrefs();
   const state = UPD = {kind, view, mine, layout, scope, expanded: null, editing: false, data: null, open: new Set(), threads: {}, pending: new Set(), manualUnread: new Set(),
-                       archivePending: new Set(), linked: new Set(), loadSeq: 0, mutationSeq: 0, sel: -1, loading: true, fromCache: false};
+                       archivePending: new Set(), linked: new Map(), loadSeq: 0, mutationSeq: 0, sel: -1, loading: true, fromCache: false};
   const cached = state.data = updCacheRead(state);
   state.loading = !cached; state.fromCache = !!cached;
   if (cached) updOrder(state, true);
@@ -138,8 +140,12 @@ async function updLoad(state, more = false) {
     const have = new Set(state.data.updates.map(u => u.id));   // a From: link may have loaded one already
     state.data = {...r, updates: [...state.data.updates, ...r.updates.filter(u => !have.has(u.id))], missed: state.data.missed};
   }
-  else { state.data = r; updCacheWrite(state, r); state.fromCache = false; }
+  else {
+    state.data = r; updCacheWrite(state, r); state.fromCache = false;
+    for (const {update} of state.linked.values()) if (!r.updates.some(u => u.id === update.id)) r.updates.push(update);
+  }
   updOrder(state, !more);
+  updLinkedRank(state);
   updBadge(r.unread);
   updRender(state);
 }
@@ -399,15 +405,21 @@ async function updGoInput(state, link) {
     if (r?.update) {
       if (!state.data.updates.some(u => u.id === id)) state.data.updates.push(r.update);
       state.threads[id] ||= r.thread;
-      state.linked.add(id);                              // shown even when My bots would hide its author
-      state.order ||= new Map();
-      state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
+      // Kept through this visit's reloads, and shown even when My bots would hide its author.
+      state.linked.set(id, {update: state.data.updates.find(u => u.id === id), from});
+      updLinkedRank(state);
       updRender(state);
       i = state.list.findIndex(u => u.id === id);
     }
   }
   if (i < 0) { location.hash = link.getAttribute('href'); return; }
   updSelect(state, i);
+}
+// An update opened from a From: link sits just under the card that links it.
+function updLinkedRank(state) {
+  if (!state.linked.size) return;
+  state.order ||= new Map();
+  for (const [id, {from}] of state.linked) state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
 }
 function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
@@ -429,6 +441,8 @@ function updRender(state) {
   const rank = state.order || new Map();
   const items = (data.updates || []).filter(u => !state.mine || isMine(u.bot) || state.linked.has(u.id))
     .sort((a, b) => (rank.get(a.id) ?? -1) - (rank.get(b.id) ?? -1));
+  const selected = state.list?.[state.sel]?.id, at = selected ? items.findIndex(u => u.id === selected) : -1;
+  if (at >= 0) state.sel = at;                          // a reload keeps the same card selected
   state.list = items;
   // Just the updates in a feed; no greeting, no progress, no who did not report.
   let html = items.map((u, i) => updCard(u, i, state)).join('');
@@ -531,6 +545,7 @@ async function updArchive(state, id) {
     updSaveDrafts();
     state.archivePending.delete(id);
     state.data.updates = state.data.updates.filter(u => u.id !== id);
+    state.linked.delete(id);                            // archived: not carried into the next reload
     state.pending.delete(id);
     state.list = (state.list || []).filter(u => u.id !== id);
     updRender(state);
