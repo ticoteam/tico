@@ -55,6 +55,9 @@ window.pageChangelog = async function () {
     window.renderChangelogNotice();
   };
   const bullet = b => esc(typeof plainMd === 'function' ? plainMd(b) : b);
+  const renderSummary = () => {
+    summary.textContent = data.unread_count ? `${data.unread_count} product ${data.unread_count === 1 ? 'update' : 'updates'} you haven't read.` : 'You’re caught up on product updates.';
+  };
   const render = () => {
     if (!page.isConnected) return;
     const q = search.value.toLowerCase().trim(), words = q.split(/\s+/);
@@ -64,7 +67,7 @@ window.pageChangelog = async function () {
       : data.entries;
     shown = pool.filter(r => (!filter.value || (r.kind === 'product' && (filter.value !== 'unread' || isNew(r))))
       && (!q || words.every(word => (r.title + ' ' + r.bullets.join(' ')).toLowerCase().includes(word))));
-    summary.textContent = data.unread_count ? `${data.unread_count} product ${data.unread_count === 1 ? 'update' : 'updates'} you haven't read.` : 'You’re caught up on product updates.';
+    renderSummary();
     add.hidden = !data.can_add;
     more.hidden = data.next_offset == null;
     list.innerHTML = shown.map(r => {
@@ -99,19 +102,20 @@ window.pageChangelog = async function () {
   const markShown = () => {
     const items = shown.filter(r => r.kind === 'product' && r.unread && !saving.has(r.id));
     if (!items.length) return saved;
-    items.forEach(r => saving.add(r.id));
+    // Remembered before the write: the server may commit it while the reply is slow or lost.
+    items.forEach(r => { saving.add(r.id); visit.set(r.id, r); });
     saved = saved.then(async () => {
       try {
         for (let i = 0; i < items.length; i += 250) {
           const chunk = items.slice(i, i + 250), ids = new Set(chunk.map(r => r.id));
           const result = await post('/v2/changelog/read', {ids: [...ids]});
-          chunk.forEach(r => visit.set(r.id, r));
           [...chunk, ...data.entries].forEach(r => { if (ids.has(r.id)) r.unread = false; });
           data.unread_count = result.unread_count;
           notice(result.unread_count);
         }
       } catch { /* post() has already retried; the badge stays and the next load tries again. */ }
-      finally { items.forEach(r => saving.delete(r.id)); render(); }
+      // The cards look the same either way, so only the summary changes; a rebuild would close what is being read.
+      finally { items.forEach(r => saving.delete(r.id)); if (page.isConnected) renderSummary(); }
     });
     return saved;
   };

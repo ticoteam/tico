@@ -12,7 +12,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     const ctx = await browser.newContext({viewport:{width:1440,height:900}, serviceWorkers:'block'});
     const page = await ctx.newPage();
     const errors = [], posts = [], read = new Set();
-    let failRead = false, failLoad = false, pageSize = 50;
+    let failRead = false, failLoad = false, pageSize = 50, hold = null, dropRead = false;
     const entries = [
       {id:'release-0.3.23', title:'Tico v0.3.23', version:'0.3.23', source:'release', kind:'product', shipped_at:'2026-10-05T00:00:00Z',
        bullets:['Relate tasks to each other, including follow-ups, duplicates and blockers.', 'Long chats show an outline so you can jump back to any prompt.', 'Task and conversation updates arrive as they happen.', 'See what each bot learned from its recent work.', 'Releases reach your team faster.'],
@@ -24,7 +24,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     const count = () => entries.filter(r => r.kind === 'product' && !read.has(r.id)).length;
     const config = () => ({version:'0.3.23', app_name:'Tico', changelog:{unread_count:count()}});
     page.on('pageerror', e => errors.push(e.message));
-    await page.route('**/*', route => {
+    await page.route('**/*', async route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body,status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
@@ -45,7 +45,10 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/v2/changelog/read') {
         posts.push(req.postDataJSON());
         if (failRead) return json({error:{detail:'Could not save read state'}},503);
+        // The server commits before its reply, which a test can hold back or lose.
         req.postDataJSON().ids.forEach(id => read.add(id));
+        if (hold) await hold.promise;
+        if (dropRead) return route.abort('connectionreset');
         return json({unread_count:count()});
       }
       if (p === '/api/employees' || p === '/api/issues') return json([]);
@@ -102,7 +105,32 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('.release-new').count(),2);
     assert.equal(count(),2,'a failed write leaves the changes unread');
     assert.equal(await page.locator('#changelog-notice').isHidden(),false);
-    failRead = false; pageSize = 1;
+    failRead = false;
+    const held = () => { let release; const promise = new Promise(r => { release = r; }); return {promise, release}; };
+    // A slow or lost reply after the server committed: the entry stays listed and open while it is being read.
+    for (const lost of [false, true]) {
+      read.clear(); hold = held();
+      const sent = posts.length;
+      await page.reload();
+      await page.locator('.release-entry').first().waitFor();
+      for (let i = 0; posts.length === sent && i < 100; i++) await page.waitForTimeout(100);
+      const searched = page.waitForResponse(r => r.url().includes('q=faster'));
+      await search.fill('faster');
+      await searched;
+      await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 1);
+      assert.equal(await page.locator('.release-entry h2').textContent(),'Tico v0.3.23',`a search during a ${lost ? 'lost' : 'slow'} save keeps the entry`);
+      assert.equal(await page.locator('.release-new').count(),1);
+      await page.locator('.release-more summary').click();
+      dropRead = lost; hold.release(); hold = null;
+      if (lost) for (let i = 0; posts.length < sent + 3 && i < 100; i++) await page.waitForTimeout(100);
+      else await page.waitForFunction(() => document.querySelector('#changelog-notice').hidden);
+      await page.waitForTimeout(200);
+      assert.equal(await page.locator('.release-more').evaluate(d => d.open),true,'the settled save leaves the open release open');
+      assert.equal(await page.locator('.release-entry h2').textContent(),'Tico v0.3.23');
+      dropRead = false;
+    }
+    // The reload drops the search and this visit's unconfirmed entries, which a later load would post again.
+    read.clear(); pageSize = 1;
     await page.reload();
     await page.locator('[data-more-changes]').waitFor();
     await page.waitForFunction(() => document.querySelector('#changelog-notice').textContent.includes('1 update'));
