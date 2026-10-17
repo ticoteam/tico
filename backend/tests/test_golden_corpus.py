@@ -23,9 +23,9 @@ from backend.tests.test_files import turn
 CORPUS = Path(__file__).parent / "fixtures" / "golden_corpus"
 KEPT = sorted((CORPUS / "kept").iterdir())
 REWRITTEN = sorted(p for p in (CORPUS / "rewritten").iterdir() if p.suffix != ".expected")
-# Rewrites this corpus found that main still makes: each runs as a strict xfail until its fix lands, then the
-# entry goes. "the runner pulls" looks for Tico words to the end of the sentence, past a ";" and into code.
-KNOWN = {"training-plan.md": "Dev ticket 113: the Librarian makes a hamstring-pulling runner the Computer"}
+# Rewrites this corpus finds that main still makes, by file name: each runs as a strict xfail until its fix lands,
+# then the entry goes.
+KNOWN = {}
 
 
 def _kept():
