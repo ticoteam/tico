@@ -52,7 +52,8 @@ All notable changes to Tico are recorded here. The format follows
   archived shows as archived, not as a blank. Members see the Public roadmap settings read-only.
 - Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
   suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
-  shows only while a public label is enabled and clears by itself.
+  shows only while a public label is enabled and clears by itself. Its **Open Public roadmap** link goes straight
+  to the Public roadmap settings.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.

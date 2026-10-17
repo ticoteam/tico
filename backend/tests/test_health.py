@@ -827,7 +827,7 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
         row = health(**kwargs)
         return row and row["label"]
 
-    fix = [{"label": "Open Public roadmap", "href": "#/settings", "tab": "tasks", "click": ""}]
+    fix = [{"label": "Open Public roadmap", "href": "#/settings/roadmap", "tab": "", "click": ""}]
     assert health(labels=(), pm="archived") is None              # no public label: nobody can suggest anything
     assert health() is None                                      # Automatic finds the Product Manager
     assert health(pm="archived") == {
