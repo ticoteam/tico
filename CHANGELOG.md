@@ -7,6 +7,8 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-10-17
+
 ### Added
 - Beta features carry a small **Beta** pill where they appear: Market, Message bots, Listening, Live meetings, chat
   goals and steering, the Slack gateway, a computer's Screen, Behaviour replay and the computer Performance page,
@@ -3022,7 +3024,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.53...HEAD
+[0.3.53]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.53
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
