@@ -22,7 +22,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/team-add.css">
 <link rel="stylesheet" href="/tico/ui/styles/avatars.css">
 <link rel="stylesheet" href="/tico/ui/styles/layout.css">
-<link rel="stylesheet" href="/tico/ui/styles/help.css">
+<link rel="stylesheet" href="/tico/ui/styles/support.css">
 <link rel="stylesheet" href="/tico/ui/styles/components.css">
 <link rel="stylesheet" href="/tico/ui/styles/board.css">
 <link rel="stylesheet" href="/tico/ui/styles/viewer.css">
@@ -73,7 +73,7 @@
 <div id="version-message" role="note" hidden><span id="version-message-text"></span><a id="version-message-link" target="_blank" rel="noopener noreferrer" hidden>Read more</a><button class="ghost" type="button" id="version-message-x">Dismiss</button></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
 <div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
-<div id="support-access-banner" role="status" hidden><span data-access-left></span><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
+<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open Your requests in Support"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
 <div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing leaves this computer.</span></div>
 <aside id="side" aria-label="Primary navigation">
   <header class="side-head">
@@ -126,7 +126,6 @@
   </nav>
   <footer class="side-footer">
     <button id="search-open" type="button" aria-label="Search" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span>Search</span><kbd>⌘K</kbd></button>
-    <button id="talk-to-us" type="button" data-talk-to-us title="A person at Tico reads every message"><span class="nav-icon" aria-hidden="true">support_agent</span><span>Talk to us</span></button>
     <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
     <div class="new-version" id="new-version-wrap" hidden>
       <button id="new-version" type="button" aria-expanded="false" aria-controls="new-version-pop"><span class="nv-dot" aria-hidden="true"></span><span id="new-version-label"></span></button>
@@ -150,7 +149,7 @@
         </nav>
       </div>
       <button class="help-link" id="connect-agent" type="button" hidden aria-label="Connect an external agent" title="Connect an external agent: Grok, Dots, Muse or any MCP agent"><span class="nav-icon" aria-hidden="true">power</span></button>
-      <a class="help-link" id="help-open" href="#/help" data-nav="help" aria-label="Overview and support" title="Overview and support">?</a>
+      <button class="help-link" id="help-open" type="button" aria-haspopup="dialog" aria-label="Support" title="Support">?</button>
     </div>
     <div id="heartbeat-alert" class="err" hidden></div>
   </footer>
@@ -168,7 +167,7 @@
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>
   <a class="mobile-nav-item" href="#/updates" data-nav="updates"><span class="mobile-nav-icon" aria-hidden="true">dynamic_feed</span><span class="mobile-nav-label">Updates</span><span class="nav-badge" data-upd-badge hidden></span></a>
-  <button class="mobile-nav-item" id="mobile-talk" type="button" data-talk-to-us aria-label="Talk to us"><span class="mobile-nav-icon" aria-hidden="true">support_agent</span><span class="mobile-nav-label">Talk to us</span></button>
+  <button class="mobile-nav-item" id="mobile-support" type="button" aria-haspopup="dialog" aria-label="Support"><span class="mobile-nav-icon" aria-hidden="true">help</span><span class="mobile-nav-label">Support</span><span class="nav-badge" data-support-badge aria-hidden="true" hidden></span></button>
   <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span></button>
 </nav>
 <div id="org-fan" class="org-fan" role="menu" aria-label="Switch bot" hidden><ul class="org-fan-list"></ul></div>
@@ -268,7 +267,6 @@
 <script src="/tico/ui/app/settings-bot-editor.js"></script>
 <script src="/tico/ui/app/settings-repositories.js"></script>
 <script src="/tico/ui/app/subscriptions.js"></script>
-<script src="/tico/ui/app/help.js"></script>
 <script src="/tico/ui/app/refresh.js"></script>
 <script src="/tico/ui/app/native.js"></script>
 <script src="/tico/ui/app/catalog.js"></script>

@@ -85,8 +85,15 @@ All notable changes to Tico are recorded here. The format follows
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
   **Changelog** page; and **Take the tour** is in the account menu.
+- **Support** is a pop-up from the **?** at the bottom of the sidebar (the **Support** tab on a phone, where it opens
+  as a sheet): it opens on your latest request that isn't closed, keeps words you haven't sent, and lists every
+  request under **Your requests**, with **View docs** and **What's new** beside it. A reply puts a count on the **?**.
+  **Talk to us** and the Help page are gone; old Help links open the pop-up over Overview ([support](docs/support.md)).
 - Faster image handling and startup with Pillow 13, plus pydantic 2.14, pypdf 6.21, Starlette 1.8 and Uvicorn 0.54.
   Python and browser tests use one Playwright version (1.64), so they share one Chromium and WebKit.
+- Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
+  @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
+  the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -138,6 +145,10 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- The desktop app keeps a whole sign-in in its window with any identity provider: Cloudflare Access with Microsoft,
+  Okta, GitHub or another provider, and built-in sign-in with Okta or Microsoft Entra. Before, only Cloudflare's and
+  Google's pages stayed; any other provider's page opened in the default browser, the sign-in landed there and the app
+  stayed signed out. Links to other sites still open in the browser.
 - **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
   so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 

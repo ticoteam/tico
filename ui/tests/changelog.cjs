@@ -58,7 +58,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/v2/needs-you') return json({items:[]});
       return json({});
     });
-    await page.goto('https://tico-ui.test/#/help');
+    await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#changelog-notice').waitFor();
     await page.locator('#changelog-notice').click();
     await page.locator('.release-entry').first().waitFor();

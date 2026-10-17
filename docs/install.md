@@ -358,7 +358,9 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `none` to skip): its route for `/api/v2` and `/download` only, its DNS record, and `TICO_RUNNER_URL`, so computers and
    external agents connect without a bypass. Keep that hostname out of the Access application; `setup doctor` checks it.
 3. Create an Access application for the hostname with your identity provider and a policy for your humans.
-   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag.
+   Note the team URL (`https://<team>.cloudflareaccess.com`) and the application's Audience tag. Any identity
+   provider Access offers works with the desktop app too (Google, Microsoft Entra, Okta, GitHub, a one-time PIN): the
+   whole sign-in stays in the app's window, so the app gets the session, not the browser.
 4. In `.env`: `COMPOSE_PROFILES=cloudflared,updater`, `TICO_DOMAIN=<hostname>`, `CLOUDFLARE_TUNNEL_TOKEN=<token>`,
    `TICO_AUTH_PROXY=cloudflare`, `TICO_ACCESS_ISSUER=<team URL>`, `TICO_ACCESS_AUDIENCE=<AUD tag>`.
 5. `docker compose up -d`
