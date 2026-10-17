@@ -4100,6 +4100,12 @@ def create_app(settings=None):
             return model_login.affected_bots(c, request.state.identity, rid, runtime, profile, store.settings,
                                              auth=auth)
 
+    # Take a named subscription off a computer (refused, naming them, while bots run on it); read back like a sign-in.
+    @app.post("/api/v2/runners/{rid}/removals")
+    def start_removal(request: Request, rid: str, body: M.RemovalStart):
+        return mutate(request, body, lambda c: model_login.remove(
+            c, request.state.identity, rid, body.runtime, body.profile, store.settings, auth=auth))
+
     # A signed-out computer login takes the company's shared key again.
     @app.post("/api/v2/runners/{rid}/shared-key")
     def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):

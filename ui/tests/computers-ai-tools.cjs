@@ -136,7 +136,7 @@ const {html, uiFile} = require('./support/page.cjs');
     assert.match(await beta.innerText(), /Signed out[\s\S]*Bots: Writer/);
     assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
-    assert.equal(await dialog.locator('[data-add-connection] [data-subs-add]').count(), 1, 'Add a named subscription at the end');
+    assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
     // Usage reads as what is left, everywhere in the pop-up and the list.
     assert.doesNotMatch(await page.locator('#set-machines').innerText(), /% used/);
 
@@ -168,7 +168,7 @@ const {html, uiFile} = require('./support/page.cjs');
     // 24. The pop-up of a computer with no connection.
     await row('empty').locator('[data-no-connection]').click();
     assert.match(await dialog.locator('[data-detail-section=connections]').innerText(), /Bots here can't run until a connection is added/);
-    assert.equal(await dialog.locator('[data-add-connection] [data-model-login][data-runtime=codex]').count(), 1);
+    assert.equal(await dialog.locator('[data-add-connection=empty]').count(), 1);
     await page.keyboard.press('Escape');
 
     // 23. Offline: last seen on the row, chips keep their reading, actions wait for the computer.
@@ -180,7 +180,8 @@ const {html, uiFile} = require('./support/page.cjs');
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
     assert.match(await dialog.locator('[data-computer-offline]').innerText(), /Computer is offline/);
-    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-subs-add] button:enabled').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-add-connection]:enabled, [data-connection-remove]:enabled, .computer-conn-rename').count(), 0);
+    assert.equal(await dialog.locator('[data-add-connection]').getAttribute('title'), 'Computer is offline');
     await page.keyboard.press('Escape');
 
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
@@ -202,7 +203,7 @@ const {html, uiFile} = require('./support/page.cjs');
       ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
     assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-subs-add], [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-connection-remove], .computer-conn-rename, [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);

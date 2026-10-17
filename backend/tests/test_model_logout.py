@@ -299,3 +299,89 @@ def test_switch_to_subscription_is_for_the_operator_or_an_admin_on_a_runner_that
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
     refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "to": "subscription"}, expected=422)
     assert "keychain" in refused["error"]["detail"]
+
+
+REMOVES = CAPABLE + ["model_remove_v1"]
+
+
+def with_profile(api, r, profile="work", runtimes=None):
+    import uuid
+    body = {"version": "test", "platform": "test", "readiness": {}, "capabilities": REMOVES,
+            "profiles": [{"name": profile, "runtimes": runtimes or {"codex": {"signed_in": True}}}]}
+    out = api.post("/api/v2/runners/heartbeat", json=body, headers={**headers(r["token"]), "Idempotency-Key": uuid.uuid4().hex})
+    assert out.status_code == 200, out.text
+
+
+def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_bots_that_run_on_it(api):
+    """Remove (Computers part 3): a named subscription's line comes off the computer, but never while a bot runs on it,
+    paused bots too; the refusal names them so the person moves them on the Bots page first."""
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    for bot, state in (("writer", "active"), ("sleeper", "paused")):
+        add_bot(api, bot, state=state)
+        put_config(api, bot, "codex")
+        post(api, f"bots/{bot}/assignment", {"runner_id": rid, "expected_generation": 0})
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
+    refused = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    assert refused["error"]["code"] == "in_use"
+    assert "sleeper and writer run on it" in refused["error"]["detail"] and "Bots page" in refused["error"]["detail"]
+    assert [b["bot"] for b in refused["error"]["bots"]] == ["sleeper", "writer"], "the page names them from this"
+    assert pending(api, r) == []
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)  # sleeper still
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM subscription_assignments WHERE target='sleeper'")
+        c.execute("INSERT INTO model_login_cleared VALUES(?, 'codex', 'work', '2026-10-17T00:00:00+00:00', 'human:ana')", (rid,))
+    put = api.put("/api/v2/subscriptions/weekly", json={"runner_id": rid, "profile": "work", "runtime": "codex",
+                  "used_percent": 40, "resets_at": None}, headers={**headers("ana-test"), "Idempotency-Key": "w1"})
+    assert put.status_code == 200, put.text
+    out = post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": "work"})   # the page's own path
+    assert out["kind"] == "remove" and out["state"] == "requested"
+    assert pending(api, r) == [{"id": out["id"], "runtime": "codex", "profile": "work", "kind": "remove",
+                                "expires_at": out["expires_at"]}]
+    # A remove ends done or failed, never signed in.
+    post(api, f"runner-logins/{out['id']}/report", {"state": "signed_in"}, token=r["token"], expected=422)
+    assert report(api, r, out["id"], state="done", message="Removed work") == {"state": "done"}
+    # Nothing of it is left to fill a line again: no sign-out mark, no manual reading.
+    assert cleared(api, rid) == []
+    from backend.subscriptions import weekly_key
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (weekly_key(rid, "work", "codex"),)).fetchone()
+
+
+def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):
+    r = online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token="cara-test", expected=403)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token=r["token"], expected=403)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": ""}, expected=422)
+    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "other"}, expected=404)
+    post(api, f"runners/{rid}/removals", {"runtime": "claude", "profile": "work"}, expected=404)
+    assert pending(api, r) == []
+    # A runner that does not know Remove would start a sign-in instead: it is told to update.
+    old = online(api)
+    with_profile(api, old)
+    beat(api, old["token"], CAPABLE)
+    refused = post(api, f"runners/{old['runner_id']}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
+    assert "Update" in refused["error"]["detail"]
+    assert pending(api, old) == []
+
+
+def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):
+    """Remove takes a login off a computer, so like Sign out it is a person's, checked before anything else; BotOps'
+    allow-list does not reach the route either."""
+    import pytest
+    from backend.auth import Identity
+    from backend.model_login import remove
+    from backend.store import Problem
+    r = online(api, REMOVES)
+    with_profile(api, r)
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as no:
+            remove(c, Identity("human:ana", "owner", via="botops", confirmed=True), r["runner_id"], "codex", "work", {})
+    assert no.value.status == 403 and "BotOps cannot remove a subscription" in str(no.value)
+    assert pending(api, r) == []

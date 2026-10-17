@@ -182,13 +182,12 @@ async function computers(browser) {
   assert.doesNotMatch(await detail.innerText(), /acme-new|not signed in/i, 'nothing for a slot that was never signed in');
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await detail.screenshot({path: path.join(SHOTS, 'computer-detail-dark.png')}); }
   // A new subscription: the typed name becomes a slug the server takes, and the sign-in starts on this computer.
-  const add = detail.locator('[data-subs-add]');
+  let add = await addSubscription(page, 'codex');
   await add.locator('input[name=profile]').fill('Acme Research');
-  assert.equal(await add.locator('[data-subs-add-msg]').innerText(), 'Saved as acme-research');
+  assert.equal(await add.locator('[data-add-msg]').innerText(), 'Saved as acme-research');
   // A settings refresh while typing leaves the field alone.
   await page.evaluate(() => loadSettings());
   assert.equal(await add.locator('input[name=profile]').inputValue(), 'Acme Research');
-  await add.locator('select[name=runtime]').selectOption('codex');
   await add.locator('button[type=submit]').click();
   const dialog = page.locator('dialog.model-login');
   await dialog.locator('[data-code]').waitFor();
@@ -196,13 +195,25 @@ async function computers(browser) {
   assert.deepEqual(last(writes, '/api/v2/computers/r1/logins'), {runtime: 'codex', profile: 'acme-research'});
   await dialog.locator('[data-close]').first().click();
   await dialog.waitFor({state: 'detached'});
+  add = await addSubscription(page, 'codex');
   await add.locator('input[name=profile]').fill('---');
   await add.locator('button[type=submit]').click();
-  assert.equal(await add.locator('[data-subs-add-msg]').innerText(), 'Use letters or numbers');
+  assert.equal(await add.locator('[data-add-msg]').innerText(), 'Use letters or numbers');
+  await page.keyboard.press('Escape');
   assert.equal(writes.filter(w => w.p.endsWith('/logins')).length, 1, 'nothing sent for an empty name');
   assert.deepEqual(errors, []);
   console.log('computers: ok');
   await page.close();
+}
+
+// Add connection in the open computer pop-up: the tool, then Subscription; returns the pop-up at its name step.
+async function addSubscription(page, runtime) {
+  await page.locator('#set-machines dialog.computer-detail[open] [data-add-connection]').click();
+  const add = page.locator('dialog.computer-add-dialog[open]');
+  await add.locator(`[data-add-tool=${runtime}]`).click();
+  await add.locator('[data-add-kind=subscription]').click();
+  await add.locator('input[name=profile]').waitFor();
+  return add;
 }
 
 async function botEditor(browser) {
@@ -252,9 +263,8 @@ async function signInRefresh(browser) {
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   // Signing acme-eng in to Claude Code as well: the add form with the existing name.
   data.finishLogin = true;
-  const add = detail.locator('[data-subs-add]');
+  const add = await addSubscription(page, 'claude');
   await add.locator('input[name=profile]').fill('acme-eng');
-  await add.locator('select[name=runtime]').selectOption('claude');
   await add.locator('button[type=submit]').click();
   const dialog = page.locator('dialog.model-login');
   await dialog.locator('[data-status][data-state="signed_in"]').waitFor({timeout: t(8000)});
@@ -282,9 +292,8 @@ async function who(browser) {
       await page.evaluate(() => settingsShow('devices'));
       assert.deepEqual(await page.locator('#set-machines tr[data-computer-row]').evaluateAll(r => r.map(x => x.dataset.computerRow)), ['r2']);
       await page.locator('#set-machines .machine-name[data-computer-open=r2]').click();
-      const add = page.locator('#set-machines dialog.computer-detail[open] [data-subs-add]');
+      const add = await addSubscription(page, 'claude');
       await add.locator('input[name=profile]').fill('acme-eng');
-      await add.locator('select[name=runtime]').selectOption('claude');
       await add.locator('button[type=submit]').click();
       await page.locator('dialog.model-login [data-status][data-state="waiting"]').waitFor();
       assert.deepEqual(last(writes, '/api/v2/computers/r2/logins'), {runtime: 'claude', profile: 'acme-eng'});

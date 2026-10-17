@@ -306,8 +306,16 @@ p:empty{display:none}
 .computer-conn-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:var(--t-base)}
 .computer-conn-signin,.computer-conn-tools{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;min-width:0}
 .computer-conn-login{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
-.computer-add{display:grid;gap:6px;margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
-.computer-add-own{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.computer-add{display:flex;margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+.computer-conn-rename{display:contents}
+.computer-conn-rename summary{list-style:none;cursor:pointer;padding:5px 10px;line-height:20px;color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctl)}
+.computer-conn-rename summary::-webkit-details-marker{display:none}
+.computer-conn-rename form{order:10;flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.computer-add-where{margin:2px 16px 0;font-size:var(--t-sm)}
+.computer-add-choices{display:grid;gap:6px;padding:0 16px 16px}
+.computer-add-choice{display:grid;gap:2px;justify-items:start;text-align:left;padding:8px 12px}.computer-add-choice .muted{font-size:var(--t-sm)}
+.computer-add-name{display:grid;gap:6px;padding:8px 16px 0}.computer-add-name label{display:grid;gap:4px}.computer-add-name p{margin:0;font-size:var(--t-sm)}
+.computer-add-name .model-login-actions{padding:8px 0 16px}
 .computer-detail-bots{margin:0 0 6px;padding-left:18px;display:grid;gap:2px}
 .computer-detail-check{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:4px 0}.computer-detail-check .muted{flex-basis:100%;padding-left:22px;font-size:var(--t-sm)}
 .computer-detail-revoke{display:block;margin-top:12px}
@@ -499,9 +507,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .brepo-row:has([data-brepo-pick]:not(:checked)) :is(.repo-seg,.brepo-run){display:none}
 }
 /* Subscriptions (ui/app/subscriptions.js): a connection's controls in the computer's pop-up, and the bot editor's line. */
-.subs-add{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.subs-add input{flex:1 1 160px;max-width:220px;font-size:var(--t-base);padding:4px 7px}
-.subs-add select{width:auto;font-size:var(--t-base);padding:4px 6px}
 .subs-controls{flex-basis:100%;font-size:var(--t-sm)}
 .subs-controls summary{cursor:pointer;color:var(--muted)}
 .subs-controls form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;padding:8px 0}
@@ -509,7 +514,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .subs-controls input{max-width:100%;box-sizing:border-box}
 .subs-controls input[type=number]{width:100px}
 .subs-controls form>strong{flex-basis:100%;font-weight:500}
-.subs-add-msg{font-size:var(--t-sm)}
 .sb-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:-4px 0 0 104px;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .sb-sub[hidden]{display:none}
 /* Compact at sits under Model: space it off Model's subscription line, and size it like Model's own selects. */

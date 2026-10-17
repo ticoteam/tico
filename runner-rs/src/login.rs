@@ -32,6 +32,8 @@ pub const LIFETIME_S: u64 = 15 * 60;
 pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
 /// Switch to subscription (`to_subscription`): a switch for the computer's own login that also takes its API key off.
 pub const SWITCH_TYPE_CAPABILITY: &str = "model_switch_type_v1";
+/// Remove (`remove`): a named subscription's login for one tool comes off the computer, then the subscription itself.
+pub const REMOVE_CAPABILITY: &str = "model_remove_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
@@ -773,6 +775,61 @@ fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     s.finish("signed_out", "Signed out", &runner, &default);
 }
 
+/// Remove a named subscription's login for `runtime`: its CLI's own logout runs in the subscription's home and is
+/// checked; then, once no other tool is signed in on that subscription, the subscription leaves runner.json and its
+/// folder is deleted. A logout that did not take leaves everything as it was.
+fn run_remove(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
+    let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
+    let fail = |msg: &str| s.finish("failed", msg, &runner, &default);
+    if s.profile == default {
+        return fail(&format!("Subscription {} is this computer's own login; sign it out instead", s.profile));
+    }
+    let (exe, env, profile) = match login_env(&s.runtime, &config, &s.profile) {
+        Ok((exe, env, Some(profile))) => (exe, env, profile),
+        Ok(_) => return fail(&format!("Subscription {} is not on this computer", s.profile)),
+        Err(e) => return fail(&e),
+    };
+    if signed_in(&s.runtime, &exe, &env, false).0 {
+        let logout = crate::harness_tools::login_command(&s.runtime).map(|l| l.logout).unwrap_or_default();
+        if logout.is_empty() {
+            return fail(&format!("Removing a subscription from the app is not available for {}", s.runtime));
+        }
+        let args: Vec<&str> = logout.iter().map(String::as_str).collect();
+        if let Ok(mut child) = model_command(&exe, &args, &env).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            let until = Instant::now() + LOGOUT_TIMEOUT;
+            while !matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                if Instant::now() > until {
+                    kill(&mut child);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        if signed_in(&s.runtime, &exe, &env, false).0 {
+            return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile));
+        }
+    }
+    crate::accounts::forget(&profile.name, &s.runtime);
+    crate::profiles::forget_windows(&profile.name, &s.runtime);
+    // Another tool still signed in on it keeps the subscription; only this tool's login went.
+    let others = crate::harness_tools::profile_runtimes().into_iter().filter(|r| *r != s.runtime).any(|r| {
+        login_env(&r, &config, &s.profile).is_ok_and(|(exe, env, _)| signed_in(&r, &exe, &env, false).0)
+    });
+    if others {
+        return s.finish("done", &format!("{} signed out of {}; its other tools stay", s.runtime, s.profile), &runner, &default);
+    }
+    match crate::profiles::remove_profile(&config, &s.profile) {
+        Ok(deleted) => {
+            if !deleted {
+                log(&format!("Tico runner: subscription {} unlisted; its folder is not Tico's to delete", s.profile));
+            }
+            runner.events.ask(&["heartbeat"]);
+            s.finish("done", &format!("Removed {}", s.profile), &runner, &default)
+        }
+        Err(e) => fail(&e),
+    }
+}
+
 /// The browser sign-ins this runner is running, kept in step with the server's list.
 pub struct Logins {
     sessions: HashMap<String, Arc<Session>>,
@@ -799,7 +856,7 @@ impl Logins {
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
-        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription"].contains(&s.kind.as_str()) {
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription", "remove"].contains(&s.kind.as_str()) {
             // Never a sign-in in place of something this runner does not know.
             s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
@@ -821,6 +878,11 @@ impl Logins {
                 Err(e) => ("failed", format!("Could not change this computer's sign-out ({:?})", e.kind())),
             };
             s.finish(state.0, &state.1, runner, &default);
+        } else if s.kind == "remove" && named.is_none() {
+            s.finish("failed", &format!("Subscription {} is not on this computer", s.profile), runner, &default);
+        } else if s.kind == "remove" {
+            let (s2, r2) = (s.clone(), runner.clone());
+            std::thread::spawn(move || run_remove(s2, r2, config));
         } else if s.kind == "sign_out" && !s.profile.is_empty() && named.is_none() {
             s.finish("failed", &format!("Subscription {} is not on this computer", s.profile), runner, &default);
         } else if s.kind == "sign_out" {

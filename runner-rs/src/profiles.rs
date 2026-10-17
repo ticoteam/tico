@@ -296,6 +296,36 @@ pub fn add_profile(config: &Config, name: &str) -> Result<Value, String> {
     Ok(entry)
 }
 
+/// Take a subscription off this computer (Remove, runner-rs/src/login.rs run_remove): out of runner.json, with any
+/// local bot assignment to it, then its folder deleted when Tico made it under `<config dir>/profiles`. A folder
+/// elsewhere, or one on the operator's own logins, is only unlisted. Ok(true) when the folder is gone.
+pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
+    let mut stored = Config::load(&config.path)?;
+    let Some(entry) = stored.data.get("profiles").and_then(|p| p.get(name)).cloned() else {
+        return Err(format!("Subscription {name} is not on this computer"));
+    };
+    if stored.data.get("default_profile").map(text_of).as_deref() == Some(name) {
+        return Err(format!("Subscription {name} is this computer's own login; sign it out instead"));
+    }
+    let profile = Profile::new(name, &text_of(&entry["dir"]), truthy(entry.get("share_operator")));
+    if let Some(map) = stored.data.get_mut("profiles").and_then(|p| p.as_object_mut()) {
+        map.remove(name);
+    }
+    if let Some(map) = stored.data.get_mut("bot_profiles").and_then(|p| p.as_object_mut()) {
+        map.retain(|_, v| text_of(v) != name);
+    }
+    stored.save()?;
+    forget_report();
+    let root = config.path.parent().unwrap_or(Path::new(".")).join("profiles");
+    let ours = std::fs::canonicalize(&root).ok().zip(std::fs::canonicalize(&profile.directory).ok())
+        .is_some_and(|(root, dir)| dir.parent() == Some(root.as_path()) && dir.file_name().is_some_and(|f| f == name));
+    if profile.share_operator || !ours {
+        return Ok(false);
+    }
+    // A link in place of the folder is never followed: remove_dir_all removes the link itself.
+    std::fs::remove_dir_all(&profile.directory).map(|()| true).map_err(|e| format!("Could not delete {} ({:?})", profile.directory.display(), e.kind()))
+}
+
 /// The `profile` subcommand: add, list, assign (runner/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
 pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool, bot: Option<&str>) -> Result<String, String> {
@@ -566,6 +596,33 @@ pub fn sha256_hex(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_profile_leaves_runner_json_and_its_folder_but_not_the_default_or_a_foreign_folder() {
+        let dir = std::env::temp_dir().join(format!("tico-remove-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("profiles/acme/codex")).unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere/beta")).unwrap();
+        std::fs::write(dir.join("profiles/acme/codex/auth.json"), "{}").unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, serde_json::to_string(&json!({"server": "x", "default_profile": "own",
+            "profiles": {"acme": {"dir": dir.join("profiles/acme").display().to_string()},
+                         "beta": {"dir": dir.join("elsewhere/beta").display().to_string()},
+                         "own": {"dir": dir.join("profiles/own").display().to_string()}},
+            "bot_profiles": {"sales": "acme", "ops": "own"}})).unwrap()).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert!(remove_profile(&config, "own").unwrap_err().contains("own login"));
+        assert_eq!(remove_profile(&config, "acme"), Ok(true));
+        assert!(!dir.join("profiles/acme").exists());
+        let stored = Config::load(&path).unwrap();
+        assert!(stored.data["profiles"].get("acme").is_none() && stored.data["profiles"].get("own").is_some());
+        assert_eq!(stored.data["bot_profiles"], json!({"ops": "own"}));
+        // Not a folder Tico made: unlisted, never deleted.
+        assert_eq!(remove_profile(&config, "beta"), Ok(false));
+        assert!(dir.join("elsewhere/beta").is_dir());
+        assert!(remove_profile(&config, "beta").unwrap_err().contains("not on this computer"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn selection_follows_the_registration() {

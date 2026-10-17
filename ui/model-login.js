@@ -49,12 +49,13 @@
   // `profile` signs in one of the computer's subscriptions (runner-rs/src/profiles.rs) instead of its default login.
   // `switchAccount` signs in to another account in place of the one signed in now. `toSubscription` does the same for
   // the computer's login running on an API key: the key stays in use until the subscription works, then goes.
-  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false}) {
+  // `into` is a pop-up already open (Add connection, ui/app/computer-detail.js): the sign-in carries on inside it.
+  function open({runnerId, runtime, machine, profile = '', switchAccount = false, toSubscription = false, into = null}) {
     const base = `/v2/computers/${encodeURIComponent(runnerId)}/logins`;
     const name = (RUNTIME_NAMES[runtime] || runtime) + (profile ? ` · ${profile}` : '');
     const kept = toSubscription ? ' The API key is still in use.' : switchAccount ? ' The account signed in before still works.' : '';
     const where = machine || 'the computer';
-    const dialog = document.createElement('dialog');
+    const dialog = into || document.createElement('dialog');
     dialog.className = 'tmodal model-login';
     dialog.setAttribute('aria-labelledby', 'model-login-title');
     const title = toSubscription ? `Switch ${text(name)}${machine ? ` on ${text(machine)}` : ''} to a subscription`
@@ -64,7 +65,7 @@
       <div class="model-login-body" data-body></div>
       <p class="model-login-status" role="status" aria-live="polite" data-status></p>
       <div class="model-login-actions" data-actions></div>`;
-    document.body.appendChild(dialog);
+    if (!into) document.body.appendChild(dialog);
     const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
           actions = dialog.querySelector('[data-actions]');
     let login = null, timer = null, closed = false, sending = false;
@@ -177,7 +178,7 @@
       draw();
       if (active(login.state)) timer = setTimeout(tick, POLL_MS);
     };
-    dialog.showModal();
+    if (!dialog.open) dialog.showModal();
     void begin();
     return dialog;
   }
@@ -267,6 +268,79 @@
     return dialog;
   }
 
+  // Remove a named subscription's login for one tool from the computer. While bots run on it (`bots`, the names the
+  // page already shows, or the server's refusal) it says so and offers the Bots page, never a Remove button: they
+  // are moved there first, not by this.
+  function remove({runnerId, runtime, machine, profile, name = '', bots = [], botsPage = null}) {
+    const computer = `/v2/computers/${encodeURIComponent(runnerId)}`;
+    const title = `${RUNTIME_NAMES[runtime] || runtime} · ${name || profile}`;
+    const where = machine || 'the computer';
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal model-login model-remove';
+    dialog.setAttribute('aria-labelledby', 'model-remove-title');
+    dialog.innerHTML = `<header><h2 id="model-remove-title">Remove ${text(title)} from ${text(where)}?</h2>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+      <div class="model-login-body" data-body></div>
+      <p class="model-login-status" role="status" aria-live="polite" data-status></p>
+      <div class="model-login-actions" data-actions></div>`;
+    document.body.appendChild(dialog);
+    const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
+          actions = dialog.querySelector('[data-actions]');
+    let timer = null, closed = false;
+    dialog.addEventListener('close', () => { closed = true; clearTimeout(timer); dialog.remove(); });
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog || event.target.closest('[data-close]')) dialog.close();
+    });
+    const inUse = names => {
+      body.innerHTML = `<p data-remove-bots>${text(botsWords(names))} ${names.length === 1 ? 'runs' : 'run'} on it. Move ${names.length === 1 ? 'it' : 'them'} to another connection on the Bots page first, then remove it.</p>`;
+      if (names.length > 3) body.firstElementChild.title = names.join(', ');
+      actions.innerHTML = `<button class="ghost" type="button" data-close>Close</button>
+        <button class="primary" type="button" data-remove-bots-page>Open the Bots page</button>`;
+    };
+    if (bots.length) inUse(bots);
+    else {
+      body.innerHTML = `<p>No bot runs on it. ${where} signs it out and deletes this login; once no other tool is signed in on ${text(name || profile)}, the subscription goes too.</p>`;
+      actions.innerHTML = `<button class="ghost" type="button" data-close>Cancel</button>
+        <button class="primary people-danger" type="button" data-remove>Remove</button>`;
+    }
+    actions.addEventListener('click', event => {
+      if (event.target.closest('[data-remove-bots-page]')) { dialog.close(); botsPage?.(); }
+    });
+    const finish = row => {
+      status.dataset.state = row.state;
+      status.textContent = row.state === 'done' ? `Removed. ${title} is no longer on ${where}.`
+        : row.state === 'failed' ? (row.message || 'The removal did not finish; the login is as it was.')
+        : row.state === 'expired' ? 'The computer did not remove it in time; the login is as it was.' : '';
+      actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+      refreshUntil(runnerId, runtime, profile, row.state === 'done' ? 'signed_out' : 'ready', row.updated);
+    };
+    const tick = async id => {
+      if (closed) return;
+      try {
+        const row = await get(`${computer}/logins/${encodeURIComponent(id)}`);
+        if (active(row.state)) { timer = setTimeout(() => tick(id), POLL_MS); return; }
+        finish(row);
+      } catch (error) { status.textContent = error.message; timer = setTimeout(() => tick(id), POLL_MS); }
+    };
+    actions.addEventListener('click', async event => {
+      if (!event.target.closest('[data-remove]')) return;
+      actions.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      status.textContent = `Removing it on ${where}…`;
+      try {
+        const row = await post(`${computer}/removals`, {runtime, profile});
+        if (active(row.state)) timer = setTimeout(() => tick(row.id), POLL_MS); else finish(row);
+      } catch (error) {
+        // Bots the page did not know of yet (a paused one, or one moved here since): the server names them.
+        const named = (error.body?.error?.bots || []).map(bot => bot.name || bot.bot);
+        if (named.length) { status.textContent = ''; inUse(named); return; }
+        status.textContent = error.message;
+        actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>';
+      }
+    });
+    dialog.showModal();
+    return dialog;
+  }
+
   // A computer login a person signed out takes the company's shared key again (when there is one).
   async function useSharedKey({runnerId, runtime}) {
     try {
@@ -296,7 +370,7 @@
     return signedOut && !profile ? ` <button class="ghost machine-signin" type="button" data-model-shared-key ${data}>Use the shared key</button>` : '';
   }
 
-  window.TicoModelLogin = {open, signOut, useSharedKey, actionsHTML};
+  window.TicoModelLogin = {open, signOut, remove, useSharedKey, actionsHTML};
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-model-login], [data-model-switch], [data-model-to-subscription], [data-model-sign-out], [data-model-shared-key]');
     if (!button) return;

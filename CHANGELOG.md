@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Add connection** in each computer's pop-up on Settings > Computers: pick an AI tool installed there, then Subscription
+  or API key; a subscription is named and signed in with the provider in the same pop-up, and its chip appears on the
+  computer's row without a restart. API key points to Credentials until the per-computer key arrives. Each subscription
+  line gets **Rename** and **Remove**; Remove is refused while bots run on it, naming them and offering the Bots page.
+  Remove needs a current runner ([Subscriptions](docs/subscriptions.md#adding-renaming-and-removing-a-connection)).
 - **Switch to subscription** on a computer's own Codex or Claude Code login that runs on an API key, in the computer's
   pop-up on Settings > Computers. The key stays in use until the subscription has signed in and is in place, so a cancel
   or failure changes nothing; then the key comes off that login (the company's "Every computer" key is not applied to
