@@ -2045,6 +2045,14 @@ def create_app(settings=None):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
+    def require_update(c, who, row):
+        """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
+        is for everyone on the chart, so anyone else gets 404."""
+        if not updates.is_person(row["bot"]):
+            auth.require_read(c, who, row["bot"], "Update not found")
+        elif row["bot"] not in update_visible(c, who):
+            raise Problem("not_found", "Update not found", 404)
+
     @app.get("/api/v2/updates")
     def updates_list(request: Request, kind: str | None = None, bot: str | None = None, unread: bool = False,
                      before: str | None = None, limit: int = 40, mine: bool = False,
@@ -2089,8 +2097,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             read = c.execute("SELECT 1 FROM update_reads WHERE update_id=? AND actor=?", (uid, who.actor)).fetchone()
             # A reply lands in the replier's own room with the bot; show only rooms this caller may read.
             rooms_ok = {}
@@ -2170,8 +2177,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             if updates.is_person(row["bot"]):
                 raise Problem("reply", "A person's update takes no replies here; message them instead", 422)
             # A reply is both a comment on the update and a message in the bot's
