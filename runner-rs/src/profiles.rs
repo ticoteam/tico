@@ -296,9 +296,18 @@ pub fn add_profile(config: &Config, name: &str) -> Result<Value, String> {
     Ok(entry)
 }
 
+/// Whether `profile`'s folder is one Tico made for it: `<config dir>/profiles/<name>`, not on the operator's own logins.
+/// Only such a folder is ever emptied or deleted by Remove.
+pub fn tico_made(config: &Config, profile: &Profile) -> bool {
+    let root = config.path.parent().unwrap_or(Path::new(".")).join("profiles");
+    !profile.share_operator
+        && std::fs::canonicalize(&root).ok().zip(std::fs::canonicalize(&profile.directory).ok())
+            .is_some_and(|(root, dir)| dir.parent() == Some(root.as_path()) && dir.file_name().is_some_and(|f| f == profile.name.as_str()))
+}
+
 /// Take a subscription off this computer (Remove, runner-rs/src/login.rs run_remove): out of runner.json, with any
-/// local bot assignment to it, then its folder deleted when Tico made it under `<config dir>/profiles`. A folder
-/// elsewhere, or one on the operator's own logins, is only unlisted. Ok(true) when the folder is gone.
+/// local bot assignment to it, then its folder deleted when Tico made it (tico_made). A folder elsewhere is only
+/// unlisted. Ok(true) when the folder is gone; a folder that could not be deleted is logged and left, unlisted.
 pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     let mut stored = Config::load(&config.path)?;
     let Some(entry) = stored.data.get("profiles").and_then(|p| p.get(name)).cloned() else {
@@ -308,6 +317,7 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
         return Err(format!("Subscription {name} is this computer's own login; sign it out instead"));
     }
     let profile = Profile::new(name, &text_of(&entry["dir"]), truthy(entry.get("share_operator")));
+    let ours = tico_made(config, &profile);
     if let Some(map) = stored.data.get_mut("profiles").and_then(|p| p.as_object_mut()) {
         map.remove(name);
     }
@@ -316,14 +326,17 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
     stored.save()?;
     forget_report();
-    let root = config.path.parent().unwrap_or(Path::new(".")).join("profiles");
-    let ours = std::fs::canonicalize(&root).ok().zip(std::fs::canonicalize(&profile.directory).ok())
-        .is_some_and(|(root, dir)| dir.parent() == Some(root.as_path()) && dir.file_name().is_some_and(|f| f == name));
-    if profile.share_operator || !ours {
+    if !ours {
         return Ok(false);
     }
     // A link in place of the folder is never followed: remove_dir_all removes the link itself.
-    std::fs::remove_dir_all(&profile.directory).map(|()| true).map_err(|e| format!("Could not delete {} ({:?})", profile.directory.display(), e.kind()))
+    match std::fs::remove_dir_all(&profile.directory) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            crate::util::log(&format!("Tico runner: subscription {name} removed; its folder {} stays ({:?})", profile.directory.display(), e.kind()));
+            Ok(false)
+        }
+    }
 }
 
 /// The `profile` subcommand: add, list, assign (runner/__main__.py profile_command). Writes runner.json the

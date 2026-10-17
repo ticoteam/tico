@@ -818,6 +818,16 @@ fn run_remove(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     if others {
         return s.finish("done", &format!("{} signed out of {}; its other tools stay", s.runtime, s.profile), &runner, &default);
     }
+    // Under runner isolation each tool's home in the folder is the bot user's: empty them as that user first, so the
+    // supervisor can then delete the folder. Only a folder Tico made, never one a person pointed it at.
+    if crate::profiles::tico_made(&config, &profile) {
+        for runtime in crate::harness_tools::profile_runtimes() {
+            if let Some(home) = profile.home(&runtime).filter(|h| h.is_dir()) {
+                let home = home.display().to_string();
+                let _ = file_command(&["find", &home, "-mindepth", "1", "-delete"], &env);
+            }
+        }
+    }
     match crate::profiles::remove_profile(&config, &s.profile) {
         Ok(deleted) => {
             if !deleted {
