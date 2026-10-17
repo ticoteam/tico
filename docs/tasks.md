@@ -250,8 +250,9 @@ A bot's comment is a message to the people on the task, under the usual rules fo
 
 A person's comment wakes the task's bot when the bot owns the task, and is never quiet on a task
 with no bot on it. On a task a bot filed and a
-person owns, it wakes the bot only when it @mentions the bot (`@ops`, or its name) or the task
-waits on that person; any other comment reaches the bot on its next turn. A person @mentioned in a
+person owns, the owner's comment wakes the bot that asked them, @mention or not: it is almost always
+a reply. Anyone else's comment there wakes the bot only when it @mentions the bot (`@ops`, or its
+name) or the task waits on that person; any other comment reaches the bot on its next turn. A person @mentioned in a
 comment (by id, the part of their email before the @, full name, or first name when no one else
 shares it) gets the comment as a question, which puts the task in their Needs you; when the
 comment also wakes the bot, or names several people, each person gets their own copy of the question.

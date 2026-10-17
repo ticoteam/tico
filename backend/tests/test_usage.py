@@ -128,3 +128,39 @@ def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(
 def test_a_bot_or_a_computer_cannot_ask(api):
     r = runner(api)
     assert api.get("/api/v2/usage", headers=headers(r["token"])).status_code in (401, 403)
+
+
+# --------------------------------------------------------------------------- long prompts (providers.LONG_PROMPT)
+def haiku(requests=None, **tokens):
+    part = {"model": "claude-haiku-5-5", "runtime": "claude", "billing": "api", **tokens}
+    if requests is not None:
+        part["requests"] = requests
+    return {**part, "segments": [part]}
+
+
+def today(api):
+    day = hubdb.now()[:10]
+    return usage(api, **{"from": day, "to": day})["totals"]
+
+
+def test_each_haiku_request_pays_the_rate_for_its_own_prompt_length(api):
+    r, _, attempt = setup_attempt(api)
+    short, long = [1_000, 50_000, 800], [5_000, 115_000, 2_000]          # prompts of 51,000 and 120,000 tokens
+    complete(api, r, attempt, haiku([short, long], input_tokens=6_000, cached_tokens=165_000, output_tokens=2_800))
+    under = (1_000 * 0.10 + 50_000 * 0.01 + 800 * 0.50) / 1e6           # Anthropic's page, read 2026-10-17
+    over = (5_000 * 0.50 + 115_000 * 0.05 + 2_000 * 2.50) / 1e6
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(under + over)
+    assert today(api)["low_estimate_runs"] == 0
+    # A prompt of exactly 100,000 tokens is not over it.
+    assert providers.estimate("claude-haiku-5-5", 1_000, 99_000, 10, [[1_000, 99_000, 10]]) == (
+        pytest.approx(price("claude-haiku-5-5", 1_000, 99_000, 10)), False)
+
+
+def test_without_each_request_the_estimate_may_be_low_and_other_models_are_unchanged(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, haiku(input_tokens=6_000, cached_tokens=165_000, output_tokens=2_800))   # an older runner
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 6_000, 165_000, 2_800))
+    assert today(api)["low_estimate_runs"] == 1
+    # A model with no long-prompt rate is priced from its totals, whatever its requests' prompts.
+    assert providers.estimate("claude-sonnet-5-5", 5_000, 115_000, 2_000, [[5_000, 115_000, 2_000]]) == (
+        pytest.approx(price("claude-sonnet-5-5", 5_000, 115_000, 2_000)), False)

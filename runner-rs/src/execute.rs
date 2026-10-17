@@ -68,13 +68,19 @@ impl From<String> for Fail {
 
 /// What a turn spent (runner/usage.py Meter): the sum of each `tokens` event's `usage` increment. A host that learns
 /// the model from its harness (Muse Code) puts it on the event; it names the run's model when the config does not.
+/// A host that sees each model request (Claude) lists them as `requests`, so the server can price each on its own.
 #[derive(Default)]
 pub(crate) struct Meter {
     input: i64,
     cached: i64,
     output: i64,
     model: String,
+    requests: Option<Vec<Value>>,
 }
+
+/// The most requests a usage report lists (backend/models.py RunUsagePart). The server prices any it is not sent at
+/// the lower rate and says the estimate may be low.
+const MAX_REQUESTS: usize = 2000;
 
 pub(crate) fn count(v: &Value) -> i64 {
     v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0).max(0)
@@ -90,6 +96,12 @@ impl Meter {
             self.input += count(&u["input"]);
             self.cached += count(&u["cached"]);
             self.output += count(&u["output"]);
+            if let Some(more) = u["requests"].as_array() {
+                let requests = self.requests.get_or_insert_with(Vec::new);
+                for r in more.iter().take(MAX_REQUESTS.saturating_sub(requests.len())) {
+                    requests.push(json!([count(&r[0]), count(&r[1]), count(&r[2])]));
+                }
+            }
         }
     }
 
@@ -106,6 +118,9 @@ impl Meter {
         m.insert("model".into(), json!(model.chars().take(120).collect::<String>()));
         m.insert("runtime".into(), json!(runtime.chars().take(60).collect::<String>()));
         m.insert("billing".into(), json!(billing));
+        if let Some(requests) = &self.requests {
+            m.insert("requests".into(), json!(requests));
+        }
         Some(m)
     }
 }
@@ -1053,6 +1068,9 @@ impl Runner {
             let ran = &s.config;
             let rt = text_of(&ran["runtime"]);
             if let Some(mut part) = s.meter.report(&text_of(&ran["model"]), &rt, s.billing) {
+                if !crate::follow::feature("usage_requests") {
+                    part.remove("requests"); // an older server refuses the field
+                }
                 let harness = Some(text_of(&ran["harness"])).filter(|h| !h.is_empty()).unwrap_or(rt);
                 part.insert("harness".into(), json!(harness));
                 part.insert("effort".into(), json!(text_of(&ran["reasoning_effort"])));
@@ -1065,6 +1083,7 @@ impl Runner {
             for k in ["input_tokens", "cached_tokens", "output_tokens"] {
                 spent.insert(k.into(), json!(parts.iter().map(|p| count(&p[k])).sum::<i64>()));
             }
+            spent.remove("requests"); // each segment carries its own
             spent.insert("segments".into(), json!(parts));
             completion.insert("usage".into(), Value::Object(spent));
         }
@@ -1277,5 +1296,16 @@ mod tests {
         m.add(&json!({"usage": {"input": 5, "cached": 20, "output": "2"}}));
         let r = m.report("m", "claude", "api").unwrap();
         assert_eq!((r["input_tokens"].as_i64(), r["cached_tokens"].as_i64(), r["output_tokens"].as_i64()), (Some(0), Some(15), Some(5)));
+        assert!(r.get("requests").is_none());
+    }
+
+    #[test]
+    fn meter_lists_each_request_up_to_the_cap() {
+        let mut m = Meter::default();
+        m.add(&json!({"usage": {"input": 150, "cached": 120, "output": 7, "requests": [[10, 20, 3], [20, 100, "4"]]}}));
+        m.add(&json!({"usage": {"input": 1, "output": 1}}));
+        assert_eq!(m.report("m", "claude", "api").unwrap()["requests"], json!([[10, 20, 3], [20, 100, 4]]));
+        m.add(&json!({"usage": {"input": 1, "requests": vec![json!([1, 0, 0]); MAX_REQUESTS]}}));
+        assert_eq!(m.report("m", "claude", "api").unwrap()["requests"].as_array().unwrap().len(), MAX_REQUESTS);
     }
 }

@@ -1,5 +1,7 @@
 """Health: every check is computed from live state, and people who are not administrators see counts only."""
 
+import json
+
 import pytest
 
 from backend import onboarding, releases
@@ -802,3 +804,40 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
         assert f"once BotOps's turn (running since {since} UTC) ends" in why(Access(set(), "0"))
         assert f"once another bot's turn (running since {since} UTC) ends" in why(None)
         assert "Watch HotMic" not in why(Access({"botops"}, "1")) + why(Access(set(), "0")) + why(None)
+
+
+def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrators(environment):
+    api = environment()
+    for slug in ("pm", "ops"):
+        add_bot(api, slug)
+
+    def health(chosen=None, labels=("roadmap",), headers=None, **states):
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('pm',?,'morgan') ON CONFLICT(bot) "
+                      "DO UPDATE SET config_json=excluded.config_json", ('{"template": "product-manager"}',))
+            c.execute("UPDATE bots SET state='active', display_name=upper(slug) WHERE slug IN ('pm','ops')")
+            for bot, state in states.items():
+                c.execute("UPDATE bots SET state=? WHERE slug=?", (state, bot))
+            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) ON CONFLICT(key) "
+                      "DO UPDATE SET value_json=excluded.value_json",
+                      (json.dumps({"labels": list(labels), "suggestions_bot": chosen}),))
+        return health_of(api, headers)[1].get("roadmap_suggestions")
+
+    def label(**kwargs):
+        row = health(**kwargs)
+        return row and row["label"]
+
+    fix = [{"label": "Open Public roadmap", "href": "#/settings/roadmap", "tab": "", "click": ""}]
+    assert health(labels=(), pm="archived") is None              # no public label: nobody can suggest anything
+    assert health() is None                                      # Automatic finds the Product Manager
+    assert health(pm="archived") == {
+        "id": "roadmap_suggestions", "label": "No bot receives roadmap suggestions", "status": "warn",
+        "summary": "Visitors who suggest a feature on your public roadmap are being turned away.", "fixes": fix}
+    archived = health(chosen="ops", ops="archived")
+    assert archived["label"] == "The bot chosen for roadmap suggestions is archived; suggestions now go to PM"
+    assert (archived["status"], archived["fixes"]) == ("warn", fix)
+    assert label(chosen="ops", ops="paused") == (
+        "The bot chosen for roadmap suggestions isn't active; suggestions now go to PM")
+    assert label(chosen="ops", ops="archived", pm="archived") == "No bot receives roadmap suggestions"
+    assert health(chosen="ops", pm="archived") is None           # choosing an active bot clears it
+    assert health(pm="archived", headers=as_person(api, "quinn")) is None

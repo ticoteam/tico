@@ -985,6 +985,9 @@ def migrate(conn, adopt_legacy=False):
     # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
     add_column(conn, "approvals", "decided_via", "TEXT")
     add_column(conn, "approvals", "decided_for_json", "TEXT")
+    # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
+    # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
+    add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -3651,10 +3654,10 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
 def comment_wakes(conn, actor, row, text, *, mover=False):
     """Whether a comment from `actor` wakes the bot on the other side of the task. A bot's comment
     does. A person's does when they are a mover, the owner or the requester, and the bot owns the
-    task (they are directing its work), or when no bot is on the task at all. On a task a bot only
-    filed, which a person owns, a person's comment wakes the bot only when it names the bot with an @
-    or the task waits on that person (the bot asked them); anything else is saved for the bot's next
-    turn on the task."""
+    task (they are directing its work), or when no bot is on the task at all. On a task a bot
+    requested, which a person owns, the owner's comment wakes it (the bot asked them, so they are
+    answering it). Anyone else's wakes the bot only when it names the bot with an @ or the task waits
+    on that person; otherwise it is saved for the bot's next turn on the task."""
     if is_bot(actor):
         return not TS.snoozed(row)
     if not (mover or actor in (row["owner"], row["requester"])):
@@ -3662,6 +3665,8 @@ def comment_wakes(conn, actor, row, text, *, mover=False):
     if not any(is_bot(a) for a in (row["owner"], row["requester"], task_origin(conn, row))):
         return True
     if is_bot(row["owner"]):
+        return True
+    if actor == row["owner"] and is_bot(row["requester"]):
         return True
     if row.get("waiting_on") == actor:
         return True
@@ -6010,9 +6015,11 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
-            conn.execute("INSERT INTO turn_usage_segments VALUES(:turn_id,:position,:input_tokens,:cached_tokens,"
-                         ":output_tokens,:model,:provider,:est_cost_usd,:billing,:runtime,:harness,:effort,:profile)",
-                         {**part, "turn_id": turn_id, "position": position})
+            conn.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,cached_tokens,output_tokens,"
+                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low) "
+                         "VALUES(:turn_id,:position,:input_tokens,:cached_tokens,:output_tokens,:model,:provider,"
+                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low)",
+                         {"est_cost_low": None, **part, "turn_id": turn_id, "position": position})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
     if row:
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))

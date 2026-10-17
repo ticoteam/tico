@@ -900,7 +900,9 @@ SCHEMAS = {
                                           "null when every such run used a model with no list price"},
                          "subscription_equiv_usd": {"type": "number", "description": "What runs on a ChatGPT or Claude sign-in would "
                                                     "cost through the API: not money spent, never added to est_cost_usd"},
-                         "unpriced_runs": {"type": "integer", "description": "Runs with tokens on a model with no list price"}}),
+                         "unpriced_runs": {"type": "integer", "description": "Runs with tokens on a model with no list price"},
+                         "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
+                                               "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
                   "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
