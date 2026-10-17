@@ -821,16 +821,23 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
             c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) ON CONFLICT(key) "
                       "DO UPDATE SET value_json=excluded.value_json",
                       (json.dumps({"labels": list(labels), "suggestions_bot": chosen}),))
-        row = health_of(api, headers)[1].get("roadmap_suggestions")
-        return row and (row["label"], row["fixes"][0]["tab"])
+        return health_of(api, headers)[1].get("roadmap_suggestions")
 
+    def label(**kwargs):
+        row = health(**kwargs)
+        return row and row["label"]
+
+    fix = [{"label": "Open Public roadmap", "href": "#/settings", "tab": "tasks", "click": ""}]
     assert health(labels=(), pm="archived") is None              # no public label: nobody can suggest anything
     assert health() is None                                      # Automatic finds the Product Manager
-    assert health(pm="archived") == ("No bot receives roadmap suggestions", "tasks")
-    assert health("ops", ops="archived") == (
-        "The bot chosen for roadmap suggestions is archived; suggestions now go to PM", "tasks")
-    assert health("ops", ops="paused") == (
-        "The bot chosen for roadmap suggestions isn't active; suggestions now go to PM", "tasks")
-    assert health("ops", ops="archived", pm="archived") == ("No bot receives roadmap suggestions", "tasks")
-    assert health("ops", pm="archived") is None                  # choosing an active bot clears it
+    assert health(pm="archived") == {
+        "id": "roadmap_suggestions", "label": "No bot receives roadmap suggestions", "status": "warn",
+        "summary": "Visitors who suggest a feature on your public roadmap are being turned away.", "fixes": fix}
+    archived = health(chosen="ops", ops="archived")
+    assert archived["label"] == "The bot chosen for roadmap suggestions is archived; suggestions now go to PM"
+    assert (archived["status"], archived["fixes"]) == ("warn", fix)
+    assert label(chosen="ops", ops="paused") == (
+        "The bot chosen for roadmap suggestions isn't active; suggestions now go to PM")
+    assert label(chosen="ops", ops="archived", pm="archived") == "No bot receives roadmap suggestions"
+    assert health(chosen="ops", pm="archived") is None           # choosing an active bot clears it
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
