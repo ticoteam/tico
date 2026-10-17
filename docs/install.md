@@ -363,6 +363,13 @@ No open ports, and Cloudflare Access can do the sign-in. The wizard creates the 
    `TICO_AUTH_PROXY=cloudflare`, `TICO_ACCESS_ISSUER=<team URL>`, `TICO_ACCESS_AUDIENCE=<AUD tag>`.
 5. `docker compose up -d`
 
+**How long a sign-in lasts.** The Access application's Session Duration (24 hours unless you change it) decides how
+often people sign in again; behind Access, Tico keeps no session of its own. When it ends, Cloudflare sends the app's next
+request to its login page, which a page cannot follow in the background, and Cloudflare offers no way to renew the
+session from the page. Tico then stops reconnecting and shows "You've been signed out" with **Sign in again**: Access's
+login opens in the same window, and afterwards the page comes back where it was, with any text typed in an open box. The
+desktop app's Dock badge shows "!" until then. To sign in less often, lengthen the Session Duration.
+
 **Which route wins.** cloudflared prefers the configuration Cloudflare holds for the tunnel. A tunnel you created in the
 dashboard, or that setup created through the API, is remotely managed and keeps the **Public Hostname** route you set
 there: the config the server writes is ignored, so keep that route at `HTTP` `server:8765`. A locally managed tunnel
