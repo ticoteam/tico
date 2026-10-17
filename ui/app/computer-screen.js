@@ -13,14 +13,20 @@ let SCREEN = null;
 // The server's rule (the sessions route): the computer's operator or a bot admin.
 const screenMayOpen = machine => !!machine && !machine.revoked_at && (settingsIsAdmin() || (!!S.me?.id && machine.operator === S.me.id));
 const screenOn = machine => !!machine && machine.screen && machine.screen !== 'off' && machine.screen_available !== false;
-// A computer's row from what is already loaded: Settings' operations listing, or the bot rows' own computer.
+// A computer's row from what is already loaded: the bot rows' own computer first (every refresh reloads them), then
+// Settings' operations listing, which is read only when Settings opens, for a computer with no bots and for revoked_at.
 function screenMachine(id) {
   if (!id) return null;
   const row = (SETTINGS_DATA.machines || []).find(m => m.id === id);
   const bot = (S.emps || []).find(e => e.machine?.runner_id === id)?.machine;
   if (!row && !bot) return null;
-  return {id, label: row?.label || bot?.label, operator: row?.operator ?? bot?.operator, revoked_at: row?.revoked_at,
-          screen: row?.screen ?? bot?.screen, screen_available: row?.screen_available ?? bot?.screen_available};
+  return {id, label: bot?.label || row?.label, operator: bot?.operator ?? row?.operator, revoked_at: row?.revoked_at,
+          screen: bot?.screen ?? row?.screen, screen_available: bot?.screen_available ?? row?.screen_available};
+}
+// A mode just saved, written into both loaded copies so neither shows the old one until the next refresh.
+function screenSaved(id, saved) {
+  for (const m of [(SETTINGS_DATA.machines || []).find(x => x.id === id), ...(S.emps || []).filter(x => x.machine?.runner_id === id).map(x => x.machine)])
+    if (m) Object.assign(m, {screen: saved.screen}, 'screen_available' in saved ? {screen_available: saved.screen_available} : {});
 }
 // The bot's computer when its screen is on and this person may open it; '' otherwise.
 function botScreenComputer(slug) {
@@ -45,6 +51,8 @@ const taskScreenLinkHTML = owner => {
 // what to do. Read from the bot row (online, its computer's platform) and the computer's row; no extra request.
 function botScreenState(slug) {
   const e = (S.emps || []).find(x => x.name === slug);
+  // Someone who may see the bot but not read it gets a row without its computer (backend/views.py): say so, name nobody.
+  if (e && !('machine' in e)) return {state: 'hidden'};
   const id = e?.machine?.runner_id, machine = screenMachine(id);
   if (!machine) return {state: e?.agent ? 'external' : 'none'};
   const base = {id, machine, operator: machine.operator ? botPersonName(machine.operator) : '', may: screenMayOpen(machine)};
@@ -86,8 +94,15 @@ function botScreenRowHTML(slug) {
     not_allowed: () => status(s.operator ? `Only ${esc(s.operator)} and admins can open this computer's screen.` : "Only admins can open this computer's screen."),
     none: () => status('This bot has no computer yet.'),
     external: () => status("This bot runs outside Tico's computers, so there is no screen to show."),
+    hidden: () => status("You can see this bot but not its activity, so its computer and screen aren't shown to you."),
   }[s.state]();
-  return `<dt>Screen${betaPill('computer_screen')}</dt><dd class="bot-screen-row" id="bot-screen-row" data-screen-state="${s.state}">${body}</dd>`;
+  return `<dt>Screen${betaPill('computer_screen')}</dt><dd class="bot-screen-row" id="bot-screen-row" data-screen-state="${s.state}" data-screen-key="${esc(botScreenKey(s))}">${body}</dd>`;
+}
+// What the row and the header button are drawn from; a refresh redraws them only when it changes.
+const botScreenKey = s => [s.state, s.id, s.machine?.screen, s.may, s.operator].map(v => v ?? '').join('|');
+function botScreenRefresh(slug) {
+  const row = $('#bot-screen-row');
+  if (row && row.dataset.screenKey !== botScreenKey(botScreenState(slug))) botScreenPaint(slug);
 }
 // Draws the row again, and the header's Screen button, which shows only when the row is ready.
 function botScreenPaint(slug) {
@@ -114,8 +129,7 @@ function botScreenWire(slug) {
     on.disabled = true;
     try {
       const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: 'view'});
-      for (const m of [(SETTINGS_DATA.machines || []).find(x => x.id === id), ...(S.emps || []).filter(x => x.machine?.runner_id === id).map(x => x.machine)])
-        if (m) Object.assign(m, {screen: saved?.screen || 'view'}, saved && 'screen_available' in saved ? {screen_available: saved.screen_available} : {});
+      screenSaved(id, {screen: 'view', ...saved});
       toast('Screen: view');
       if (BOT?.slug === slug) botScreenPaint(slug);
     } catch (error) { toast(error.message, true); on.disabled = false; }

@@ -49,6 +49,7 @@ All notable changes to Tico are recorded here. The format follows
   No screen offered: the steps on the computer, with commands to copy; on Docker the main one turns the screen on live
   inside the runner's container, with no restart (install.md says the same). Also a Mac, an offline computer, no computer, or
   not yours to open. The header's Screen button now shows only when the row is ready (not while the computer is offline).
+  Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the

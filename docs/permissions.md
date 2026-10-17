@@ -180,7 +180,8 @@ it and says View or Control, and the bot's header has a **Screen** button too. O
 the screen is off in Tico (the operator or an admin gets **Turn on (View)** right there; Control stays a choice in
 Settings > Computers), the computer offers no screen yet (the steps to turn it on on the computer, with commands to copy),
 it is a Mac (Linux only for now), the computer is offline, the bot has no computer, or only the operator and admins may
-open it.
+open it. Someone who may see the bot but not its activity is told its computer isn't shown to them, and nothing more.
+The row follows the computer as the page refreshes (it comes online, its screen is turned on), with no reload.
 
 ## Tico support
 

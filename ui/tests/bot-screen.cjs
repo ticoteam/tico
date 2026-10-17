@@ -1,7 +1,8 @@
 // A bot's Screen row in More: always there, with its status, and when the screen is not ready, why and what to do.
 // One bot per state (ready, off, not offered on Linux, a Mac, offline, no computer, someone who may not open it).
 // The header's Screen button shows only for the ready one. Turn on (View) is offered to the operator or an admin
-// only; it saves view and the row (and the header button) become ready.
+// only; it saves view and the row (and the header button) become ready. A normal refresh redraws both, even with
+// Settings' older copy of the computer loaded. Someone who may only see a bot is told its computer isn't shown.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -28,7 +29,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         bot('mac', true, computer('c-mac', {platform: 'darwin'})),
         bot('offline', false, computer('c-offline', {screen: 'view', screen_available: true})),
         bot('none', false, null),
-        bot('unowned', true, computer('c-unowned', {operator: null, screen: 'view', screen_available: true}))];
+        bot('unowned', true, computer('c-unowned', {operator: null, screen: 'view', screen_available: true})),
+        bot('flip', true, computer('c-flip', {operator: 'ana', screen: 'view'})),
+        // Seen, not read: the server leaves out the computer, online and agent (backend/views.py).
+        {name: 'seen', display_name: 'seen', state: 'active', status: 'active', description: '', reports_to: '', operator: 'sam',
+         my_access: {see: true, read: false, write: false}, can_manage: false, bot_owners: [], private_tasks_default: false,
+         team: '', org_parent: '', is_branch: false, users: [], icon: '', helper: false, can_chat: false}];
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;
         const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -45,6 +51,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         if (p === '/api/v2/goals') return json({goals: [], chain: [], company: [], reports: []});
         if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, today: {}});
         if (p === '/api/v2/tasks') return json({tasks: []});
+        if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine.runner_id, label: b.machine.label,
+          operator: b.machine.operator, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
         if (p === '/api/v2/conversations') return json({conversations: []});
         if (p === '/api/v2/computers/c-off/screen') {
           const body = JSON.parse(request.postData()); writes.push(body);
@@ -68,7 +76,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
                 text: await rowText(),
                 header: await page.locator('#bot-top #bot-screen').count()};
       };
-      return {page, errors, writes, open, rowText};
+      return {page, errors, writes, open, rowText, bots};
     };
 
     // Ana is an admin (the owner): every state, and the header button only for the ready one.
@@ -111,8 +119,37 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await admin.rowText(), 'Open · View');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
     assert.equal(await admin.page.locator('#bot-screen-row').evaluate(el => el.previousElementSibling.textContent), 'Screen');
+
+    // Settings was read while c-flip's screen was not offered. Then, with no navigation, normal refreshes: it is
+    // offered (ready, header button), then the computer goes offline (no header button).
+    await admin.page.goto('https://tico-ui.test/#/settings');
+    await admin.page.waitForFunction(() => SETTINGS_DATA.machines?.some(m => m.id === 'c-flip' && m.screen_available === false));
+    row = await admin.open('flip');
+    assert.deepEqual([row.state, row.header], ['not_offered', 0]);
+    const flip = admin.bots.find(b => b.name === 'flip');
+    flip.machine.screen_available = true;
+    await admin.page.evaluate(() => refresh());
+    await admin.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
+    assert.equal(await admin.rowText(), 'Open · View');
+    assert.equal(await admin.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-flip/screen');
+    flip.online = false;
+    await admin.page.evaluate(() => refresh());
+    await admin.page.locator('#bot-screen-row[data-screen-state=offline]').waitFor();
+    assert.equal(await admin.rowText(), "This computer is offline. Screen works when it's back.");
+    assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 0);
     assert.deepEqual(admin.errors, []);
     await admin.page.close();
+
+    // Sam operates these computers and is not an admin: Turn on (View) is theirs too.
+    const operator = await visit({id: 'sam', name: 'Sam', role: 'member'});
+    row = await operator.open('off');
+    assert.match(row.text, /^Screen is off for this computer\. Turn on \(View\)/);
+    await operator.page.locator('#bot-screen-row [data-screen-on]').click();
+    await operator.page.locator('#bot-screen-row[data-screen-state=ready]').waitFor();
+    assert.deepEqual(operator.writes, [{mode: 'view'}]);
+    assert.equal(await operator.page.locator('#bot-top #bot-screen').getAttribute('href'), '#/computers/c-off/screen');
+    assert.deepEqual(operator.errors, []);
+    await operator.page.close();
 
     // Bo is a member, not the operator: told who may, never offered Turn on, never shown the computer's steps.
     const member = await visit({id: 'bo', name: 'Bo', role: 'member'});
@@ -127,9 +164,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // A computer with no operator names admins alone.
     row = await member.open('unowned');
     assert.deepEqual([row.state, row.text], ['not_allowed', "Only admins can open this computer's screen."]);
+    // Bo may only see 'seen': no claim it has no computer, nothing to open or turn on, no computer named.
+    row = await member.open('seen');
+    assert.deepEqual([row.state, row.text, row.header], ['hidden', "You can see this bot but not its activity, so its computer and screen aren't shown to you.", 0]);
+    assert.equal(await member.page.locator('#bot-screen-row a, #bot-screen-row button').count(), 0);
+    assert.doesNotMatch(row.text, /no computer|offline|Sam/);
     assert.deepEqual(member.writes, []);
     assert.deepEqual(member.errors, []);
     await member.page.close();
-    console.log('PASS: Screen row in More for each state; header button only when ready; Turn on (View) for operator/admin only');
+    console.log('PASS: Screen row in More for each state; header button only when ready; Turn on (View) for operator/admin only; refresh redraws; see-only told it is not shown');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

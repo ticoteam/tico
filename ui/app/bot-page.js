@@ -537,6 +537,7 @@ function showBotTab(tab) {
   if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
   if (view === 'history') void botHistoryLoad(BOT.slug);
   placeBotHead();
+  if (view === 'more') botScreenRefresh(BOT.slug);
   if (chat && BOT_PILL?.focusOnOpen) {
     delete BOT_PILL.focusOnOpen;
     const box = pq(BOT_PILL, '.p-text');
