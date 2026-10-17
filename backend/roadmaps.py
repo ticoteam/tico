@@ -38,7 +38,7 @@ def migrate(c):
     # those copies go from tasks that are not public, so publishing one later needs public text written for it.
     c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
-        c.execute("UPDATE task_types SET default_visibility='private' WHERE manager='product-manager'")
+        c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
                   "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
@@ -376,7 +376,7 @@ def install_internal(app, store, auth, mutate, mover):
                 '(SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
                 'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
                 "min(nullif(organization,'')) organization FROM task_requesters GROUP BY task_id) r ON r.task_id=t.id "
-                "WHERE t.type_id IN (SELECT id FROM task_types WHERE manager='product-manager') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND (" + visible + ')) '
+                "WHERE t.type_id IN (SELECT id FROM task_types WHERE role='product-roadmap') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND (" + visible + ')) '
                 'ORDER BY ' + sorts[sort] + ' ' + direction + ',t.id LIMIT ? OFFSET ?', (limit + 1, offset))
             items, after = page((dict(r) for r in rows), limit, offset)
             return {'tasks': items, 'next_offset': after}

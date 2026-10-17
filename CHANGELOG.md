@@ -29,6 +29,13 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- Roadmaps keep working after the bot that managed the Product roadmap or Dev tickets type is archived or replaced.
+  Tico found both types by their manager's name (`product-manager`, `engineering-lead`), so a type that moved to
+  another bot lost its Approved → Building → Shipped sync, its Roadmap tab and its ranked list. Each type now has a
+  role (`role` in `hub task types` and the API), given once on upgrade without changing any task; setting up the
+  default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
+  Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
+  Engineering did.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at

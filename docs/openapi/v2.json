@@ -25743,6 +25743,18 @@
               "string",
               "null"
             ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "product-roadmap",
+              "engineering",
+              null
+            ],
+            "description": "The Product roadmap or Dev tickets type, whoever manages it"
           }
         },
         "required": [
