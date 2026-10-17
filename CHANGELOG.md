@@ -64,6 +64,12 @@ All notable changes to Tico are recorded here. The format follows
   default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
   Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
   Engineering did.
+- A Linux computer's screen now comes up when another X server (say a headless IDE's own `Xvfb :99`) already holds
+  display `:99`. The runner takes the first free display from `:99` to `:120`, and bots get that `DISPLAY`. Set
+  `TICO_SCREEN_DISPLAY` (like `:101`) to use one display exactly. When the display it needs is taken, the computer's
+  screen says so, with the process holding it when the runner can read it: "Display :99 is in use by another X
+  server (Xvfb, pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display." It used to say only "Xvfb :99 did
+  not start".
 - A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
   **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
   straight from Done still counts as shipped, as does the default Engineering type's Done step.
