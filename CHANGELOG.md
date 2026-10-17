@@ -8,6 +8,9 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
+  roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
+  Linked from the README, Public roadmaps and Starter bots.
 - Beta features carry a small **Beta** pill where they appear: Market, Message bots, Listening, Live meetings, chat
   goals, the Slack gateway, a computer's Screen, Behaviour replay and the computer Performance page,
   Windows through WSL 2, external agents (Hermes, OpenClaw, Grok Bot, Dots, Muse sync) and the Mac app. Help lists

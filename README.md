@@ -85,6 +85,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
 | [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
 | [docs/starter-bots.md](docs/starter-bots.md) | The 93 bot templates by group, their card fields and what a good bot looks like |
+| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles, models and Dev tickets steps for building software with bots |
 | [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |
 | [docs/files.md](docs/files.md) | What bots publish, versions, who can see a file |
