@@ -431,3 +431,46 @@ def test_the_reply_page_is_one_constant_document_under_a_tight_policy(client):
     assert not regex.search(r"(?:src|href)=|https?://|innerHTML|insertAdjacentHTML|document\.write", page.text)
     # The page reads the secret from the fragment and sends it as the header the JSON route takes.
     assert "location.hash" in page.text and '"X-Ticket-Secret": secret' in page.text and "?secret" not in page.text
+
+
+def test_an_unpaired_surrogate_is_refused_before_any_limit_or_the_judge(db, tickets, ticks):
+    """JSON can carry "\\ud800" as an escape, which UTF-8 cannot: a message, an email, a diagnostics value or key and a
+    follow-up with one get the usual 422, store nothing, reach no judge and use up no install's limit."""
+    judged = []
+
+    def judge(text):
+        judged.append(text)
+        return "legit", "judged legit (0.99)"
+    latest = Latest(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"tag_name": "v0.2.17"})))
+    install = str(uuid.uuid4())
+
+    def send(c, body, path="/v1/support", **headers):
+        raw = json.dumps(body)                               # json.dumps writes the surrogate as the escape \\ud800
+        assert "\\ud800" in raw
+        ticks[0] += 3601                                     # the per-address hourly limit is not what is tested
+        return c.post(path, content=raw, headers={"Content-Type": "application/json", **headers})
+    bad = [({"message": "Hi \ud800 there", "install_id": install}, "message"),
+           ({"message": "Hi \ud800", "kind": "setup", "install_id": install}, "message"),
+           ({"message": "Hi \ud800", "kind": "feedback", "install_id": install}, "message"),
+           ({"message": "Hi", "email": "\ud800@acme.example", "install_id": install}, "email"),
+           ({"message": "Hi", "install_id": install, "diagnostics": {**BUNDLE, "note": "a \ud800 b"}}, "diagnostics"),
+           ({"message": "Hi", "install_id": install, "diagnostics": {**BUNDLE, "logs": {"\ud800": []}}}, "diagnostics")]
+    with TestClient(create_app(db, latest, staff_key=STAFF, tickets=tickets, judge=judge),
+                    client=("203.0.113.9", 5000)) as c:
+        for body, field in bad:
+            r = send(c, body)
+            assert r.status_code == 422 and r.json() == {"error": "invalid", "field": field}, body
+        assert db.conn.execute("SELECT count(*) FROM tickets").fetchone()[0] == 0 and judged == []
+        # The same address and install can file afterwards, all ten a day: the refusals counted toward no install.
+        made = []
+        for n in range(10):
+            ticks[0] += 3601
+            made.append(file(c, f"The board will not load {n}", install_id=install))
+        assert [r.status_code for r in made] == [201] * 10 and len(judged) == 10
+        tid, secret = made[0].json()["ticket_id"], made[0].json()["secret"]
+        r = send(c, {"message": "More \ud800"}, f"/v1/support/{tid}/messages", **{"X-Ticket-Secret": secret})
+        assert r.status_code == 422 and r.json() == {"error": "invalid", "field": "message"}
+        r = send(c, {"message": "More", "diagnostics": {**BUNDLE, "note": "\ud800"}}, f"/v1/support/{tid}/messages",
+                 **{"X-Ticket-Secret": secret})
+        assert r.status_code == 422 and r.json() == {"error": "invalid", "field": "diagnostics"}
+        assert db.conn.execute("SELECT count(*) FROM ticket_replies").fetchone()[0] == 0

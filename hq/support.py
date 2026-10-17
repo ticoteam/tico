@@ -145,9 +145,19 @@ class Invalid(Exception):
         self.field = field
 
 
+def utf8(value):
+    """Whether `value` can be written as UTF-8. JSON can carry an unpaired surrogate as an escape ("\\ud800"); UTF-8, and
+    so the database and the judge, cannot."""
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def text(value, field, limit):
-    """Plain text of 1..limit characters: a string, no control characters, no blank message."""
-    if not isinstance(value, str) or CONTROL.search(value):
+    """Plain text of 1..limit characters: a string, valid UTF-8, no control characters, no blank message."""
+    if not isinstance(value, str) or not utf8(value) or CONTROL.search(value):
         raise Invalid(field)
     value = value.replace("\r\n", "\n").replace("\r", "\n")
     if not value.strip() or len(value) > limit:
@@ -157,17 +167,18 @@ def text(value, field, limit):
 
 def _plain(value, depth=0):
     """Whether `value` is JSON made only of strings, numbers, booleans, null, lists and objects, not deeply nested,
-    with no control character in any string."""
+    with no control character in any string and every string valid UTF-8."""
     if depth > DIAGNOSTICS_DEPTH:
         return False
     if isinstance(value, str):
-        return not CONTROL.search(value)
+        return utf8(value) and not CONTROL.search(value)
     if value is None or isinstance(value, (bool, int, float)):
         return True
     if isinstance(value, list):
         return all(_plain(v, depth + 1) for v in value)
     if isinstance(value, dict):
-        return all(isinstance(k, str) and not CONTROL.search(k) and _plain(v, depth + 1) for k, v in value.items())
+        return all(isinstance(k, str) and utf8(k) and not CONTROL.search(k) and _plain(v, depth + 1)
+                   for k, v in value.items())
     return False
 
 
@@ -199,19 +210,12 @@ def parse_ticket(data):
         value = data.get(name)
         if value in (None, ""):
             values[name] = None
-        elif not isinstance(value, str) or (name == "email" and len(value) > 254) or not pattern.fullmatch(value):
+        elif not isinstance(value, str) or not utf8(value) or (name == "email" and len(value) > 254) \
+                or not pattern.fullmatch(value):
             raise Invalid(name)
         else:
             values[name] = value
     return message, values["email"], values["install_id"], values["version"], values["app_version"], kind
-
-
-def utf8(value):
-    try:
-        value.encode()
-    except UnicodeEncodeError:
-        return False
-    return True
 
 
 def parse_setup_website(data):
@@ -219,7 +223,6 @@ def parse_setup_website(data):
     nothing, so the page gets no help probing it. There is no field for the chat, so the chat cannot be sent."""
     if not isinstance(data, dict) or set(SETUP_REQUIRED) - set(data) or set(data) - set(SETUP_REQUIRED) - set(SETUP_OPTIONAL):
         raise Invalid("fields")
-    # JSON can carry an unpaired surrogate as an escape; UTF-8, and so the database, cannot.
     if any(isinstance(value, str) and not utf8(value) for value in data.values()):
         raise Invalid("fields")
     email, step, mode, turns, session_id = (data[name] for name in ("email", "step", "mode", "turns", "session_id"))
