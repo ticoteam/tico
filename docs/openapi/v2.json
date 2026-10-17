@@ -16925,6 +16925,9 @@
           },
           "woke": {
             "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           }
         },
         "required": [
@@ -22887,6 +22890,17 @@
               }
             ],
             "title": "Create Repositories"
+          },
+          "create_product_repositories": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Create Product Repositories"
           },
           "mode": {
             "type": "string",

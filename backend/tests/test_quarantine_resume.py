@@ -48,23 +48,29 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
         c.execute("UPDATE tasks SET requester='bot:ops' WHERE id=?", (task["id"],))
         comment = H.task_comment(c, "bot:ops", task["id"], "Leave the label to a person.")
         assert comment["to_actor"] == "bot:cpo"
-    for write in (lambda c: H.say(c, "bot:cmo", "bot:cpo", "Are you stuck?"),
-                  lambda c: H.note_create(c, "bot:cmo", "bot:cpo", "Are you stuck?")):
-        with pytest.raises(H.Refused) as got:
-            with api.app.state.store.transaction() as c:
-                write(c)
-        assert got.value.rule == "reach"
+    # Any other bot's message waits too (a refused one quarantined the sender in turn), but its note does not.
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, "bot:cmo", "bot:cpo", "Are you stuck?")
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
+    with pytest.raises(H.Refused) as got:
+        with api.app.state.store.transaction() as c:
+            H.note_create(c, "bot:cmo", "bot:cpo", "Are you stuck?")
+    assert got.value.rule == "target_inactive"
     with api.app.state.store.transaction() as c:
         assert H.say(c, "human:ben", "bot:cpo", "Are you stuck?"), "a person's message waits, as before"
         assert H.note_create(c, "human:ben", "bot:cpo", "Back soon?")
-    # A bot a person paused stays theirs: its manager bot cannot queue work for it.
+    # A bot a person paused stays theirs: its manager bot's note is refused, and its message waits for the person
+    # to resume it.
     with api.app.state.store.transaction() as c:
         H.status_set(c, "human:ana", "cpo", state="active", reason="reviewed")
         H.status_set(c, "human:ana", "cpo", state="paused", reason="holding it")
     with pytest.raises(H.Refused) as got:
         with api.app.state.store.transaction() as c:
-            H.say(c, "bot:ops", "bot:cpo", "Start the export work.")
-    assert got.value.rule == "reach"
+            H.note_create(c, "bot:ops", "bot:cpo", "Start the export work.")
+    assert got.value.rule == "target_inactive"
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, "bot:ops", "bot:cpo", "Start the export work.")
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
 
 
 def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):

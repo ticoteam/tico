@@ -1155,7 +1155,8 @@ def create_app(settings=None):
                 c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, conv["id"]))
             auth.conversation(c, who, conv["id"])
         # A bot still in setup starts only a person's message; anyone else's waits for its setup.
-        if note := usage_limits.warning(c, to) or (None if H.is_human(who.actor) else H.setup_hold(c, to)):
+        if note := (H.held_note(c, to) or usage_limits.warning(c, to)
+                    or (None if H.is_human(who.actor) else H.setup_hold(c, to))):
             message = {**message, "warning": note}
         return message
 
@@ -2996,7 +2997,9 @@ def create_app(settings=None):
                 c.execute("UPDATE task_file_reviews SET comment_id=coalesce(comment_id,?) WHERE file_id=? AND version=?",
                           (msg["id"], item["id"], item["version"]))
             msg = next(m for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m["id"] == msg["id"])
-            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)), "woke": bool(wake)}
+            held = H.held_note(c, msg.get("to_actor"))
+            return {"comment": msg, "comments": H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)),
+                    "woke": bool(wake), **({"warning": held} if held else {})}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now

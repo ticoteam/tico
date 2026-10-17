@@ -414,6 +414,11 @@ class Rule4Unsolicited(HubCase):
 
 # ----------------------------------------------------------------------------- rule 8
 class Rule8Counting(HubCase):
+    def setUp(self):
+        super().setUp()
+        # Rule 8's review tasks go to BotOps; without it every review is refused and none is ever counted.
+        self.conn.execute("INSERT INTO bots(slug, display_name, state) VALUES(?,?, 'active')", (H.FLEET_MAINTAINER, "BotOps"))
+
     def refuse_reach(self, n, actor=CMO):
         """`n` refusals that count: the same refused write made n + 1 times (the first is recorded, not counted)."""
         for _ in range(n + 1):
@@ -453,11 +458,71 @@ class Rule8Counting(HubCase):
         H.quarantine(self.conn, "cmo", "10 refused writes today")
         self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
 
-    def test_a_person_may_still_message_a_quarantined_bot_and_it_waits(self):
+    def reviewed(self, slug):
+        """Review tasks opened today for `slug`'s refusals. BotOps receives them, so it must exist."""
+        self.assertTrue(H.bot(self.conn, H.FLEET_MAINTAINER), "no reviewer: a review count would be vacuous")
+        return self.conn.execute("SELECT COUNT(*) FROM tasks WHERE title=?",
+                                 (f"Review {slug}'s refused writes",)).fetchone()[0]
+
+    def test_writes_to_a_quarantined_bot_are_kept_or_refused_without_quarantining_the_sender(self):
+        handoff = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", CMO)
         self.refuse_reach(H.QUARANTINE_AT)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
         self.assertTrue(H.say(self.conn, ANA, CMO, "are you stuck?"), "a person's message is kept for when it is back")
-        self.refused("reach", H.say, self.conn, SEO, CMO, "are you stuck?")      # rule 2: a bot still cannot
+        for i in range(4):
+            # A bot's message or comment is kept too: runners claim only active bots' work.
+            self.assertTrue(H.say(self.conn, SEO, CMO, f"review {i} is posted"))
+            self.assertTrue(H.task_comment(self.conn, SEO, handoff["id"], f"finding {i}"))
+            # A new task for it is still refused, as the target's state, not as the sender reaching too far.
+            got = self.refused("target_inactive", H.task_create, self.conn, SEO, "Check the pricing page", "Read it", CMO)
+            self.assertIn("until about", got.detail)
+            self.assertIn("is not a repeat", got.detail)
+        self.assertEqual(H.bot(self.conn, "seo")["state"], "active", "one quarantine does not spread to its partners")
+        self.assertEqual(self.reviewed("seo"), 0)
+        self.assertIn("is kept", H.held_note(self.conn, CMO))
+        self.assertIsNone(H.held_note(self.conn, SEO))
+
+    def refuse_inactive(self, n):
+        for _ in range(n):
+            self.refused("target_inactive", H.task_create, self.conn, CMO, "Plan the week", "Draft it", "coach")
+
+    def test_target_state_refusals_neither_advance_nor_delay_real_ones(self):
+        self.conn.execute("UPDATE bots SET state='archived' WHERE slug='legal'")
+        # Only a bot that exists but is not running is the target's state; a gone or unknown one is still reach.
+        self.refused("target_inactive", H.say, self.conn, SEO, H.bot_actor("game"), "ready?")     # planned
+        self.refused("reach", H.say, self.conn, SEO, H.bot_actor("legal"), "ready?")              # archived
+        self.refused("reach", H.say, self.conn, SEO, "nobody@example.com", "ready?")              # not on the roster
+        def real(n):            # the same refused write n times: the first is recorded, each after it a repeat
+            for _ in range(n):
+                self.refused("reach", H.say, self.conn, CMO, "outsider@example.com", "hello")
+        self.refuse_inactive(12)
+        real(1)
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.assertEqual(self.reviewed("cmo"), 0, "one real refusal and many target ones open no review")
+        real(H.REVIEW_AT - 1)
+        self.assertEqual(self.reviewed("cmo"), 1, "the real refusals alone open the review at the same count")
+        real(H.QUARANTINE_AT - H.REVIEW_AT)
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active", "nine repeats: not yet")
+        real(1)
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined", "the tenth repeat, as before")
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_AT} repeated refusals today")
+
+    def test_target_state_refusals_count_toward_the_backstop_of_a_real_one(self):
+        self.refuse_inactive(H.QUARANTINE_TOTAL_AT - 1)
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.refused("reach", H.say, self.conn, CMO, "new-outsider@example.com", "hello")
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
+
+    def test_retrying_a_write_to_a_paused_bot_meets_only_the_day_backstop(self):
+        for i in range(H.QUARANTINE_TOTAL_AT - 1):
+            got = self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
+        self.assertIn("until a person resumes it", got.detail)
+        self.assertEqual(H.bot(self.conn, "seo")["state"], "active", "the same words every time are no repeat")
+        self.assertEqual(self.reviewed("seo"), 0, "the target's state opens no review of the sender")
+        self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
+        self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
+        self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
 
     def test_an_escape_quarantine_holds_until_a_human_clears_it(self):
         H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")

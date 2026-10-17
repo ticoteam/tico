@@ -104,6 +104,20 @@ All notable changes to Tico are recorded here. The format follows
   `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
   support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
   is sent.
+- **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
+  **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
+  the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Only the Owner turns it on, a bot can't turn it
+  on for itself, BotOps doesn't have it built in, and no bot gets it by default. **Owner: to let Head of Engineering and
+  DevOps create repositories, turn it on in each one's settings.** Private only: a public repository is publishing and
+  stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
+  to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
+  bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
+  so.
+  Without the right a bot is refused with the right named; if the GitHub App lacks Administration: write, the refusal
+  says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
+  stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
+  [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
 - **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
   too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
 - Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
@@ -142,6 +156,10 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
+  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
+  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
+  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
 - Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
   `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
 - Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
