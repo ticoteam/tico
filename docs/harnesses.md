@@ -101,6 +101,7 @@ The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 | Claude Code (Anthropic) | Opus 5.5 | `claude-opus-5-5` | 2026-09-22 |
 | Claude Code (Anthropic) | Sonnet 5.5 | `claude-sonnet-5-5` | 2026-09-28 |
 | Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
+| Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
 | Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 

@@ -322,6 +322,7 @@ async function pageBot(slug, tab) {
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>`
           : String(e.reports_to || '').startsWith('human:') ? `<dt>Reports to</dt><dd>${esc(botPersonName(e.reports_to.slice(6)))}</dd>` : ''}
         <dt>Your access</dt><dd>${e.my_access.write ? 'See it and send requests' : 'See it only'}</dd>
+        ${botScreenRowHTML(slug)}
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
 ` : `    <section class="card" id="bot-setup-card"><header><h2>Setup</h2>${settingsCanManageBot(e) ? '<button class="ghost" type="button" id="bot-edit-settings">Bot settings</button>' : ''}</header>
@@ -333,6 +334,7 @@ async function pageBot(slug, tab) {
         : `<dt>Model</dt><dd>${esc(e.model ? settingsChoiceLabel(e.harness || e.runtime, e.model, e.reasoning_effort || e.effort) : settingsDefaultLabel(e))}${e.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(e.fallback.harness, e.fallback.model, e.fallback.reasoning_effort || e.fallback.effort))}</span>` : ''}</dd>`}
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}
         ${botRepoHTML(e) ? `<dt>Repository</dt><dd>${botRepoHTML(e).replace(/^Repository /, '')}</dd>` : ''}
+        ${botScreenRowHTML(slug)}
       </dl></section>
     <section class="card" id="bot-tools-card"><header><h2>Tools</h2></header><div id="bot-tools"><div class="empty">Loading…</div></div></section>
     <div id="bot-quarantine-host">${botQuarantineCard(slug)}</div>
@@ -373,6 +375,7 @@ async function pageBot(slug, tab) {
   </div>`;
 
   BOT = {slug, tab: null, loaded: new Set(), limited};
+  botScreenWire(slug);
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
   bindChatSwipe($('#conv-thread'));
@@ -534,6 +537,7 @@ function showBotTab(tab) {
   if ($('#pane-history')) $('#pane-history').hidden = view !== 'history';
   if (view === 'history') void botHistoryLoad(BOT.slug);
   placeBotHead();
+  if (view === 'more') botScreenRefresh(BOT.slug);
   if (chat && BOT_PILL?.focusOnOpen) {
     delete BOT_PILL.focusOnOpen;
     const box = pq(BOT_PILL, '.p-text');
