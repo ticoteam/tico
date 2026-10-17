@@ -100,7 +100,7 @@ GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{
   session id (the salt is in the database, so a restart keeps the row), the first UTC day, the furthest step, whether
   the file was downloaded, how many messages the visitor sent (a count, sent once per message by the page), and the
   turns and cost the assistant adds. No message text and no address; the table has no
-  column for them. Off (the default), nothing is written. At most 20,000 new sessions a day are counted. Rows go 13
+  column for them. Off (the default), no visitor data is written. At most 20,000 new sessions a day are counted. Rows go 13
   months after their day, with the daily purge, which also runs at start. PRIVACY.md says the same in the page's words.
 - **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (comma-separated, default `https://tico.team`) get
   `Access-Control-Allow-Origin` back, on every answer under `/v1/onboarding`, including HQ's `429`, so the page can read
