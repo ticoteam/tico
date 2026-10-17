@@ -6,8 +6,8 @@
 //! token-shaped first. Success is not the command's word: sign-in is checked again afterwards.
 //!
 //! The same relay signs a login out (the CLI's own logout, checked afterwards), switches it to another account
-//! (signed in on the side in a home of its own, moved into place only once it has finished, so a cancelled switch
-//! leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
+//! (signed in on the side in a home of its own, moved into place only once it has finished and the server has agreed
+//! it is no longer cancelled, so a cancelled or failed switch leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
 //! A computer login a person signed out stays signed out (signin.rs SIGNED_OUT_FILE).
 
 use std::collections::HashMap;
@@ -31,6 +31,8 @@ pub const LIFETIME_S: u64 = 15 * 60;
 /// Told to the server in every heartbeat: this runner knows the kinds beyond `sign_in`.
 pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
 pub const POLL_S: f64 = 2.0;
 const KEEP_RAW: usize = 60_000;
 const MAX_LINES: usize = 12;
@@ -168,6 +170,8 @@ pub struct Session {
     profile: String,
     inner: Mutex<Inner>,
     cancelled: AtomicBool,
+    /// The server took this switch's `finishing` report: it can no longer be cancelled, so the new login goes in.
+    confirmed: AtomicBool,
 }
 
 impl Session {
@@ -179,6 +183,7 @@ impl Session {
             profile: text_of(&work["profile"]),
             inner: Mutex::new(Inner { state: "starting".into(), dirty: true, ..Default::default() }),
             cancelled: AtomicBool::new(false),
+            confirmed: AtomicBool::new(false),
         })
     }
 
@@ -411,7 +416,7 @@ fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
 }
 
 /// A Switch account's own home: a new folder inside the login's home, made as the CLI's user, with the manifest's
-/// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_switch`.
+/// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_files`.
 fn begin_switch(runtime: &str, id: &str, env: &Env) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let login = crate::harness_tools::login_command(runtime).ok_or("Switching accounts is not available")?;
     let home = login_home(runtime, env).ok_or("Switching accounts is not available for this runtime")?;
@@ -432,22 +437,90 @@ fn begin_switch(runtime: &str, id: &str, env: &Env) -> Result<(std::path::PathBu
     Ok((home, side))
 }
 
-/// Put a finished switch's login in place of the old one: each of the manifest's `files` the new sign-in wrote is
-/// moved over the old (a rename, so the CLI never reads half a file).
-fn adopt_switch(runtime: &str, home: &std::path::Path, side: &std::path::Path, env: &Env) -> Result<(), String> {
-    let login = crate::harness_tools::login_command(runtime).ok_or("Switching accounts is not available")?;
-    for rel in &login.files {
+/// One login file a switch put in place, and where the old one was kept until the switch is over (None: none).
+struct Moved {
+    to: std::path::PathBuf,
+    kept: Option<std::path::PathBuf>,
+}
+
+/// Put a finished switch's login in place of the old one: each of `files` the new sign-in wrote is moved over the old
+/// (a rename, so the CLI never reads half a file), the old one kept in the side home first. A step that fails puts
+/// back what was already moved, so the old login is whole again; the error says whether that worked.
+fn adopt_files(files: &[String], home: &std::path::Path, side: &std::path::Path, env: &Env) -> Result<Vec<Moved>, String> {
+    let old = side.join(".tico-old");
+    let mut moved: Vec<Moved> = vec![];
+    let mkdir_for = |path: &std::path::Path| match path.parent() {
+        Some(parent) => file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env),
+        None => Ok(()),
+    };
+    for rel in files {
         let from = side.join(rel);
         if !std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file()) {
             continue;
         }
         let to = home.join(rel);
-        if let Some(parent) = to.parent() {
-            file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env)?;
+        let step = (|| -> Result<(), String> {
+            if std::fs::symlink_metadata(&to).is_ok() {
+                let kept = old.join(rel);
+                mkdir_for(&kept)?;
+                file_command(&["mv", "-f", &to.display().to_string(), &kept.display().to_string()], env)?;
+                moved.push(Moved { to: to.clone(), kept: Some(kept) });
+            } else {
+                moved.push(Moved { to: to.clone(), kept: None });
+            }
+            mkdir_for(&to)?;
+            file_command(&["mv", "-f", &from.display().to_string(), &to.display().to_string()], env)
+        })();
+        if let Err(e) = step {
+            return Err(match restore(&moved, env) {
+                Ok(()) => format!("The new account could not be put in place, so the old one stays: {e}"),
+                Err(r) => format!("The new account could not be put in place ({e}), and the old one could not be put back: {r}"),
+            });
         }
-        file_command(&["mv", "-f", &from.display().to_string(), &to.display().to_string()], env)?;
     }
-    Ok(())
+    Ok(moved)
+}
+
+/// Undo `adopt_files`: the old files back where they were, and the new ones that had no old one removed.
+fn restore(moved: &[Moved], env: &Env) -> Result<(), String> {
+    let mut failed = vec![];
+    for m in moved.iter().rev() {
+        let to = m.to.display().to_string();
+        let done = match &m.kept {
+            Some(kept) => file_command(&["mv", "-f", &kept.display().to_string(), &to], env),
+            None => file_command(&["rm", "-f", &to], env),
+        };
+        if let Err(e) = done {
+            failed.push(e);
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
+}
+
+/// The commit point of a switch: tell the server it is `finishing` and wait for it to agree. Once it has, a cancel is
+/// refused there, so the new login can go in; a cancel that came first wins, and so does no answer.
+fn confirm_switch(s: &Session) -> Result<(), (String, String)> {
+    let cancelled = || ("cancelled".to_string(), "Cancelled".to_string());
+    {
+        let mut i = s.inner.lock().unwrap();
+        i.state = "finishing".into();
+        i.url.clear();
+        i.code.clear();
+        i.dirty = true;
+    }
+    let until = Instant::now() + CONFIRM_TIMEOUT;
+    loop {
+        if s.confirmed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if s.cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled());
+        }
+        if Instant::now() > until {
+            return Err(("failed".into(), "Tico did not confirm the switch in time, so the old account stays".into()));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: Duration) {
@@ -555,20 +628,36 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     };
     drop(writer); // the master closes, so the reader ends on a pty too
     let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    // Kept only when the old login's files are still in it, so a failed restore never deletes them.
+    let mut keep_side = false;
     let (state, message) = match verdict {
         Some(v) => v,
         None if s.cancelled.load(Ordering::SeqCst) => ("cancelled".into(), "Cancelled".into()),
         None if !child.wait().map(|st| st.success()).unwrap_or(false) => ("failed".into(), "The sign-in command stopped without signing in".into()),
         None if switch.is_some() => {
-            // Signed in on the side? Then that login takes the old one's place, and is checked where it now is.
+            // Signed in on the side? Then, once the server agrees, that login takes the old one's place and is checked
+            // where it now is; if it does not work there, the old one goes back.
             let (home, side) = switch.as_ref().unwrap();
+            let files = login.files.clone();
             match signed_in(&s.runtime, &exe, &env, false) {
-                (true, _) => match adopt_switch(&s.runtime, home, side, &real_env) {
-                    Ok(()) => match signed_in(&s.runtime, &exe, &real_env, false) {
-                        (true, detail) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
-                        _ => ("failed".into(), format!("The new account was put in place but {} is not signed in", s.runtime)),
+                (true, _) => match confirm_switch(&s) {
+                    Err(verdict) => verdict,
+                    Ok(()) => match adopt_files(&files, home, side, &real_env) {
+                        Ok(moved) => match signed_in(&s.runtime, &exe, &real_env, false) {
+                            (true, detail) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
+                            _ => match restore(&moved, &real_env) {
+                                Ok(()) => ("failed".into(), format!("The new account did not work in place of the old one, so the old one is back on {}", s.runtime)),
+                                Err(e) => {
+                                    keep_side = true;
+                                    ("failed".into(), format!("The new account did not work, and the old one could not be put back ({e}); its files are in {}", side.display()))
+                                }
+                            },
+                        },
+                        Err(e) => {
+                            keep_side = e.contains("could not be put back");
+                            ("failed".into(), e)
+                        }
                     },
-                    Err(e) => ("failed".into(), format!("The new account could not be put in place, so the old one stays: {e}")),
                 },
                 _ => ("failed".into(), format!("The command finished but {} is not signed in to the new account; the old one stays", s.runtime)),
             }
@@ -582,7 +671,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         }
     };
     if let Some((_, side)) = &switch {
-        discard(side);
+        if !keep_side {
+            discard(side);
+        }
         if state == "signed_in" {
             // The new account's email and plan are read afresh, not the old one's.
             crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
@@ -617,6 +708,12 @@ fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     if own {
         if let Err(e) = runner.sign_in.mark_signed_out(&s.runtime) {
             return fail(&format!("Could not record the sign-out on this computer ({:?})", e.kind()));
+        }
+        // A key login that started before the mark could still be writing a login: let it end before logging out,
+        // or it would write the login back after the check below said signed out.
+        if !runner.sign_in.wait_for_key_logins(&s.runtime, crate::signin::KEY_LOGIN_DRAIN) {
+            let _ = runner.sign_in.unmark_signed_out(&s.runtime);
+            return fail(&format!("{} is still signing in with a key on this computer; try again in a minute", s.runtime));
         }
     }
     // Its exit status is not the verdict (an already signed-out CLI may say so with an error): the check after it is.
@@ -678,6 +775,12 @@ impl Logins {
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
+        } else if s.kind == "switch"
+            && crate::harness_tools::login_command(&s.runtime).is_some_and(|l| l.keychain.iter().any(|p| p == crate::runner::platform()))
+        {
+            // The login is in the system keychain here, not in files: there is no side to sign in on.
+            let msg = format!("Switching accounts isn't available for {} on this computer: sign out, then sign in", s.runtime);
+            s.finish("failed", &msg, runner, &default);
         } else if s.kind == "use_shared_key" {
             let state = match runner.sign_in.unmark_signed_out(&s.runtime) {
                 Ok(()) => ("done", "The shared key signs it in again".to_string()),
@@ -745,9 +848,19 @@ impl Logins {
             let s = self.sessions[&id].clone();
             let body = s.report().filter(|b| b["state"] != "cancelled"); // the server ended it: nothing to tell it
             if let Some(body) = body {
-                if runner.client.post(&format!("runner-logins/{id}/report"), &body, None).await.is_err() {
-                    s.inner.lock().unwrap().dirty = true; // said again on the next poll
-                    continue;
+                let reply = match runner.client.post(&format!("runner-logins/{id}/report"), &body, None).await {
+                    Ok(reply) => reply,
+                    Err(_) => {
+                        s.inner.lock().unwrap().dirty = true; // said again on the next poll
+                        continue;
+                    }
+                };
+                // A switch goes ahead only once the server holds it as finishing; if it had already ended there
+                // (cancelled, expired), the runner stops too.
+                match text_of(&reply["state"]).as_str() {
+                    "finishing" if body["state"] == "finishing" => s.confirmed.store(true, Ordering::SeqCst),
+                    "cancelled" | "expired" if s.live() => s.cancelled.store(true, Ordering::SeqCst),
+                    _ => {}
                 }
                 {
                     let mut i = s.inner.lock().unwrap();
@@ -802,12 +915,20 @@ mod tests {
         }
     }
 
-    /// A stand-in `codex`: `login status` reads $CODEX_HOME/auth.json, `logout` removes it (unless $HOME/stuck),
-    /// and `login --device-auth` shows a code and writes a new login (or hangs while $HOME/slow is there).
+    /// A stand-in `codex`, each run recorded in $HOME/runs: `login status` reads $CODEX_HOME/auth.json (on a switch's
+    /// side home it first waits for $HOME/release while $HOME/hold-probe is there; in the real home it says signed
+    /// out while $HOME/refuse is there), `logout` removes it (unless $HOME/stuck), and `login --device-auth` shows a
+    /// code and writes a new login (or hangs while $HOME/slow is there).
     const FAKE_CODEX: &str = r#"#!/bin/sh
 home="${CODEX_HOME:-$HOME/.codex}"
+echo "$@" >> "$HOME/runs"
 case "$1 $2" in
-  "login status") if [ -f "$home/auth.json" ]; then echo "Logged in using ChatGPT"; exit 0; fi; echo "Not signed in"; exit 1 ;;
+  "login status")
+    case "$home" in
+      *tico-switch-*) if [ -f "$HOME/hold-probe" ]; then : > "$HOME/probing"; n=0; while [ ! -f "$HOME/release" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done; fi ;;
+      *) if [ -f "$HOME/refuse" ]; then echo "Not signed in"; exit 1; fi ;;
+    esac
+    if [ -f "$home/auth.json" ]; then echo "Logged in using ChatGPT"; exit 0; fi; echo "Not signed in"; exit 1 ;;
   "logout ") [ -f "$HOME/stuck" ] || rm -f "$home/auth.json"; exit 0 ;;
   "login --device-auth")
     echo "Open https://auth.openai.com/codex/device"; echo "Enter this one-time code"; echo "ABCD-1234"
@@ -824,6 +945,35 @@ exit 2
     fn state(s: &Session) -> (String, String) {
         let i = s.inner.lock().unwrap();
         (i.state.clone(), i.message.clone())
+    }
+
+    fn wait_for(what: impl Fn() -> bool) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !what() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(what(), "timed out waiting");
+    }
+
+    /// Run a switch on its own thread, the way the relay does, with `server` standing in for Tico's answer once the
+    /// runner says it is finishing (true: confirmed; false: it had been cancelled).
+    fn switch_with(runner: &Arc<Runner>, config: &Config, server: Option<bool>) -> (Arc<Session>, std::thread::JoinHandle<()>) {
+        let s = session("switch");
+        let (s2, r2, c2) = (s.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        if let Some(confirm) = server {
+            let s3 = s.clone();
+            std::thread::spawn(move || {
+                let until = Instant::now() + Duration::from_secs(15);
+                while state(&s3).0 != "finishing" && s3.live() && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                if state(&s3).0 == "finishing" {
+                    if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.cancelled.store(true, Ordering::SeqCst) }
+                }
+            });
+        }
+        (s, running)
     }
 
     #[test]
@@ -881,13 +1031,76 @@ exit 2
         assert!(auth.exists() && !runner.sign_in.signed_out("codex"));
         std::fs::remove_file(root.join("stuck")).unwrap();
 
-        // Switch account: signed in on the side, then put in place; the side home is gone.
+        // Switch account: signed in on the side, then, once Tico confirms, put in place; the side home is gone.
         std::fs::write(&auth, "old\n").unwrap();
-        let switch = session("switch");
-        run_session(switch.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+        let (switch, running) = switch_with(&runner, &config, Some(true));
+        running.join().unwrap();
         assert_eq!(state(&switch).0, "signed_in", "{:?}", state(&switch));
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
         assert_eq!(sides(), 0);
+
+        // Nothing moves before Tico confirms: a switch Tico says was cancelled meanwhile keeps the old login.
+        std::fs::write(&auth, "old\n").unwrap();
+        let (refused, running) = switch_with(&runner, &config, Some(false));
+        running.join().unwrap();
+        assert_eq!(state(&refused).0, "cancelled", "{:?}", state(&refused));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        assert_eq!(sides(), 0);
+
+        // A cancel that arrives while the new login is being checked on the side wins too.
+        std::fs::write(root.join("hold-probe"), "").unwrap();
+        let (late, running) = switch_with(&runner, &config, Some(true));
+        wait_for(|| root.join("probing").exists());
+        late.cancelled.store(true, Ordering::SeqCst);
+        std::fs::write(root.join("release"), "").unwrap();
+        running.join().unwrap();
+        assert_eq!(state(&late).0, "cancelled", "{:?}", state(&late));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        assert_eq!(sides(), 0);
+        for f in ["hold-probe", "probing", "release"] {
+            std::fs::remove_file(root.join(f)).unwrap();
+        }
+
+        // The new login, once in place, does not work: the old one goes back.
+        std::fs::write(root.join("refuse"), "").unwrap();
+        let (broken, running) = switch_with(&runner, &config, Some(true));
+        running.join().unwrap();
+        assert_eq!(state(&broken).0, "failed");
+        assert!(state(&broken).1.contains("the old one is back"), "{:?}", state(&broken));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        assert_eq!(sides(), 0);
+        std::fs::remove_file(root.join("refuse")).unwrap();
+
+        // Two login files, and the second cannot be moved in: the first is put back, so the old login is whole.
+        let (home, side) = (root.join("multi/home"), root.join("multi/side"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(side.join("sub")).unwrap();
+        std::fs::write(home.join("a.json"), "old-a").unwrap();
+        std::fs::write(home.join("sub"), "a file where a folder should be").unwrap();
+        std::fs::write(side.join("a.json"), "new-a").unwrap();
+        std::fs::write(side.join("sub/b.json"), "new-b").unwrap();
+        let env: Env = std::env::vars().collect();
+        let files = vec!["a.json".to_string(), "sub/b.json".to_string()];
+        let err = adopt_files(&files, &home, &side, &env).err().expect("the second move fails");
+        assert!(err.contains("so the old one stays"), "{err}");
+        assert_eq!(std::fs::read_to_string(home.join("a.json")).unwrap(), "old-a");
+        // And a whole move undone: the old file back, the new one that had no old one gone.
+        std::fs::remove_file(home.join("sub")).unwrap();
+        let moved = adopt_files(&files, &home, &side, &env).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("sub/b.json")).unwrap(), "new-b");
+        restore(&moved, &env).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("a.json")).unwrap(), "old-a");
+        assert!(!home.join("sub/b.json").exists());
+
+        // A kind this runner does not know is refused, and nothing runs or changes.
+        let runs = std::fs::read_to_string(root.join("runs")).unwrap_or_default();
+        let mut logins = Logins::default();
+        logins.begin(&runner, &json!({"id": "lnew", "runtime": "codex", "kind": "rename_account"}));
+        let unknown = logins.sessions["lnew"].clone();
+        assert_eq!(state(&unknown), ("failed".into(), "Update this computer's runner to rename account".into()));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(std::fs::read_to_string(root.join("runs")).unwrap_or_default(), runs, "a CLI ran for an unknown kind");
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
 
         // A switch cancelled partway leaves the old login exactly as it was.
         std::fs::write(&auth, "old\n").unwrap();
@@ -905,13 +1118,6 @@ exit 2
         assert_eq!(state(&cancelled).0, "cancelled");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
         assert_eq!(sides(), 0);
-    }
-
-    #[test]
-    fn a_kind_this_runner_does_not_know_is_never_run_as_a_sign_in() {
-        assert_eq!(session("sign_in").kind, "sign_in");
-        assert_eq!(Session::new(&json!({"id": "x", "runtime": "codex"})).kind, "sign_in");
-        assert_eq!(session("use_shared_key").kind, "use_shared_key");
     }
 
     #[test]

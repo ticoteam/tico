@@ -10,7 +10,9 @@ All notable changes to Tico are recorded here. The format follows
 ### Added
 - **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
   subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
-  Switch account signs the new account in on the side, so cancelling keeps the old one. A computer login someone signed
+  Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
+  the new one doesn't take; it isn't offered for Claude Code on a Mac, which keeps its login in the Keychain. After any
+  of these the page waits for the computer's next report before redrawing. A computer login someone signed
   out stays signed out: the model key given to every computer no longer signs it back in, until someone signs in or
   chooses **Use the shared key**. No restart. Needs a current runner on the computer.
 - Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says

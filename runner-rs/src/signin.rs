@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -22,6 +22,8 @@ pub const TEAM_KEYS_FILE: &str = "_team_model.env";
 pub const SIGNED_OUT_FILE: &str = "_signed_out.json";
 const TEAM_KEY_RETRY: Duration = Duration::from_secs(300);
 const KEY_LOGIN_RETRY: Duration = Duration::from_secs(600);
+/// How long a sign-out waits for a key login already running (its own limit is 30 seconds) to end.
+pub const KEY_LOGIN_DRAIN: Duration = Duration::from_secs(40);
 /// How long a refused key or sign-in is trusted before one turn tries again (service.py REJECT_RECHECK_S).
 pub const REJECT_RECHECK: Duration = Duration::from_secs(300);
 
@@ -64,11 +66,40 @@ pub struct SignIn {
     rejected: Mutex<HashMap<(String, String, String), Rejection>>,
     /// Set when a rejection is recorded or cleared: the loop sends a heartbeat at once.
     dirty: std::sync::atomic::AtomicBool,
+    /// Held for every read-modify-write of SIGNED_OUT_FILE and TEAM_KEYS_FILE, so two runtimes signed out (or in)
+    /// at once never write back each other's stale list or key. It also counts the key logins running per runtime:
+    /// one starts only while the runtime is not signed out, and a sign-out waits for those already running.
+    keys: Mutex<HashMap<String, usize>>,
+    key_login_ended: Condvar,
+}
+
+/// A key login running for `runtime`: counted until it ends, however it ends.
+struct KeyLoginRunning<'a> {
+    sign: &'a SignIn,
+    runtime: String,
+}
+
+impl Drop for KeyLoginRunning<'_> {
+    fn drop(&mut self) {
+        let mut running = self.sign.keys.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = running.get_mut(&self.runtime) {
+            *n = n.saturating_sub(1);
+        }
+        self.sign.key_login_ended.notify_all();
+    }
 }
 
 impl SignIn {
     pub fn new(projects_dir: &Path) -> SignIn {
-        SignIn { secrets: projects_dir.join("secrets"), asked: Mutex::new(HashMap::new()), key_tried: Mutex::new(HashMap::new()), rejected: Mutex::new(HashMap::new()), dirty: Default::default() }
+        SignIn {
+            secrets: projects_dir.join("secrets"),
+            asked: Mutex::new(HashMap::new()),
+            key_tried: Mutex::new(HashMap::new()),
+            rejected: Mutex::new(HashMap::new()),
+            dirty: Default::default(),
+            keys: Mutex::new(HashMap::new()),
+            key_login_ended: Condvar::new(),
+        }
     }
 
     /// Changes when a key or sign-in might have (service.py credential_fingerprint); never holds a secret.
@@ -166,6 +197,7 @@ impl SignIn {
     /// company's key this computer holds for it is deleted. Written before the CLI logs out, so no readiness pass
     /// in between signs it straight back in.
     pub fn mark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
+        let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
         let mut list = self.signed_out_list();
         if !list.iter().any(|r| r == runtime) {
             list.push(runtime.into());
@@ -184,15 +216,29 @@ impl SignIn {
 
     /// A person signed `runtime` in again, or chose the shared key: keys sign it in as before, at once.
     pub fn unmark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
-        let mut list = self.signed_out_list();
-        if list.iter().any(|r| r == runtime) {
-            list.retain(|r| r != runtime);
-            self.write_signed_out(&list)?;
+        {
+            let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+            let mut list = self.signed_out_list();
+            if list.iter().any(|r| r == runtime) {
+                list.retain(|r| r != runtime);
+                self.write_signed_out(&list)?;
+            }
         }
         self.asked.lock().unwrap().remove(runtime);
         self.key_tried.lock().unwrap().retain(|(home, _), _| !home.starts_with(&format!("{runtime}:")));
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Wait until no key login for `runtime` is running, at most `limit`. After `mark_signed_out` none starts, so
+    /// once this is true no key login can write a login back after the CLI's logout. False when one is still running.
+    pub fn wait_for_key_logins(&self, runtime: &str, limit: Duration) -> bool {
+        let running = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        let (running, _) = self
+            .key_login_ended
+            .wait_timeout_while(running, limit, |r| r.get(runtime).is_some_and(|n| *n > 0))
+            .unwrap_or_else(|e| e.into_inner());
+        !running.get(runtime).is_some_and(|n| *n > 0)
     }
 
     fn hand(&self) -> Env {
@@ -262,6 +308,13 @@ impl SignIn {
                 given.insert(k, v);
             }
         }
+        // The fetch took a while: decide on the files as they are now, under the lock. A person may have signed this
+        // runtime out meanwhile, or another runtime's key may have changed.
+        let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        if self.signed_out(runtime) {
+            return false;
+        }
+        team = self.team();
         if given.is_empty() || given.iter().all(|(k, v)| team.get(k) == Some(v)) {
             return false;
         }
@@ -311,6 +364,16 @@ impl SignIn {
             }
             tried.insert(attempt, Instant::now());
         }
+        // Counted from here, and only while not signed out: a sign-out marked before this never sees it start, and
+        // one marked after it waits for it to end before logging out.
+        let _running = {
+            let mut running = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+            if self.signed_out(runtime) {
+                return false;
+            }
+            *running.entry(runtime.to_string()).or_default() += 1;
+            KeyLoginRunning { sign: self, runtime: runtime.to_string() }
+        };
         use tokio::io::AsyncWriteExt;
         let child = crate::isolation::command(executable)
             .args(&args)
@@ -425,6 +488,106 @@ mod tests {
         assert_eq!(asked.load(Ordering::SeqCst), 1);
         assert!(restarted.key_login("codex", &exe).await);
         assert_eq!(std::fs::read_to_string(&runs).unwrap().trim(), "login --with-api-key");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_logins_signed_out_or_in_at_once_each_keep_their_own_change() {
+        // The runner signs out Codex and Claude Code on threads of their own; neither may write back the other's
+        // stale list or company key.
+        for _ in 0..100 {
+            let dir = projects();
+            let secrets = dir.join("secrets");
+            let both = "OPENAI_API_KEY=sk-team-a\nCLAUDE_CODE_OAUTH_TOKEN=team-b\nOTHER=kept\n";
+            std::fs::write(secrets.join(TEAM_KEYS_FILE), both).unwrap();
+            let sign = Arc::new(SignIn::new(&dir));
+            let race = |a: &'static str, b: &'static str, unmark_a: bool| {
+                let barrier = Arc::new(std::sync::Barrier::new(2));
+                let threads: Vec<_> = [(a, unmark_a), (b, false)].into_iter().map(|(runtime, unmark)| {
+                    let (sign, barrier) = (sign.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        if unmark { sign.unmark_signed_out(runtime) } else { sign.mark_signed_out(runtime) }.unwrap();
+                    })
+                }).collect();
+                threads.into_iter().for_each(|t| t.join().unwrap());
+            };
+            race("codex", "claude", false);
+            assert!(sign.signed_out("codex") && sign.signed_out("claude"));
+            let team = read_env(&secrets.join(TEAM_KEYS_FILE));
+            assert!(!team.contains_key("OPENAI_API_KEY") && !team.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{team:?}");
+            assert_eq!(team.get("OTHER").map(String::as_str), Some("kept"));
+            // One signed in again while the other is signed out: each keeps its own.
+            sign.unmark_signed_out("claude").unwrap();
+            race("codex", "claude", true);
+            assert!(!sign.signed_out("codex") && sign.signed_out("claude"));
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_login_already_running_cannot_sign_a_signed_out_login_back_in() {
+        let dir = projects();
+        std::fs::write(dir.join("secrets").join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        // A key login that has started and writes its login only once it is let go.
+        let (exe, auth) = (dir.join("codex"), dir.join("auth.json"));
+        let script = format!("#!/bin/sh\ncat > /dev/null\n: > '{d}/started'\nwhile [ ! -f '{d}/release' ]; do sleep 0.05; done\necho key > '{a}'\n",
+            d = dir.display(), a = auth.display());
+        std::fs::write(&exe, script).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let sign = Arc::new(SignIn::new(&dir));
+        let (k, exe2) = (sign.clone(), exe.clone());
+        let login = tokio::spawn(async move { k.key_login("codex", &exe2).await });
+        let until = Instant::now() + Duration::from_secs(10);
+        while !dir.join("started").exists() && Instant::now() < until {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The sign-out, as run_sign_out does it: mark, wait for key logins already running, then the CLI's logout.
+        let (s2, auth2) = (sign.clone(), auth.clone());
+        let out = std::thread::spawn(move || {
+            s2.mark_signed_out("codex").unwrap();
+            let drained = s2.wait_for_key_logins("codex", Duration::from_secs(10));
+            let _ = std::fs::remove_file(&auth2);
+            drained
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::fs::write(dir.join("release"), "").unwrap();
+        assert!(login.await.unwrap(), "the key login finished");
+        assert!(tokio::task::spawn_blocking(move || out.join().unwrap()).await.unwrap(), "the sign-out waited for it");
+        assert!(!auth.exists(), "the key login wrote the login back after the logout");
+        assert!(sign.headless_secret("codex").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_company_key_fetched_while_the_login_was_signed_out_is_not_saved() {
+        let dir = projects();
+        let team = dir.join("secrets").join(TEAM_KEYS_FILE);
+        // A server that answers only once it is let go, so the sign-out lands while the key is on its way.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (asked_tx, asked_rx) = tokio::sync::oneshot::channel::<()>();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let _ = asked_tx.send(());
+            let _ = go_rx.await;
+            let body = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789"}]}"#;
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(reply.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        });
+        let client = Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap();
+        let sign = Arc::new(SignIn::new(&dir));
+        let k = sign.clone();
+        let fetch = tokio::spawn(async move { k.team_model_keys(&client, "codex").await });
+        asked_rx.await.unwrap();
+        sign.mark_signed_out("codex").unwrap();
+        go_tx.send(()).unwrap();
+        assert!(!fetch.await.unwrap());
+        assert!(!read_env(&team).contains_key("OPENAI_API_KEY"), "the key was saved after the sign-out");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -1,6 +1,7 @@
 """Sign out and Switch account from the app: the sign-in relay's other kinds, and a login signed out on purpose stays
 signed out, even when the company gives every computer a model key."""
 
+from backend.store import H
 from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
 from backend.tests.test_computer_signin import computer_asks, grant, new_computer, store, vault
 from backend.tests.test_getting_started import add_bot
@@ -153,3 +154,66 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     as_computer(api, token, f"runner-logins/{used.json()['id']}/report", {"state": "done"})
     again = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
     assert again.status_code == 409
+
+
+def test_a_switch_past_its_commit_point_cannot_be_cancelled_and_one_cancelled_first_is_never_put_in_place(api):
+    r = online(api)
+    rid = r["runner_id"]
+    # Only a switch has a commit point.
+    sign_in = post(api, f"runners/{rid}/logins", {"runtime": "claude"})
+    post(api, f"runner-logins/{sign_in['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
+    out = post(api, f"runners/{rid}/logouts", {"runtime": "claude", "profile": "work"})
+    post(api, f"runner-logins/{out['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
+    # The runner asks to put the new login in place; the server agrees, and from then on refuses a cancel and gives it
+    # time of its own to finish in.
+    switch = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
+    report(api, r, switch["id"], state="waiting", url="https://auth.openai.com/codex/device", code="ABCD-1234")
+    with api.app.state.store.transaction() as c:  # nearly out of time
+        c.execute("UPDATE model_logins SET expires_at=? WHERE id=?", (H.shift(H.now(), seconds=5), switch["id"]))
+    assert report(api, r, switch["id"], state="finishing") == {"state": "finishing"}
+    row = get(api, f"runners/{rid}/logins/{switch['id']}")
+    assert row["state"] == "finishing" and row["url"] == "" and row["code"] == ""
+    with api.app.state.store.read() as c:
+        expires = c.execute("SELECT expires_at FROM model_logins WHERE id=?", (switch["id"],)).fetchone()[0]
+    assert expires >= H.shift(H.now(), seconds=100), "finishing gets about two minutes of its own"
+    refused = post(api, f"runners/{rid}/logins/{switch['id']}/cancel", {}, expected=409)
+    assert "can't be cancelled" in refused["error"]["detail"]
+    assert switch["id"] in [p["id"] for p in pending(api, r)], "still the computer's to finish"
+    assert report(api, r, switch["id"], state="signed_in") == {"state": "signed_in"}
+    # Cancelled before the commit point: the runner's finishing gets cancelled back, so it keeps the old login.
+    late = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
+    post(api, f"runners/{rid}/logins/{late['id']}/cancel", {})
+    assert report(api, r, late["id"], state="finishing") == {"state": "cancelled"}
+    assert get(api, f"runners/{rid}/logins/{late['id']}")["state"] == "cancelled"
+
+
+def test_a_mac_is_never_asked_to_switch_claude_code_which_keeps_its_login_in_the_keychain(api):
+    r = online(api)
+    rid = r["runner_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
+    refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "switch": True}, expected=422)
+    assert "keychain" in refused["error"]["detail"] and "Sign out, then sign in" in refused["error"]["detail"]
+    assert pending(api, r) == []
+    # Codex keeps its login in a file there too, and Claude Code still signs out and in.
+    assert post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})["kind"] == "switch"
+    assert post(api, f"runners/{rid}/logouts", {"runtime": "claude"})["kind"] == "sign_out"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET platform='linux' WHERE id=?", (rid,))
+    post(api, f"runners/{rid}/logins", {"runtime": "claude", "switch": True}, expected=409)  # the sign-out is still running
+
+
+def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_after_a_change(api):
+    r = online(api)
+    rid = r["runner_id"]
+
+    def machine():
+        return next(m for m in get(api, "operations")["machines"] if m["id"] == rid)
+    first = machine()["readiness_at"]
+    assert first
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET readiness_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+    pending(api, r)  # other contact moves last_seen, never readiness_at
+    assert machine()["readiness_at"] == "2000-01-01T00:00:00+00:00"
+    beat(api, r["token"])
+    assert machine()["readiness_at"] > "2000-01-01T00:00:00+00:00"

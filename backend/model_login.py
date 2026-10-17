@@ -32,9 +32,13 @@ SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 KINDS = ("sign_in", "switch", "sign_out", "use_shared_key")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 LIFETIME = 15 * 60
-ACTIVE = ("requested", "starting", "waiting")
+FINISH_SECONDS = 2 * 60
+# `finishing`: a switch signed in on the side and the runner is putting it in place. It can no longer be cancelled;
+# the runner waits for the server to take that report before it moves anything, so a cancel that came first wins.
+ACTIVE = ("requested", "starting", "waiting", "finishing")
+ACTIVE_SQL = "state IN ('requested','starting','waiting','finishing')"
 TERMINAL = ("signed_in", "signed_out", "done", "failed", "cancelled", "expired")
-ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting", "signed_in", "failed"))}
+ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting", "finishing", "signed_in", "failed"))}
 ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 # The verdicts each kind may end with; any other is refused as the runner's mistake.
 VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
@@ -90,7 +94,7 @@ def sweep(c):
     """Expire what ran out of time; forget what nobody needs any more."""
     now = H.now()
     c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated=? "
-              "WHERE state IN ('requested','starting','waiting') AND expires_at<?", (now, now))
+              f"WHERE {ACTIVE_SQL} AND expires_at<?", (now, now))
     c.execute("DELETE FROM model_logins WHERE created<?", (H.shift(now, days=-1),))
 
 
@@ -133,8 +137,8 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
     sweep(c)
-    running = c.execute("SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? "
-                        "AND state IN ('requested','starting','waiting')", (runner["id"], runtime, profile)).fetchone()
+    running = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? AND {ACTIVE_SQL}",
+                        (runner["id"], runtime, profile)).fetchone()
     if running and running["kind"] == kind:
         return running, False
     if running:
@@ -164,6 +168,9 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False):
     if switch and runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Switching accounts from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
+    if switch and runner["platform"] in manifests.caps(runtime).get("switch_unavailable_on", []):
+        raise Problem("kind", f"Switching accounts isn't available for {runtime} on {runner['label']}: it keeps the "
+                      "login in the system keychain. Sign out, then sign in", 422)
     row, new = _queue(c, who, runner, runtime, profile, "switch" if switch else "sign_in",
                       "switch accounts" if switch else "start a sign-in")
     if new:
@@ -273,6 +280,8 @@ def cancel(c, who, rid, lid, auth=None):
     _operator(c, who, rid, auth)
     sweep(c)
     row = _login(c, rid, lid)
+    if row["state"] == "finishing":
+        raise Problem("state", "The new account is already being put in place, so it can't be cancelled now", 409)
     if row["state"] in ACTIVE:
         c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated=? "
                   "WHERE id=?", (H.now(), lid))
@@ -283,8 +292,8 @@ def cancel(c, who, rid, lid, auth=None):
 def pending(c, runner_id):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
     sweep(c)
-    rows = c.execute("SELECT * FROM model_logins WHERE runner_id=? AND state IN ('requested','starting','waiting') "
-                     "ORDER BY created", (runner_id,)).fetchall()
+    rows = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created",
+                     (runner_id,)).fetchall()
     return [{"id": r["id"], "runtime": r["runtime"], "profile": r["profile"], "expires_at": r["expires_at"],
              **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
              **({"code": r["pending_code"]} if r["pending_code"] else {})} for r in rows]
@@ -300,10 +309,18 @@ def report(c, runner_id, lid, body):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
+    if body.state == "finishing" and row["kind"] != "switch":
+        raise Problem("state", "Only a switch puts a new login in place", 422)
+    if body.state == "finishing" and row["state"] != "finishing":
+        # From here it cannot be cancelled, and it has a little time of its own to finish in.
+        c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
+                  (H.shift(H.now(), seconds=FINISH_SECONDS), lid))
     state = body.state if ORDER[body.state] >= ORDER[row["state"]] else row["state"]
     terminal = state in ("signed_in", "signed_out", "done", "failed")
-    url = "" if terminal else clean_url(body.url) or row["url"]
-    code = "" if terminal else clean_user_code(body.code) or row["user_code"]
+    # Finishing, the person has nothing left to open or enter.
+    done_with_page = terminal or state == "finishing"
+    url = "" if done_with_page else clean_url(body.url) or row["url"]
+    code = "" if done_with_page else clean_user_code(body.code) or row["user_code"]
     lines = clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
     pending_code = None if terminal or body.code_taken else row["pending_code"]
     c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines_json=?, message=?, pending_code=?, "

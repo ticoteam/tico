@@ -64,7 +64,7 @@ def request_refresh(c, auth, who, body):
     if state is None:
         raise Problem('not_found', 'Subscription runtime not found on this computer', 404)
     if c.execute("SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime=? "
-                 "AND state IN ('requested','starting','waiting') AND expires_at>?",
+                 "AND state IN ('requested','starting','waiting','finishing') AND expires_at>?",
                  (body.runner_id, body.profile, body.runtime, H.now())).fetchone():
         raise Problem('busy', 'Finish signing in before refreshing weekly usage', 409)
     storage_key = key(body.runner_id, body.profile, body.runtime)

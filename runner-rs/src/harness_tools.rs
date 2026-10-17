@@ -62,6 +62,9 @@ pub struct Login {
     pub files: Vec<String>,
     /// Files copied from the home into the switch's own home first, so the CLI's settings in them survive it.
     pub seed: Vec<String>,
+    /// Platforms (runner::platform, e.g. "darwin") where the CLI keeps this login in the system keychain rather than in
+    /// `files`: a switch cannot sign in on the side there, so it is not offered.
+    pub keychain: Vec<String>,
 }
 
 /// How readiness tells whether a CLI is signed in (`[capabilities.sign_in_status]`, docs/harnesses.md).
@@ -363,10 +366,10 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         }
         let flag = |k: &str| raw.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
         let logout = strings(raw.get("logout"), "login.logout", &at, None, 0, &[])?;
-        // Paths inside the runtime's home: never absolute, never climbing out of it.
+        // Paths inside the runtime's home: never absolute (a leading / leaves an empty part), never climbing out of it.
         let inside = |k: &str| -> Result<Vec<String>, String> {
             let paths = strings(raw.get(k), &format!("login.{k}"), &at, None, 0, &[])?;
-            match paths.iter().find(|p| p.is_empty() || p.starts_with('/') || p.split('/').any(|part| part == ".." || part.is_empty())) {
+            match paths.iter().find(|p| p.split('/').any(|part| part == ".." || part.is_empty())) {
                 Some(bad) => Err(format!("{at}: login.{k} names a path inside the runtime's home, not {bad:?}")),
                 None => Ok(paths),
             }
@@ -378,7 +381,8 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         if let Some(extra) = seed.iter().find(|p| !files.contains(p)) {
             return Err(format!("{at}: login.seed {extra:?} is not one of login.files"));
         }
-        Some(Login { command, terminal: flag("terminal"), logout, files, seed })
+        let keychain = strings(raw.get("keychain"), "login.keychain", &at, None, 0, &[])?;
+        Some(Login { command, terminal: flag("terminal"), logout, files, seed, keychain })
     } else if methods.iter().any(|m| m == "device-code") {
         return Err(format!("{at}: device-code sign-in needs a [login] command for the browser relay"));
     } else {
@@ -1583,6 +1587,36 @@ mod tests {
         assert!(load_from(&dup).unwrap_err().contains("already claimed"));
         let bad: toml::Table = toml::from_str("id = \"x\"\nname = \"X\"\nhost = \"codex\"\nexecutable = \"x\"\nproviders = [\"x\"]\n[install]\nmethod = \"apt\"").unwrap();
         assert!(parse(&bad, "x.toml").unwrap_err().contains("install.method"));
+    }
+
+    #[test]
+    fn a_login_moves_only_files_inside_its_home_and_seeds_only_those() {
+        // Sign out and Switch account move and remove these as the CLI's user, so a manifest never reaches outside the
+        // runtime's home.
+        let codex = BUILT_IN[1].1;
+        let with = |files: &str| {
+            let text = codex.replace("files = [\"auth.json\"]", files);
+            assert_ne!(text, codex);
+            parse(&toml::from_str(&text).unwrap(), "codex.toml")
+        };
+        for bad in ["/etc/passwd", "../auth.json", "sub/../../auth.json", "sub//auth.json", "sub/"] {
+            let err = with(&format!("files = [{bad:?}]")).unwrap_err();
+            assert!(err.contains("login.files names a path inside the runtime's home"), "{bad:?}: {err}");
+        }
+        assert!(with("files = [\"\"]").unwrap_err().contains("login.files must be a list of string"));
+        for bad in ["/etc/passwd", "../auth.json"] {
+            let err = with(&format!("files = [\"auth.json\"]\nseed = [{bad:?}]")).unwrap_err();
+            assert!(err.contains("login.seed names a path inside the runtime's home"), "{bad:?}: {err}");
+        }
+        let err = with("files = [\"auth.json\"]\nseed = [\"config.toml\"]").unwrap_err();
+        assert!(err.contains("login.seed \"config.toml\" is not one of login.files"), "{err}");
+        let err = with("files = []").unwrap_err();
+        assert!(err.contains("login.logout needs login.files"), "{err}");
+        let login = with("files = [\"auth.json\", \"sub/state.json\"]\nseed = [\"sub/state.json\"]\nkeychain = [\"darwin\"]").unwrap().login.unwrap();
+        assert_eq!((login.files, login.seed, login.keychain), (vec!["auth.json".to_string(), "sub/state.json".to_string()],
+            vec!["sub/state.json".to_string()], vec!["darwin".to_string()]));
+        assert_eq!(built_in()["claude-code"].login.as_ref().unwrap().keychain, vec!["darwin"]);
+        assert!(built_in()["codex"].login.as_ref().unwrap().keychain.is_empty());
     }
 
     #[test]

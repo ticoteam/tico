@@ -1840,7 +1840,7 @@ class LoginCode(Contract):
 
 
 class LoginReport(Contract):
-    state: Literal["starting", "waiting", "signed_in", "signed_out", "done", "failed"]
+    state: Literal["starting", "waiting", "finishing", "signed_in", "signed_out", "done", "failed"]
     url: str = Field(default="", max_length=2100)
     code: str = Field(default="", max_length=40)
     lines: list[str] = Field(default_factory=list, max_length=40)

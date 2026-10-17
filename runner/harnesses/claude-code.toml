@@ -31,6 +31,9 @@ paste_code = true
 logout = ["auth", "logout"]
 files = [".claude/.credentials.json", ".claude.json"]
 seed = [".claude.json"]
+# On a Mac the CLI keeps this login in the Keychain, not in `files`, so it cannot be signed in on the side: Switch
+# account is not offered there (sign out, then sign in).
+keychain = ["darwin"]
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]

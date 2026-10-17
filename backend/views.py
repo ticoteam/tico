@@ -1518,7 +1518,7 @@ def install_views(app, store, auth, mutate, task_view):
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                 "accepts_member_bots,screen,performance,capabilities_json FROM runners ORDER BY created"):
+                                 "accepts_member_bots,screen,performance,capabilities_json,readiness_at FROM runners ORDER BY created"):
                 if not auth.bot_admin(who) and who.actor != "human:" + row["operator"]:
                     continue
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))]

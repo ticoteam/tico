@@ -53,14 +53,21 @@ The same people who may sign a login in see them: the Computer's operator, owner
 and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
 
 - **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime and subscription
-  are that login. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
-  signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. Bots
-  and assignments stay: those bots wait, as for any signed-out login, until someone signs in again.
+  are that login. The button stays off until they are named; if they can't be looked up, the dialog says so and offers
+  **Try again**. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
+  signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. A
+  shared-key sign-in already running there is waited for (up to 40 seconds) so it cannot sign the login back in; if it
+  is still running, the sign-out fails with "try again in a minute". Bots and assignments stay: those bots wait, as for
+  any signed-out login, until someone signs in again. A signed-out named subscription has **Sign in** on its row.
 - **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
-  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login), and only once that
-  finished moves the new login files in place. Cancelling, failing or running out of time leaves the old account
-  working; the side folder is always removed. Runs that start afterwards use the new account. The account and usage
-  readings of the old account are cleared.
+  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
+  account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
+  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
+  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
+  not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
+  are cleared.
 - A **Computer's own login that someone signed out stays signed out**. The company's model key given to **Every
   computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
   again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
@@ -72,8 +79,13 @@ bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` s
 /api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
 sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
-may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files; Switch account
-there has not been tested and may not keep the old account when cancelled.
+may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
+no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
+then sign in. Codex switches on a Mac as anywhere.
+
+After a sign-in, switch, sign-out or **Use the shared key**, the page looks again until the Computer has reported since
+the change finished (its heartbeat; `readiness_at` on the computer in `GET /api/v2/operations`) and that report shows
+the change, redrawing **Settings → Computers** and **AI providers** together, for about a minute.
 
 ### Refreshing weekly allowance
 

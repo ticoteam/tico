@@ -142,9 +142,13 @@ function subsAccountHTML(c, p) {
   const machine = (SETTINGS_DATA?.machines || []).find(m => m.id === c.runner_id);
   const online = !machine || (!machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000);
   return subsRuntimes().filter(([id]) => p.runtimes?.[id]?.signed_in === true).map(([id, label]) => {
-    const buttons = window.TicoModelLogin?.actionsHTML({runnerId: c.runner_id, runtime: id, machine: c.label, profile: p.name, signedIn: true, online}) || '';
+    const buttons = window.TicoModelLogin?.actionsHTML({runnerId: c.runner_id, runtime: id, machine: c.label, profile: p.name, signedIn: true, online,
+      platform: machine?.platform || ''}) || '';
+    // Where Switch account isn't offered (the CLI keeps its login in the keychain there), neither is the promise.
+    const note = buttons.includes('data-model-switch')
+      ? '<span class="muted">Switching signs in on the side: the account signed in now keeps working until the new one is in.</span>' : '';
     return buttons ? `<div class="subs-account" data-subs-account="${esc(id)}"><strong>${esc(label)} account</strong>${buttons}
-      <span class="muted">Switching signs in on the side: the account signed in now keeps working until the new one is in.</span></div>` : '';
+      ${note}</div>` : '';
   }).join('');
 }
 function subsControlsHTML(c, p) {

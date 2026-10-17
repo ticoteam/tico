@@ -289,7 +289,8 @@ function machineSignInHTML(machine, online, name, auth, value) {
 const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
 // Sign out / Switch account (or Use the shared key) for one login, from the shared sign-in module (ui/model-login.js).
 const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
-  runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online}) || '';
+  runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
+  platform: machine.platform || ''}) || '';
 function machineProfileSignIn(state, runtime) {
   if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
   if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
@@ -333,10 +334,14 @@ function machineToolsHtml(machine, online) {
     const own = installed ? machineUsageHTML(name, {account: value.account, weekly: value.weekly, five_hour: value.five_hour}, label) : '<span class="muted">—</span>';
     const lines = installed ? profiles.filter(p => p.runtimes?.[name]).map(p => {
       const state = p.runtimes[name];
+      // A signed-out named subscription signs in again from here, like the computer's own login above.
+      const signIn = !manage ? '' : state.signed_in === true ? machineLoginActions(machine, online, name, p.name, true)
+        : state.signed_in === false && online && harnessCaps(name).browser_sign_in
+          ? ` <button class="ghost machine-signin" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(name)}" data-profile="${esc(p.name)}" data-machine="${esc(machine.label)}" aria-label="Sign in ${esc(p.display_name || p.name)} to ${esc(label)}">Sign in</button>` : '';
       return `<div class="machine-tool machine-tool-profile" role="row" data-machine-profile="${esc(p.name)}" data-machine-tool="${esc(name)}">
         <span role="cell" class="machine-tool-name" title="Named subscription ${esc(p.display_name || p.name)}">${esc(p.display_name || p.name)}</span>
         <span role="cell" class="machine-tool-version"></span><span role="cell" class="machine-tool-enabled"></span>
-        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${manage && state.signed_in === true ? machineLoginActions(machine, online, name, p.name, true) : ''}</span>
+        <span role="cell" class="machine-tool-signin">${machineProfileSignIn(state, name)}${signIn}</span>
         <span role="cell" class="machine-tool-usage">${state.signed_in === false ? '<span class="muted">—</span>' : machineUsageHTML(name, state, `${label} ${p.display_name || p.name}`, 'this subscription')}</span></div>`;
     }).join('') : '';
     return `<div class="machine-tool" role="row" data-machine-tool="${esc(name)}">

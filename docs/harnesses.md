@@ -251,6 +251,8 @@ A harness is a manifest plus a host adapter.
    logout = ["logout"]          # optional: the CLI's sign-out, for Sign out and Switch account in the app (needs files)
    files = ["auth.json"]        # the login's files, relative to its home; a switch moves these in from the side folder
    seed = []                    # of files, those copied into the side folder first (settings the CLI keeps with the login)
+   keychain = []                # platforms (as the runner names them, e.g. "darwin") where the CLI keeps the login in
+                                # the system keychain instead: no Switch account there (`switch_unavailable_on`)
 
    [capabilities]               # what Tico does differently for this CLI; see Capabilities below
    terminal_login = ["login"]
@@ -275,7 +277,9 @@ is a bug in its host, not a reason to compare names.
 Sign-in facts come from the tables that already hold them: `[login]` present means the browser relay (Settings >
 Computers), `paste_code` means it takes a pasted code, `logout` means Sign out and Switch account (`sign_out` in
 `harnesses[].capabilities`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
-`profile_home` variable's folder, or `HOME`), never absolute and never with `..`.
+`profile_home` variable's folder, or `HOME`), never absolute, never with `..` or an empty part; `seed` names only
+some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
+(`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).
 
 | Capability | Means | Absent |
 |---|---|---|
