@@ -62,6 +62,10 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
+  "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
+  set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
+  everywhere a model is named.
 - What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
@@ -84,6 +88,13 @@ All notable changes to Tico are recorded here. The format follows
   closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one
   card no longer makes the chat jump: the other cards stay exactly as they were, with any **Show more** or Details you
   opened still open, and focus stays where it was.
+- Roadmaps keep working after the bot that managed the Product roadmap or Dev tickets type is archived or replaced.
+  Tico found both types by their manager's name (`product-manager`, `engineering-lead`), so a type that moved to
+  another bot lost its Approved → Building → Shipped sync, its Roadmap tab and its ranked list. Each type now has a
+  role (`role` in `hub task types` and the API), given once on upgrade without changing any task; setting up the
+  default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
+  Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
+  Engineering did.
 - A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
   once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
   stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can

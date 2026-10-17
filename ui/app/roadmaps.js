@@ -1,7 +1,7 @@
 /* Roadmap publication, internal requesters, ranking and company settings. */
 'use strict';
 
-const roadmapTask = t => pipelineType(t)?.manager === 'product-manager';
+const roadmapTask = t => pipelineType(t)?.role === 'product-roadmap';
 const REQUEST_SOURCE = {manual: 'Added by hand', public_form: 'Public roadmap', inbox: 'Email', meeting: 'Meeting'};
 const ROADMAP_SORTS = [['requester_count', 'Requests'], ['external_requesters', 'External'], ['important', 'Important'], ['organization', 'Organization'], ['size', 'Size']];
 
@@ -129,7 +129,7 @@ function pageRoadmap() {
     <div class="roadmap-sort"><button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button><button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button></div>
     <div data-roadmap-table></div><div class="row roadmap-pager"><button class="ghost" type="button" data-roadmap-back disabled>Previous</button><button class="ghost" type="button" data-roadmap-next disabled>Next</button><span class="err" role="status" data-roadmap-error></span></div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   $('#task-filter-pop').onkeydown = tasksMenuKeys;
-  $('[data-roadmap-new]').onclick = () => { void taskTypesLoad().then(() => { const manager = S.emps.find(e => e.name === 'product-manager' || e.template === 'product-manager'); const product = TASK_TYPES.find(t => t.manager === 'product-manager'); openTaskCreate(manager?.name || '', {type: product?.id || 'product-roadmap'}); }); };
+  $('[data-roadmap-new]').onclick = () => { void taskTypesLoad().then(() => { const product = pipelineProductType(); const manager = S.emps.find(e => e.name === product?.manager || product?.manager && e.template === product.manager); openTaskCreate(manager?.name || '', {type: product?.id || 'product-roadmap'}); }); };
   $('[data-roadmap-sort]').onclick = ev => tasksMenu(state, ev.currentTarget, `<div class="tl-menu" role="menu" aria-label="Sort roadmap">${ROADMAP_SORTS.map(([key, label]) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${state.sort === key}" data-sort="${key}">${label}</button>`).join('')}</div>`, pop => pop.onclick = e => { const button = e.target.closest('[data-sort]'); if (button) { state.sort = button.dataset.sort; state.offset = 0; state.previous = []; tasksMenuClose(); void roadmapRankingLoad(state); } });
   $('[data-roadmap-direction]').onclick = () => { state.direction = state.direction === 'desc' ? 'asc' : 'desc'; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); };
   $('[data-roadmap-back]').onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
