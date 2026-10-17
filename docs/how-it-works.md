@@ -86,10 +86,14 @@ rather than a request ([Tasks](tasks.md)); title and Credential checks apply sep
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
 rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
-for an hour (a loop over new targets). Words that name another bot's folder or a `secrets/` path are written
+for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
+counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
-A person's message to a
-paused or quarantined bot is kept and runs when it is back; another bot still cannot write to it.
+A person's message, note or task comment to a paused or quarantined bot is kept and runs when it is back, and so
+is its manager bot's (the bot it reports to on the org chart); any other bot still cannot write to it. When a
+quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico leaves the bot a quiet note that its
+next run carries: the refusal that stopped it, and "Do not retry this action; leave a note for a person if you
+still need it."
 
 ## The three places
 

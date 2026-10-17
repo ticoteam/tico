@@ -1694,11 +1694,12 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                      f"Read its refusals and decide whether its playbook or its reach needs a change.", origin=actor)
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
+    stopped = {"rule": rule, "detail": said}       # what the bot is told when it is back (quarantine_lifted_note)
     if repeats >= QUARANTINE_AT:
-        quarantine(conn, slug, f"{repeats} repeated refusals today")
+        quarantine(conn, slug, f"{repeats} repeated refusals today", refusal=stopped)
     elif count >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
-        quarantine(conn, slug, f"{count} refusals today")
+        quarantine(conn, slug, f"{count} refusals today", refusal=stopped)
 
 
 def task_origin(conn, row):
@@ -1795,11 +1796,13 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     return lifted
 
 
-def quarantine(conn, slug, reason, context=None):
+def quarantine(conn, slug, reason, context=None, refusal=None):
     """Rule 8's stop: the bot writes nothing more until a human sets it active again. `context` is the
-    refusal that stopped it, for the person who reviews it (`quarantine_review`)."""
+    refusal that stopped it, for the person who reviews it (`quarantine_review`); `refusal` ({rule, detail})
+    is the last refused write of a refusal-count quarantine, for the bot when it is back."""
     conn.execute("UPDATE bots SET state='quarantined' WHERE slug=?", (slug,))
-    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {})})
+    event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {}),
+                                                         **({"refusal": refusal} if refusal else {})})
     # The status line people read says what the check matched, not the rule's own words.
     focus = (f"Paused for review: the safety check stopped a {context['what']} naming {context['found']}"
              if context and context.get("found") else reason)
@@ -1808,6 +1811,30 @@ def quarantine(conn, slug, reason, context=None):
     except Refused:
         pass
     return bot(conn, slug)
+
+
+QUARANTINE_LIFTED = "Do not retry this action; leave a note for a person if you still need it."
+
+
+def quarantine_lifted_note(conn, slug):
+    """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
+    run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
+    back from a cooldown retried the same refused write."""
+    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
+                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    detail = (_json(row["detail_json"], {}) or {}) if row else {}
+    review, refused = quarantine_review(conn, slug) or {}, detail.get("refusal") or {}
+    if review.get("what"):
+        what = f"the safety check stopped a {review['what']}" + (f" naming {review['found']}" if review.get("found") else "")
+    elif refused.get("detail"):
+        what = f"{refused['detail']} ({refused.get('rule')})"
+    else:
+        what = detail.get("reason") or "a refused write"
+    body = f"You were quarantined and are back. The refusal that stopped you: {what}. {QUARANTINE_LIFTED}"
+    ident = new_id()
+    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                 (ident, KEEPER, bot_actor(slug), body[:NOTE_MAX], now()))
+    event(conn, KEEPER, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
 
 
 # ----------------------------------------------------------------------------- identity
@@ -1875,6 +1902,18 @@ def resolve_actor(conn, value):
 
 
 HELD_STATES = ("quarantined", "paused")
+
+
+def held_for(conn, actor, target):
+    """Whether what `actor` writes to a paused or quarantined bot is kept for when it is back, rather than refused
+    (rule 2): a person's, or the bot's own manager bot's (bot_config.reports_to), so it can say why it stopped."""
+    if is_human(actor):
+        return True
+    target = resolve_actor(conn, target)
+    if not (is_bot(actor) and is_bot(target)) or not _has_table(conn, "bot_config"):
+        return False
+    boss = str((_one(conn, "SELECT reports_to FROM bot_config WHERE bot=?", (actor_id(target),)) or {}).get("reports_to") or "")
+    return bool(boss) and not boss.startswith("human:") and actor_id(boss) == actor_id(actor)
 
 
 def _reach(conn, actor, target, allow_planned=False, allow_held=False):
@@ -2052,9 +2091,11 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     on_task = (refs or {}).get("task")
     path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
-    # A person's message to a paused or quarantined bot is kept: runners claim only active bots' work
-    # (execution.claim), so it runs when the bot is back. A bot still cannot write to one (rule 2).
-    target = _reach(conn, actor, to_actor, allow_held=is_human(actor))
+    # A person's message to a paused or quarantined bot is kept, and so is its manager bot's (held_for): runners
+    # claim only active bots' work (execution.claim), so it runs when the bot is back. Any other bot still cannot
+    # write to one (rule 2).
+    held = held_for(conn, actor, to_actor)
+    target = _reach(conn, actor, to_actor, allow_held=held)
     refs = dict(refs or {})
     warnings = []
 
@@ -2067,7 +2108,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
     else:
         conv = _pair_conversation(conn, actor, target,
-                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=is_human(actor))
+                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=held)
 
     # rule 3: the loop caps
     if is_bot(actor) and is_bot(target):
@@ -5448,9 +5489,10 @@ NOTE_WAITING_SQL = (
 
 
 def note_create(conn, actor, to, body):
-    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one."""
+    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one. A paused or
+    quarantined bot's note waits for its next run when a person or its manager bot leaves it (held_for)."""
     _writer(conn, actor)
-    target = _reach(conn, actor, to)
+    target = _reach(conn, actor, to, allow_held=held_for(conn, actor, to))
     if not is_bot(target):
         refuse(conn, actor, "note", "a note waits for a bot's next run; a person has none, so tell them another way")
     if target == actor:
@@ -5743,6 +5785,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
             refuse(conn, actor, "quarantined", f"only a person takes {slug} out of this quarantine")
     if quarantined and state == "active":
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
+        quarantine_lifted_note(conn, slug)
     if quarantined and state not in ("active", "quarantined"):
         # Lease expiry and completion are routine keeper updates. Neither can clear or mask
         # the human review required by quarantine.
