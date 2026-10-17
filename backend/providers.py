@@ -110,6 +110,9 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "claude-fable-5-1", "label": "fable 5.1", "runtime": "claude", "provider": "anthropic",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "high"},
+    {"id": "claude-haiku-5-5", "label": "haiku 5.5", "runtime": "claude", "provider": "anthropic",
+     "efforts": ("low", "medium", "high", "xhigh", "max"),
+     "default_effort": "medium"},
     # Cursor picks the model itself on `auto`; any other model it offers is named in the bot's config.
     {"id": "cursor-auto", "label": "cursor auto", "runtime": "cursor", "provider": "cursor",
      "recommended": True, "efforts": ("as-configured",), "default_effort": "as-configured"},
@@ -168,6 +171,8 @@ MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 # Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
 #   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
 #              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens. A prompt over that
+#              pays 5x on every rate ($0.50 / $0.05 / $2.50); a run's totals cannot say which requests crossed it.
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
@@ -181,6 +186,7 @@ PRICES = {
     "claude-opus-4-8": (5.0, 0.50, 25.0),
     "claude-sonnet-5-5": (2.0, 0.10, 10.0),
     "claude-sonnet-5": (2.0, 0.20, 10.0),
+    "claude-haiku-5-5": (0.10, 0.01, 0.50),
     "claude-haiku-4-5": (1.0, 0.10, 5.0),
     "gpt-6-astra": (10.0, 1.0, 50.0),
     "gpt-6-sol": (2.0, 0.20, 10.0),

@@ -47,7 +47,8 @@ const {html, uiFile} = require('./support/page.cjs');
         {bot: 'writer', profile: 'beta', display_name: 'beta', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: false, problem: ''}]};
     const empty = {id: 'empty', label: 'Spare server', operator: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen: at(-2000),
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
-    const fresh = {id: 'fresh', label: 'Fresh Mac', operator: 'ana', bots: [], version: '', last_seen: at(-2000), readiness: null};
+    // Before its first report the server sends readiness_document(None) (backend/store.py).
+    const fresh = {id: 'fresh', label: 'Fresh Mac', operator: 'ana', bots: [], version: '', last_seen: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
     const revoked = {id: 'old', label: 'Old laptop', operator: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen: at(-86400000),
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};

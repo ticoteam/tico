@@ -115,7 +115,7 @@ correctly. `restart` and `update` wait for runs in flight before bouncing the bo
 ## Subscription profiles
 
 A profile is a named directory holding one provider login. Bots that name the same profile share a
-subscription; a bot with its own profile has its own. Credentials stay on the Computer. Tico stores profile names, sign-in state and group or bot assignments.
+subscription; a bot with its own profile has its own. Credentials stay on the Computer. Tico stores profile names, sign-in state and which bots chose one.
 See [Subscriptions](subscriptions.md) for assignments and browser sign-in.
 
 ```bash

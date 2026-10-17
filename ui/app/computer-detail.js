@@ -9,8 +9,10 @@
 const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
 const machineToolName = (machine, runtime) => Object.values(machine.readiness?.harnesses || {}).find(tool => tool.runtime === runtime)?.name
   || harnessRow(runtime)?.name || harnessWords(runtime);
+// Whether the computer has reported its tools yet: before its first report the server sends empty `runtimes`.
+const machineReported = machine => Object.keys(machine.readiness?.runtimes || {}).length > 0 || Object.keys(machine.readiness?.harnesses || {}).length > 0;
 // A computer that has not reported what it has yet, or a sign-in it has not reported back (ui/model-login.js).
-const machineWaiting = machine => !machine.revoked_at && (!machine.readiness || (window.machineLoginPending?.get(machine.id) || 0) > Date.now());
+const machineWaiting = machine => !machine.revoked_at && (!machineReported(machine) || (window.machineLoginPending?.get(machine.id) || 0) > Date.now());
 const machineReset = reset => new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'});
 const machineEmail = account => String(account?.email || '').trim().toLowerCase();
 const machineNewer = (a, b) => (Date.parse(a?.reported_at) || 0) > (Date.parse(b?.reported_at) || 0);
@@ -89,7 +91,7 @@ function machineChipHTML(machine, conn) {
 function machineChipsHTML(machine) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
   const waiting = machineWaiting(machine) ? `<span class="machine-chip waiting" data-machine-waiting>Waiting for ${esc(machine.label)}</span>` : '';
-  if (!machine.readiness) return waiting;
+  if (!machineReported(machine)) return waiting;
   const conns = machineConnections(machine);
   const chips = conns.map(conn => machineChipHTML(machine, conn)).join('')
     || `<button type="button" class="machine-chip attention" data-computer-open="${esc(machine.id)}" data-no-connection><span class="machine-chip-dot" aria-hidden="true"></span><span>No AI connection</span></button>`;
@@ -231,11 +233,11 @@ function machineSettingsHTML(machine) {
 }
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
-  const conns = machine.readiness ? machineConnections(machine) : [];
+  const conns = machineReported(machine) ? machineConnections(machine) : [];
   const status = machine.revoked_at ? 'revoked' : online ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`;
   const notes = [!machine.revoked_at && !online ? '<p class="computer-detail-note" role="status" data-computer-offline>Computer is offline. Sign-in, usage refresh, screen and updates wait until it is back.</p>' : '',
     machineWaiting(machine) ? `<p class="computer-detail-note" role="status" data-machine-waiting>Waiting for ${esc(machine.label)} to report.</p>` : ''].join('');
-  const empty = machine.readiness && !conns.length && !machine.revoked_at
+  const empty = machineReported(machine) && !conns.length && !machine.revoked_at
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key, title, body) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
   return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · ${esc(status)}</span></div>

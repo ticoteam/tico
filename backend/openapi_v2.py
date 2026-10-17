@@ -1011,7 +1011,9 @@ SCHEMAS['Task']['properties'].update({
     'internal_requesters': {'type': 'integer'}, 'important_requesters': {'type': 'integer'},
 })
 SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['public', 'private']},
-                                         'manager': {'type': ['string', 'null']}})
+                                         'manager': {'type': ['string', 'null']},
+                                         'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
+                                                  'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
 ANSWERS = SCHEMAS
 

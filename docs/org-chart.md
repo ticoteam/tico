@@ -57,7 +57,7 @@ Owners and admins change groups; everyone else reads them.
 
 - **In the app**, **Team > + > Add section** adds a group, and the **+** on a group adds one inside it. The pencil renames a group in place.
   The delete button removes a group after confirmation: its people, bots and child groups move to its parent, or **No group** at the top.
-  Teammates, their histories and reporting lines stay; subscriptions assigned to that group are unassigned.
+  Teammates, their histories and reporting lines stay.
   Drag a human or a bot onto a group to put it there, onto **No group** (it appears while you drag) to take it out, and drag a group onto
   another to nest it. Members see the groups but have none of these handles.
 - **In the API**: `GET /api/v2/groups` lists them with their humans and the bots you may see; `POST /api/v2/groups` adds one
