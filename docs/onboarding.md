@@ -15,7 +15,7 @@ Nobody else sees the wizard. Only the owner may write it, and the sidebar entry
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`
 (the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
-and the screen after Create), `hq/recruit.py` (Tico HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
+and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
 `runner/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner catalog`) and `templates/catalog/` (the templates). The quick start in the
 [README](../README.md) is the same flow with the commands in it.
 

@@ -4,8 +4,8 @@ What a Tico install sends outside your own server, and what the receiving side k
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
-sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`) and the code that receives them (`hq/`).
-Tico HQ itself is described in [docs/tico-hq.md](docs/tico-hq.md).
+sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
+Tico HQ, is run by the Tico team from a separate repository; what it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
 ## The anonymous usage count
 
@@ -92,10 +92,10 @@ At each start of a release image, the server also asks GitHub which commit that 
 
 - `TICO_TELEMETRY_DEBUG=1` prints the exact request Tico would send to the server log and sends nothing.
 - `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite payload` prints the same five fields.
-- The sending code is `backend/census.py` and `backend/releases.py`; the collector is `hq/`. A test
+- The sending code is `backend/census.py` and `backend/releases.py`; the collector is Tico HQ ([docs/tico-hq.md](docs/tico-hq.md)). A test
   (`backend/tests/test_usage_count.py`) fails if the request carries any field beyond these five.
 
-More on why it is built this way, and how to run HQ yourself: [docs/telemetry.md](docs/telemetry.md).
+More on why it is built this way: [docs/telemetry.md](docs/telemetry.md).
 
 ## Suggestions while you build your team chart
 
