@@ -68,7 +68,7 @@
   };
   // `selected`: the request in the chat ('' is a new one); `view`: the chat, or the list of Your requests.
   let state = {enabled: null, tickets: [], unread: 0}, selected = '', view = 'chat', pop = null, timer, busyRefresh = null;
-  let owner = '', toasted = 0, compose = null, drafts = new Map(), editor = null, opener = null, loading = null;
+  let owner = '', toasted = 0, compose = null, drafts = new Map(), editor = null, opener = null, loading = null, sending = null;
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}); };
   const short = iso => {
     const d = new Date(iso);
@@ -119,8 +119,9 @@
     if (!isOpen()) return;
     if (selected && !current()) { selected = latest()?.id || ''; renderComposer(); }
     render();
-    // A reply that lands in the conversation someone has open in front of them is read.
-    if (view === 'chat' && current()?.unread && document.hasFocus()) void readVisible();
+    // A reply that lands in the conversation someone has open in front of them is read; while the pop-up is still
+    // opening, open() reads what it settles on instead.
+    if (!loading && view === 'chat' && current()?.unread && document.hasFocus()) void readVisible();
   }
   function note(message, error = false) {
     const el = pop?.querySelector('[data-connection]');
@@ -161,6 +162,16 @@
     } catch (_) { /* unread remains until the conversation is opened again */ }
   }
   const badge = status => `<span class="support-badge s-${statuses[status] ? status : 'other'}">${escape(statuses[status] || status)}</span>`;
+  // While a message is on its way nothing that could send it again, change it or move the chat can be pressed, however
+  // often the pop-up is closed and reopened: every render locks what it draws until the send settles.
+  const LOCKED = '[data-compose] :is(input, textarea, button, select), [data-requests] button, [data-new], [data-mine], [data-delete], [data-view-last]';
+  const lockSending = (on = true) => {
+    if (!pop || (on && !sending)) return;
+    pop.querySelectorAll(LOCKED).forEach(el => { el.disabled = on; });
+    const submit = pop.querySelector('[data-compose] [type=submit]');
+    if (on) submit?.setAttribute('aria-busy', 'true'); else submit?.removeAttribute('aria-busy');
+  };
+  const settled = () => { sending = null; lockSending(false); };
   function render() {
     if (!pop) return;
     const off = state.enabled === false, known = state.enabled !== null;
@@ -171,7 +182,7 @@
     pop.querySelector('[data-view]').hidden = !known || off || view !== 'chat';
     renderLinks();
     if (!known || off) return;
-    renderTickets(); renderThread();
+    renderTickets(); renderThread(); lockSending();
   }
   // View docs · What's new (N) · Your requests (N)
   function renderLinks() {
@@ -217,6 +228,7 @@
     const closed = t && ended(t);
     pop.querySelector('[data-compose]').hidden = !!closed;
     pop.querySelector('[data-closed]').hidden = !closed;
+    lockSending();
   }
   // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; at the foot of Your
   // requests, the button that starts one on the request in the chat (or the latest open one), for an owner or admin,
@@ -328,7 +340,7 @@
     form.innerHTML = `<label class="sr-only" for="support-message">Message to Tico support</label>
       <div class="support-input"><textarea id="support-message" name="message" maxlength="4000" rows="2" placeholder="Message Tico support…" required aria-describedby="support-keys">${escape(d.message)}</textarea>
       <button class="support-send" type="submit" aria-label="Send" title="Send (Enter)">${ICON.send}</button></div>
-      <p class="err support-error" data-error role="alert" hidden></p>
+      <p class="err support-error" data-error role="alert"${d.error ? '' : ' hidden'}>${escape(d.error || '')}</p>
       <small class="sr-only" id="support-keys">Enter sends. Shift+Enter adds a new line.</small>
       <details class="support-attach" data-attach${d.open ? ' open' : ''}><summary data-attach-label></summary>
       <div class="support-diag"><label><input name="diag" type="checkbox" ${d.diag ? 'checked' : ''}> @diagnostics</label><label>Computer performance <select name="perf">${PERF_WINDOWS.map(([h, label]) => `<option value="${h}"${h === d.perf ? ' selected' : ''}>${label}</option>`).join('')}</select></label><button class="ghost" type="button" data-preview>Review and edit</button></div>
@@ -356,37 +368,41 @@
       e.preventDefault(); form.requestSubmit();
     };
     form.querySelector('[data-preview]').onclick = () => openEditor(d);
+    // The outcome is kept on the draft and shown in whichever composer is on screen when it settles: the pop-up may
+    // have been closed and reopened (a new form) since Send was pressed.
+    const shown = text => {
+      d.error = text;
+      const err = pop.querySelector('[data-compose] [data-error]');
+      if (err && draft() === d) { err.textContent = text; err.hidden = !text; }
+    };
     form.onsubmit = async e => {
       e.preventDefault();
-      const err = form.querySelector('[data-error]'), submit = form.querySelector('[type=submit]');
-      if (submit.disabled) return;
-      err.hidden = true;
-      if (!d.message.trim()) { err.textContent = 'Write a message first.'; err.hidden = false; return; }
-      const locked = [...form.querySelectorAll('input, textarea, button'), ...pop.querySelectorAll('[data-requests] button, [data-new], [data-mine], [data-delete], [data-view-last]')];
-      locked.forEach(el => { el.disabled = true; });
-      submit.setAttribute('aria-busy', 'true');
-      const thread = selected;
+      if (sending) return;
+      shown('');
+      if (!d.message.trim()) { shown('Write a message first.'); return; }
+      const thread = selected, key = d.key;
+      sending = d; lockSending();
       try {
         if (d.diag && !d.bundle) { d.bundle = await capture(d.perf, d.report); updateSent(); }
         const body = {message: d.message, diagnostics: d.diag ? d.bundle.id : ''};
         if (!thread) Object.assign(body, {email: d.email.trim(), include_ids: d.ids}, d.ids && appVersion() ? {app_version: appVersion()} : {},
           d.kind !== 'support' ? {kind: d.kind} : {});
-        const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, d.key);
+        const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, key);
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
-        drafts.delete(thread); selected = next.id; view = 'chat';
-        locked.forEach(el => { el.disabled = false; });
+        // A draft that changed while this was on its way (Report this, a setup snapshot) holds newer words: it stays.
+        if (drafts.get(thread) === d && d.key === key) drafts.delete(thread);
+        selected = next.id; view = 'chat';
+        settled();
         if (isOpen()) { render(); renderThread(true); renderComposer(); pop.querySelector('[name=message]')?.focus(); }
         say(d.diag ? 'Sent with diagnostics.' : 'Sent.'); schedule();
       } catch (error) {
+        settled();
         // Said where the person is looking: the message did not arrive and is still in the box.
-        err.textContent = !error.status || error.status >= 500 ? 'Not sent. Could not reach Tico support. Try again in a moment.' : 'Not sent. ' + error.message;
-        err.hidden = false;
-        locked.forEach(el => { el.disabled = false; });
-        submit.removeAttribute('aria-busy');
-        form.elements.message?.focus();
+        shown(!error.status || error.status >= 500 ? 'Not sent. Could not reach Tico support. Try again in a moment.' : 'Not sent. ' + error.message);
+        if (isOpen() && draft() === d) pop.querySelector('[data-compose] [name=message]')?.focus();
       }
     };
-    updateSent();
+    updateSent(); lockSending();
   }
   function updateSent() {
     if (!pop) return;
@@ -629,6 +645,9 @@
       opener = document.activeElement !== document.body ? document.activeElement : null;
       pop.showModal();
     }
+    // Where it is going is set before anything loads, so the chat left open last time is not shown or read on the way.
+    if (how.list) view = 'list';
+    else if (how.fresh || how.ticket) { view = 'chat'; selected = how.fresh ? '' : how.ticket; }
     const run = loading = load();
     render(); focusBox();
     await run;

@@ -32,13 +32,14 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       const page = await ctx.newPage();
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
-      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access};
+      // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
+      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, gate: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
       const out = t => ({...t, unread: unread(t)});
       const view = () => ({enabled, tickets: hq.tickets.map(out), unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => { hq.asked.push(d.message()); return hq.confirm ? d.accept() : d.dismiss(); });
-      await page.route('**/*', route => {
+      await page.route('**/*', async route => {
         const req = route.request(), p = new URL(req.url()).pathname;
         const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
@@ -80,6 +81,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
           }
           const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id);
           if (rest.endsWith('/read')) { hq.seen[id] = ticket.messages.filter(m => m.from === 'staff').length; return json(out(ticket)); }
+          if (rest.endsWith('/messages') && hq.gate) await hq.gate;
           if (rest.endsWith('/messages') && hq.abort) return route.abort('connectionrefused');
           if (rest.endsWith('/messages') && hq.fail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
           if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
@@ -353,6 +355,85 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await vpop.getByRole('button', {name: 'View it'}).click();
     assert.equal(await vpop.locator('[data-title]').innerText(), 'Old question');
     assert.match(await vpop.locator('[data-thread]').innerText(), /Reply 1/);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // A send still on its way when the pop-up is closed and reopened: nothing can send it twice or change it, and the
+    // outcome shows in the composer on screen, whether it lands while open or while closed.
+    v = await visit({seed: [{id: 'sup_s', created: at(30), status: 'open', message: 'Slow line', messages: [], sent: {}}]});
+    const slow = v.page.locator('#support-pop');
+    const hold = () => { let go; v.hq.gate = new Promise(r => { go = r; }); return () => { v.hq.gate = null; go(); }; };
+    const posted = () => v.calls.filter(c => c.startsWith('POST tickets/sup_s/messages')).length;
+    await openSupport(v.page);
+    let release = hold();
+    await slow.locator('[name=message]').fill('First words');
+    await slow.locator('[name=message]').press('Enter');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
+    await v.page.keyboard.press('Escape');
+    await openSupport(v.page);
+    assert.equal(await slow.locator('[name=message]').isDisabled(), true, 'the box stays locked while the send is on its way');
+    assert.equal(await slow.locator('.support-send').isDisabled(), true);
+    assert.equal(await slow.locator('.support-send').getAttribute('aria-busy'), 'true');
+    await slow.locator('[data-compose]').evaluate(f => f.requestSubmit());
+    release();
+    await slow.locator('.support-msg.you', {hasText: 'First words'}).waitFor();
+    assert.equal(posted(), 1, 'sent once');
+    assert.equal(await slow.locator('[name=message]').isDisabled(), false);
+    assert.equal(await slow.locator('[name=message]').inputValue(), '');
+    // Fails while open after a reopen: the Not sent line is in the composer on screen, with the words kept.
+    v.hq.fail = true;
+    release = hold();
+    await slow.locator('[name=message]').fill('Second words');
+    await slow.locator('[name=message]').press('Enter');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
+    await v.page.keyboard.press('Escape');
+    await openSupport(v.page);
+    release();
+    await slow.locator('[data-compose] [data-error]:not([hidden])').waitFor();
+    assert.equal(await slow.locator('[data-compose] [data-error]').innerText(), UNREACHABLE);
+    assert.equal(await slow.locator('[name=message]').inputValue(), 'Second words');
+    assert.equal(await slow.locator('[name=message]').isDisabled(), false);
+    // Fails while closed: reopening shows it.
+    release = hold();
+    await slow.locator('[name=message]').press('Enter');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
+    await v.page.keyboard.press('Escape');
+    release();
+    await v.page.waitForFunction(() => !document.querySelector('#support-pop .support-send')?.hasAttribute('aria-busy'));
+    await openSupport(v.page);
+    assert.equal(await slow.locator('[data-compose] [data-error]').innerText(), UNREACHABLE);
+    assert.equal(await slow.locator('[name=message]').inputValue(), 'Second words');
+    v.hq.fail = false;
+    assert.equal(posted(), 3);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // Opening on Your requests or on another request's reply reads only what it shows: the chat left open last time is
+    // not read on the way.
+    v = await visit({seed: [
+      {id: 'sup_a', created: at(60), status: 'answered', message: 'Question A', messages: [reply(1, 30)], sent: {}},
+      {id: 'sup_b', created: at(90), status: 'open', message: 'Question B', messages: [], sent: {}}]});
+    await openSupport(v.page);
+    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'Question A');
+    await v.page.waitForFunction(() => !document.querySelector('#help-open')?.hasAttribute('data-support-unread'));
+    await v.page.keyboard.press('Escape');
+    v.hq.tickets.find(x => x.id === 'sup_a').messages.push(reply(2, 2));
+    v.hq.tickets.find(x => x.id === 'sup_b').messages.push(reply(1, 1));
+    await v.page.evaluate(() => window.supportPoll());
+    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '2');
+    const reads = () => v.calls.filter(c => c.endsWith('/read'));
+    const before = reads().length;
+    await v.page.evaluate(() => window.supportOpen({list: true}));
+    await v.page.locator('#support-pop[open] [data-list]:not([hidden])').waitFor();
+    await v.page.waitForTimeout(300);
+    assert.deepEqual(reads().slice(before), [], 'Your requests reads nothing');
+    assert.equal(await v.page.locator('#help-open').getAttribute('data-support-unread'), '2');
+    await v.page.keyboard.press('Escape');
+    await v.page.locator('.toast', {hasText: 'Tico support replied.'}).last().getByRole('button', {name: 'Open'}).click();
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Question B');
+    await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '1');
+    await v.page.waitForTimeout(300);
+    assert.deepEqual(reads().slice(before), ['POST tickets/sup_b/read'], "B's reply reads only B");
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
