@@ -16,6 +16,10 @@ use crate::env::Env;
 use crate::util::{log, text_of};
 
 pub const TEAM_KEYS_FILE: &str = "_team_model.env";
+/// The runtimes whose computer login a person signed out from the app (backend/model_login.py): no key on this
+/// computer signs them in again, not the company's and not the 10-minute key login, until a person signs in or
+/// chooses the shared key. A JSON list of runtimes, kept across restarts.
+pub const SIGNED_OUT_FILE: &str = "_signed_out.json";
 const TEAM_KEY_RETRY: Duration = Duration::from_secs(300);
 const KEY_LOGIN_RETRY: Duration = Duration::from_secs(600);
 /// How long a refused key or sign-in is trusted before one turn tries again (service.py REJECT_RECHECK_S).
@@ -135,6 +139,62 @@ impl SignIn {
         self.dirty.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Whether a person signed `runtime`'s computer login out from the app (SIGNED_OUT_FILE).
+    pub fn signed_out(&self, runtime: &str) -> bool {
+        self.signed_out_list().iter().any(|r| r == runtime)
+    }
+
+    fn signed_out_list(&self) -> Vec<String> {
+        std::fs::read_to_string(self.secrets.join(SIGNED_OUT_FILE))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<String>>(&t).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_signed_out(&self, list: &[String]) -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o770).create(&self.secrets)?;
+        let temp = self.secrets.join(format!("{SIGNED_OUT_FILE}.tmp"));
+        let mut out = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
+        out.write_all(serde_json::to_string(list).unwrap_or_default().as_bytes())?;
+        out.sync_all()?;
+        std::fs::rename(&temp, self.secrets.join(SIGNED_OUT_FILE))
+    }
+
+    /// A person signs `runtime`'s computer login out: from now no key on this computer signs it in, and the
+    /// company's key this computer holds for it is deleted. Written before the CLI logs out, so no readiness pass
+    /// in between signs it straight back in.
+    pub fn mark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
+        let mut list = self.signed_out_list();
+        if !list.iter().any(|r| r == runtime) {
+            list.push(runtime.into());
+            list.sort();
+            self.write_signed_out(&list)?;
+        }
+        let names = headless_names(runtime);
+        let mut team = self.team();
+        if names.iter().any(|n| team.contains_key(n)) {
+            team.retain(|k, _| !names.contains(k));
+            self.write_team(&team)?;
+        }
+        self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// A person signed `runtime` in again, or chose the shared key: keys sign it in as before, at once.
+    pub fn unmark_signed_out(&self, runtime: &str) -> std::io::Result<()> {
+        let mut list = self.signed_out_list();
+        if list.iter().any(|r| r == runtime) {
+            list.retain(|r| r != runtime);
+            self.write_signed_out(&list)?;
+        }
+        self.asked.lock().unwrap().remove(runtime);
+        self.key_tried.lock().unwrap().retain(|(home, _), _| !home.starts_with(&format!("{runtime}:")));
+        self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
     fn hand(&self) -> Env {
         let mut env: Env = std::env::vars().collect();
         env.extend(read_env(&self.secrets.join("_shared.env")));
@@ -145,8 +205,12 @@ impl SignIn {
         read_env(&self.secrets.join(TEAM_KEYS_FILE))
     }
 
-    /// (name, value) of the key that signs `runtime` in headlessly, or None.
+    /// (name, value) of the key that signs `runtime` in headlessly, or None. None while a person has it signed
+    /// out: that is what keeps it out of readiness, the key login, turns and the fallback.
     pub fn headless_secret(&self, runtime: &str) -> Option<(String, String)> {
+        if self.signed_out(runtime) {
+            return None;
+        }
         let mut env = self.team();
         env.extend(self.hand());
         headless_names(runtime).iter().find_map(|n| {
@@ -156,6 +220,9 @@ impl SignIn {
 
     /// Whether the only key that signs `runtime` in is the company's.
     pub fn team_key_only(&self, runtime: &str) -> bool {
+        if self.signed_out(runtime) {
+            return false;
+        }
         let (hand, team) = (self.hand(), self.team());
         let names = headless_names(runtime);
         !names.iter().any(|n| hand.get(n).is_some_and(|v| !v.is_empty())) && names.iter().any(|n| team.get(n).is_some_and(|v| !v.is_empty()))
@@ -166,7 +233,7 @@ impl SignIn {
     /// case the company rotated it.
     pub async fn team_model_keys(&self, client: &Client, runtime: &str) -> bool {
         let names = headless_names(runtime);
-        if names.is_empty() {
+        if names.is_empty() || self.signed_out(runtime) {
             return false;
         }
         let (hand, mut team) = (self.hand(), self.team());
@@ -281,4 +348,96 @@ impl SignIn {
 /// Whether any assigned bot runs `runtime`.
 pub fn assigned(assignments: &[Value], runtime: &str) -> bool {
     assignments.iter().any(|row| row["config"]["runtime"] == runtime)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn projects() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tico-signed-out-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        dir
+    }
+
+    /// A stand-in `codex` that records each run, so a key login that happens is seen.
+    fn fake_codex(dir: &Path) -> (PathBuf, PathBuf) {
+        let (exe, runs) = (dir.join("codex"), dir.join("runs"));
+        std::fs::write(&exe, format!("#!/bin/sh\necho \"$@\" >> '{}'\ncat > /dev/null\n", runs.display())).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (exe, runs)
+    }
+
+    /// A server that hands out the company's model key and counts how often it was asked.
+    async fn team_server() -> (Client, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut buf = vec![0u8; 8192];
+                let _ = sock.read(&mut buf).await;
+                let body = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789"}]}"#;
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = sock.write_all(reply.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap(), asked)
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_login_is_not_signed_back_in_by_the_shared_key() {
+        let dir = projects();
+        let secrets = dir.join("secrets");
+        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\nOTHER=kept\n").unwrap();
+        let (exe, runs) = fake_codex(&dir);
+        let sign = SignIn::new(&dir);
+        sign.mark_signed_out("codex").unwrap();
+        assert!(sign.signed_out("codex") && !sign.signed_out("claude"));
+        // The company's key this computer held for it is gone, and nothing else in that file.
+        let team = read_env(&secrets.join(TEAM_KEYS_FILE));
+        assert!(!team.contains_key("OPENAI_API_KEY") && team.get("OTHER").map(String::as_str) == Some("kept"));
+        // No key signs it in: not readiness's "ready with a key", not the 10-minute key login, not the next fetch.
+        assert_eq!(sign.headless_secret("codex"), None);
+        assert!(!sign.team_key_only("codex"));
+        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        assert_eq!(sign.headless_secret("codex"), None, "a key that came back still does not sign it in");
+        assert!(!sign.key_login("codex", &exe).await);
+        assert!(!runs.exists(), "the key login ran while signed out");
+        let (client, asked) = team_server().await;
+        std::fs::remove_file(secrets.join(TEAM_KEYS_FILE)).unwrap();
+        assert!(!sign.team_model_keys(&client, "codex").await);
+        assert_eq!(asked.load(Ordering::SeqCst), 0, "the shared key was fetched while signed out");
+        // It stays so across a restart: the mark is on disk.
+        let restarted = SignIn::new(&dir);
+        assert!(restarted.signed_out("codex") && restarted.headless_secret("codex").is_none());
+        // A person chose the shared key (or signed in): it is fetched and logged in with again, at once.
+        restarted.unmark_signed_out("codex").unwrap();
+        assert!(restarted.team_model_keys(&client, "codex").await);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        assert!(restarted.key_login("codex", &exe).await);
+        assert_eq!(std::fs::read_to_string(&runs).unwrap().trim(), "login --with-api-key");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_signed_out_mark_is_owner_only_and_a_bad_file_marks_nothing() {
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        sign.mark_signed_out("claude").unwrap();
+        sign.mark_signed_out("claude").unwrap();
+        let path = dir.join("secrets").join(SIGNED_OUT_FILE);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"["claude"]"#);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(!sign.signed_out("claude"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

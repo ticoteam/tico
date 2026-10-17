@@ -137,9 +137,19 @@ function subsWeeklyHTML(c, p) {
         </div>`;
     }).join('');
 }
+// Switch account / Sign out for each signed-in runtime of the subscription (ui/model-login.js); the computer must be online.
+function subsAccountHTML(c, p) {
+  const machine = (SETTINGS_DATA?.machines || []).find(m => m.id === c.runner_id);
+  const online = !machine || (!machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000);
+  return subsRuntimes().filter(([id]) => p.runtimes?.[id]?.signed_in === true).map(([id, label]) => {
+    const buttons = window.TicoModelLogin?.actionsHTML({runnerId: c.runner_id, runtime: id, machine: c.label, profile: p.name, signedIn: true, online}) || '';
+    return buttons ? `<div class="subs-account" data-subs-account="${esc(id)}"><strong>${esc(label)} account</strong>${buttons}
+      <span class="muted">Switching signs in on the side: the account signed in now keeps working until the new one is in.</span></div>` : '';
+  }).join('');
+}
 function subsControlsHTML(c, p) {
   if (!subsMaySignIn(c)) return '';
-  const forms = subsRenameHTML(c, p) + subsWeeklyRuntimes(p).map(([runtime, state]) => {
+  const forms = subsRenameHTML(c, p) + subsAccountHTML(c, p) + subsWeeklyRuntimes(p).map(([runtime, state]) => {
     const percent = state.weekly?.used_percent, reset = Date.parse(state.weekly?.resets_at);
     const localReset = Number.isFinite(reset) ? new Date(reset - new Date(reset).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
     return `<form data-subs-weekly data-runner="${esc(c.runner_id)}" data-profile="${esc(p.name)}" data-runtime="${esc(runtime)}">

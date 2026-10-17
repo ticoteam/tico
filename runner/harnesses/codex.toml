@@ -24,6 +24,10 @@ api_key_env = ["OPENAI_API_KEY"]
 [login]
 command = ["login", "--device-auth"]
 terminal = false
+# Sign out (Settings > Computers): the CLI's own logout, and the files under CODEX_HOME that hold the login, which a
+# Switch account moves into place only once the new sign-in has finished.
+logout = ["logout"]
+files = ["auth.json"]
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]

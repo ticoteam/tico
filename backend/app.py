@@ -4077,7 +4077,26 @@ def create_app(settings=None):
     @app.post("/api/v2/runners/{rid}/logins")
     def start_login(request: Request, rid: str, body: M.LoginStart):
         return mutate(request, body, lambda c: model_login.start(
+            c, request.state.identity, rid, body.runtime, body.profile, auth=auth, switch=body.switch))
+
+    # Sign a login out (the computer's own, or a named subscription's); it is read back like a sign-in.
+    @app.post("/api/v2/runners/{rid}/logouts")
+    def start_logout(request: Request, rid: str, body: M.LogoutStart):
+        return mutate(request, body, lambda c: model_login.sign_out(
             c, request.state.identity, rid, body.runtime, body.profile, auth=auth))
+
+    # The bots a sign-out would stop, for the confirmation.
+    @app.get("/api/v2/runners/{rid}/logouts/bots")
+    def logout_bots(request: Request, rid: str, runtime: str, profile: str = ""):
+        with store.read() as c:
+            return model_login.affected_bots(c, request.state.identity, rid, runtime, profile, store.settings,
+                                             auth=auth)
+
+    # A signed-out computer login takes the company's shared key again.
+    @app.post("/api/v2/runners/{rid}/shared-key")
+    def use_shared_key(request: Request, rid: str, body: M.SharedKeyUse):
+        return mutate(request, body, lambda c: model_login.use_shared_key(
+            c, request.state.identity, rid, body.runtime, auth=auth))
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):

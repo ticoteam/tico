@@ -8,6 +8,11 @@ writes it on the runner's disk, and the runner only reports whether readiness tu
 What is stored is a link, a one-time code, a few redacted CLI message lines and timestamps, for
 at most `LIFETIME` seconds. A code the person pastes back is held only until the runner has
 taken it, then dropped.
+
+The same relay signs a login out, switches it to another account, and puts the company's shared key
+back (`kind`). A computer's own login that a person signed out stays signed out (`model_login_cleared`):
+the server stops handing that computer the shared "Every computer" key for it, and the runner keeps its
+own mark, until a person signs in again or chooses to use the shared key.
 """
 
 import json
@@ -21,10 +26,19 @@ from .store import H, Problem
 # back. A runner too old for one of them answers that browser sign-in is not available.
 RUNTIMES = manifests.with_capability("browser_sign_in")
 PASTE_RUNTIMES = manifests.with_capability("paste_code")
+SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
+# What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
+# handed another kind: it would start a sign-in instead.
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key")
+SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 LIFETIME = 15 * 60
 ACTIVE = ("requested", "starting", "waiting")
-TERMINAL = ("signed_in", "failed", "cancelled", "expired")
+TERMINAL = ("signed_in", "signed_out", "done", "failed", "cancelled", "expired")
 ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting", "signed_in", "failed"))}
+ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
+# The verdicts each kind may end with; any other is refused as the runner's mistake.
+VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
+            "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed")}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -82,7 +96,7 @@ def sweep(c):
 
 def view(row):
     state = row["state"]
-    return {"id": row["id"], "runner_id": row["runner_id"], "runtime": row["runtime"],
+    return {"id": row["id"], "kind": row["kind"], "runner_id": row["runner_id"], "runtime": row["runtime"],
             "profile": row["profile"], "state": state, "url": row["url"], "code": row["user_code"],
             "lines": json.loads(row["lines_json"] or "[]"), "message": row["message"],
             "accepts_code": row["runtime"] in PASTE_RUNTIMES and state == "waiting",
@@ -111,28 +125,124 @@ def _login(c, rid, lid):
     return row
 
 
-def start(c, who, rid, runtime, profile="", auth=None):
+def _signs_out(runner):
+    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
+def _queue(c, who, runner, runtime, profile, kind, what):
+    """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
+    per login: a sign-out never races a sign-in on the same files."""
+    sweep(c)
+    running = c.execute("SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? "
+                        "AND state IN ('requested','starting','waiting')", (runner["id"], runtime, profile)).fetchone()
+    if running and running["kind"] == kind:
+        return running, False
+    if running:
+        raise Problem("state", "Something else is running for this login on that computer; cancel it or wait for it "
+                      "to finish", 409)
+    if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
+        raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
+    if kind != "sign_in" and not _signs_out(runner):
+        raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
+    now = H.now()
+    lid = H.new_id()
+    c.execute("INSERT INTO model_logins(id,runner_id,runtime,profile,state,created,updated,expires_at,requested_by,kind) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (lid, runner["id"], runtime, profile, "requested", now, now, H.shift(now, seconds=LIFETIME), who.actor,
+               kind))
+    return _login(c, runner["id"], lid), True
+
+
+def start(c, who, rid, runtime, profile="", auth=None, switch=False):
+    """Sign `runtime` in on a computer (`profile` "" is the computer's own login). `switch` signs in to another
+    account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
+    a cancelled or failed switch leaves the old login working."""
     _operator(c, who, rid, auth)
     if runtime not in RUNTIMES:
         raise Problem("kind", "Browser sign-in works for " + ", ".join(RUNTIMES[:-1]) + " and " + RUNTIMES[-1]
                       + "; set other runtimes up from the computer's terminal", 422)
+    if switch and runtime not in SIGN_OUT_RUNTIMES:
+        raise Problem("kind", "Switching accounts from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
-    sweep(c)
-    running = c.execute("SELECT * FROM model_logins WHERE runner_id=? AND runtime=? AND profile=? "
-                        "AND state IN ('requested','starting','waiting')", (rid, runtime, profile)).fetchone()
-    if running:
-        return view(running)
-    if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
-        raise Problem("offline", "That computer is offline, so it cannot start a sign-in", 409)
+    row, new = _queue(c, who, runner, runtime, profile, "switch" if switch else "sign_in",
+                      "switch accounts" if switch else "start a sign-in")
+    if new:
+        from .subscription_refresh import invalidate_signin
+        invalidate_signin(c, rid, profile, runtime, row["created"])
+        H.event(c, who.actor, "runner.login.switch" if switch else "runner.login.start", rid, {"runtime": runtime})
+    return view(row)
+
+
+def cleared(c, rid, runtime, profile=""):
+    """Whether a person signed this login out (the shared key stays away from it until they sign in again)."""
+    return bool(c.execute("SELECT 1 FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+                          (rid, runtime, profile)).fetchone())
+
+
+def cleared_logins(c, rid):
+    """{runtime: [profile, ...]} signed out by a person on this computer ("" is the computer's own login)."""
+    out = {}
+    for row in c.execute("SELECT runtime, profile FROM model_login_cleared WHERE runner_id=? ORDER BY runtime, profile",
+                         (rid,)):
+        out.setdefault(row["runtime"], []).append(row["profile"])
+    return out
+
+
+def sign_out(c, who, rid, runtime, profile="", auth=None):
+    """Sign `runtime` out on a computer: the runner runs the CLI's own logout and checks it took. The login stays
+    signed out: the shared key no longer signs it back in, until a person signs in or chooses the shared key."""
+    _operator(c, who, rid, auth)
+    if runtime not in SIGN_OUT_RUNTIMES:
+        raise Problem("kind", "Signing out from here isn't available for " + runtime, 422)
+    runner = _runner(c, rid)
+    row, new = _queue(c, who, runner, runtime, profile, "sign_out", "sign out")
+    if not new:
+        return view(row)
     now = H.now()
-    lid = H.new_id()
-    c.execute("INSERT INTO model_logins(id,runner_id,runtime,profile,state,created,updated,expires_at,requested_by) "
-              "VALUES(?,?,?,?,?,?,?,?,?)",
-              (lid, rid, runtime, profile, "requested", now, now, H.shift(now, seconds=LIFETIME), who.actor))
+    c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET cleared_at=excluded.cleared_at, "
+              "cleared_by=excluded.cleared_by", (rid, runtime, profile, now, who.actor))
     from .subscription_refresh import invalidate_signin
     invalidate_signin(c, rid, profile, runtime, now)
-    H.event(c, who.actor, "runner.login.start", rid, {"runtime": runtime})
-    return view(_login(c, rid, lid))
+    H.event(c, who.actor, "runner.login.sign_out", rid, {"runtime": runtime, "profile": profile})
+    return view(row)
+
+
+def use_shared_key(c, who, rid, runtime, auth=None):
+    """Let the company's shared key sign a signed-out computer login in again."""
+    _operator(c, who, rid, auth)
+    if runtime not in SIGN_OUT_RUNTIMES:
+        raise Problem("kind", "Signing out from here isn't available for " + runtime, 422)
+    runner = _runner(c, rid)
+    if not cleared(c, rid, runtime):
+        raise Problem("state", "That login was not signed out from here", 409)
+    row, _ = _queue(c, who, runner, runtime, "", "use_shared_key", "use the shared key")
+    c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
+    H.event(c, who.actor, "runner.login.use_shared_key", rid, {"runtime": runtime})
+    return view(row)
+
+
+def affected_bots(c, who, rid, runtime, profile, settings, auth=None):
+    """The active bots on this computer that run `runtime` on this login: the ones a sign-out stops."""
+    _operator(c, who, rid, auth)
+    _runner(c, rid)
+    from . import providers, subscriptions
+    from .shared_bots import follow
+    ctx = subscriptions.context(c, settings)
+    out = []
+    for row in c.execute("SELECT a.bot, b.display_name, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
+                         "ORDER BY a.bot", (rid,)):
+        try:
+            config = providers.fill(ctx["providers"], follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
+        except ValueError:
+            continue
+        if config.get("runtime") != runtime:
+            continue
+        assigned, _ = subscriptions.effective(c, row["bot"], ctx)
+        if (assigned or "") == profile:
+            out.append({"bot": row["bot"], "name": row["display_name"] or row["bot"]})
+    return {"runtime": runtime, "profile": profile, "bots": out}
 
 
 def read(c, who, rid, lid, auth=None):
@@ -176,6 +286,7 @@ def pending(c, runner_id):
     rows = c.execute("SELECT * FROM model_logins WHERE runner_id=? AND state IN ('requested','starting','waiting') "
                      "ORDER BY created", (runner_id,)).fetchall()
     return [{"id": r["id"], "runtime": r["runtime"], "profile": r["profile"], "expires_at": r["expires_at"],
+             **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
              **({"code": r["pending_code"]} if r["pending_code"] else {})} for r in rows]
 
 
@@ -187,8 +298,10 @@ def report(c, runner_id, lid, body):
     row = c.execute("SELECT * FROM model_logins WHERE id=?", (lid,)).fetchone()
     if row["state"] in TERMINAL:
         return {"state": row["state"]}
+    if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
+        raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
     state = body.state if ORDER[body.state] >= ORDER[row["state"]] else row["state"]
-    terminal = state in ("signed_in", "failed")
+    terminal = state in ("signed_in", "signed_out", "done", "failed")
     url = "" if terminal else clean_url(body.url) or row["url"]
     code = "" if terminal else clean_user_code(body.code) or row["user_code"]
     lines = clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
@@ -198,4 +311,9 @@ def report(c, runner_id, lid, body):
               (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
     if terminal:
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
+    # A person signed this login in again: it is no longer signed out on purpose. A sign-out that did not take
+    # leaves the login as it was, so it is not marked either.
+    if (state == "signed_in" or state == "failed" and row["kind"] == "sign_out") and terminal:
+        c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+                  (row["runner_id"], row["runtime"], row["profile"]))
     return {"state": state}

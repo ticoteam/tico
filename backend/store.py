@@ -109,8 +109,12 @@ CREATE TABLE IF NOT EXISTS model_logins(
  profile TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
  user_code TEXT NOT NULL DEFAULT '', lines_json TEXT NOT NULL DEFAULT '[]',
  message TEXT NOT NULL DEFAULT '', pending_code TEXT, code_sent INTEGER NOT NULL DEFAULT 0,
- created TEXT NOT NULL, updated TEXT NOT NULL, expires_at TEXT NOT NULL, requested_by TEXT NOT NULL);
+ created TEXT NOT NULL, updated TEXT NOT NULL, expires_at TEXT NOT NULL, requested_by TEXT NOT NULL,
+ kind TEXT NOT NULL DEFAULT 'sign_in');
 CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,state);
+CREATE TABLE IF NOT EXISTS model_login_cleared(
+ runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
+ cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
@@ -1115,6 +1119,8 @@ class Store:
                 # What every bot may do with a type's tasks (hubdb.TYPE_BOTS). Checked on every start
                 # rather than numbered, so no migration number collides with another branch's.
                 H.add_column(c, "task_types", "bots", "TEXT")
+                # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
+                H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=55").fetchone():
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
