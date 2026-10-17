@@ -514,6 +514,8 @@ mod tests {
             };
             race("codex", "claude", false);
             assert!(sign.signed_out("codex") && sign.signed_out("claude"));
+            let again = SignIn::new(&dir); // as the runner reads them after a restart
+            assert!(again.signed_out("codex") && again.signed_out("claude"));
             let team = read_env(&secrets.join(TEAM_KEYS_FILE));
             assert!(!team.contains_key("OPENAI_API_KEY") && !team.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{team:?}");
             assert_eq!(team.get("OTHER").map(String::as_str), Some("kept"));
@@ -521,6 +523,8 @@ mod tests {
             sign.unmark_signed_out("claude").unwrap();
             race("codex", "claude", true);
             assert!(!sign.signed_out("codex") && sign.signed_out("claude"));
+            let again = SignIn::new(&dir);
+            assert!(!again.signed_out("codex") && again.signed_out("claude"));
             std::fs::remove_dir_all(&dir).unwrap();
         }
     }
