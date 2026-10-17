@@ -1,0 +1,9 @@
+# FAQ
+
+How do I change what a bot does? Edit its Instructions on the bot page.
+INSTRUCTIONS apply to every run. Instructions are versioned.
+Where are the Tico docs? Open Tico docs from the side bar.
+Work goes through Tico on your computer, so Through Tico is how a bot reaches GitHub.
+The Computer pulls updates from the repository before each run. The Computer syncs `AGENT.md` before the next run.
+
+Our company keeps its washing machine and coworkers; keep `standing instructions` in code.
