@@ -4,6 +4,7 @@ import json
 import threading
 
 import httpx
+import pytest
 
 from backend import github_app as G, hubdb as H
 from backend.auth import Identity
@@ -81,26 +82,47 @@ def test_bot_with_the_right_creates_a_private_repo_gets_write_and_the_owner_is_t
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 1
 
 
-def test_the_inventory_refresh_creation_queues_keeps_the_new_repo_when_it_lands_after_the_grant(api, gh, monkeypatch):
-    """Creation queues a background refresh of the repository list. When its write lands after the bot's grant (held
-    here until then), the new repository is listed, so it is not marked missing and the bot keeps write to it."""
-    ready(api, gh)
-    service, listing, release = api.app_state.github_app, threading.Event(), threading.Event()
+@pytest.fixture
+def refresh_after_grant(api, gh, monkeypatch):
+    """`hold()` holds the inventory refresh that creating a repository queues; `finish()`, once the create has
+    answered, lets it write after the bot's grant (the order that lost a repository in Dev 119) and checks it synced."""
+    service, listing, release, answers = api.app_state.github_app, threading.Event(), threading.Event(), []
 
     def held(request):
         if request.url.path == "/installation/repositories" and threading.current_thread() is service.repository_worker:
             listing.set()
-            assert release.wait(10)
+            released = release.wait(10)
+            response = gh(request)
+            answers.append((released, response.status_code))
+            return response
         return gh(request)
-    monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(held))
 
+    class Refresh:
+        def hold(self):
+            if service.repository_worker:
+                service.repository_worker.join(10)               # the refresh connecting queued, unheld
+            monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(held))
+
+        def finish(self):
+            assert listing.wait(10), "creating the repository queued a refresh"
+            release.set()
+            service.repository_worker.join(10)
+            assert not service.repository_worker.is_alive()
+            assert answers == [(True, 200)] and service.repository_sync_failures == 0, "the held refresh synced"
+    yield Refresh()
+    release.set()
+
+
+def test_the_inventory_refresh_creation_queues_keeps_the_new_repo_when_it_lands_after_the_grant(api, gh,
+                                                                                                 refresh_after_grant):
+    """Creation queues a background refresh of the repository list. When its write lands after the bot's grant, the
+    new repository is listed, so it is not marked missing and the bot keeps write to it."""
+    ready(api, gh)
+    refresh_after_grant.hold()
     assert grant(api).status_code == 200
     made = product_repo_request(api, BODY, actor="bot-test", key="bot-services")
     assert made.status_code == 200 and made.json()["bot_access"] == "write", made.text
-    assert listing.wait(10), "creating the repository queued a refresh"
-    release.set()
-    service.repository_worker.join(10)
-    assert not service.repository_worker.is_alive()
+    refresh_after_grant.finish()
     with api.app_state.store.read() as c:
         assert c.execute("SELECT reachable FROM repositories WHERE full_name='Acme/tico-services'").fetchone()[0] == 1
     assert {"full_name": "Acme/tico-services", "access": "write"} in api.get(ACCESS, headers=auth()).json()["effective"]
@@ -108,6 +130,7 @@ def test_the_inventory_refresh_creation_queues_keeps_the_new_repo_when_it_lands_
 
 def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(api, gh):
     ready(api, gh)
+    gh.repositories.append({"full_name": "Acme/tico"})            # the installation sees the ticked repository
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES('r-tico','Acme/tico',1,?)", (H.now(),))
         config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
@@ -122,8 +145,11 @@ def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(a
     assert "Bots set to every ticked repository reach it too: cpo." in made.json()["note"]
 
 
-def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read_elsewhere(api, gh):
+def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read_elsewhere(api, gh,
+                                                                                          refresh_after_grant):
     ready(api, gh)
+    gh.repositories.append({"full_name": "Acme/tico"})            # the installation sees the ticked repository
+    refresh_after_grant.hold()
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES('r-tico','Acme/tico',1,?)", (H.now(),))
     assert api.put(ACCESS, json={"mode": "all", "all_access": "read", "create_product_repositories": True},
@@ -131,6 +157,7 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
     assert {"full_name": "Acme/tico", "access": "read"} in api.get(ACCESS, headers=auth()).json()["effective"]
     made = product_repo_request(api, BODY, actor="bot-test", key="all-read-bot")
     assert made.status_code == 200, made.text
+    refresh_after_grant.finish()
     assert made.json()["bot_access"] == "write"
     view = api.get(ACCESS, headers=auth()).json()
     effective = {r["full_name"]: r["access"] for r in view["effective"]}

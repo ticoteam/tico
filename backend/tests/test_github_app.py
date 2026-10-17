@@ -1066,3 +1066,21 @@ def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says
     assert r.status_code == 200, r.text
     assert turn_token(api).status_code == 200
     assert turns()[-1]["actions"] == "read"
+
+
+def test_the_fake_installation_lists_a_repository_created_through_it_only_when_it_has_every_repository():
+    """The fake behaves like GitHub: an all-repositories installation lists what was created through it, once; a
+    selected-repositories one lists only what was selected."""
+    fake = FakeGitHub()
+    fake.repositories = [{"full_name": "Acme/docs", "default_branch": "trunk"}]
+    client = httpx.Client(transport=httpx.MockTransport(fake), base_url="https://api.github.com")
+    for name in ("docs", "tico-services"):
+        assert client.post("/orgs/Acme/repos", json={"name": name, "private": True}).status_code == 201
+
+    def listed():
+        return client.get("/installation/repositories").json()["repositories"]
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}, {"full_name": "Acme/tico-services"}]
+    fake.missing = {"tico-services"}
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
+    fake.missing, fake.selection = set(), "selected"
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
