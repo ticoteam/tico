@@ -176,7 +176,7 @@ from or goes to a Tico server you run.
 
 | Field | What it is |
 |---|---|
-| `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`) |
+| `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`). One shaped like a key or token is refused before anything is done with it |
 | `kind` | `message` (that you sent one; not what it said), `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
 
 No message text, plan, company name, email address or cookie. Only `https://tico.team` may call these routes from a page.
@@ -197,11 +197,12 @@ session cost. No message text.
 
 - **Counts are off unless HQ is told to keep them** (`HQ_ONBOARDING_COUNTS=on`). While off, HQ answers the same and
   stores nothing.
-- **No message text is stored anywhere**, and the table has no column for it. Keys and passwords are never stored.
+- **No message text is stored anywhere**, and the table has no column for it. Keys and passwords are never stored, in
+  any form: a session ID shaped like one is refused before it is hashed.
 - **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the same limit
   of 60 requests an hour as every other route.
 - **Retention:** a session row is deleted 13 months after its day, by the daily job.
-- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, downloads, cost), never a session's row.
+- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
 
 ## The server's own model calls
 

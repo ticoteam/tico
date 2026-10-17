@@ -18,16 +18,20 @@ This part is the page's download count, the health check the page asks first, an
   first seen, the furthest step reached, whether the file was downloaded, how many messages the visitor sent, and the
   turns and cost the brain adds later.
   No message text, no address, no user agent: the table has no column for them. Rows go after 13 months, like installs.
-- **Strict input.** Only those fields; a session id of 8 to 64 letters, digits, `-` or `_`; kind `download`, `message` or
+- **Strict input.** Only those fields; a session id of 8 to 64 letters, digits, `-` or `_` that is not shaped like a
+  key or token (refused before it is hashed, so nothing derived from a pasted key is kept; a UUID is fine); kind `download`, `message` or
   `step`; `step` a whole number from 0 to 9, and only with kind `step`. Anything else is a 422 with no detail and nothing kept.
+- **Its own request budget.** Events are not counted against HQ's 60 requests an hour per address, so a long chat
+  still leaves room for its download; they have their own limit of 300 an hour per address (in memory, salted).
 - **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (default `https://tico.team`) may call these routes from a
   page. A preflight is answered here, before the request limit, so it does not use up the visitor's requests, and every
   answer on these routes carries the origin back, including the limit's 429, so the page can read it.
 - **Staff read.** `GET /v1/staff/onboarding?days=14` (staff key): totals per UTC day for the Customer Insights
-  Analyst's report: sessions, sessions with 2 or more visitor messages (in either mode), downloads and cost. No session rows, no text.
+  Analyst's report: sessions, sessions with 2 or more visitor messages (in either mode), how many of those downloaded
+  the file (the main measure), all downloads and cost. No session rows, no text.
 
-Merging into hq/app.py: `create_app` calls `onboarding.install(app, counts, staff_only)` after the routes and the request
-limit, so this module's browser rules sit outside that limit. The daily purge calls `counts.purge()`.
+Merging into hq/app.py: `create_app` calls `onboarding.install(app, counts, staff_only, address=address)` after the
+routes and the request limit, so this module's browser rules sit outside that limit, and leaves `EVENT` out of it. The daily purge calls `counts.purge()`.
 """
 import hashlib
 import json
@@ -38,12 +42,21 @@ from datetime import timedelta
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
+from .limits import Limiter
+
 PREFIX = "/v1/onboarding"
+EVENT = PREFIX + "/event"
+EVENTS_PER_HOUR = 300          # per address: a 60-turn session's messages, steps and download, a few times over
 ORIGINS = ("https://tico.team",)
 BODY_LIMIT = 512
 FIELDS = {"session_id", "kind", "step"}
 KINDS = ("download", "message", "step")
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
+# Key and token shapes, as in backend/redaction.py: a provider prefix anywhere, or a long run mixing letters and digits
+# that is not a UUID.
+KEY_PREFIX = re.compile(r"sk-|sk_|pk_|rk_|(?:ghp|gho|ghs|ghu|ghr)_|github_pat_|xox[abprs]-|xapp-|glpat-|hf_|eyJ"
+                        r"|(?:AKIA|ASIA)[0-9A-Z]{16}")
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 MAX_STEP = 9
 RETENTION_DAYS = 395          # 13 months, as installs
 NEW_SESSIONS_PER_DAY = 20_000  # a flood cap: past it, a new session is not counted that day
@@ -64,6 +77,17 @@ CREATE TABLE IF NOT EXISTS onboarding_sessions(
  cost_micro_usd INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS onboarding_sessions_day ON onboarding_sessions(day);
 """
+
+
+def key_shaped(value):
+    if KEY_PREFIX.search(value):
+        return True
+    return len(value) >= 32 and bool(re.search(r"\d", value) and re.search(r"[A-Za-z]", value)) \
+        and not UUID.fullmatch(value)
+
+
+def valid_session_id(value):
+    return isinstance(value, str) and bool(SESSION_ID.fullmatch(value)) and not key_shaped(value)
 
 
 def switched_on(value):
@@ -91,11 +115,14 @@ class Counts:
         self.salt = bytes(row[0])
 
     def key(self, session_id):
+        # Checked here as well as in parse, so no caller can hash, and keep, a derivative of a pasted key.
+        if not valid_session_id(session_id):
+            raise ValueError("invalid session id")
         return hashlib.blake2b(session_id.encode(), key=self.salt, digest_size=16).digest()
 
     def event(self, session_id, kind, step=None):
         """Count one page event. Returns whether anything was written."""
-        if not self.on:
+        if not self.on or not valid_session_id(session_id):
             return False
         day = self.db.clock().isoformat()
         key = self.key(session_id)
@@ -126,14 +153,17 @@ class Counts:
         first = today - timedelta(days=days - 1)
         with self.db.lock:
             rows = {r[0]: r for r in self.db.conn.execute(
-                "SELECT day, count(*), sum(messages>=2), sum(downloaded), sum(cost_micro_usd) FROM onboarding_sessions "
+                "SELECT day, count(*), sum(messages>=2), sum(messages>=2 AND downloaded=1), sum(downloaded), "
+                "sum(cost_micro_usd) FROM onboarding_sessions "
                 "WHERE day>=? GROUP BY day", (first.isoformat(),))}
         out = []
         for n in range(days):
             day = (first + timedelta(days=n)).isoformat()
             r = rows.get(day)
-            out.append({"day": day, "sessions": r[1] if r else 0, "sessions_2plus_messages": r[2] if r else 0,
-                        "downloads": r[3] if r else 0, "cost_usd": round((r[4] if r else 0) / 1_000_000, 6)})
+            r = r or (day, 0, 0, 0, 0, 0)
+            out.append({"day": day, "sessions": r[1], "sessions_2plus_messages": r[2],
+                        "sessions_2plus_messages_downloaded": r[3], "downloads": r[4],
+                        "cost_usd": round(r[5] / 1_000_000, 6)})
         return out
 
 
@@ -148,7 +178,7 @@ def parse(raw):
     if not isinstance(body, dict) or not set(body) <= FIELDS:
         return None
     session_id, kind, step = body.get("session_id"), body.get("kind"), body.get("step")
-    if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id) or kind not in KINDS:
+    if not valid_session_id(session_id) or kind not in KINDS:
         return None
     if kind == "step":
         if type(step) is not int or not 0 <= step <= MAX_STEP:
@@ -158,10 +188,12 @@ def parse(raw):
     return session_id, kind, step
 
 
-def install(app, counts, staff_only=None, origins=None, brain_ready=lambda: False):
+def install(app, counts, staff_only=None, origins=None, brain_ready=lambda: False, address=None, events=None):
     """Add the `/v1/onboarding` routes and their browser rules to an HQ app. `brain_ready` says whether `/turn` can
     answer now; until the brain is built there is none, and `/health` says so without a model call or a key."""
     allowed = set(origins_from_env() if origins is None else origins)
+    events = events or Limiter(limit=EVENTS_PER_HOUR, window=3600)
+    address = address or (lambda request: request.client.host if request.client else "")
 
     def ours(path):
         return path == PREFIX or path.startswith(PREFIX + "/")
@@ -192,8 +224,10 @@ def install(app, counts, staff_only=None, origins=None, brain_ready=lambda: Fals
     def health():
         return JSONResponse({"ok": bool(brain_ready())}, headers=NO_STORE)
 
-    @app.post(PREFIX + "/event")
+    @app.post(EVENT)
     async def event(request: Request):
+        if not events.allow(address(request)):
+            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "3600", **NO_STORE})
         raw = b""
         async for chunk in request.stream():         # read no more than a valid request can be
             raw += chunk

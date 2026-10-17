@@ -87,10 +87,13 @@ POST /v1/onboarding/event  {"session_id": "<random id>", "kind": "download"}
                            {"session_id": "<random id>", "kind": "step", "step": 2}
                            -> 204, whether or not anything is kept
 GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{"day", "sessions",
-                           "sessions_2plus_messages", "downloads", "cost_usd"}]}
+                           "sessions_2plus_messages", "sessions_2plus_messages_downloaded", "downloads",
+                           "cost_usd"}]}
 ```
 
-- **Input** is checked strictly: a session id of 8 to 64 letters, digits, `-` or `_`; kind `download`, `message` or `step`; `step` a
+- **Input** is checked strictly: a session id of 8 to 64 letters, digits, `-` or `_`, refused before it is hashed when
+  it is shaped like a key or token (a provider prefix such as `sk-` or `ghp_`, or 32 or more characters mixing letters and
+  digits that are not a UUID), so nothing derived from a pasted key is kept; kind `download`, `message` or `step`; `step` a
   whole number from 0 to 9, only with kind `step`; no other field; at most 512 bytes. Anything else is `422 {"error": "invalid"}`.
   A `text/plain` body (a beacon) is read the same way.
 - **What is kept.** With `HQ_ONBOARDING_COUNTS=on`, one row per session in `onboarding_sessions`: a salted hash of the
@@ -103,7 +106,12 @@ GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{
   `Access-Control-Allow-Origin` back, on every answer under `/v1/onboarding`, including HQ's `429`, so the page can read
   it. A preflight (`OPTIONS`) for `GET` or `POST` with at most `Content-Type` is answered `204` before the request limit and
   is not counted against it. Staff routes send no CORS headers.
+- **Request budget.** `POST /event` is left out of HQ's 60 requests an hour per address, so a long chat still leaves room
+  for its download count, and has its own limit of 300 an hour per address (in memory, salted, as `hq/limits.py`).
+  `/health` stays under the shared limit.
 - **Staff read** for the Customer Insights Analyst's report: totals per UTC day, today last, 1 to 90 days (default 14).
+  `sessions_2plus_messages_downloaded` over `sessions_2plus_messages` is the main measure; `downloads` is every download,
+  for cost per downloaded file.
 
 ## Messages, known issues and fixed-in notices
 

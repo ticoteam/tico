@@ -11,8 +11,10 @@ All notable changes to Tico are recorded here. The format follows
 - Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
   `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download and message counts. Counts are kept only when
   `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
-  how many messages were sent, turns and cost, and no message text or address. Only `https://tico.team` may call these routes from a browser
-  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`.
+  how many messages were sent, turns and cost, and no message text or address; a session ID shaped like a key is
+  refused before it is hashed. Only `https://tico.team` may call these routes from a browser
+  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`, including how many sessions
+  with 2 or more messages downloaded the file.
 - Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
   Usage estimates its cost at Anthropic's list price for prompts up to 100,000 tokens ($0.10 in, $0.01 cached, $0.50
   out per million tokens); a prompt over that costs five times as much, which the estimate does not show.

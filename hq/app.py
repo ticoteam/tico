@@ -101,9 +101,11 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
 
     @app.middleware("http")
     async def rate_limit(request: Request, call_next):
-        # The support routes have limits of their own (support.py): a person's app polls for replies.
+        # The support routes have limits of their own (support.py): a person's app polls for replies. So does the setup
+        # page's event route (onboarding.py), so a long chat still leaves room for its download count.
         path = request.url.path
-        if path != "/healthz" and not path.startswith(("/v1/support", "/v1/staff")) and not limiter.allow(address(request)):
+        if path not in ("/healthz", onboarding.EVENT) and not path.startswith(("/v1/support", "/v1/staff")) \
+                and not limiter.allow(address(request)):
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "3600"})
         return await call_next(request)
 
@@ -137,5 +139,5 @@ def create_app(db, latest, limiter=None, client_ip_header="", staff_key="", tick
     notices_module.install(app, notices, staff_only, watch)
     install_support_access(app, tickets, address, staff_only)
     # Last, so its browser rules sit outside the request limit above: a preflight is not counted, and a 429 is readable.
-    onboarding.install(app, counts, staff_only)
+    onboarding.install(app, counts, staff_only, address=address)
     return app
