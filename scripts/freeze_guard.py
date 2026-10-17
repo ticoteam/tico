@@ -7,12 +7,14 @@ The Release Manager runs it on the frozen candidate, before asking for Release v
 It walks every first-parent commit from the previous release tag to the candidate (a merged pull request is one
 such commit) and reports, naming the pull request or commit each time:
 
-1. NET REVERT: a change that undoes most of what a pull request or commit shipped in an earlier release did: it
-   deletes the lines that one added, or puts back the lines it deleted. A stale tree committed over newer work looks
-   exactly like this, and so does re-applying a fix that was reverted.
+1. NET REVERT: a change that undoes what a pull request or commit shipped in an earlier release did: all of it,
+   however small, or most of its meaningful lines (it deletes the lines that one added, or puts back the lines it
+   deleted). A stale tree committed over newer work looks exactly like this, and so does re-applying a fix that was
+   reverted. Every earlier release is compared unless --releases limits it.
 2. UNREVIEWED: a merged pull request whose final head has neither an approving GitHub review at that commit nor a
    review receipt from its ticket naming that commit. An approval of an earlier head counts only when the change at
-   that head is the same as the change at the final head (a merge of main into the branch, say).
+   that head is the same as the change at the final head, line for line with whitespace (a merge of main into the
+   branch, say).
 3. NO PR: a commit that landed without a pull request and has no receipt. Commits that only touch CHANGELOG.md
    (release notes) are exempt.
 
@@ -32,12 +34,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# A change is reported as a net revert when it undoes at least this share of what an earlier change added, or of
-# what it deleted, and at least MIN_LINES of it.
+# A change is a net revert when it undoes everything an earlier change did, however small, or at least this share of
+# the meaningful lines an earlier change added or deleted, and at least MIN_LINES of them.
 REVERT_SHARE = 0.6
 MIN_LINES = 5
-# How many earlier releases' changes a candidate is compared against.
-LOOKBACK_RELEASES = 25
 # Release notes move between sections at every cut; they are never evidence of a revert or need a review.
 NOTES_FILES = {"CHANGELOG.md"}
 # Cutting tests is routine here (the suite is kept small), so only product code counts toward a revert.
@@ -57,10 +57,9 @@ def git(repo, *args, check=True):
     return done.stdout if not done.returncode else ""
 
 
-def significant(line):
-    """A line's text for matching, or None for blank lines and lone brackets that every file shares."""
-    text = line.strip()
-    return text if sum(ch.isalnum() for ch in text) >= 3 else None
+def meaningful(text):
+    """Blank lines, lone brackets and one-word lines appear everywhere; they don't count toward a partial revert."""
+    return sum(ch.isalnum() for ch in text) >= 3
 
 
 def parse_log(text):
@@ -80,12 +79,14 @@ def parse_log(text):
                 path = line[6:] if line.startswith("+++ b/") else path
             elif line[:1] in "+-" and line and path is not None and path not in NOTES_FILES \
                     and not TEST_PATH.search(path):
-                text = significant(line[1:])
-                if text is not None:
+                text = line[1:].strip()
+                if text:
                     added, removed = files.setdefault(path, (Counter(), Counter()))
                     (added if line[0] == "+" else removed)[text] += 1
         commits.append({"sha": sha.strip(), "parents": parents.split(), "subject": subject, "body": body,
-                        "files": files, "touched": _touched(diff)})
+                        "files": files, "meaningful": {path: tuple(Counter({k: v for k, v in c.items() if meaningful(k)})
+                                                                   for c in pair) for path, pair in files.items()},
+                        "touched": _touched(diff)})
     return commits
 
 
@@ -125,15 +126,18 @@ def label(repo, commit):
     return f"PR #{number} ({commit['sha'][:8]})" if number else f"commit {commit['sha'][:8]} \"{commit['subject']}\""
 
 
-def undone(change, earlier):
-    """How much of `earlier` the `change` undoes: (lines it added now deleted, of how many; deleted now back, of how many)."""
-    net = Counter()
-    for added, removed in change["files"].values():
-        net.update(added)
-        net.subtract(removed)
-    gone, back = Counter({k: -v for k, v in net.items() if v < 0}), Counter({k: v for k, v in net.items() if v > 0})
+def undone(change, earlier, lines="files"):
+    """How much of `earlier` the `change` undoes, over all its lines or only its meaningful ones: (lines it added now
+    deleted, of how many; lines it deleted now back, of how many)."""
+    if ("net", lines) not in change:
+        net = Counter()
+        for added, removed in change[lines].values():
+            net.update(added)
+            net.subtract(removed)
+        change["net", lines] = ({k: -v for k, v in net.items() if v < 0}, {k: v for k, v in net.items() if v > 0})
+    gone, back = (Counter(side) for side in change["net", lines])
     added_total = removed_total = added_undone = removed_undone = 0
-    for path, (added, removed) in earlier["files"].items():
+    for path, (added, removed) in earlier[lines].items():
         added_total += sum(added.values())
         removed_total += sum(removed.values())
         if path not in change["files"]:
@@ -152,6 +156,9 @@ def undone(change, earlier):
 def reverts(change, earlier):
     """The share of `earlier` that `change` undoes when it is a net revert, else None."""
     added_undone, added_total, removed_undone, removed_total = undone(change, earlier)
+    if added_total + removed_total and (added_undone, removed_undone) == (added_total, removed_total):
+        return 1.0   # an exact inverse, whatever its size
+    added_undone, added_total, removed_undone, removed_total = undone(change, earlier, "meaningful")
     shares = [(n, total) for n, total in ((added_undone, added_total), (removed_undone, removed_total))
               if n >= MIN_LINES and n >= REVERT_SHARE * total]
     if not shares:
@@ -200,7 +207,16 @@ class GitHub:
         done = subprocess.run(["gh", "api", "--paginate", f"repos/{self.slug}/{path}"], capture_output=True, text=True)
         if done.returncode:
             raise GuardError(f"gh api {path}: {done.stderr.strip() or done.stdout.strip()}")
-        return json.loads(done.stdout or "null")
+        # --paginate prints one JSON document per page; list pages are joined into one list.
+        pages, text, at = [], done.stdout, 0
+        decoder = json.JSONDecoder()
+        while text[at:].strip():
+            at += len(text[at:]) - len(text[at:].lstrip())
+            page, at = decoder.raw_decode(text, at)
+            pages.append(page)
+        if pages and all(isinstance(page, list) for page in pages):
+            return [item for page in pages for item in page]
+        return pages[0] if pages else None
 
     def head(self, number):
         return self._api(f"pulls/{number}")["head"]["sha"]
@@ -214,15 +230,26 @@ def has_object(repo, sha):
 
 
 def change_id(repo, base, head):
-    """A stable id of the change `head` makes on top of `base`, so a branch merged up to date keeps its id."""
+    """The change `head` makes on top of its fork from `base`, so a branch merged up to date keeps it.
+
+    Every changed line is kept verbatim (whitespace inside strings and indentation change behaviour); only line numbers
+    and blob ids, which shift when main is merged in, are left out.
+    """
     fork = git(repo, "merge-base", base, head, check=False).strip()
     if not fork:
         return None
-    diff = git(repo, "diff", "--no-color", "--no-ext-diff", fork, head, check=False)
-    if not diff:
-        return None
-    done = subprocess.run(["git", "-C", repo, "patch-id", "--stable"], input=diff, capture_output=True, text=True)
-    return done.stdout.split()[0] if done.stdout.strip() else None
+    diff = git(repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "--binary", "-U0", fork, head, check=False)
+    kept, in_body = [], False
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            kept.append(line)
+            in_body = False
+        elif line.startswith(("@@", "GIT binary patch")):
+            in_body = True
+            kept.append("@@" if line.startswith("@@") else line)
+        elif in_body or line.startswith(("new file mode", "deleted file mode", "old mode", "new mode", "Binary files")):
+            kept.append(line)
+    return "\n".join(kept) if kept else None
 
 
 def final_head(repo, commit, number, github):
@@ -293,32 +320,42 @@ def unreviewed(repo, changes, receipts, github, fetch=True):
 
 
 def previous_release(repo, head):
-    """The newest release tag below the candidate's own tag, or the newest one when the candidate has none yet.
+    """The newest release tag that is earlier than the candidate (and below its own tag, when it has one).
 
-    Release tags sit on release branches that are not always merged back, so the nearest reachable tag can be older.
+    Release tags sit on release branches that are not always merged back, so the previous release need not be an
+    ancestor; a tag is later than the candidate when it contains it.
     """
     tags = git(repo, "tag", "--list", "v[0-9]*", "--sort=-v:refname").split()
     own = set(git(repo, "tag", "--points-at", head, "--list", "v[0-9]*").split())
     below = tags[max(tags.index(t) for t in own) + 1:] if own else tags
-    if not below:
-        raise GuardError(f"no release tag before {head}; name one with --previous")
-    return below[0]
+    for tag in below:
+        contains = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", head, tag], capture_output=True)
+        if contains.returncode == 1:
+            return tag
+    raise GuardError(f"no release tag earlier than {head[:12]}; name one with --previous")
 
 
 def lookback_base(repo, previous, releases):
+    if not releases:
+        return None
     tags = git(repo, "tag", "--merged", previous, "--list", "v[0-9]*", "--sort=-v:refname").split()
     older = [t for t in tags if t != previous]
     return older[releases - 1] if len(older) >= releases else None
 
 
-def check(repo, head, previous=None, receipts=(), github=None, releases=LOOKBACK_RELEASES, fetch=True):
+def check(repo, head, previous=None, receipts=(), github=None, releases=None, fetch=True):
+    """Check the candidate against every earlier release, or only the last `releases` of them when given."""
     head = git(repo, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
     previous = previous or previous_release(repo, head)
     changes = first_parent_log(repo, f"{previous}..{head}")
+    if not changes:
+        raise GuardError(f"nothing between {previous} and {head[:12]}: {previous} is not an earlier release of this "
+                         f"candidate; name the right one with --previous")
     base = lookback_base(repo, previous, releases)
     shipped = first_parent_log(repo, f"{base}..{previous}" if base else previous)
     findings = net_reverts(repo, changes, shipped) + unreviewed(repo, changes, list(receipts), github, fetch=fetch)
-    return {"head": head, "previous": previous, "changes": len(changes), "findings": findings}
+    return {"head": head, "previous": previous, "changes": len(changes), "compared_since": base or "the first commit",
+            "findings": findings}
 
 
 def repo_slug(repo):
@@ -335,8 +372,8 @@ def main(argv=None):
     parser.add_argument("--repo", default=".", help="the git checkout (default .)")
     parser.add_argument("--github", help="owner/name on GitHub (default: from the origin remote)")
     parser.add_argument("--no-github", action="store_true", help="don't read GitHub; heads and receipts only")
-    parser.add_argument("--releases", type=int, default=LOOKBACK_RELEASES,
-                        help=f"how many earlier releases a change is compared against (default {LOOKBACK_RELEASES})")
+    parser.add_argument("--releases", type=int,
+                        help="compare against only the last N earlier releases (default: all history)")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
     try:
@@ -358,8 +395,8 @@ def main(argv=None):
     else:
         for finding in result["findings"]:
             print(f"{finding['kind']:<11} {finding['text']}")
-        print(f"freeze guard: {result['previous']}..{result['head'][:12]}, {result['changes']} changes, "
-              f"{len(result['findings'])} findings")
+        print(f"freeze guard: {result['previous']}..{result['head'][:12]}, {result['changes']} changes compared "
+              f"with history since {result['compared_since']}, {len(result['findings'])} findings")
     return 1 if result["findings"] else 0
 
 
