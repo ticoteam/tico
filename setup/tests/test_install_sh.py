@@ -3,6 +3,7 @@
 The scenarios are in install_scenarios.sh. They install curl and python3 from the distro's own packages, so the
 containers need network access; the tests skip when Docker is not available."""
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -176,7 +177,9 @@ def test_build_refuses_a_non_release_version_and_a_script_without_the_placeholde
         build.bake("nothing to replace", "v1.2.3")
 
 
-@pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck not installed")
+# The Release workflow runs the same shellcheck after the tag is pushed; v0.2.30 failed there. On a CI VM (shellcheck is
+# preinstalled) a missing shellcheck is a failure, not a skip, so the release gate cannot pass without this check.
+@pytest.mark.skipif(not shutil.which("shellcheck") and not os.environ.get("CI"), reason="shellcheck not installed")
 def test_install_sh_is_shellcheck_clean_posix_sh():
     r = subprocess.run(["shellcheck", "-s", "sh", str(SCRIPTS / "install.sh")],
                        capture_output=True, text=True)

@@ -26,9 +26,29 @@ def pytest_addoption(parser):
                      help="Build API fixture databases from empty paths (migration checks and benchmarks)")
 
 
+def _unix_socket_bind_outside_tmp_path(config):
+    """A Unix socket path has a length limit (108 bytes on Linux, 104 on macOS). pytest's tmp_path is short on a laptop
+    but long under the hosted release gate's TMPDIR, so a socket under tmp_path passed every local run and failed only
+    at release validation (v0.3.50's first candidate). Refuse it on every computer, so it fails at the first run."""
+    import socket
+    bind = socket.socket.bind
+    explicit = config.option.basetemp and str(Path(config.option.basetemp).resolve())
+
+    def checked_bind(self, address):
+        if self.family == socket.AF_UNIX and isinstance(address, (str, os.PathLike)):
+            path = os.fspath(address)
+            if "/pytest-of-" in path or (explicit and os.path.abspath(path).startswith(explicit)):
+                raise OSError(f"Unix socket under pytest's tmp_path: {path}. Its length depends on TMPDIR and breaks "
+                              "the hosted release gate; bind it in tempfile.mkdtemp(dir='/tmp') instead.")
+        return bind(self, address)
+
+    socket.socket.bind = checked_bind
+
+
 def pytest_configure(config):
     """A test path that does not exist is an error. Under -n (on by default here) xdist drops it without a word,
     and the run ends as "no tests ran", which a reader piping the output can take for a pass."""
+    _unix_socket_bind_outside_tmp_path(config)
     if hasattr(config, "workerinput") or config.option.pyargs:
         return          # --pyargs names modules, not paths
     base = Path(config.invocation_params.dir)
