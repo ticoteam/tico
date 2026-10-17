@@ -13,6 +13,7 @@ from . import bot_access as BA
 from . import models as M
 from . import placement
 from . import providers
+from . import app_delivery
 from . import rooms
 from . import shared_bots
 from .auth import Identity
@@ -196,7 +197,8 @@ class SettingsAdmin:
                 "review_model": effective.get("review_model"),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
-                "fallback": normalize_fallback(effective.get("fallback"))}
+                "fallback": normalize_fallback(effective.get("fallback")),
+                "app_delivery": app_delivery.view(c, _json(config["config_json"], {}) or {})}
 
     @staticmethod
     def refuse_retired(choice):
@@ -578,6 +580,8 @@ class SettingsAdmin:
                 declared.pop("capture_stream", None)
                 from .stream_capture import forget_bot
                 forget_bot(c, bot)
+        if "app_delivery" in body.model_fields_set:
+            app_delivery.change(c, who, self.auth, bot, body.app_delivery, declared, config["operator"])
         if "shared" in body.model_fields_set:
             declared["shared"] = bool(body.shared)
         if "template" in body.model_fields_set:

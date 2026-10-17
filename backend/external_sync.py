@@ -19,8 +19,9 @@ Tico does the rest here:
 - What the person wrote to it in Tico since the last sync comes back in the reply (`inbox`), for
   the routine to hand to the bot; its answer arrives with the next transcript.
 
-Nothing is dispatched to these bots: the harnesses are external, so presence is "last synced"
-rather than a heartbeat.
+Nothing is dispatched to these bots, so presence is "last synced" rather than a heartbeat, unless the person
+delivers one through its desktop app on their computer (backend/app_delivery.py): then a message to it is a job
+for that computer, and the sync still brings its history and instructions without handing that message over too.
 """
 
 import base64
@@ -328,12 +329,22 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
     now = H.now()
     added = 0
     place = provider.label.split()[0]
+    from . import app_delivery
+    config = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+                      or {"config_json": "{}"})["config_json"], {}) or {}
+    delivering = app_delivery.setting(config) is not None
     for msg in messages:
         mid = message_id(provider, ext_id, msg, person)
         if provider.id == "grokbot" and legacy_grok_message(c, room, ext_id, msg, mid, images):
             continue
         sender, target = (me, bot) if msg.role == "user" else (bot, me)
         created = moment(msg.at, now)
+        # What the app already brought (and, while the app delivers, what a runner turn posted or the person sent
+        # here) is not copied again: the same words from the same sender within a day are that message.
+        if not c.execute("SELECT 1 FROM messages WHERE id=?", (mid,)).fetchone() and (
+                app_delivery.echoes(c, room["id"], sender, msg.text, any_source=False, at=created)
+                or (delivering and app_delivery.echoes(c, room["id"], sender, msg.text, at=created))):
+            continue
         refs = {"quiet": True, provider.key: {"bot": ext_id, "id": msg.id or None}}
         text, attached = msg.text, []
         for row in (images or {}).get(mid) or []:
@@ -366,19 +377,31 @@ def synced_through(c, provider, person, slug):
 
 def take_inbox(c, provider, person, slug):
     """What the person wrote to the bot in Tico and the bot has not been given yet, oldest first.
-    Only their own room: another person's message to it is theirs to relay, not this sync's."""
+    Only their own room: another person's message to it is theirs to relay, not this sync's.
+    A message with a job is the computer's while the bot is delivered through its app (backend/app_delivery.py),
+    and always once a runner tried it: it reaches the bot once. A job no runner tried, with app delivery off, is
+    cancelled and its message handed over here."""
     room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=?",
                      ("human:" + person, slug)).fetchone()
     if not room:
         return []
-    rows = c.execute("SELECT id,body,created FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? "
-                     "AND delivered_at IS NULL AND deleted_at IS NULL AND kind='say' AND id NOT LIKE ? "
-                     "ORDER BY created LIMIT ?",
-                     (room["id"], "human:" + person, "bot:" + slug, provider.key + "-%", INBOX_LIMIT)).fetchall()
+    from . import app_delivery
+    config = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+                      or {"config_json": "{}"})["config_json"], {}) or {}
+    delivering = 1 if app_delivery.active(c, config) else 0
+    rows = c.execute("SELECT m.id,m.body,m.created FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
+                     "AND m.to_actor=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
+                     "AND m.id NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=m.id AND "
+                     "(? OR j.state NOT IN ('queued','cancelled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
+                     "ORDER BY m.created LIMIT ?",
+                     (room["id"], "human:" + person, "bot:" + slug, provider.key + "-%", delivering,
+                      INBOX_LIMIT)).fetchall()
     if rows:
         now = H.now()
         c.executemany("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
                       [(now, row["id"]) for row in rows])
+        c.executemany("UPDATE jobs SET state='cancelled' WHERE message_id=? AND state='queued'",
+                      [(row["id"],) for row in rows])
     return [{"id": row["id"], "text": row["body"], "at": row["created"]} for row in rows]
 
 

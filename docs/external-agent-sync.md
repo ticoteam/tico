@@ -38,7 +38,7 @@ human on a routine, so the sync runs on the platform, with the human's own sign-
 - Grok Bots named "Tico …" in Grok read "Grok …" here: in Grok the word marks the Bot as one of ours; here it says
   where the bot runs. The Grok name is kept in `config_json.grok.name`.
 - Presence is the last sync: synced in the last 26 hours shows as synced, older as not synced lately. Nothing is
-  dispatched to these bots.
+  dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app).
 
 The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
 `hub external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
@@ -70,6 +70,34 @@ The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/
 >    messages per Bot per call, repeating until all are sent.
 > 4. For each Bot with `inbox` messages in any of those replies, give them to that Bot as from me, in order (each is given only once).
 > 5. Tell me in one line per Bot what Tico added and what you passed on. Change nothing else in Grok.
+
+### Deliver through the Grok Mac app
+
+The daily routine makes a message wait up to a day. With app delivery on, a Grok Bot is a bot like any other in Tico:
+a message to it reaches it within a minute, it shows as working while it answers, its reply streams into its Tico
+chat, and what it says on its own in Grok (a scheduled result, a follow-up) shows up there within a few minutes.
+
+It runs on a Mac of yours that stays signed in, with the Grok app installed and signed in to your account:
+
+1. Run the native runner on that Mac (the "Use a Tico checkout instead" install), not the Docker one: Docker cannot
+   see Mac apps. `tico-appdriver` ships beside `tico-runner`.
+2. Give the runner Accessibility permission when **Settings → Computers →** that Mac shows **Desktop apps: Grok —
+   Needs Accessibility permission**: System Settings → Privacy & Security → Accessibility, and turn on the entry that
+   row names. The row reads **Ready** once Grok is installed, signed in and answers in the background.
+3. In the bot's settings, set **Deliver through the app on** to that Mac. Only the person who synced the bot can set
+   it, and only to a computer of theirs where Grok is ready. Clear it to go back to the daily sync.
+
+The runner works only through macOS Accessibility: it sets the Grok Bot's message box and presses Send, then reads
+the reply. It never moves the pointer, types through the keyboard or brings Grok to the front, so you can keep using
+the Mac. It presses nothing but the bot's row, the message box and Send. When a reply asks for something only you can
+do in Grok (an approval, a sign-in, a payment), Tico asks you instead. When Grok is signed out, missing its
+permission, or changed its layout, Health names the problem for that Mac and the bot's chat says why the message
+didn't go.
+
+The routine keeps working and stays optional; with app delivery on it is only needed to copy the bot's instructions
+and section. A message delivered through the app is not handed to the routine again, and the routine does not copy
+the app exchange a second time. xAI's terms may not allow automated use of its app; turning this on is the account
+owner's call.
 
 ## Dots
 

@@ -265,3 +265,148 @@ def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
         c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old','grok-designer','meeting.ready','Notes','x')")
         assert routines.emit(c, "meeting.ready", "m1") == []
 
+
+
+# ----------------------------------------------------------------------------- delivered through the Grok app
+def mac(api, operator="cara", label="Cara's Mac", grok_ready=True, bots=()):
+    """A computer of `operator`'s whose runner reports the Grok app ready (or signed out) and `bots` ready."""
+    from backend.tests.test_api import runner
+    machine = runner(api, operator, label)
+    beat(api, machine, grok_ready, bots)
+    return machine
+
+
+def beat(api, machine, grok_ready=True, bots=()):
+    grok = {"installed": True, "running": True, "signed_in": grok_ready, "background_ok": True, "ready": grok_ready,
+            "state": "ready" if grok_ready else "not_signed_in", "detail": "" if grok_ready else "Grok shows its sign-in"}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "runtimes": {}, "bots": {slug: {"ready": True} for slug in bots},
+        "appdriver": {"trusted": True, "macos": "15.1", "apps": {"grok": grok}}}}, token=machine["token"])
+
+
+def deliver(api, computer, token="cara-test", expected=200, slug="grok-designer"):
+    revision = next(b for b in get(api, "bots", token=token) if b["slug"] == slug)["revision"]
+    value = {"computer": computer, "app": "grok"} if computer else None
+    return api.post(f"/api/v2/bots/{slug}/definition", headers=headers(token),
+                    json={"app_delivery": value, "expected_revision": revision})
+
+
+def jobs(api, slug="grok-designer"):
+    with api.app.state.store.read() as c:
+        return {r["message_id"]: r["state"] for r in c.execute("SELECT message_id,state FROM jobs WHERE bot=?", (slug,))}
+
+
+def inbox(api, token="cara-test"):
+    return [m["text"] for m in post(api, "external/sync", {"provider": "grokbot", "inbox": True, "bots": [
+        designer(id=GROK_ID, grok_id="", messages=[])]}, token=token)["bots"][0]["inbox"]]
+
+
+def test_only_the_bots_person_delivers_it_through_their_own_ready_computer_and_an_admin_may_turn_it_off(api):
+    sync(api, designer(), token="cara-test")
+    signed_out, bens = mac(api, grok_ready=False), mac(api, "ben", "Ben's Mac")
+    refused = deliver(api, signed_out["runner_id"])
+    assert refused.status_code == 422 and "Grok isn't ready on Cara's Mac: Grok shows its sign-in" in refused.text
+    assert deliver(api, bens["runner_id"]).status_code == 422          # signed in to Grok as Ben there, not Cara
+    ready = mac(api)
+    refused = deliver(api, ready["runner_id"], token="ben-test")       # an admin, not the person who synced it
+    assert refused.status_code == 422 and "Only the person who synced this Grok Bot" in refused.text
+    assert deliver(api, ready["runner_id"]).status_code == 200
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"]["computer_label"] == "Cara's Mac" and row["assignment"]["runner_id"] == ready["runner_id"]
+    assert row["app_delivery_app"] == "grok"
+    employee = next(e for e in api.get("/api/employees", headers=headers("cara-test")).json() if e["name"] == "grok-designer")
+    assert employee["app_delivery"]["computer_label"] == "Cara's Mac" and employee["app_delivery_app"] == "grok"
+    assert deliver(api, None, token="ben-test").status_code == 200     # the way back is an admin's too
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"] is None and row["assignment"] is None
+
+
+def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_otherwise_never_both(api):
+    from backend.tests.test_api import claim
+    sync(api, designer(), token="cara-test")
+    before = post(api, "chat/grok-designer", {"text": "Before, for the sync."}, token="cara-test")
+    assert jobs(api) == {}                                             # off: exactly as before
+    computer = mac(api, bots=["grok-designer"])
+    assert deliver(api, computer["runner_id"]).status_code == 200
+    taken = post(api, "chat/grok-designer", {"text": "For the app."}, token="cara-test")
+    waiting = post(api, "chat/grok-designer", {"text": "Also for the app."}, token="cara-test")
+    assert jobs(api) == {taken["id"]: "queued", waiting["id"]: "queued"}
+    assert inbox(api) == ["Before, for the sync."]                     # the computer's messages are not handed over
+    attempt = claim(api, computer)
+    assert attempt["message"]["id"] == taken["id"]
+    assert attempt["config"]["app_delivery"] == {"computer": computer["runner_id"], "app": "grok"}
+    assert attempt["config"]["app_bot"] == {"id": GROK_ID, "name": "Tico Designer"}
+    assert deliver(api, None).status_code == 200                       # off again: what no runner took goes to the sync
+    assert jobs(api) == {taken["id"]: "leased", waiting["id"]: "cancelled"}
+    assert inbox(api) == ["Also for the app."] and inbox(api) == []
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE id=? AND delivered_at IS NULL", (before["id"],)).fetchone()
+
+
+def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches_needs_you(api):
+    from backend.tests.test_api import claim
+    sync(api, designer(messages=[]), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    deliver(api, computer["runner_id"])
+    asked = post(api, "chat/grok-designer", {"text": "Try a warmer palette."}, token="cara-test")
+    attempt = claim(api, computer)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "grok"}, token=computer["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Warmer: sand and rust.",
+                                                     "last_seq": 0}, token=computer["token"])
+    assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"] == [
+        {"slug": "grok-designer", "app": "grok", "bot": {"id": GROK_ID, "name": "Tico Designer"}, "after": None}]
+    report = lambda *messages, error=None: post(api, "runners/me/app-delivery/grok-designer", {
+        "app": "grok", "messages": list(messages), "error": error}, token=computer["token"])
+    page = [{"key": "k1", "role": "user", "text": " Try a  warmer palette."},     # Tico delivered it
+            {"key": "k2", "role": "bot", "text": "Warmer: sand and rust."},       # the turn posted it
+            {"key": "k3", "role": "user", "text": "And the logo?"},               # typed in the app itself
+            {"key": "k4", "role": "bot", "text": "Logo: keep it."}]               # the bot on its own
+    assert report(*page) == {"after": "k4", "posted": 2}
+    assert report(*page) == {"after": "k4", "posted": 0}                          # each key once
+    bodies = [(m["from_actor"], m["body"], bool(m["read_at"])) for m in room_messages_of(api, "cara", "grok-designer")]
+    assert bodies == [("human:cara", asked["body"], False), ("bot:grok-designer", "Warmer: sand and rust.", False),
+                      ("human:cara", "And the logo?", True), ("bot:grok-designer", "Logo: keep it.", False)]
+    assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k4"
+    report(error={"code": "needs_human", "detail": "Grok asks to approve", "text": "Approve the purchase in Grok?"})
+    needs = get(api, "needs-you", token="cara-test")
+    assert any(i.get("kind") == "ask" and i["body"] == "Approve the purchase in Grok?" for i in needs["items"])
+    other = mac(api, "cara", "Cara's other Mac")
+    refused = api.post("/api/v2/runners/me/app-delivery/grok-designer", headers=headers(other["token"]),
+                       json={"app": "grok", "messages": [{"key": "k9", "role": "bot", "text": "Not mine."}]})
+    assert refused.status_code == 404
+
+
+def test_a_removed_computer_puts_the_bot_back_on_the_daily_sync(api):
+    sync(api, designer(), token="cara-test")
+    computer = mac(api, bots=["grok-designer"])
+    deliver(api, computer["runner_id"])
+    report = {"app": "grok", "error": {"code": "not_signed_in", "detail": "Grok shows its sign-in"}}
+    post(api, "runners/me/app-delivery/grok-designer", report, token=computer["token"])
+    issues = api.get("/api/v2/health", headers=headers()).json()
+    assert any("Grok on Cara's Mac: not signed in" in check["summary"] for check in issues["checks"])
+    post(api, f"runners/{computer['runner_id']}/revoke", {}, token="cara-test")
+    row = next(b for b in get(api, "bots", token="cara-test") if b["slug"] == "grok-designer")
+    assert row["app_delivery"] is None and row["assignment"] is None
+    post(api, "chat/grok-designer", {"text": "Back to the sync."}, token="cara-test")
+    assert jobs(api) == {} and inbox(api) == ["Back to the sync."]
+
+
+def room_messages_of(api, person, slug):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
+            "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? ORDER BY m.created,m.rowid",
+            ("human:" + person, slug))]
+
+
+def test_an_existing_database_gets_the_queue_trigger_that_queues_for_app_delivery(api):
+    from backend import store as S
+    from backend.config import Settings
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DROP TRIGGER queue_bot_message")
+        c.execute(S.QUEUE_TRIGGER.replace(" AND NOT EXISTS (SELECT 1 FROM runners r", " AND NOT EXISTS (SELECT 2 FROM runners r"))
+    S.Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(seed_market=False)
+    with store.read() as c:
+        stored = c.execute("SELECT sql FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0]
+    assert stored == S.QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1)

@@ -923,6 +923,42 @@ class ScreenReadiness(Contract):
     reason: Annotated[str, BeforeValidator(lambda v: v[:200] if isinstance(v, str) else v), Field(max_length=200)] = ""
 
 
+def _cut(limit):
+    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+
+
+AppState = Literal["ready", "no_permission", "not_installed", "not_signed_in", "needs_foreground", "ui_changed",
+                   "no_driver", "error"]
+APP_STATES = AppState.__args__
+
+
+class AppDriverApp(Contract):
+    """One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py)."""
+    installed: StrictBool = False
+    version: Annotated[str, _cut(100), Field(max_length=100)] = ""
+    running: StrictBool = False
+    signed_in: StrictBool = False
+    background_ok: StrictBool = False
+    ready: StrictBool = False
+    # A state a newer driver names that this server does not know yet reads as `error`, not as a refused report.
+    state: Annotated[AppState, BeforeValidator(lambda v: v if v in APP_STATES else "error")] = "error"
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+
+
+APP_DRIVER_APPS = 10
+
+
+class AppDriverReadiness(Contract):
+    """The computer's desktop-app driver: whether macOS trusts it, and each app's state by app id (`grok`)."""
+    trusted: StrictBool = False
+    macos: Annotated[str, _cut(50), Field(max_length=50)] = ""
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+    apps: Annotated[dict[Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,40}$")], AppDriverApp],
+                    BeforeValidator(lambda v: dict(list(v.items())[:APP_DRIVER_APPS]) if isinstance(v, dict) else v)
+                    ] = Field(default_factory=dict)
+
+
 class StructuredReadiness(Contract):
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
@@ -940,6 +976,7 @@ class StructuredReadiness(Contract):
     browser_launch: ContainerExecReadiness | None = None
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
+    appdriver: AppDriverReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
     recent_errors: list[Annotated[str, BeforeValidator(lambda v: v[:300] if isinstance(v, str) else v),
@@ -950,7 +987,7 @@ class StructuredReadiness(Contract):
         data = handler(self)
         if data.get("disk") is None:
             data.pop("disk", None)
-        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen"):
+        for field in ("container_exec", "github_auth", "browser_launch", "engine", "screen", "appdriver"):
             if data.get(field) is None:
                 data.pop(field, None)
         if not data.get("recent_errors"):
@@ -1257,6 +1294,35 @@ class BotArchive(Contract):
     on_behalf_of: ID | None = None
 
 
+class AppDelivery(Contract):
+    """Where a synced bot's messages are delivered: through `app` on the computer (runner) `computer`."""
+    computer: ID
+    app: Literal["grok"] = "grok"
+
+
+class AppDeliveryMessage(Contract):
+    """One message the app shows in the bot's conversation. `key` is the driver's own stable id for it."""
+    key: Annotated[str, Field(min_length=1, max_length=200)]
+    role: Literal["bot", "user"]
+    text: Annotated[str, Field(min_length=1, max_length=40_000)]
+    at: Annotated[str, Field(max_length=50)] | None = None
+    needs_human: StrictBool = False
+
+
+class AppDeliveryError(Contract):
+    code: Literal["needs_human", "no_permission", "not_signed_in", "needs_foreground", "ui_changed", "not_installed",
+                  "not_running", "bot_not_found", "timeout", "send_failed", "busy"]
+    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
+    text: Annotated[str, Field(max_length=40_000)] = ""
+
+
+class AppDeliveryReport(Contract):
+    """What a computer read from a bot's conversation in the app, newest last (POST /api/v2/runners/me/app-delivery)."""
+    app: Literal["grok"] = "grok"
+    messages: list[AppDeliveryMessage] = Field(default_factory=list, max_length=50)
+    error: AppDeliveryError | None = None
+
+
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
     template: str | None = Field(default=None, max_length=80)
@@ -1280,6 +1346,9 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
+    # A Grok Bot answered through the Grok app on one of its person's computers; null turns it off
+    # (backend/app_delivery.py). Unset leaves it as it is.
+    app_delivery: AppDelivery | None = None
     expected_revision: int = Field(ge=1)
     # BotOps applying a person's own request: the id of that person's message to BotOps. The
     # change is checked as that person, never as BotOps (backend/app.py update_bot).

@@ -1902,7 +1902,9 @@ def routine_run(api, args):
                                        "check model; own (default): its own model"},
        "capture_stream": {"type": "string", "enum": ["on", "off"],
                           "description": "on (owner only): keep each run's raw provider stream a week; off (default): not"},
-       "status": {"type": "string", "enum": ["active", "paused", "planned"]}},
+       "status": {"type": "string", "enum": ["active", "paused", "planned"]},
+       "app_delivery": _s("A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
+                          "or `off` for the daily sync alone")},
       required=("slug",), writes=True)
 def bot_set(api, args):
     delegated = _for_person(api)
@@ -1914,6 +1916,8 @@ def bot_set(api, args):
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream") if args.get(k) is not None}
+    if args.get("app_delivery"):
+        change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
                     {**change, "expected_revision": row["revision"],
                      **({"on_behalf_of": on_behalf} if delegated else {})}, key=_key(args))
