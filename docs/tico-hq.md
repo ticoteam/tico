@@ -83,18 +83,20 @@ in the browser alone first.
 ```
 GET  /v1/onboarding/health -> 200 {"ok": false}       (true once the assistant can answer)
 POST /v1/onboarding/event  {"session_id": "<random id>", "kind": "download"}
+                           {"session_id": "<random id>", "kind": "message"}
                            {"session_id": "<random id>", "kind": "step", "step": 2}
                            -> 204, whether or not anything is kept
 GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{"day", "sessions",
-                           "sessions_2plus_turns", "downloads", "cost_usd"}]}
+                           "sessions_2plus_messages", "downloads", "cost_usd"}]}
 ```
 
-- **Input** is checked strictly: a session id of 8 to 64 letters, digits, `-` or `_`; kind `download` or `step`; `step` a
+- **Input** is checked strictly: a session id of 8 to 64 letters, digits, `-` or `_`; kind `download`, `message` or `step`; `step` a
   whole number from 0 to 9, only with kind `step`; no other field; at most 512 bytes. Anything else is `422 {"error": "invalid"}`.
   A `text/plain` body (a beacon) is read the same way.
 - **What is kept.** With `HQ_ONBOARDING_COUNTS=on`, one row per session in `onboarding_sessions`: a salted hash of the
   session id (the salt is in the database, so a restart keeps the row), the first UTC day, the furthest step, whether
-  the file was downloaded, and the turns and cost the assistant adds. No message text and no address; the table has no
+  the file was downloaded, how many messages the visitor sent (a count, sent once per message by the page), and the
+  turns and cost the assistant adds. No message text and no address; the table has no
   column for them. Off (the default), nothing is written. At most 20,000 new sessions a day are counted. Rows go 13
   months after their day, with the daily purge, which also runs at start. PRIVACY.md says the same in the page's words.
 - **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (comma-separated, default `https://tico.team`) get

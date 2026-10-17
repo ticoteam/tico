@@ -6,6 +6,7 @@ This part is the page's download count, the health check the page asks first, an
     GET /v1/onboarding/health -> 200 {"ok": false} while there is no brain to talk to; the page then plans in the
                                  browser (and still sends its download count, which it does only after this answers JSON)
     POST /v1/onboarding/event {"session_id": "<the page's random id>", "kind": "download"}
+                              {"session_id": "...", "kind": "message"}   (one per visitor message; a count only)
                               {"session_id": "...", "kind": "step", "step": 2}
     -> 204, with no body, whatever is kept
 
@@ -14,15 +15,16 @@ This part is the page's download count, the health check the page asks first, an
 - **Counts are off until switched on.** Nothing is stored unless `HQ_ONBOARDING_COUNTS=on`; the answer is the same
   204 either way, so the page cannot tell. Switching it on follows the owner's yes on what we keep.
 - **What is kept** (one row per session, in `onboarding_sessions`): a salted hash of the session id, the UTC day it was
-  first seen, the furthest step reached, whether the file was downloaded, and the turns and cost the brain adds later.
+  first seen, the furthest step reached, whether the file was downloaded, how many messages the visitor sent, and the
+  turns and cost the brain adds later.
   No message text, no address, no user agent: the table has no column for them. Rows go after 13 months, like installs.
-- **Strict input.** Only those fields; a session id of 8 to 64 letters, digits, `-` or `_`; kind `download` or `step`;
-  `step` a whole number from 0 to 9, and only with kind `step`. Anything else is a 422 with no detail and nothing kept.
+- **Strict input.** Only those fields; a session id of 8 to 64 letters, digits, `-` or `_`; kind `download`, `message` or
+  `step`; `step` a whole number from 0 to 9, and only with kind `step`. Anything else is a 422 with no detail and nothing kept.
 - **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (default `https://tico.team`) may call these routes from a
   page. A preflight is answered here, before the request limit, so it does not use up the visitor's requests, and every
   answer on these routes carries the origin back, including the limit's 429, so the page can read it.
 - **Staff read.** `GET /v1/staff/onboarding?days=14` (staff key): totals per UTC day for the Customer Insights
-  Analyst's report: sessions, sessions with 2 or more turns, downloads and cost. No session rows, no text.
+  Analyst's report: sessions, sessions with 2 or more visitor messages (in either mode), downloads and cost. No session rows, no text.
 
 Merging into hq/app.py: `create_app` calls `onboarding.install(app, counts, staff_only)` after the routes and the request
 limit, so this module's browser rules sit outside that limit. The daily purge calls `counts.purge()`.
@@ -40,7 +42,7 @@ PREFIX = "/v1/onboarding"
 ORIGINS = ("https://tico.team",)
 BODY_LIMIT = 512
 FIELDS = {"session_id", "kind", "step"}
-KINDS = ("download", "step")
+KINDS = ("download", "message", "step")
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
 MAX_STEP = 9
 RETENTION_DAYS = 395          # 13 months, as installs
@@ -57,6 +59,7 @@ CREATE TABLE IF NOT EXISTS onboarding_sessions(
  day TEXT NOT NULL,
  step INTEGER NOT NULL DEFAULT 0,
  downloaded INTEGER NOT NULL DEFAULT 0,
+ messages INTEGER NOT NULL DEFAULT 0,
  turns INTEGER NOT NULL DEFAULT 0,
  cost_micro_usd INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS onboarding_sessions_day ON onboarding_sessions(day);
@@ -105,6 +108,8 @@ class Counts:
                 conn.execute("INSERT INTO onboarding_sessions(session_hash, day) VALUES(?, ?)", (key, day))
             if kind == "download":
                 conn.execute("UPDATE onboarding_sessions SET downloaded=1 WHERE session_hash=?", (key,))
+            elif kind == "message":
+                conn.execute("UPDATE onboarding_sessions SET messages=messages+1 WHERE session_hash=?", (key,))
             else:
                 conn.execute("UPDATE onboarding_sessions SET step=max(step, ?) WHERE session_hash=?", (step, key))
         return True
@@ -121,13 +126,13 @@ class Counts:
         first = today - timedelta(days=days - 1)
         with self.db.lock:
             rows = {r[0]: r for r in self.db.conn.execute(
-                "SELECT day, count(*), sum(turns>=2), sum(downloaded), sum(cost_micro_usd) FROM onboarding_sessions "
+                "SELECT day, count(*), sum(messages>=2), sum(downloaded), sum(cost_micro_usd) FROM onboarding_sessions "
                 "WHERE day>=? GROUP BY day", (first.isoformat(),))}
         out = []
         for n in range(days):
             day = (first + timedelta(days=n)).isoformat()
             r = rows.get(day)
-            out.append({"day": day, "sessions": r[1] if r else 0, "sessions_2plus_turns": r[2] if r else 0,
+            out.append({"day": day, "sessions": r[1] if r else 0, "sessions_2plus_messages": r[2] if r else 0,
                         "downloads": r[3] if r else 0, "cost_usd": round((r[4] if r else 0) / 1_000_000, 6)})
         return out
 

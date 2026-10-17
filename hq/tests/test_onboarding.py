@@ -86,9 +86,11 @@ def test_a_download_with_counts_on_keeps_one_row_with_no_text(db, caplog):
         assert event(c).status_code == 204                      # the same session downloading twice is one row
         assert event(c, kind="step", step=3).status_code == 204
         assert event(c, kind="step", step=1).status_code == 204  # the furthest step stays
+        assert event(c, kind="message").status_code == 204
+        assert event(c, kind="message").status_code == 204
     [row] = rows(db)
     assert row["day"] == "2026-11-01" and row["downloaded"] == 1 and row["step"] == 3
-    assert row["turns"] == 0 and row["cost_micro_usd"] == 0
+    assert row["messages"] == 2 and row["turns"] == 0 and row["cost_micro_usd"] == 0
     assert isinstance(row["session_hash"], bytes) and SESSION.encode() not in row["session_hash"]
     dump = "".join(db.conn.iterdump())
     assert SESSION not in dump and "203.0.113.9" not in dump
@@ -100,7 +102,7 @@ def test_the_counts_table_has_no_text_column():
     conn.executescript(onboarding.SCHEMA)
     columns = {r[1]: r[2] for r in conn.execute("PRAGMA table_info(onboarding_sessions)")}
     assert columns == {"session_hash": "BLOB", "day": "TEXT", "step": "INTEGER", "downloaded": "INTEGER",
-                       "turns": "INTEGER", "cost_micro_usd": "INTEGER"}
+                       "messages": "INTEGER", "turns": "INTEGER", "cost_micro_usd": "INTEGER"}
     # The one TEXT column is the day, which the code always writes as YYYY-MM-DD.
 
 
@@ -116,7 +118,10 @@ def test_a_restart_keeps_the_session_row(tmp_path, day):
 
 @pytest.mark.parametrize("body", [
     {"session_id": SESSION, "kind": "download", "extra": "x"},
-    {"session_id": SESSION, "kind": "message"},
+    {"session_id": SESSION, "kind": "message", "text": "hello"},
+    {"session_id": SESSION, "kind": "message", "length": 5},
+    {"session_id": SESSION, "kind": "message", "step": 1},
+    {"session_id": SESSION, "kind": "turn"},
     {"session_id": SESSION},
     {"kind": "download"},
     {"session_id": "short", "kind": "download"},
@@ -249,7 +254,12 @@ def test_staff_read_the_daily_totals_and_no_one_else_does(db, day):
     counts = Counts(db, on=True)
     counts.event("session-one", "download")
     counts.event("session-two", "step", 1)
+    counts.event("session-one", "message")
+    counts.event("session-one", "message")
+    counts.event("session-two", "message")
+    # Brain turns are counted apart from messages: a session with turns but one message is not "2 or more messages".
     db.conn.execute("UPDATE onboarding_sessions SET turns=3, cost_micro_usd=25000 WHERE downloaded=1")
+    db.conn.execute("UPDATE onboarding_sessions SET turns=5 WHERE downloaded=0")
     day[0] = TODAY + timedelta(days=1)
     counts.event("session-three", "download")
     with make(db) as c:
@@ -260,9 +270,9 @@ def test_staff_read_the_daily_totals_and_no_one_else_does(db, day):
                for d in ("0", "91", "abc", "-1")]
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert r.json() == {"counting": True, "days": [
-        {"day": "2026-10-31", "sessions": 0, "sessions_2plus_turns": 0, "downloads": 0, "cost_usd": 0.0},
-        {"day": "2026-11-01", "sessions": 2, "sessions_2plus_turns": 1, "downloads": 1, "cost_usd": 0.025},
-        {"day": "2026-11-02", "sessions": 1, "sessions_2plus_turns": 0, "downloads": 1, "cost_usd": 0.0}]}
+        {"day": "2026-10-31", "sessions": 0, "sessions_2plus_messages": 0, "downloads": 0, "cost_usd": 0.0},
+        {"day": "2026-11-01", "sessions": 2, "sessions_2plus_messages": 1, "downloads": 1, "cost_usd": 0.025},
+        {"day": "2026-11-02", "sessions": 1, "sessions_2plus_messages": 0, "downloads": 1, "cost_usd": 0.0}]}
     assert bad == [422, 422, 422, 422]
     with make(db, staff_key="") as c:
         assert c.get("/v1/staff/onboarding", headers={"Authorization": f"Bearer {STAFF}"}).status_code == 404

@@ -168,7 +168,7 @@ from or goes to a Tico server you run.
 
 - `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
   launches it answers `{"ok": false}`, and the page plans in your browser.
-- `POST /v1/onboarding/event`, when you download your company file, and nothing else:
+- `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
 
 ```
 {"session_id": "3f6c1a2e-9b7d-4c58-9a10-2d4e8b7f5a63", "kind": "download"}
@@ -177,7 +177,7 @@ from or goes to a Tico server you run.
 | Field | What it is |
 |---|---|
 | `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`) |
-| `kind` | `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
+| `kind` | `message` (that you sent one; not what it said), `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
 
 No message text, plan, company name, email address or cookie. Only `https://tico.team` may call these routes from a page.
 
@@ -192,6 +192,7 @@ session cost. No message text.
 | `day` | the UTC day the session was first seen |
 | `step` | the furthest step reached |
 | `downloaded` | whether the company file was downloaded |
+| `messages` | how many messages you sent; never what they said |
 | `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost; zero until the assistant launches |
 
 - **Counts are off unless HQ is told to keep them** (`HQ_ONBOARDING_COUNTS=on`). While off, HQ answers the same and
@@ -200,7 +201,7 @@ session cost. No message text.
 - **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the same limit
   of 60 requests an hour as every other route.
 - **Retention:** a session row is deleted 13 months after its day, by the daily job.
-- The Tico team reads daily totals only (sessions, sessions with 2 or more turns, downloads, cost), never a session's row.
+- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, downloads, cost), never a session's row.
 
 ## The server's own model calls
 
