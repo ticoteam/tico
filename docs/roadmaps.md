@@ -65,14 +65,15 @@ link/script/iframe HTML.
 
 Suggestions create private Product roadmap tasks at Suggested, owned by the bot that receives suggestions,
 with the label and submitter's request. They queue quietly for that bot's next run and need team
-review before publication. The receiving bot is `suggestions_bot` in settings (a bot slug; owners and admins set it
-with `hub roadmap settings --suggestions-bot SLUG`), or **Automatic** when unset (`--automatic`, or `null`):
-the first active or planned bot made from the Product Manager template, else an active bot made from the Head of
-Product (`product-lead`) template. A chosen bot that is later archived is passed over for Automatic; suggestions never
-go to an archived bot. Reading the settings returns `suggestions_receiver`, the bot suggestions go to right now
-(`bot`, display `name`, and `source`: `chosen`, `automatic`, or `chosen_archived`). With no receiving bot a
-visitor gets 409 "Suggestions aren't being accepted right now.", nothing is stored and their daily allowance is
-not used. At most 20 visitor suggestions wait at Suggested at once across every visitor
+review before publication. The receiving bot is `suggestions_bot` in settings (an active bot's slug; owners and
+admins set it with `hub roadmap settings --suggestions-bot SLUG`), or **Automatic** when unset (`--automatic`, or
+`null`): the first active or planned bot made from the Product Manager template, else an active bot made from the Head
+of Product (`product-lead`) template. While the chosen bot is not active (archived, paused, quarantined or planned)
+suggestions go to the Automatic bot; they never go to an archived bot. Reading the settings returns
+`suggestions_receiver`, the bot suggestions go to right now (`bot`, display `name`, and `source`: `chosen`,
+`automatic`, `chosen_archived`, or `chosen_inactive` for a chosen bot that is paused, quarantined or planned). With no
+receiving bot a visitor gets 409 "Suggestions aren't being accepted right now.", ahead of either limit below; nothing
+is stored and their daily allowance is not used. At most 20 visitor suggestions wait at Suggested at once across every visitor
 (`suggestion_limit` in settings, 1 to 1000); while that many wait, a new suggestion gets 429 until the team moves
 some on, and the first refusal of each UTC day sends the receiving bot a notice saying so. Successful suggest, add, remove and comment actions share one limit
 per IP per UTC day across every roadmap (default 10, configurable in settings); exhaustion returns

@@ -3430,7 +3430,7 @@ def roadmap_tasks(api, args):
            "action_limit": {"type": "integer", "minimum": 1},
            "suggestion_limit": {"type": "integer", "minimum": 1, "description": "Visitor suggestions waiting at Suggested, overall"},
            "bot_public_approval": {"type": "boolean"},
-           "suggestions_bot": {"type": ["string", "null"], "description": "Bot slug that receives visitor suggestions; null for Automatic"}},
+           "suggestions_bot": {"type": ["string", "null"], "description": "Slug of the active bot that receives visitor suggestions; null for Automatic"}},
            "additionalProperties": False}}, writes=True)
 def roadmap_settings(api, args):
     if args.get('settings') is not None:

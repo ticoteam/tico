@@ -153,12 +153,8 @@ def suggestions_full(c, manager):
 NOT_ACCEPTING = "Suggestions aren't being accepted right now."
 
 
-def record_suggestion(c, request, body, label, receiver):
+def record_suggestion(c, request, body, label, receiver, product_type):
     charge(c, request)
-    from .roadmap_flow import managed_type
-    product_type = managed_type(c, 'product-manager')
-    if not receiver or not product_type:
-        raise Problem('setup', NOT_ACCEPTING, 409)
     try:
         row = H.task_create(c, H.KEEPER, body.title,
                             'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary, 'bot:' + receiver,
@@ -220,7 +216,7 @@ def install(app, store, auth, mutate):
             chosen = updates.get('suggestions_bot')
             if chosen is not None:
                 chosen = updates['suggestions_bot'] = chosen.removeprefix('bot:')
-                if not H._one(c, "SELECT 1 FROM bots WHERE slug=? AND state<>'archived'", (chosen,)):
+                if not H._one(c, "SELECT 1 FROM bots WHERE slug=? AND state='active'", (chosen,)):
                     raise Problem('suggestions_bot', f'No active bot {chosen!r}: choose an active bot, or null for Automatic', 422)
             value = {**R.settings(c), **updates}
             for label in value['labels']:
@@ -266,9 +262,15 @@ def install(app, store, auth, mutate):
         with public_write(store) as c:
             require_label(c, label)
             receiver = R.suggestions_receiver(c)[0]
+            from .roadmap_flow import managed_type
+            product_type = managed_type(c, 'product-manager')
+            # Before either limit: a visitor turned away for want of a receiver hears that, whatever the queue
+            # or their allowance, and spends nothing.
+            if not receiver or not product_type:
+                raise Problem('setup', NOT_ACCEPTING, 409)
             full = suggestions_full(c, receiver)
             if not full:
-                row, token = record_suggestion(c, request, body, label, receiver)
+                row, token = record_suggestion(c, request, body, label, receiver, product_type)
         if full:   # refused once the transaction is in, so the notice to the receiving bot is kept
             raise Problem('rate_limit', 'Too many suggestions are waiting for review; try again later', 429)
         return {'id': row['id'], 'requester_token': token['requester_token']}
