@@ -424,15 +424,23 @@ fn begin_switch(runtime: &str, id: &str, env: &Env) -> Result<(std::path::PathBu
     let (home_s, side_s) = (home.display().to_string(), side.display().to_string());
     file_command(&["mkdir", "-p", "-m", "700", &home_s], env)?;
     file_command(&["mkdir", "-m", "700", &side_s], env)?;
-    for rel in &login.seed {
-        let from = home.join(rel);
-        if std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file()) {
-            let to = side.join(rel);
-            if let Some(parent) = to.parent() {
-                file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env)?;
+    let seed = || -> Result<(), String> {
+        for rel in &login.seed {
+            let from = home.join(rel);
+            if std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file()) {
+                let to = side.join(rel);
+                if let Some(parent) = to.parent() {
+                    file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env)?;
+                }
+                file_command(&["cp", "-p", &from.display().to_string(), &to.display().to_string()], env)?;
             }
-            file_command(&["cp", "-p", &from.display().to_string(), &to.display().to_string()], env)?;
         }
+        Ok(())
+    };
+    // The caller only cleans up a side home it was given, so a setup that fails takes its own away.
+    if let Err(e) = seed() {
+        let _ = file_command(&["rm", "-rf", &side_s], env);
+        return Err(e);
     }
     Ok((home, side))
 }
@@ -888,6 +896,26 @@ impl Logins {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_switch_whose_setup_fails_leaves_no_side_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root reads an unreadable file, so the copy below would not fail
+        }
+        let home = std::env::temp_dir().join(format!("tico-switch-setup-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        // Claude Code seeds the side home with .claude.json; one the copy cannot read fails the setup.
+        let seed = home.join(".claude.json");
+        std::fs::write(&seed, "{}").unwrap();
+        std::fs::set_permissions(&seed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let env: Env = [("HOME".to_string(), home.display().to_string()), ("PATH".to_string(), std::env::var("PATH").unwrap())].into();
+        let err = begin_switch("claude", "setup1", &env).unwrap_err();
+        assert!(err.starts_with("cp failed"), "{err}");
+        assert!(!home.join(".tico-switch-setup1").exists(), "the half-made side home is gone");
+        std::fs::set_permissions(&seed, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 
     #[test]
     fn login_and_verdict_commands_use_the_bot_identity_and_profile_home() {
