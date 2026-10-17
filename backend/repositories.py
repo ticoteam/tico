@@ -107,8 +107,15 @@ PRODUCT_GRANTS = 'product-repository-creation-grants'
 
 
 def can_create_product_repositories(c, bot):
-    """Create product repositories: only the Owner turns it on, for any bot; none has it built in or by default."""
-    return metadata(c, PRODUCT_GRANTS).get(bot) is True
+    """Create product repositories: every bot has it unless the Owner or an admin switched it off for that bot (Chris,
+    Oct 17). The grants keep only explicit choices: `False` is a switch-off, kept until the Owner switches it back on,
+    and a bot with no entry, including one made later, has the default. Nothing writes the default in, so no
+    migration or template can overwrite an off."""
+    return product_creation(metadata(c, PRODUCT_GRANTS), bot)
+
+
+def product_creation(grants, bot):
+    return grants.get(bot) is not False
 
 
 _NOCASE = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
@@ -194,7 +201,7 @@ def access(c, bot, org, reads=None):
     effective = [r for _, r in sorted(grants.items()) if (r['full_name'].lower() not in missing or r['full_name'].lower() == str(own).lower()) and org and r['full_name'].split('/')[0].lower() == org.lower()]
     return {'mode': mode, 'all_access': all_access, 'chosen': chosen, 'effective': effective,
             'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
-            'create_product_repositories': reads.product_creation.get(bot) is True}
+            'create_product_repositories': product_creation(reads.product_creation, bot)}
 
 
 def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True, owner=False):
@@ -210,8 +217,8 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             raise Problem('forbidden', 'BotOps retains its built-in repository creation access', 403)
     product = body.create_product_repositories
     if product is not None and product != before['create_product_repositories']:
-        # Only the Owner creates product repositories themselves, so only the Owner's own click hands that to a bot.
-        # Taking it away is a narrowing: an admin may too.
+        # On by default. Switching it back on after an off widens a bot, so it is the Owner's own click, as the Owner
+        # creates product repositories themselves. Switching it off is a narrowing: an admin may too.
         if product and not (owner and own_click and H.is_human(actor)):
             raise Problem('forbidden', 'Only the Owner turns on Create product repositories, in the bot\'s settings', 403)
         if not product and (not team_list or not H.is_human(actor)):
@@ -271,10 +278,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         save_metadata(c, 'repository-creation-grants', grants)
     if product is not None and product != before['create_product_repositories']:
         grants = metadata(c, PRODUCT_GRANTS)
-        if product:
-            grants[bot] = True
-        else:
-            grants.pop(bot, None)
+        grants[bot] = bool(product)                           # an explicit choice either way; an off must stick
         save_metadata(c, PRODUCT_GRANTS, grants)
     after = access(c, bot, org)
     # Kept flags apply again when a grant returns to effect (Own or All back to Chosen): that is a gain too.
@@ -640,7 +644,7 @@ class Grant(Contract):
 
 class RepoAccessUpdate(Contract):
     create_repositories: bool | None = None
-    # Only the Owner turns it on (an admin may turn it off); left out, the bot keeps what it has.
+    # On by default; the Owner or an admin turns it off, only the Owner back on. Left out, the bot keeps what it has.
     create_product_repositories: bool | None = None
     mode: Literal['own', 'all', 'chosen']
     all_access: Literal['read', 'write'] | None = None

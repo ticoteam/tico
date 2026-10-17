@@ -3076,8 +3076,8 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
-@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (only the Owner turns it on, "
-      "in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
+@tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
+      "or an admin switched it off in the bot's settings under Repositories). Private only; a bot that creates one gets write to it and the Owner "
       "is told. First call with `name` and a stable `operation_id` to preview the "
       "connected organization, exact repository name, private visibility, empty initialization, and live App "
       "capability. If capability is available, review the preview and call again with `confirm_repository` set "

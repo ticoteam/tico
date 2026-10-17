@@ -100,12 +100,14 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- Bots can create private repositories by default; the Owner can switch it off per bot. **Create product
+  repositories** is on for every bot, BotOps and new bots included. The Owner or an admin switches it off in the bot's
+  **Settings → Repositories**; an off stays off, and only the Owner switches it back on. A bot's turn acting for
+  someone (BotOps, the Assistant) or an external agent still can't create one.
 - **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
   **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
   the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
-  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Only the Owner turns it on, a bot can't turn it
-  on for itself, BotOps doesn't have it built in, and no bot gets it by default. **Owner: to let Head of Engineering and
-  DevOps create repositories, turn it on in each one's settings.** Private only: a public repository is publishing and
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Private only: a public repository is publishing and
   stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
   to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
   bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says

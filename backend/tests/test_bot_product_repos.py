@@ -1,9 +1,11 @@
-"""A bot with Create product repositories makes a private product repository: the Owner turns the right on, the bot
-gets write to what it made, the Owner is told, and connecting GitHub stays the Owner's."""
+"""A bot with Create product repositories makes a private product repository: every bot has the right unless the
+Owner or an admin switches it off, the bot gets write to what it made, the Owner is told, and connecting GitHub stays
+the Owner's."""
 import json
 
 from backend import hubdb as H
 from backend.auth import Identity
+from backend.repositories import PRODUCT_GRANTS, metadata
 from backend.store import encode
 from backend.tests.test_github_app import api, gh, auth, botops_turn, connect, product_repo_request, runner_token  # noqa: F401
 
@@ -35,17 +37,12 @@ def creates(gh):
     return [call for call in gh.calls if call[:2] == ("POST", "/orgs/Acme/repos")]
 
 
-def test_bot_with_the_right_creates_a_private_repo_gets_write_and_the_owner_is_told(api, gh):
+def test_a_bot_with_no_setting_creates_a_private_repo_gets_write_and_the_owner_is_told(api, gh):
     ready(api, gh)
-    # Before the Owner turns it on, the bot is refused and told which right it needs (the 403 this ticket removes).
-    refused = product_repo_request(api, BODY, actor="bot-test", key="bot-services")
-    assert refused.status_code == 403 and RIGHT in refused.json()["error"]["detail"]
-    assert api.get(PREVIEW, params={"name": "tico-services"}, headers=auth("bot-test")).status_code == 403
-    assert not creates(gh)
-
-    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
-    on = grant(api)
-    assert on.status_code == 200 and on.json()["create_product_repositories"] is True, on.text
+    # Nobody chose anything for cmo: on by default (Chris, Oct 17), with nothing written for it.
+    with api.app_state.store.read() as c:
+        assert "cmo" not in metadata(c, PRODUCT_GRANTS)
+    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is True
 
     preview = api.get(PREVIEW, params={"name": "tico-services"}, headers=auth("bot-test"))
     assert preview.status_code == 200 and preview.json()["capability"] == "available", preview.text
@@ -117,11 +114,16 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
     assert notice.endswith(made.json()["note"].removeprefix("Created as a private empty repository. "))
 
 
-def test_a_bot_without_the_right_is_refused_and_told_which_right(api, gh):
+def test_a_bot_switched_off_is_refused_and_told_which_right(api, gh):
     ready(api, gh)
     botops_turn(api)
-    # BotOps creates bot repositories built in, but not product repositories.
-    assert api.get("/api/v2/bots/botops/repositories", headers=auth()).json()["create_product_repositories"] is False
+    # Every bot has it by default, BotOps too; the Owner switches it off for both.
+    for bot in ("cmo", "botops"):
+        path = f"/api/v2/bots/{bot}/repositories"
+        assert api.get(path, headers=auth()).json()["create_product_repositories"] is True, bot
+        off = api.put(path, json={"mode": api.get(path, headers=auth()).json()["mode"],
+                                  "create_product_repositories": False}, headers=auth())
+        assert off.status_code == 200 and off.json()["create_product_repositories"] is False, off.text
     for actor in ("bot-test", "botops-test", "person-test", "runner-test"):
         refused = product_repo_request(api, BODY, actor=actor, key="no-right-" + actor)
         assert refused.status_code == 403, (actor, refused.text)
@@ -129,29 +131,51 @@ def test_a_bot_without_the_right_is_refused_and_told_which_right(api, gh):
     assert not creates(gh)
 
 
-def test_only_the_owner_turns_the_right_on_and_an_admin_may_turn_it_off(api, gh):
+def test_an_admin_switches_it_off_the_off_sticks_and_only_the_owner_switches_it_back_on(api, gh):
     ready(api, gh)
     with api.app_state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('access',?)", (encode({"admins": ["riley@acme.example"]}),))
     botops_turn(api)
-    for actor in ("person-test", "bot-test", "botops-test", "runner-test"):
-        refused = grant(api, who=actor)
-        assert refused.status_code == 403, (actor, refused.text)
-    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
-    # An admin's save that leaves the right as it is still works.
-    assert grant(api, on=False, who="person-test").status_code == 200
-    assert grant(api).json()["create_product_repositories"] is True
+    # A save that leaves the right as it is still works, for anyone who may save the bot's repositories.
+    assert grant(api, who="person-test").status_code == 200
+    for actor in ("bot-test", "botops-test", "runner-test"):
+        assert grant(api, on=False, who=actor).status_code == 403, actor
     off = grant(api, on=False, who="person-test")
     assert off.status_code == 200 and off.json()["create_product_repositories"] is False
     assert off.json()["product_creation_stopped"] is True
     refused = product_repo_request(api, BODY, actor="bot-test", key="after-revoke")
-    assert refused.status_code == 403 and RIGHT in refused.text
+    assert refused.status_code == 403 and RIGHT in refused.json()["error"]["detail"]
+    assert "switched it off" in refused.json()["error"]["detail"]
+    assert api.get(PREVIEW, params={"name": "tico-services"}, headers=auth("bot-test")).status_code == 403
+    # The off is recorded as a choice, so running the migrations again, or the default changing, doesn't undo it.
+    with api.app_state.store.read() as c:
+        assert metadata(c, PRODUCT_GRANTS)["cmo"] is False
+    api.app_state.store.initialize(seed_market=False)
+    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
+    assert product_repo_request(api, BODY, actor="bot-test", key="after-migrations").status_code == 403
     assert not creates(gh)
+    # Switching it back on widens the bot again: the Owner's own click only, not an admin's or a bot's.
+    for actor in ("person-test", "bot-test", "botops-test", "runner-test"):
+        refused = grant(api, who=actor)
+        assert refused.status_code == 403, (actor, refused.text)
+    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
+    assert grant(api).json()["create_product_repositories"] is True
+    assert product_repo_request(api, BODY, actor="bot-test", key="back-on").status_code == 200
+    assert len(creates(gh)) == 1
+
+
+def test_a_bot_still_cannot_create_a_public_repo(api, gh):
+    ready(api, gh)
+    for i, body in enumerate(({**BODY, "visibility": "public"}, {**BODY, "auto_init": True}, {**BODY, "confirmed": False})):
+        refused = product_repo_request(api, body, actor="bot-test", key=f"public-{i}")
+        assert refused.status_code == 422, refused.text      # the request model takes only private, empty, confirmed
+    nothing_made(api, gh)
 
 
 def test_the_owners_request_carried_by_a_bot_turn_cannot_turn_the_right_on(api, gh):
     ready(api, gh)
     botops_turn(api)
+    assert grant(api, on=False).status_code == 200            # the Owner switched cmo off
     carried = {"via-botops": Identity("human:ana", "owner", "ana@acme.example", runner_id="r1", attempt_id="a2",
                                       via="botops", task_actor="bot:botops", confirmed=True),
                "via-self": Identity("human:ana", "owner", "ana@acme.example", runner_id="r1", attempt_id="a1",

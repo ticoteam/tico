@@ -573,6 +573,9 @@ def test_product_repository_preview_is_owner_only_and_rejects_paths_before_githu
     gh.permissions = {"administration": "write", "metadata": "read"}
     path = "/api/v2/github/product-repos/preview"
     botops_turn(api)
+    # Every bot may create product repositories unless switched off (test_bot_product_repos.py): BotOps is, here.
+    assert api.put("/api/v2/bots/botops/repositories", json={"mode": "own", "create_product_repositories": False},
+                   headers=auth()).status_code == 200
     before = len(gh.calls)
     body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
             "auto_init": False, "confirmed": True}

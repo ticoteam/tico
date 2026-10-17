@@ -34,7 +34,8 @@ function fixtures() {
       repo('acme/bot-support', {bot_repo: true}),
     ],
     new_bot_default: 'own', github_connected: true,
-    bot: {mode: 'chosen', all_access: 'write', chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}]},
+    // Create product repositories is on for a bot nobody switched off, as the server says.
+    bot: {mode: 'chosen', all_access: 'write', create_product_repositories: true, chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}]},
   };
 }
 const effective = (data) => {
@@ -198,7 +199,7 @@ async function owner(browser) {
   await box.locator('[data-brepo="acme/mobile"] [data-brepo-pick]').check();
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories'), {mode: 'chosen', all_access: 'write', create_repositories: false,
-    create_product_repositories: false, chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}, {full_name: 'acme/mobile', access: 'write'}]});
+    create_product_repositories: true, chosen: [{full_name: 'acme/web', access: 'write'}, {full_name: 'acme/api', access: 'read'}, {full_name: 'acme/mobile', access: 'write'}]});
   // Run workflows: only on a ticked write repo; sent when turned on or off, left out otherwise.
   const runs = name => box.locator(`[data-brepo="${name}"] [data-brepo-run]`);
   assert.equal(await runs('acme/api').isDisabled(), true, 'a read grant cannot run workflows');
@@ -243,16 +244,19 @@ async function owner(browser) {
   assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_repositories, true);
   assert.equal(await creation.isChecked(), true);
   assert.equal(await creation.evaluate(el => el === document.activeElement), true);
-  // Create product repositories: its own grant, the Owner's to turn on.
+  // Create product repositories: its own grant, on by default; the Owner switches it off and back on.
   const product = box.locator('[data-brepo-product]');
-  assert.equal(await product.isChecked(), false);
+  assert.equal(await product.isChecked(), true);
   assert.equal(await product.isDisabled(), false);
   await product.focus();
-  await page.keyboard.press('Space');
-  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
-  assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_product_repositories, true);
-  assert.equal(await product.isChecked(), true);
-  assert.equal(await product.evaluate(el => el === document.activeElement), true);
+  for (const on of [false, true]) {
+    await page.evaluate(() => { document.querySelector('#bot-editor [data-brepo-status]').textContent = ''; });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+    assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').create_product_repositories, on);
+    assert.equal(await product.isChecked(), on);
+    assert.equal(await product.evaluate(el => el === document.activeElement), true);
+  }
   // The old free-text box is gone; Save bot no longer writes github-repos.
   assert.equal(await page.locator('#bot-editor textarea[name=extra_repos]').count(), 0);
   assert.deepEqual(errors, []);
