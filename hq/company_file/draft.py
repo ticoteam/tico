@@ -326,9 +326,14 @@ def check(raw, snapshot=False):
         extra["owner"] = False
     if sum(1 for b in draft["bots"] if b.get("first_job")) > 1:
         raise DraftError("only one bot has the first job")
+    # A reports-to whose target left the chart (the visitor removed that person or bot on the page) falls back to the
+    # line the chart draws anyway, so the draft says what the file says.
+    known = chart_ids(draft)
+    for bot in draft["bots"]:
+        if bot.get("reports_to") is not None and (bot["reports_to"] not in known or bot["reports_to"] == bot["id"]):
+            del bot["reports_to"]
     if loops(draft):
         raise DraftError("a bot's reporting line comes back to itself")
-    known = chart_ids(draft)
     for goal in draft["goals"]:
         if goal["owner"] not in known:
             goal["owner"] = owner_id(draft)

@@ -22,8 +22,10 @@ PATTERNS = [re.compile(p) for p in (
     r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",   # JWTs
     r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{16,}=*",
 )]
+# The label may be quoted, as a JSON or YAML key is: {"password": "x"}.
 LABELLED = re.compile(r"(?i)(\b(?:password|passwd|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|"
-                      r"client[ _-]?secret|private[ _-]?key)\b\s*(?:[:=]|\bis\b)\s*)(\"[^\"]*\"|'[^']*'|\S{4,})")
+                      r"client[ _-]?secret|private[ _-]?key)\b[\"']?\s*(?:[:=]|\bis\b)\s*)(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
 LABELLED_IS = re.compile(r"(?i)\bis\b")
 # A long run of token characters with letters and digits mixed, and close to random.
 TOKEN = re.compile(r"[A-Za-z0-9_+/=-]{32,}")
@@ -41,10 +43,16 @@ def _random(word):
 
 def _labelled(match):
     label, value = match.group(1), match.group(2)
+    password = PASSWORD.match(label)
     # "the token is optional": with "is", only a password-like label counts.
-    if LABELLED_IS.search(label) and not re.match(r"(?i)\s*(?:password|passwd|passcode|pwd)", label):
+    if LABELLED_IS.search(label) and not password:
         return match.group(0)
-    return label + MARK
+    quoted = value[:1] in "\"'" and len(value) > 1
+    inner = value[1:-1] if quoted else value
+    # A password of any length goes; another label needs a value long enough to be a key ("token: 5" is a count).
+    if not inner or (len(inner) < 4 and not password):
+        return match.group(0)
+    return label + (value[0] + MARK + value[0] if quoted else MARK)
 
 
 def scrub(text):

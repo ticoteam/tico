@@ -189,15 +189,20 @@ def test_9_a_template_tico_doesn_t_have_is_refused_with_the_closest_real_one():
 
 def test_10_key_shaped_strings_never_reach_the_draft_or_the_file():
     draft = started(chat=[{"who": "me", "text": "my key is " + OPENAI}])
-    draft["company"]["about"] = "We roast coffee. password: hunter22 and " + AWS
+    draft["company"]["about"] = "We roast coffee. password: hunter22 and " + AWS + ' {"pwd": "Zq1"}'
     turn = C.Turn(draft, TODAY)
     turn.apply("bot_add", {"template": "github", "reason": "Use " + GITHUB, "title": "Repo bot"})
     turn.apply("goal_add", {"title": "token=" + "x9" * 20})
+    turn.apply("company_set", {"name": '{"password": "Wombat9"}'})
     out = turn.finish()
     text = json.dumps(out) + C.to_yaml(out, CREATED)
     assert turn.keys_removed and "[removed]" in text
-    for secret in (OPENAI, GITHUB, AWS, "hunter22", "x9" * 20):
+    for secret in (OPENAI, GITHUB, AWS, "hunter22", "x9" * 20, "Zq1", "Wombat9"):
         assert secret not in text
+    # The file writer scrubs on its own: a page draft can reach it without a turn.
+    direct = started()
+    direct["people"] = [{"id": "maya", "name": "Maya", "role": "Key " + OPENAI, "dept": None, "owner": True}]
+    assert OPENAI not in C.to_yaml(direct, CREATED)
     assert C.apply_action(started(), "step_go", {"step": "goals"}, TODAY)[1]["keys_removed"] is False
     # The words of every role, and an ordinary sentence about tokens, are left alone.
     for role in C.ROLES:
@@ -301,6 +306,20 @@ def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
     # No rule needing a person is written as an empty list, not as nothing.
     none, _ = run(draft, ("rules_set_never", {"never": []}))
     assert yaml.safe_load(C.to_yaml(none, CREATED))["rules"]["never_without_a_person"] == []
+
+
+def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_file_draws():
+    draft, _ = run(started(), ("person_set", {"name": "Maya", "role": "CEO"}), ("person_set", {"name": "Jo", "role": "Ops"}),
+                   ("bot_set_reports_to", {"bot": "Builder", "to": "Jo"}))
+    assert next(b for b in draft["bots"] if b["title"] == "Builder")["reports_to"] == "jo"
+    # The visitor took Jo off the team on the page; an invented id is treated the same way.
+    sent = {**draft, "people": [p for p in draft["people"] if p["name"] != "Jo"]}
+    next(b for b in sent["bots"] if b["title"] == "Reviewer 1")["reports_to"] = "nobody"
+    out = C.Turn(sent, TODAY).finish()
+    assert not any(b.get("reports_to") for b in out["bots"])
+    doc = yaml.safe_load(C.to_yaml(out, CREATED))
+    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-lead"
+    assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
 
 def test_hq_s_copy_runs_the_same_engine():

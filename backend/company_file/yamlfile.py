@@ -52,8 +52,9 @@ def tool_list(draft):
 
 
 def to_yaml(draft, created=None):
-    """The company file for a draft. `created` defaults to now."""
-    draft = D.check(draft)
+    """The company file for a draft, with key-shaped strings removed whatever path the draft took. `created` defaults
+    to now."""
+    draft = D.check(scrub_all(draft)[0])
     created = created or dt.datetime.now(dt.timezone.utc)
     head = D.owner(draft)
     head_id = head["id"] if head else "you"
