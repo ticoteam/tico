@@ -1032,7 +1032,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1822,6 +1822,17 @@ class LoginStart(Contract):
     # Which runtimes the browser can sign in is the manifests' call (backend/model_login.py RUNTIMES).
     runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
     profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
+    # Sign in to another account in place: the old login keeps working until the new one has finished.
+    switch: bool = False
+
+
+class LogoutStart(Contract):
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
+    profile: Annotated[str, Field(pattern=r"^(?:[a-z0-9]+(?:-[a-z0-9]+)*)?$", max_length=80)] = ""
+
+
+class SharedKeyUse(Contract):
+    runtime: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$", max_length=40)]
 
 
 class LoginCode(Contract):
@@ -1829,7 +1840,7 @@ class LoginCode(Contract):
 
 
 class LoginReport(Contract):
-    state: Literal["starting", "waiting", "signed_in", "failed"]
+    state: Literal["starting", "waiting", "signed_in", "signed_out", "done", "failed"]
     url: str = Field(default="", max_length=2100)
     code: str = Field(default="", max_length=40)
     lines: list[str] = Field(default_factory=list, max_length=40)

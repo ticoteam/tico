@@ -248,6 +248,9 @@ A harness is a manifest plus a host adapter.
    command = ["login", "--device-auth"]
    terminal = false             # true when the CLI insists on a terminal
    paste_code = false           # true when the sign-in page hands back a code to paste
+   logout = ["logout"]          # optional: the CLI's sign-out, for Sign out and Switch account in the app (needs files)
+   files = ["auth.json"]        # the login's files, relative to its home; a switch moves these in from the side folder
+   seed = []                    # of files, those copied into the side folder first (settings the CLI keeps with the login)
 
    [capabilities]               # what Tico does differently for this CLI; see Capabilities below
    terminal_login = ["login"]
@@ -270,7 +273,9 @@ external agent) has no capabilities, and the app treats each as unknown. A capab
 is a bug in its host, not a reason to compare names.
 
 Sign-in facts come from the tables that already hold them: `[login]` present means the browser relay (Settings >
-Computers), `paste_code` means it takes a pasted code, `auth.api_key_env` names the keys.
+Computers), `paste_code` means it takes a pasted code, `logout` means Sign out and Switch account (`sign_out` in
+`harnesses[].capabilities`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
+`profile_home` variable's folder, or `HOME`), never absolute and never with `..`.
 
 | Capability | Means | Absent |
 |---|---|---|

@@ -84,6 +84,8 @@ def _row(harness, runtime, data, where, auth=None, login=None):
     # What the API says: the manifest's own values plus the sign-in facts [login] and [auth] already hold.
     public = {**caps, "sign_in_status": caps["sign_in_status"].get("check", "none"),
               "browser_sign_in": bool(relay), "paste_code": bool((login or {}).get("paste_code")),
+              # Sign out and Switch account from the app (backend/model_login.py): the CLI's own logout command.
+              "sign_out": bool(relay and (login or {}).get("logout")),
               "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",
               "container_login": " ".join([executable, *(relay or caps["terminal_login"])]) if relay or caps["terminal_login"] else "",
               "api_key_env": keys, "api_key_login": bool(caps["api_key_login"]),

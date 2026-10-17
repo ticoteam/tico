@@ -4,6 +4,11 @@
 //! use, and relays what it prints: a link and a one-time code, or a prompt for a code the owner pastes back
 //! (typed into a pty). The credential stays on this disk; every line that leaves is scrubbed of anything
 //! token-shaped first. Success is not the command's word: sign-in is checked again afterwards.
+//!
+//! The same relay signs a login out (the CLI's own logout, checked afterwards), switches it to another account
+//! (signed in on the side in a home of its own, moved into place only once it has finished, so a cancelled switch
+//! leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
+//! A computer login a person signed out stays signed out (signin.rs SIGNED_OUT_FILE).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -23,6 +28,9 @@ use crate::runner::Runner;
 use crate::util::{log, text_of};
 
 pub const LIFETIME_S: u64 = 15 * 60;
+/// Told to the server in every heartbeat: this runner knows the kinds beyond `sign_in`.
+pub const SIGN_OUT_CAPABILITY: &str = "model_sign_out_v1";
+const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 pub const POLL_S: f64 = 2.0;
 const KEEP_RAW: usize = 60_000;
 const MAX_LINES: usize = 12;
@@ -154,6 +162,8 @@ struct Inner {
 /// One login command, from start to a verdict.
 pub struct Session {
     id: String,
+    /// sign_in | switch | sign_out | use_shared_key (backend/model_login.py KINDS).
+    kind: String,
     runtime: String,
     profile: String,
     inner: Mutex<Inner>,
@@ -164,6 +174,7 @@ impl Session {
     fn new(work: &Value) -> Arc<Session> {
         Arc::new(Session {
             id: text_of(&work["id"]),
+            kind: Some(text_of(&work["kind"])).filter(|k| !k.is_empty()).unwrap_or_else(|| "sign_in".into()),
             runtime: text_of(&work["runtime"]),
             profile: text_of(&work["profile"]),
             inner: Mutex::new(Inner { state: "starting".into(), dirty: true, ..Default::default() }),
@@ -205,12 +216,18 @@ impl Session {
             i.url.clear();
             i.code.clear();
         }
-        log(&format!("Tico runner: {} sign-in {state}", self.runtime));
+        log(&format!("Tico runner: {} {} {state}", self.runtime, self.kind.replace('_', " ")));
         // Whatever the verdict, the next heartbeat asks the profile's CLI again instead of a cached answer.
         crate::profiles::forget_report();
         if state == "signed_in" {
             let name = if self.profile.is_empty() { default_profile } else { &self.profile };
             runner.sign_in.clear_rejection(&self.runtime, name);
+            // A person signed the computer's own login in: it is no longer signed out on purpose.
+            if self.profile.is_empty() {
+                if let Err(e) = runner.sign_in.unmark_signed_out(&self.runtime) {
+                    log(&format!("Tico runner: {} is signed in but still marked signed out: {e}", self.runtime));
+                }
+            }
         }
     }
 }
@@ -341,35 +358,133 @@ fn kill(child: &mut Child) {
     }
 }
 
+/// The CLI and the environment a login of `runtime` on `profile` runs with: the same user and homes as its readiness
+/// check and turns.
+fn login_env(runtime: &str, config: &Config, profile_name: &str) -> Result<(String, Env, Option<crate::profiles::Profile>), String> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let Some(exe) = crate::env::which(&crate::harness_tools::executable_for(runtime), &path) else {
+        return Err("The runtime is not installed on this computer".into());
+    };
+    let profile = profile_for(config, profile_name);
+    if let Some(Err(e)) = profile.as_ref().map(crate::profiles::hand_to_bot) {
+        return Err(format!("The subscription profile is not ready for sign-in: {e}"));
+    }
+    let process: Env = std::env::vars().collect();
+    let mut env = match &profile {
+        Some(p) => p.environment(runtime, &process),
+        None => process,
+    };
+    if crate::harness_tools::caps(runtime, "").own_config_home {
+        // Bot turns read this host's login from Tico's own config folder, never the operator's.
+        crate::hosts::use_own_config_home(runtime, profile.as_ref(), &mut env);
+    }
+    // The person opens a sign-in link on their own screen, not on this machine.
+    env.insert("BROWSER".into(), "true".into());
+    env.insert("NO_COLOR".into(), "1".into());
+    env.extend(crate::harness_tools::env_for(runtime));
+    Ok((exe.display().to_string(), env, profile))
+}
+
+/// Run a small file command (mkdir, cp, mv, rm) as the user the CLI runs as, so the login's files stay that user's
+/// and nothing is done to them with the supervisor's rights.
+fn file_command(args: &[&str], env: &Env) -> Result<(), String> {
+    let out = model_command(args[0], &args[1..], env).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output()
+        .map_err(|e| format!("{} could not run ({:?})", args[0], e.kind()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{} failed: {}", args[0], redact(String::from_utf8_lossy(&out.stderr).trim()).chars().take(200).collect::<String>()))
+    }
+}
+
+/// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default.
+fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
+    let var = crate::harness_tools::caps(runtime, "").profile_home;
+    if var.is_empty() {
+        return None;
+    }
+    match env.get(&var).filter(|v| !v.is_empty()) {
+        Some(v) => Some(v.into()),
+        None if var == "CODEX_HOME" => env.get("HOME").filter(|h| !h.is_empty()).map(|h| std::path::Path::new(h).join(".codex")),
+        None => None,
+    }
+}
+
+/// A Switch account's own home: a new folder inside the login's home, made as the CLI's user, with the manifest's
+/// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_switch`.
+fn begin_switch(runtime: &str, id: &str, env: &Env) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let login = crate::harness_tools::login_command(runtime).ok_or("Switching accounts is not available")?;
+    let home = login_home(runtime, env).ok_or("Switching accounts is not available for this runtime")?;
+    let side = home.join(format!(".tico-switch-{}", id.chars().filter(|c| c.is_ascii_alphanumeric()).take(32).collect::<String>()));
+    let (home_s, side_s) = (home.display().to_string(), side.display().to_string());
+    file_command(&["mkdir", "-p", "-m", "700", &home_s], env)?;
+    file_command(&["mkdir", "-m", "700", &side_s], env)?;
+    for rel in &login.seed {
+        let from = home.join(rel);
+        if std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file()) {
+            let to = side.join(rel);
+            if let Some(parent) = to.parent() {
+                file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env)?;
+            }
+            file_command(&["cp", "-p", &from.display().to_string(), &to.display().to_string()], env)?;
+        }
+    }
+    Ok((home, side))
+}
+
+/// Put a finished switch's login in place of the old one: each of the manifest's `files` the new sign-in wrote is
+/// moved over the old (a rename, so the CLI never reads half a file).
+fn adopt_switch(runtime: &str, home: &std::path::Path, side: &std::path::Path, env: &Env) -> Result<(), String> {
+    let login = crate::harness_tools::login_command(runtime).ok_or("Switching accounts is not available")?;
+    for rel in &login.files {
+        let from = side.join(rel);
+        if !std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        let to = home.join(rel);
+        if let Some(parent) = to.parent() {
+            file_command(&["mkdir", "-p", "-m", "700", &parent.display().to_string()], env)?;
+        }
+        file_command(&["mv", "-f", &from.display().to_string(), &to.display().to_string()], env)?;
+    }
+    Ok(())
+}
+
 fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: Duration) {
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |state: &str, msg: &str| s.finish(state, msg, &runner, &default);
     let Some(login) = crate::harness_tools::login_command(&s.runtime) else { return fail("failed", "Browser sign-in is not available") };
-    let path = std::env::var("PATH").unwrap_or_default();
-    let Some(exe) = crate::env::which(&crate::harness_tools::executable_for(&s.runtime), &path) else {
-        return fail("failed", "The runtime is not installed on this computer");
+    let (exe, mut env, profile) = match login_env(&s.runtime, &config, &s.profile) {
+        Ok(found) => found,
+        Err(e) => return fail("failed", &e),
     };
-    let exe = exe.display().to_string();
-    let profile = profile_for(&config, &s.profile);
-    if let Some(Err(e)) = profile.as_ref().map(crate::profiles::hand_to_bot) {
-        return fail("failed", &format!("The subscription profile is not ready for sign-in: {e}"));
-    }
-    let process: Env = std::env::vars().collect();
-    let mut env = match &profile {
-        Some(p) => p.environment(&s.runtime, &process),
-        None => process,
+    // A switch signs in on the side: the old login keeps working until the new one is in place.
+    let real_env = env.clone();
+    let switch = if s.kind == "switch" {
+        match begin_switch(&s.runtime, &s.id, &env) {
+            Ok((home, side)) => {
+                let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
+                env.insert(var, side.display().to_string());
+                Some((home, side))
+            }
+            Err(e) => return fail("failed", &e),
+        }
+    } else {
+        None
     };
-    if crate::harness_tools::caps(&s.runtime, "").own_config_home {
-        // Bot turns read this host's login from Tico's own config folder, never the operator's.
-        crate::hosts::use_own_config_home(&s.runtime, profile.as_ref(), &mut env);
-    }
-    // The person opens the link on their own screen, not on this machine.
-    env.insert("BROWSER".into(), "true".into());
-    env.insert("NO_COLOR".into(), "1".into());
-    env.extend(crate::harness_tools::env_for(&s.runtime));
+    let discard = |side: &std::path::Path| {
+        if let Err(e) = file_command(&["rm", "-rf", &side.display().to_string()], &real_env) {
+            log(&format!("Tico runner: {} switch left {}: {e}", s.runtime, side.display()));
+        }
+    };
     let (mut child, read_fd, writer) = match spawn(&exe, &login.command, &env, login.terminal) {
         Ok(x) => x,
-        Err(e) => return fail("failed", &format!("The sign-in command could not start ({:?})", e.kind())),
+        Err(e) => {
+            if let Some((_, side)) = &switch {
+                discard(side);
+            }
+            return fail("failed", &format!("The sign-in command could not start ({:?})", e.kind()));
+        }
     };
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let reader = {
@@ -444,6 +559,20 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         Some(v) => v,
         None if s.cancelled.load(Ordering::SeqCst) => ("cancelled".into(), "Cancelled".into()),
         None if !child.wait().map(|st| st.success()).unwrap_or(false) => ("failed".into(), "The sign-in command stopped without signing in".into()),
+        None if switch.is_some() => {
+            // Signed in on the side? Then that login takes the old one's place, and is checked where it now is.
+            let (home, side) = switch.as_ref().unwrap();
+            match signed_in(&s.runtime, &exe, &env, false) {
+                (true, _) => match adopt_switch(&s.runtime, home, side, &real_env) {
+                    Ok(()) => match signed_in(&s.runtime, &exe, &real_env, false) {
+                        (true, detail) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
+                        _ => ("failed".into(), format!("The new account was put in place but {} is not signed in", s.runtime)),
+                    },
+                    Err(e) => ("failed".into(), format!("The new account could not be put in place, so the old one stays: {e}")),
+                },
+                _ => ("failed".into(), format!("The command finished but {} is not signed in to the new account; the old one stays", s.runtime)),
+            }
+        }
         None => {
             let headless = profile.is_none() && runner.sign_in.headless_secret(&s.runtime).is_some();
             match signed_in(&s.runtime, &exe, &env, headless) {
@@ -452,6 +581,13 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             }
         }
     };
+    if let Some((_, side)) = &switch {
+        discard(side);
+        if state == "signed_in" {
+            // The new account's email and plan are read afresh, not the old one's.
+            crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
+        }
+    }
     s.finish(&state, &message, &runner, &default);
     {
         let mut i = s.inner.lock().unwrap();
@@ -462,6 +598,50 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     if reader.is_finished() {
         let _ = reader.join();
     }
+}
+
+/// Sign `runtime` out: the computer's own login is marked signed out first (so no key signs it straight back in),
+/// then the CLI's own logout runs and the sign-in is checked again. A logout that did not take leaves it as it was.
+fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
+    let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
+    let fail = |msg: &str| s.finish("failed", msg, &runner, &default);
+    let logout = crate::harness_tools::login_command(&s.runtime).map(|l| l.logout).unwrap_or_default();
+    if logout.is_empty() {
+        return fail(&format!("Signing out from the app is not available for {}", s.runtime));
+    }
+    let (exe, env, profile) = match login_env(&s.runtime, &config, &s.profile) {
+        Ok(found) => found,
+        Err(e) => return fail(&e),
+    };
+    let own = s.profile.is_empty();
+    if own {
+        if let Err(e) = runner.sign_in.mark_signed_out(&s.runtime) {
+            return fail(&format!("Could not record the sign-out on this computer ({:?})", e.kind()));
+        }
+    }
+    // Its exit status is not the verdict (an already signed-out CLI may say so with an error): the check after it is.
+    let args: Vec<&str> = logout.iter().map(String::as_str).collect();
+    let ran = model_command(&exe, &args, &env).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+    if let Ok(mut child) = ran {
+        let until = Instant::now() + LOGOUT_TIMEOUT;
+        while !matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            if Instant::now() > until {
+                kill(&mut child);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    if signed_in(&s.runtime, &exe, &env, false).0 {
+        if own {
+            let _ = runner.sign_in.unmark_signed_out(&s.runtime);
+        }
+        return fail(&format!("The logout finished but {} is still signed in", s.runtime));
+    }
+    let account = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+    crate::accounts::forget(&account, &s.runtime);
+    crate::profiles::forget_windows(&account, &s.runtime);
+    s.finish("signed_out", "Signed out", &runner, &default);
 }
 
 /// The browser sign-ins this runner is running, kept in step with the server's list.
@@ -490,11 +670,25 @@ impl Logins {
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key"].contains(&s.kind.as_str()) {
+            // Never a sign-in in place of something this runner does not know.
+            s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
             s.finish("failed", &format!("Another sign-in is already running for {}", s.runtime), runner, &default);
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
+        } else if s.kind == "use_shared_key" {
+            let state = match runner.sign_in.unmark_signed_out(&s.runtime) {
+                Ok(()) => ("done", "The shared key signs it in again".to_string()),
+                Err(e) => ("failed", format!("Could not change this computer's sign-out ({:?})", e.kind())),
+            };
+            s.finish(state.0, &state.1, runner, &default);
+        } else if s.kind == "sign_out" && !s.profile.is_empty() && named.is_none() {
+            s.finish("failed", &format!("Subscription {} is not on this computer", s.profile), runner, &default);
+        } else if s.kind == "sign_out" {
+            let (s2, r2) = (s.clone(), runner.clone());
+            std::thread::spawn(move || run_sign_out(s2, r2, config));
         } else {
             if !s.profile.is_empty() && named.is_none() {
                 if let Err(e) = crate::profiles::add_profile(&config, &s.profile) {
@@ -606,6 +800,118 @@ mod tests {
             assert_eq!(command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(), expected);
             assert!(command.get_envs().any(|(key, value)| key == "HOME" && value == Some(std::ffi::OsStr::new("/subscriptions/acme/claude"))));
         }
+    }
+
+    /// A stand-in `codex`: `login status` reads $CODEX_HOME/auth.json, `logout` removes it (unless $HOME/stuck),
+    /// and `login --device-auth` shows a code and writes a new login (or hangs while $HOME/slow is there).
+    const FAKE_CODEX: &str = r#"#!/bin/sh
+home="${CODEX_HOME:-$HOME/.codex}"
+case "$1 $2" in
+  "login status") if [ -f "$home/auth.json" ]; then echo "Logged in using ChatGPT"; exit 0; fi; echo "Not signed in"; exit 1 ;;
+  "logout ") [ -f "$HOME/stuck" ] || rm -f "$home/auth.json"; exit 0 ;;
+  "login --device-auth")
+    echo "Open https://auth.openai.com/codex/device"; echo "Enter this one-time code"; echo "ABCD-1234"
+    if [ -f "$HOME/slow" ]; then sleep 30; exit 1; fi
+    mkdir -p "$home"; echo new > "$home/auth.json"; exit 0 ;;
+esac
+exit 2
+"#;
+
+    fn session(kind: &str) -> Arc<Session> {
+        Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()), "runtime": "codex", "kind": kind}))
+    }
+
+    fn state(s: &Session) -> (String, String) {
+        let i = s.inner.lock().unwrap();
+        (i.state.clone(), i.message.clone())
+    }
+
+    #[test]
+    fn sign_out_and_switch_account_on_the_computers_own_codex_login() {
+        const CHILD: &str = "TICO_TEST_SIGN_OUT";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A process of its own: PATH, HOME and CODEX_HOME point at a stand-in CLI and a scratch home.
+            let root = std::env::temp_dir().join(format!("tico-sign-out-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::write(root.join("bin/codex"), FAKE_CODEX).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/codex"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = format!("{}:/usr/bin:/bin", root.join("bin").display());
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::sign_out_and_switch_account_on_the_computers_own_codex_login", "--nocapture"])
+                .env(CHILD, &root).env("PATH", path).env("HOME", &root).env("CODEX_HOME", root.join("codex"))
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV)
+                .env_remove("OPENAI_API_KEY").output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        std::fs::create_dir_all(root.join("projects/secrets")).unwrap();
+        std::fs::create_dir_all(root.join("codex")).unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+        let auth = root.join("codex/auth.json");
+        let team = root.join("projects/secrets").join(crate::signin::TEAM_KEYS_FILE);
+        let sides = || std::fs::read_dir(root.join("codex")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with(".tico-switch-")).count();
+
+        // Sign out: the login and the company's key this computer held are gone, and it is marked signed out.
+        std::fs::write(&auth, "old\n").unwrap();
+        std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        let out = session("sign_out");
+        run_sign_out(out.clone(), runner.clone(), config.clone());
+        assert_eq!(state(&out).0, "signed_out", "{:?}", state(&out));
+        assert!(!auth.exists() && runner.sign_in.signed_out("codex") && runner.sign_in.headless_secret("codex").is_none());
+        assert!(!std::fs::read_to_string(&team).unwrap().contains("OPENAI_API_KEY"));
+
+        // A browser sign-in is a person signing in again: the mark goes.
+        let back = session("sign_in");
+        run_session(back.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+        assert_eq!(state(&back).0, "signed_in", "{:?}", state(&back));
+        assert!(!runner.sign_in.signed_out("codex"));
+
+        // A logout that did not take: failed, and not left marked signed out.
+        std::fs::write(root.join("stuck"), "").unwrap();
+        let stuck = session("sign_out");
+        run_sign_out(stuck.clone(), runner.clone(), config.clone());
+        assert_eq!(state(&stuck), ("failed".into(), "The logout finished but codex is still signed in".into()));
+        assert!(auth.exists() && !runner.sign_in.signed_out("codex"));
+        std::fs::remove_file(root.join("stuck")).unwrap();
+
+        // Switch account: signed in on the side, then put in place; the side home is gone.
+        std::fs::write(&auth, "old\n").unwrap();
+        let switch = session("switch");
+        run_session(switch.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+        assert_eq!(state(&switch).0, "signed_in", "{:?}", state(&switch));
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
+        assert_eq!(sides(), 0);
+
+        // A switch cancelled partway leaves the old login exactly as it was.
+        std::fs::write(&auth, "old\n").unwrap();
+        std::fs::write(root.join("slow"), "").unwrap();
+        let cancelled = session("switch");
+        let (s2, r2, c2) = (cancelled.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        let until = Instant::now() + Duration::from_secs(10);
+        while state(&cancelled).0 != "waiting" && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(sides(), 1, "the switch signs in on the side");
+        cancelled.cancelled.store(true, Ordering::SeqCst);
+        running.join().unwrap();
+        assert_eq!(state(&cancelled).0, "cancelled");
+        assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        assert_eq!(sides(), 0);
+    }
+
+    #[test]
+    fn a_kind_this_runner_does_not_know_is_never_run_as_a_sign_in() {
+        assert_eq!(session("sign_in").kind, "sign_in");
+        assert_eq!(Session::new(&json!({"id": "x", "runtime": "codex"})).kind, "sign_in");
+        assert_eq!(session("use_shared_key").kind, "use_shared_key");
     }
 
     #[test]

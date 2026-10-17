@@ -55,6 +55,13 @@ fn re(p: &str) -> Regex {
 pub struct Login {
     pub command: Vec<String>,
     pub terminal: bool,
+    /// The CLI's own sign-out (`codex logout`), run by Sign out in Settings > Computers. Empty: not offered.
+    pub logout: Vec<String>,
+    /// The files under the runtime's home that hold its login, which Switch account moves into place once the new
+    /// sign-in has finished on the side.
+    pub files: Vec<String>,
+    /// Files copied from the home into the switch's own home first, so the CLI's settings in them survive it.
+    pub seed: Vec<String>,
 }
 
 /// How readiness tells whether a CLI is signed in (`[capabilities.sign_in_status]`, docs/harnesses.md).
@@ -355,7 +362,23 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
             return Err(format!("{at}: login is for device-code or subscription sign-in"));
         }
         let flag = |k: &str| raw.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
-        Some(Login { command, terminal: flag("terminal") })
+        let logout = strings(raw.get("logout"), "login.logout", &at, None, 0, &[])?;
+        // Paths inside the runtime's home: never absolute, never climbing out of it.
+        let inside = |k: &str| -> Result<Vec<String>, String> {
+            let paths = strings(raw.get(k), &format!("login.{k}"), &at, None, 0, &[])?;
+            match paths.iter().find(|p| p.is_empty() || p.starts_with('/') || p.split('/').any(|part| part == ".." || part.is_empty())) {
+                Some(bad) => Err(format!("{at}: login.{k} names a path inside the runtime's home, not {bad:?}")),
+                None => Ok(paths),
+            }
+        };
+        let (files, seed) = (inside("files")?, inside("seed")?);
+        if !logout.is_empty() && files.is_empty() {
+            return Err(format!("{at}: login.logout needs login.files, the files a Switch account moves into place"));
+        }
+        if let Some(extra) = seed.iter().find(|p| !files.contains(p)) {
+            return Err(format!("{at}: login.seed {extra:?} is not one of login.files"));
+        }
+        Some(Login { command, terminal: flag("terminal"), logout, files, seed })
     } else if methods.iter().any(|m| m == "device-code") {
         return Err(format!("{at}: device-code sign-in needs a [login] command for the browser relay"));
     } else {

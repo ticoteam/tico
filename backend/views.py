@@ -1547,8 +1547,11 @@ def install_views(app, store, auth, mutate, task_view):
                 from .subscriptions import computer_profiles
                 # Each named subscription on it, with its sign-in, account and usage windows: this list is already
                 # limited to an administrator or the computer's operator, who may read its accounts.
+                from .model_login import cleared_logins
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
                                  "profiles": computer_profiles(c, row, True),
+                                 # {runtime: [profile, ...]} a person signed out here; they stay signed out.
+                                 "signed_out": cleared_logins(c, row["id"]),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],

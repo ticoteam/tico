@@ -45,6 +45,36 @@ Profile directories separate provider logins. Browser-created profiles live outs
 
 The Engineering Manager template gives owners and admins an initial read grant to all enabled repositories. Member-created bots keep the team default. Its child-task and worktree instructions require phases 2 and 3 to ship first.
 
+### Signing out and switching accounts
+
+On **Settings → Computers** a signed-in Codex or Claude Code login, the Computer's own or a named subscription's, has
+**Switch account** and **Sign out**; **Manage subscription** on **AI providers** has the same for each signed-in runtime.
+The same people who may sign a login in see them: the Computer's operator, owners and admins. The Computer must be online
+and on a current runner; an older one answers `Update <computer> to sign out from here` and is never asked.
+
+- **Sign out** first names the bots that stop: the active bots assigned to that Computer whose runtime and subscription
+  are that login. The Computer then runs the CLI's own logout (`codex logout`, `claude auth logout`) as the user that
+  signs in, and checks the login again. If it is still signed in, the sign-out fails and the login is as it was. Bots
+  and assignments stay: those bots wait, as for any signed-out login, until someone signs in again.
+- **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
+  login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login), and only once that
+  finished moves the new login files in place. Cancelling, failing or running out of time leaves the old account
+  working; the side folder is always removed. Runs that start afterwards use the new account. The account and usage
+  readings of the old account are cleared.
+- A **Computer's own login that someone signed out stays signed out**. The company's model key given to **Every
+  computer** does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
+  again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
+  Signing in again, or **Use the shared key** next to it, ends that. A named subscription never takes the shared key.
+
+None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches; `POST
+/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
+sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
+may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files; Switch account
+there has not been tested and may not keep the old account when cancelled.
+
 ### Refreshing weekly allowance
 
 On **AI providers**, a computer operator or administrator can choose **Refresh weekly
@@ -61,7 +91,7 @@ never means a fresh allowance or a repaired sign-in. Claude and other runtimes w
 a supported standalone weekly read use observations from normal runs or a manual
 provider reading. Missing percentages remain unknown, not zero.
 
-Starting a new sign-in through Tico invalidates earlier readings and in-flight refresh
+Starting a new sign-in, a switch or a sign-out through Tico invalidates earlier readings and in-flight refresh
 results for that profile/runtime. Replacing credentials outside Tico under the same
 local profile cannot currently be detected: refresh and confirm the provider reading
 after such a change. Usage reported by a turn that was already running during sign-in
