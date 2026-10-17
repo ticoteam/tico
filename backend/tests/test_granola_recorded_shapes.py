@@ -1,6 +1,7 @@
 """Granola's answers as they really arrive, replayed through the real client: every answer gzipped, notes and
-transcripts after a line of provider text, and throttling in each of its three forms. The fixtures are scrubbed
-recordings in backend/tests/fixtures/granola/; scripts/granola_live_check.py checks Granola still answers this way."""
+transcripts after a line of provider text, and throttling in each of its three forms. The fixtures in
+backend/tests/fixtures/granola/ are rebuilt from the two Granola incidents and Granola's docs, not yet a live
+recording; scripts/granola_live_check.py checks Granola still answers this way, and its --record output replays here."""
 import gzip
 import json
 from datetime import datetime, timezone
@@ -21,9 +22,8 @@ def with_id(message, request_id):
     return json.loads(json.dumps(message).replace('"<request id>"', json.dumps(request_id)))
 
 
-def served(name, request_id=None):
-    """The recorded answer as Granola sends it: compressed when it was, an event stream when it was."""
-    exchange = EXCHANGES[name]
+def body_of(exchange, request_id=None):
+    """The bytes Granola sends: compressed when it was, an event stream when it was."""
     if "events" in exchange:
         body = "".join("event: message\ndata: " + json.dumps(with_id(e, request_id)) + "\n\n"
                        for e in exchange["events"]).encode()
@@ -31,16 +31,22 @@ def served(name, request_id=None):
         body = json.dumps(with_id(exchange["json"], request_id)).encode()
     else:
         body = b""
-    if exchange["headers"].get("Content-Encoding") == "gzip":
+    if httpx.Headers(exchange["headers"]).get("content-encoding") == "gzip":   # a recording's names are lowercase
         body = gzip.compress(body)
-    return httpx.Response(exchange["status"], headers=exchange["headers"], content=body)
+    return body
+
+
+def served(name, request_id=None, exchanges=EXCHANGES):
+    exchange = exchanges[name]
+    return httpx.Response(exchange["status"], headers=exchange["headers"], content=body_of(exchange, request_id))
 
 
 class Recorded(Provider):
     """Answers only with recorded shapes; `throttles` puts recorded rate limits ahead of a tool's answer."""
 
-    def __init__(self, api, notes="get_meetings"):
+    def __init__(self, api, notes="get_meetings", exchanges=EXCHANGES):
         self.notes, self.throttles, self.notes_calls, self.tools = notes, {}, [], []
+        self.exchanges = exchanges
         super().__init__(api)
         self.now = datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp()
 
@@ -50,27 +56,27 @@ class Recorded(Provider):
         oauth = {"/oauth2/register": "register", "/oauth2/device_authorization": "device_authorization",
                  "/oauth2/token": "token", "/.well-known/oauth-authorization-server": "authorization_server"}
         if path in oauth:
-            return served(oauth[path])
+            return served(oauth[path], exchanges=self.exchanges)
         if path == "/oauth2/revoke":
             return httpx.Response(200)
         assert path == "/mcp"
         body = json.loads(request.content)
         if body["method"] == "initialize":
-            return served("initialize", body["id"])
+            return served("initialize", body["id"], exchanges=self.exchanges)
         assert request.headers["Mcp-Session-Id"] == "session-placeholder"
         if body["method"] == "notifications/initialized":
-            return served("initialized")
+            return served("initialized", exchanges=self.exchanges)
         if body["method"] == "tools/list":
-            return served("tools_list", body["id"])
+            return served("tools_list", body["id"], exchanges=self.exchanges)
         name = body["params"]["name"]
         self.tools.append(name)
         if name == "get_meetings":
             self.notes_calls.append(body["params"]["arguments"]["meeting_ids"])
         if self.throttles.get(name):
-            return served(self.throttles[name].pop(0), body["id"])
+            return served(self.throttles[name].pop(0), body["id"], exchanges=self.exchanges)
         shape = {"list_meetings": "list_meetings", "get_meetings": self.notes,
                  "get_meeting_transcript": "transcript"}[name]
-        return served(shape, body["id"])
+        return served(shape, body["id"], exchanges=self.exchanges)
 
 
 def imported(api):
@@ -150,3 +156,66 @@ def test_a_recording_keeps_the_shape_and_drops_people_and_tokens():
         assert secret not in text
     assert scrubbed["token"]["json"]["expires_in"] == 3600
     assert granola_live_check.shape_problems("get_meetings", scrubbed["get_meetings"]) == []
+
+
+def live_granola(notes="get_meetings", throttle=None, public=None):
+    """A fake Granola for the live check: recorded MCP answers, or a throttle for every notes request."""
+    def handle(request):
+        if request.url.host == "public-api.granola.ai":
+            return public or httpx.Response(200, json={"notes": [{"id": "not_ABCDEFGHIJKLMN"}], "hasMore": False})
+        body = json.loads(request.content)
+        method, name = body["method"], body.get("params", {}).get("name")
+        shape = {"initialize": "initialize", "notifications/initialized": "initialized", "tools/list": "tools_list"}.get(
+            method) or (throttle or notes if name == "get_meetings" else name)
+        return served(shape, body.get("id"))
+    return httpx.MockTransport(handle)
+
+
+@pytest.fixture
+def live(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(granola_live_check, "SLEEP", sleeps.append)
+    monkeypatch.delenv("GRANOLA_API_KEY", raising=False)
+    monkeypatch.setenv("GRANOLA_MCP_TOKEN", "fake-access-sensitive")
+    return sleeps
+
+
+def test_the_live_check_says_ok_only_when_every_probe_answered(live, monkeypatch, capsys):
+    monkeypatch.setattr(granola_live_check, "TRANSPORT", live_granola())
+    assert granola_live_check.main([]) == 0
+    assert capsys.readouterr().out.strip().endswith("OK: Granola's answers match the fixtures' shapes")
+
+
+@pytest.mark.parametrize("throttle", granola_live_check.RATE_LIMITS)
+def test_a_throttled_notes_probe_is_incomplete_never_ok(live, monkeypatch, capsys, throttle):
+    monkeypatch.setattr(granola_live_check, "TRANSPORT", live_granola(throttle=throttle))
+    assert granola_live_check.main([]) == 2
+    out = capsys.readouterr().out
+    assert "INCOMPLETE get_meetings: rate-limited twice" in out and "OK:" not in out and "DRIFT" not in out
+    assert live == [5 if throttle == "rate_limit_http_429" else 20]       # one bounded wait, Retry-After when named
+
+
+def test_a_throttled_public_api_is_incomplete_never_ok(live, monkeypatch, capsys):
+    monkeypatch.delenv("GRANOLA_MCP_TOKEN")
+    monkeypatch.setenv("GRANOLA_API_KEY", "fake-key-sensitive")
+    monkeypatch.setattr(granola_live_check, "TRANSPORT", live_granola(public=httpx.Response(429, headers={"Retry-After": "600"})))
+    assert granola_live_check.main([]) == 2
+    out = capsys.readouterr().out
+    assert "INCOMPLETE public API notes" in out and "OK:" not in out
+    assert live == [60]
+
+
+@pytest.mark.parametrize("notes", ["get_meetings", "get_meetings_event_stream"])
+def test_a_new_recording_replays_compressed_through_the_real_client(api, live, monkeypatch, tmp_path, notes):
+    monkeypatch.setattr(granola_live_check, "TRANSPORT", live_granola(notes))
+    assert granola_live_check.main(["--record", str(tmp_path)]) == 0
+    recording = json.loads((tmp_path / "mcp_shapes.json").read_text())["exchanges"]
+    assert recording["get_meetings"]["headers"]["content-encoding"] == "gzip"            # httpx's lowercase names
+    assert body_of(recording["get_meetings"])[:2] == b"\x1f\x8b"                       # replayed compressed
+    assert "fake-access-sensitive" not in json.dumps(recording)
+    provider = Recorded(api, exchanges={**EXCHANGES, **recording})
+    provider.connect()
+    provider.sync()
+    status = api.get(BASE, headers=headers("ana-test")).json()
+    assert not status["last_error"] and status["imported_count"] == 2 and status["skipped"] == 0
+    assert set(imported(api).values()) == {"Scrubbed summary"}

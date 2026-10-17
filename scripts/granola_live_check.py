@@ -13,14 +13,18 @@ backend/tests/fixtures/granola/ and the parser", not as a broken build.
 --record DIR writes the answers it saw to DIR/mcp_shapes.json in the fixture format, scrubbed: ids, titles,
 names, emails and notes become placeholders and no token or cookie is written. Read the file before committing it.
 
-Exit status: 0 when the shapes match or the check is skipped, 1 on drift, 2 when Granola cannot be reached or
-refuses the credential.
+A probe Granola rate-limits is waited out once (its Retry-After, at most a minute); if it is throttled again, that
+probe is reported INCOMPLETE and the run never says OK. The throttle's own shape is still checked.
+
+Exit status: 0 when every probe's shape matches or the check is skipped, 1 on drift, 2 when part of the check could
+not run (unreachable, credential refused, rate-limited twice, no meetings to read).
 """
 import argparse
 import json
 import os
 import re
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -30,9 +34,12 @@ from backend.granola_mcp import MCP, GranolaError, GranolaMCP  # noqa: E402
 
 PUBLIC_API = "https://public-api.granola.ai/v1"
 KEPT_HEADERS = ("content-type", "content-encoding", "mcp-session-id", "retry-after")
-SECRETS = ("access_token", "refresh_token", "device_code", "id_token", "client_id", "id")
+SECRETS = ("access_token", "refresh_token", "device_code", "id_token", "client_id")
 PERSONAL = ("name", "title", "summary", "summary_markdown", "summary_text", "notes", "private_notes", "transcript",
             "speaker", "company", "email")
+RETRY_WAIT, RETRY_WAIT_MAX = 20, 60    # one wait-and-retry for a throttled probe, never longer than this
+TRANSPORT = None                       # tests replace the network; None is the real one
+SLEEP = time.sleep
 RATE_LIMITS = ("rate_limit_http_429", "rate_limit_rpc_error", "rate_limit_tool_error")
 
 
@@ -143,72 +150,99 @@ def recorded(response):
     return out
 
 
-def live_mcp(token, timeout=45):
-    import httpx
-    exchanges, session = {}, {}
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-        def rpc(name, method, params=None, notification=False):
-            headers = {"Authorization": "Bearer " + token, "Accept": "application/json, text/event-stream",
-                       "MCP-Protocol-Version": "2025-03-26"}
-            if session.get("id"):
-                headers["Mcp-Session-Id"] = session["id"]
-            body = {"jsonrpc": "2.0", "method": method, "params": params or {}}
-            if not notification:
-                body["id"] = uuid.uuid4().hex
-            response = client.post(MCP, headers=headers, json=body)
-            if response.status_code in (401, 403):
-                raise PermissionError(f"{name}: Granola refused the token (HTTP {response.status_code})")
-            session["id"] = response.headers.get("Mcp-Session-Id") or session.get("id")
-            exchange = recorded(response)
-            message = decoded(exchange)
-            message = message if isinstance(message, dict) else {}
-            result = message.get("result") if isinstance(message.get("result"), dict) else {}
-            if response.status_code == 429:
-                name = "rate_limit_http_429"
-            elif message.get("error") and GranolaMCP.rate_limited(message["error"]):
-                name = "rate_limit_rpc_error"
-            elif result.get("isError") and GranolaMCP.rate_limited(result):
-                name = "rate_limit_tool_error"
-            exchanges[name] = exchange
-            return result
+def retry_wait(response):
+    try:
+        return min(max(float(response.headers.get("Retry-After", RETRY_WAIT)), 0), RETRY_WAIT_MAX)
+    except ValueError:
+        return RETRY_WAIT
 
-        rpc("initialize", "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
-                                         "clientInfo": {"name": "tico-live-check", "version": "1"}})
+
+def live_mcp(token, timeout=45):
+    """The answers seen, and the probes a rate limit kept from answering (their shapes were not checked)."""
+    import httpx
+    exchanges, session, incomplete = {}, {}, []
+    with httpx.Client(timeout=timeout, follow_redirects=False, transport=TRANSPORT) as client:
+        def rpc(name, method, params=None, notification=False):
+            for attempt in range(2):
+                headers = {"Authorization": "Bearer " + token, "Accept": "application/json, text/event-stream",
+                           "MCP-Protocol-Version": "2025-03-26"}
+                if session.get("id"):
+                    headers["Mcp-Session-Id"] = session["id"]
+                body = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+                if not notification:
+                    body["id"] = uuid.uuid4().hex
+                response = client.post(MCP, headers=headers, json=body)
+                if response.status_code in (401, 403):
+                    raise PermissionError(f"{name}: Granola refused the token (HTTP {response.status_code})")
+                session["id"] = response.headers.get("Mcp-Session-Id") or session.get("id")
+                exchange = recorded(response)
+                message = decoded(exchange)
+                message = message if isinstance(message, dict) else {}
+                result = message.get("result") if isinstance(message.get("result"), dict) else {}
+                throttle = ("rate_limit_http_429" if response.status_code == 429 else
+                            "rate_limit_rpc_error" if message.get("error") and GranolaMCP.rate_limited(message["error"]) else
+                            "rate_limit_tool_error" if result.get("isError") and GranolaMCP.rate_limited(result) else None)
+                if throttle is None:
+                    exchanges[name] = exchange
+                    return result
+                exchanges[throttle] = exchange    # the throttle's own shape is checked too
+                if attempt == 0:
+                    SLEEP(retry_wait(response))
+            incomplete.append(f"{name}: rate-limited twice, its answer was not checked")
+            return None
+
+        if rpc("initialize", "initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                            "clientInfo": {"name": "tico-live-check", "version": "1"}}) is None:
+            return exchanges, incomplete
         rpc("initialized", "notifications/initialized", notification=True)
-        tools = {t.get("name"): t for t in rpc("tools_list", "tools/list").get("tools", []) if isinstance(t, dict)}
+        listed_tools = rpc("tools_list", "tools/list")
+        if listed_tools is None:
+            return exchanges, incomplete
+        tools = {t.get("name"): t for t in listed_tools.get("tools", []) if isinstance(t, dict)}
         if "list_meetings" not in tools:
-            return exchanges
+            return exchanges, incomplete
         schema = (tools["list_meetings"].get("inputSchema") or {}).get("properties", {})
         ranges = schema.get("time_range", {}).get("enum", [])
         listed = rpc("list_meetings", "tools/call", {"name": "list_meetings", "arguments": {
             "time_range": "last_30_days"} if "last_30_days" in ranges else {}})
+        if listed is None:
+            return exchanges, incomplete
         try:
             ids = [row["id"] for row in GranolaMCP.content(listed).get("meetings", []) if row.get("id")][:3]
+            if not ids:
+                incomplete.append("get_meetings: no meetings in the last 30 days, so no notes answer was checked")
         except (GranolaError, AttributeError, TypeError):
-            ids = []
+            ids = []    # the list's own shape check reports this as drift
         if ids and "get_meetings" in tools:
             rpc("get_meetings", "tools/call", {"name": "get_meetings", "arguments": {"meeting_ids": ids}})
-    return exchanges
+    return exchanges, incomplete
 
 
 def live_public_api(key, timeout=30):
+    """Shape problems and incomplete probes for one page of the public API's notes."""
     import httpx
-    response = httpx.get(PUBLIC_API + "/notes", params={"page_size": 1}, timeout=timeout,
-                         headers={"Authorization": "Bearer " + key})
+    with httpx.Client(timeout=timeout, transport=TRANSPORT) as client:
+        for attempt in range(2):
+            response = client.get(PUBLIC_API + "/notes", params={"page_size": 1},
+                                  headers={"Authorization": "Bearer " + key})
+            if response.status_code != 429:
+                break
+            if attempt == 0:
+                SLEEP(retry_wait(response))
+        else:
+            return [], ["public API notes: rate-limited twice, its answer was not checked"]
     if response.status_code in (401, 403):
         raise PermissionError(f"public API: Granola refused the key (HTTP {response.status_code})")
-    if response.status_code == 429:
-        return []    # throttled: nothing to say about the shape
     try:
         page = response.json()
     except ValueError:
-        return [f"public API notes: HTTP {response.status_code} without JSON"]
+        return [f"public API notes: HTTP {response.status_code} without JSON"], []
     if not isinstance(page, dict) or not isinstance(page.get("notes"), list):
-        return ["public API notes: no notes list"]
+        return ["public API notes: no notes list"], []
     problems = [] if "hasMore" in page else ["public API notes: no hasMore"]
     if any(not re.fullmatch(r"not_[A-Za-z0-9]{14}", str(row.get("id", ""))) for row in page["notes"]):
         problems.append("public API notes: a note id no longer looks like not_ + 14 characters")
-    return problems
+    return problems, []
 
 
 # ---- scrub ----
@@ -240,6 +274,8 @@ def scrub(exchanges):
         if isinstance(value, list):
             return [walk(v, None, meetings) for v in value]
         if isinstance(value, str):
+            if key == "id" and value != "<request id>":
+                return placeholder_id([value])
             if key in SECRETS:
                 return f"<{key}>"
             if key and key.lower() == "mcp-session-id":
@@ -250,7 +286,19 @@ def scrub(exchanges):
         return value
 
     # Tool and server descriptions name no one; everywhere else a name, title or note is a person's.
-    return {name: walk(exchange, meetings=name not in ("initialize", "tools_list")) for name, exchange in exchanges.items()}
+    def request_id(message):
+        # The JSON-RPC id is the request's own; the replay puts the new request's id back in its place.
+        return {**message, "id": "<request id>"} if isinstance(message, dict) and "jsonrpc" in message else message
+
+    out = {}
+    for name, exchange in exchanges.items():
+        exchange = dict(exchange)
+        if "json" in exchange:
+            exchange["json"] = request_id(exchange["json"])
+        if "events" in exchange:
+            exchange["events"] = [request_id(e) for e in exchange["events"]]
+        out[name] = walk(exchange, meetings=name not in ("initialize", "tools_list"))
+    return out
 
 
 def main(argv=None):
@@ -261,14 +309,15 @@ def main(argv=None):
     if not token and not key:
         print("SKIP: set GRANOLA_MCP_TOKEN and/or GRANOLA_API_KEY to check Granola's live answers")
         return 0
-    problems = []
+    problems, incomplete = [], []
     try:
         if token:
-            exchanges = live_mcp(token)
+            exchanges, unchecked = live_mcp(token)
+            incomplete.extend(unchecked)
             for name, exchange in exchanges.items():
                 problems.extend(shape_problems(name, exchange))
             for name in ("initialize", "tools_list", "list_meetings"):
-                if name not in exchanges:
+                if name not in exchanges and not any(item.startswith(name + ":") for item in unchecked):
                     problems.append(f"{name}: no answer recorded")
             if args.record:
                 Path(args.record).mkdir(parents=True, exist_ok=True)
@@ -279,7 +328,9 @@ def main(argv=None):
         else:
             print("SKIP MCP: GRANOLA_MCP_TOKEN is not set")
         if key:
-            problems.extend(live_public_api(key))
+            found, unchecked = live_public_api(key)
+            problems.extend(found)
+            incomplete.extend(unchecked)
         else:
             print("SKIP public API: GRANOLA_API_KEY is not set")
     except PermissionError as exc:
@@ -290,8 +341,16 @@ def main(argv=None):
         return 2
     for problem in problems:
         print("DRIFT " + problem)
-    print("OK: Granola's answers match the fixtures' shapes" if not problems else f"{len(problems)} shape change(s)")
-    return 1 if problems else 0
+    for item in incomplete:
+        print("INCOMPLETE " + item)
+    if problems:
+        print(f"{len(problems)} shape change(s)")
+        return 1
+    if incomplete:
+        print("CANNOT CHECK: part of the check did not finish")
+        return 2
+    print("OK: Granola's answers match the fixtures' shapes")
+    return 0
 
 
 if __name__ == "__main__":
