@@ -293,12 +293,12 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
                                'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
     with api.app.state.store.transaction() as c:
         # A fresh database is marked on its first start, so its second start clears nothing.
-        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='roadmaps_copies_cleared'").fetchone()
+        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'").fetchone()
         # What the first version left: a copy made before the title changed, and a task public at creation.
         c.execute("UPDATE tasks SET public_title='Old title',public_summary='Old notes',title='New title' WHERE id=?",
                   (edited['id'],))
         c.execute("UPDATE tasks SET visibility='public',public_title=title,public_summary=body WHERE id=?", (copied['id'],))
-        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_copies_cleared'")
+        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'")
         R.migrate(c)
         state = lambda tid: tuple(c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?',
                                             (tid,)).fetchone())
@@ -307,7 +307,7 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
         assert state(draft['id']) == ('private', 'Written draft', '')              # written public text stays
         assert state(shown['id']) == ('public', 'Shown idea', 'Shown notes')       # written at creation, so it stays
         note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='visibility'", (copied['id'],)).fetchone()
-        assert 'copy of the internal title and body' in note[0]
+        assert 'copy of the internal title' in note[0]
         cleared = c.execute("SELECT field,old,new,note FROM task_events WHERE task_id=? AND note LIKE 'Cleared:%' "
                             "ORDER BY field", (edited['id'],)).fetchall()
         assert [tuple(r[:3]) for r in cleared] == [('public_summary', 'Old notes', ''), ('public_title', 'Old title', '')]
@@ -315,6 +315,37 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
         R.migrate(c)                                                                # once only
         assert state(edited['id']) == ('private', 'Old title', '')
     assert api.get('/public/roadmaps/roadmap/tasks/' + copied['id']).status_code == 404
+
+
+def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api):
+    from backend import roadmaps as R
+    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'D', 'body': 'secret internal body', 'type': 'Product roadmap'})
+    hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'E', 'body': 'other internal body', 'type': 'Product roadmap'})
+    retitled = post(api, 'tasks', {'owner': 'cpo', 'title': 'F', 'body': 'Written summary', 'type': 'Product roadmap'})
+    with api.app.state.store.transaction() as c:
+        # The first version made each a copy at creation; then the owner rewrote only one field through publication().
+        c.execute("UPDATE tasks SET public_title=title,public_summary=body WHERE id IN (?,?,?)",
+                  (shown['id'], hidden['id'], retitled['id']))
+        c.execute("UPDATE tasks SET visibility='public' WHERE id IN (?,?)", (shown['id'], retitled['id']))
+    shown = get(api, 'tasks/' + shown['id'])['task']
+    post(api, 'tasks/' + shown['id'], {'version': shown['version'], 'public_title': 'D written'})
+    hidden = get(api, 'tasks/' + hidden['id'])['task']
+    post(api, 'tasks/' + hidden['id'], {'version': hidden['version'], 'public_title': 'E written'})
+    retitled = get(api, 'tasks/' + retitled['id'])['task']
+    post(api, 'tasks/' + retitled['id'], {'version': retitled['version'], 'public_summary': 'Written summary, public'})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'")
+        R.migrate(c)
+        state = lambda tid: tuple(c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?',
+                                            (tid,)).fetchone())
+        assert state(shown['id']) == ('public', 'D written', '')              # the written title keeps it public
+        assert state(hidden['id']) == ('private', 'E written', '')
+        assert state(retitled['id']) == ('private', '', 'Written summary, public')
+        # Each clearing leaves its event, so it can be put back.
+        assert tuple(c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='public_summary' "
+                               "AND note LIKE 'Cleared:%'", (shown['id'],)).fetchone()) == ('secret internal body', '')
+        assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='visibility' AND note LIKE 'Unpublished:%'",
+                         (retitled['id'],)).fetchone()
 
 
 def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
