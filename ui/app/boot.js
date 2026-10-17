@@ -49,6 +49,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   void Promise.all([status, issues, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
     botAlertDraw();
+    overviewRefresh();                 // a campus opened before the first status answer shows it now, not at the next poll
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   });
   if (S.me?.cloud) void updUnreadRefresh();

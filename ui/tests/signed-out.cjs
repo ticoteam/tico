@@ -114,6 +114,9 @@ async function signInAndReturn(page, state, seen, press) {
   await press();
   await until('a top-level visit to this address', () => seen.top);
   assert.equal(seen.top, 'https://tico-ui.test/');
+  // The visit is still on its way when the server sees it. Coming back before it lands (on the browser's error page
+  // here) lets that page cut this navigation off.
+  await until('the visit leaves for the login', () => !page.url().startsWith('https://tico-ui.test/'));
   state.mode = 'ok';
   await page.goto('https://tico-ui.test/');
   await page.waitForFunction(() => location.hash === '#/bot/ops/chat');
