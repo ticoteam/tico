@@ -953,6 +953,7 @@ def parser():
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
+    s.add_argument("--approval-id", dest="approval_id", help="an approved publish approval, for a public roadmap label")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
     s = task.add_parser("close")

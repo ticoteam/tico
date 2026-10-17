@@ -368,12 +368,12 @@ def refused(c, identity, exc):
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity)
+        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None))
     except H.Refused:
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "escape", "quarantined", "close") else 422)
+    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422)
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
