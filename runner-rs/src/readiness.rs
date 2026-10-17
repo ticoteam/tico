@@ -322,7 +322,7 @@ pub fn unsupported(entry: &Value) -> Vec<String> {
     let runtime = text_of(&c["runtime"]);
     let mut needs = vec![];
     let harness = text_of(&c["harness"]);
-    if !harness.is_empty() && !crate::harness_tools::is_harness_of(&runtime, &harness) {
+    if !harness.is_empty() && crate::appdriver::delivery(c).is_none() && !crate::harness_tools::is_harness_of(&runtime, &harness) {
         needs.push(format!("the {harness} harness"));
     }
     needs
@@ -358,7 +358,10 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
         let expected = &entry["config"];
         let runtime = text_of(&expected["runtime"]);
         let caps = crate::harness_tools::caps_of(expected);
-        let known = crate::harness_tools::runtimes().contains(&runtime);
+        // A bot delivered through an app needs no repository, runtime or sign-in here; its app's state is the
+        // readiness `appdriver` field, and a turn that cannot reach it fails saying why.
+        let app = crate::appdriver::delivery(expected).is_some();
+        let known = app || crate::harness_tools::runtimes().contains(&runtime);
         let path = crate::sessions::local_path(config, &bot, expected);
         let requested = text_of(&entry["profile"]);
         let computer = text_of(&entry["computer_label"]);
@@ -379,9 +382,9 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
             problems.push(profiles::subscription_problem(&config.data, assignments, &requested, false, &computer));
         }
         let repository_present = path.join("AGENT.md").is_file();
-        if !repository_present {
+        if !repository_present && !app {
             problems.push(crate::product_files::problem(&bot).or_else(|| crate::fetchrepo::problem(&bot)).unwrap_or_else(|| "Missing bot repository or AGENT.md".into()));
-        } else {
+        } else if repository_present {
             if caps.repo_permission_lint {
                 warnings.extend(crate::readiness_extra::deny_warnings(&path));
             }
@@ -399,7 +402,9 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
                 detail
             }
         };
-        if runtime.is_empty() {
+        if app {
+            // Its app's state stands for install and sign-in (above).
+        } else if runtime.is_empty() {
             problems.push(NO_RUNTIME.into());
         } else if !known {
             problems.push("Unsupported runtime".into());

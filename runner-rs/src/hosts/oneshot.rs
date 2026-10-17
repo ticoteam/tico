@@ -1,5 +1,5 @@
-//! The process side of the hosts that run one harness process per turn and read its JSON lines (Pi, Cursor):
-//! the prompt goes in on
+//! The process side of the hosts that run one harness process per turn and read its JSON lines (Pi, Cursor, the
+//! Mac app driver): the prompt goes in on
 //! stdin, stderr to an unlinked file read back for the error text, one turn at a time, interrupt and stop by
 //! signal. What a harness's lines mean is its `Wire`.
 
@@ -39,6 +39,11 @@ pub struct Turn {
     pub session: bool,
     /// Events to emit, as (kind, fields).
     pub out: Vec<(&'static str, Value)>,
+    /// The host's bot and command, for a wire whose lines mean something only with them.
+    pub bot: String,
+    pub cmd: Vec<String>,
+    /// What the wire keeps between lines of one turn.
+    pub extra: Value,
 }
 
 impl Turn {
@@ -56,6 +61,23 @@ pub trait Wire: Send + Sync + 'static {
     fn env(settings: &Settings) -> Env;
     fn on_event(msg: &Value, turn: &mut Turn);
     fn succeeded(rc: i32, turn: &Turn) -> bool;
+    /// The harness runs as the bot user where the runner isolates turns (crate::isolation).
+    const ISOLATED: bool = true;
+    /// What goes in on stdin.
+    fn stdin(_cmd: &[String], text: &str) -> String {
+        text.into()
+    }
+    /// A lock the turn holds from before its process starts until it ends.
+    fn gate(_cmd: &[String]) -> Option<Arc<tokio::sync::Mutex<()>>> {
+        None
+    }
+    /// How long the process may run before it is killed and the turn fails (`timed_out`).
+    fn deadline(_cmd: &[String]) -> Option<Duration> {
+        None
+    }
+    fn timed_out(_turn: &mut Turn) {}
+    /// The turn is over, before its last events go out.
+    fn finished(_rc: i32, _turn: &Turn, _interrupted: bool) {}
 }
 
 /// Python's `int(value or 0)` for a usage count; anything else is 0.
@@ -158,7 +180,7 @@ impl<W: Wire> OneShot<W> {
         let path = std::env::temp_dir().join(format!("tico-{}-stderr-{}", W::NAME, uuid::Uuid::new_v4().simple()));
         let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
         let _ = std::fs::remove_file(&path);
-        let mut command = crate::isolation::command(&argv[0]);
+        let mut command = if W::ISOLATED { crate::isolation::command(&argv[0]) } else { tokio::process::Command::new(&argv[0]) };
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -172,7 +194,7 @@ impl<W: Wire> OneShot<W> {
 
     pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let (child, stderr) = {
+        let (argv, settings, launched) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed(format!("{} host is not running", W::NAME)));
@@ -185,17 +207,63 @@ impl<W: Wire> OneShot<W> {
                 t.bot = self.0.bot.clone();
             }
             let argv = W::argv(&self.0.cmd, thread_id, &t, effort);
-            let launched = self.launch(&argv, &t.settings).map_err(|e| failed(format!("could not start {}: {e}", W::PROGRAM)))?;
+            // A gated wire starts its process once it holds the gate, in the turn's own task.
+            let launched = match W::gate(&self.0.cmd) {
+                Some(_) => None,
+                None => Some(self.launch(&argv, &t.settings).map_err(|e| failed(format!("could not start {}: {e}", W::PROGRAM)))?),
+            };
             inner.turn = Some((thread_id.into(), turn.clone()));
-            launched
+            (argv, t.settings, launched)
         };
-        log(&format!("{}[{}]: turn started pid {}", W::NAME, self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
         self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
         let host = self.clone();
-        let (tid, t2, text) = (thread_id.to_string(), turn.clone(), text.to_string());
-        let reader = tokio::spawn(async move { host.read_loop(child, stderr, tid, t2, text).await });
+        let (tid, t2, text) = (thread_id.to_string(), turn.clone(), W::stdin(&self.0.cmd, text));
+        let reader = tokio::spawn(async move {
+            let (child, stderr, _held) = match launched {
+                Some((child, stderr)) => (child, stderr, None),
+                None => {
+                    let Some(held) = host.wait_gate(&t2).await else {
+                        host.finish(&tid, &t2, -1, "", host.turn_state());
+                        return;
+                    };
+                    match host.launch(&argv, &settings) {
+                        Ok((child, stderr)) => (child, stderr, Some(held)),
+                        Err(e) => {
+                            let state = Turn { error: format!("could not start {}: {e}", W::PROGRAM), ..host.turn_state() };
+                            host.finish(&tid, &t2, -1, "", state);
+                            return;
+                        }
+                    }
+                }
+            };
+            log(&format!("{}[{}]: turn started pid {}", W::NAME, host.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
+            host.read_loop(child, stderr, tid, t2, text).await
+        });
         self.inner().reader = Some(reader);
         Ok(turn)
+    }
+
+    fn turn_state(&self) -> Turn {
+        Turn { bot: self.0.bot.clone(), cmd: self.0.cmd.clone(), ..Default::default() }
+    }
+
+    /// The wire's gate, or None once the turn is interrupted or the host stopped while it waited.
+    async fn wait_gate(&self, turn: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        let gate = W::gate(&self.0.cmd)?;
+        loop {
+            {
+                let mut inner = self.inner();
+                if !inner.up {
+                    inner.interrupted.insert(turn.into());
+                }
+                if inner.interrupted.contains(turn) {
+                    return None;
+                }
+            }
+            if let Ok(held) = tokio::time::timeout(Duration::from_millis(250), gate.clone().lock_owned()).await {
+                return Some(held);
+            }
+        }
     }
 
     async fn read_loop(&self, mut child: Child, mut stderr: std::fs::File, tid: String, turn: String, text: String) {
@@ -212,12 +280,25 @@ impl<W: Wire> OneShot<W> {
             if !inner.up || inner.interrupted.contains(&turn) {
                 stopper.terminate(STOP_TIMEOUT);
             }
-            inner.stopper = Some(stopper);
+            inner.stopper = Some(stopper.clone());
         }
-        let mut state = Turn::default();
+        let mut state = self.turn_state();
+        let deadline = W::deadline(&self.0.cmd).map(|d| tokio::time::Instant::now() + d);
         if let Some(stdout) = stdout {
             let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            loop {
+                let next = match deadline {
+                    Some(at) => match tokio::time::timeout_at(at, lines.next_line()).await {
+                        Ok(next) => next,
+                        Err(_) => {
+                            W::timed_out(&mut state);
+                            stopper.terminate(Duration::from_secs(2));
+                            break;
+                        }
+                    },
+                    None => lines.next_line().await,
+                };
+                let Ok(Some(line)) = next else { break };
                 let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
                 W::on_event(&msg, &mut state);
                 if std::mem::take(&mut state.session) {
@@ -249,6 +330,7 @@ impl<W: Wire> OneShot<W> {
             }
             inner.interrupted.contains(turn)
         };
+        W::finished(rc, &state, interrupted);
         if interrupted {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
         } else if W::succeeded(rc, &state) {
@@ -265,9 +347,10 @@ impl<W: Wire> OneShot<W> {
 
     pub fn interrupt(&self, turn_id: &str) {
         let mut inner = self.inner();
-        if inner.turn.as_ref().is_none_or(|(_, t)| t != turn_id) || inner.stopper.is_none() {
+        if inner.turn.as_ref().is_none_or(|(_, t)| t != turn_id) {
             return;
         }
+        // Before its process starts too: a turn still waiting for its gate never starts it.
         inner.interrupted.insert(turn_id.into());
         if let Some(s) = &inner.stopper {
             s.terminate(STOP_TIMEOUT);

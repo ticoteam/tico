@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
 mod accounts;
+mod appdriver;
 mod backlog;
 mod capture;
 mod client;

@@ -576,8 +576,18 @@ impl Runner {
     }
 
     /// The host for `runtime` on this turn: Claude Code runs the installed (or tools-dir) `claude`, Codex its app
-    /// server on the profile's CODEX_HOME.
-    fn make_host(&self, bot: &str, runtime: &str, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+    /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
+    fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+        if let Some(delivery) = crate::appdriver::delivery(config) {
+            let app = crate::appdriver::label(&delivery.app);
+            if !cfg!(target_os = "macos") {
+                return Err(Fail::runtime(format!("{app} app delivery runs only on a Mac, and this computer is not one")));
+            }
+            let driver = crate::appdriver::driver().ok_or_else(|| {
+                Fail::runtime(format!("{app} can't be reached on this Mac: {} is not installed beside tico-runner", crate::appdriver::EXECUTABLE))
+            })?;
+            return Ok(Host::AppDriver(crate::hosts::appdriver::AppDriverHost::new(bot, crate::hosts::appdriver::command(&driver, &delivery), tx)));
+        }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(bot, vec![crate::harness_tools::executable_for("claude")], tx)),
             "codex" => Host::Codex(CodexHost::on_home(env.clone(), tx, profile.and_then(|p| p.home("codex")).map(|h| h.display().to_string()).as_deref())),
@@ -774,7 +784,7 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
+                self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
             if let Some(c) = &capture {
@@ -902,7 +912,7 @@ impl Runner {
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, mut rx) = unbounded_channel();
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -1117,7 +1127,9 @@ impl Runner {
                         }
                     }
                     self.state.phase(&aid, "synced")?;
-                    if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some()) {
+                    // A bot delivered through an app has no repository here: its work lives in the app.
+                    let repository = crate::appdriver::delivery(&config).is_none();
+                    if let Some(p) = place.as_ref().filter(|_| drove.outcome == "completed" && host.is_some() && repository) {
                         if !committed_secret && p.session_path.is_none() {
                             self.publish(&bot, &execution_path, &env).await;
                         }
