@@ -111,6 +111,16 @@ def _operator(c, who, rid, auth=None):
         raise Problem("forbidden", "You cannot sign a model in on this computer", 403)
 
 
+def _person_only(who, what):
+    """Switching accounts and signing out stop the bots on that login, so only a person does them, never BotOps: not
+    as itself, and not with the rights of the person it works for (its delegated identity keeps `via` "botops", even
+    on a person's click on a card it proposed). Checked before anything is queued, marked or recorded."""
+    from .onboarding import BOTOPS
+    if "bot:" + BOTOPS in (who.actor, who.task_actor) or who.via == "botops":
+        raise Problem("forbidden", f"BotOps cannot {what}: it stops the bots on that login. Ask the person to do it "
+                      "in Settings > Computers", 403)
+
+
 def _runner(c, rid):
     row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not row:
@@ -157,6 +167,8 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False):
     """Sign `runtime` in on a computer (`profile` "" is the computer's own login). `switch` signs in to another
     account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
     a cancelled or failed switch leaves the old login working."""
+    if switch:
+        _person_only(who, "switch accounts")
     _operator(c, who, rid, auth)
     if runtime not in RUNTIMES:
         raise Problem("kind", "Browser sign-in works for " + ", ".join(RUNTIMES[:-1]) + " and " + RUNTIMES[-1]
@@ -191,6 +203,7 @@ def cleared_logins(c, rid):
 def sign_out(c, who, rid, runtime, profile="", auth=None):
     """Sign `runtime` out on a computer: the runner runs the CLI's own logout and checks it took. The login stays
     signed out: the shared key no longer signs it back in, until a person signs in or chooses the shared key."""
+    _person_only(who, "sign a login out")
     _operator(c, who, rid, auth)
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Signing out from here isn't available for " + runtime, 422)
