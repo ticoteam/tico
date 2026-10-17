@@ -885,7 +885,8 @@ def install_github_app(app, settings, store):
         return who
 
     def product_creator(request):
-        """The Owner, or a bot's own run with Create product repositories (`can_create_product_repositories`).
+        """The Owner, or a bot's own run with Create product repositories (`can_create_product_repositories`: every
+        bot unless switched off for it).
         Connecting or disconnecting the App stays the Owner's (`owner`). Never a carried identity: a bot's turn acting
         for the Owner (BotOps' on-behalf-of, the Assistant) or an external agent would create without any bot's right,
         name rule, grant or notice."""
@@ -903,7 +904,8 @@ def install_github_app(app, settings, store):
                 if can_create_product_repositories(c, H.actor_id(who.actor)):
                     return who
         raise Problem("forbidden", "Creating a product repository needs the Owner, or a bot with the Create product "
-                      "repositories right. Only the Owner turns that on, in the bot's settings under Repositories.", 403)
+                      "repositories right. Every bot has it unless the Owner or an admin switched it off; only the "
+                      "Owner switches it back on, in the bot's settings under Repositories.", 403)
 
     def bot_product_name(c, who, name):
         """A bot never creates a name a bot repository uses or would use: write to it would reach that bot's Instructions."""

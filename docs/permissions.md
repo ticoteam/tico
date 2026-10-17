@@ -126,15 +126,16 @@ Administration: write ([GitHub App](github-app.md#when-the-app-cannot-create-rep
 | Switch | Lets the bot create | Who turns it on | Who turns it off | Built in |
 | --- | --- | --- | --- | --- |
 | **Create bot repositories** | `<org>/bot-<slug>` for a bot that exists | the Owner or an admin | the Owner or an admin | BotOps, always |
-| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | the Owner only, in their own click | the Owner or an admin | nobody |
+| **Create product repositories** | a private repository with any other name ([GitHub App](github-app.md#bots-that-create-product-repositories)) | on by default; back on after an off: the Owner only, in their own click | the Owner or an admin | every bot, until switched off |
 
 Create product repositories is a wider reach than bot repositories, so:
-- **Only the Owner turns it on.** Only the Owner creates product repositories themselves, so an admin cannot hand that to a
-  bot; the Owner's request carried by BotOps or the Assistant is refused too. Taking it away narrows a bot, so an admin may.
+- **Every bot has it by default** (Chris, Oct 17), BotOps and bots made later included. The Owner or an admin switches it
+  off per bot; taking it away narrows a bot, so an admin may. The off is kept as that bot's own choice, so a migration, a
+  later default or a template change never turns it back on.
+- **Only the Owner switches it back on.** Only the Owner creates product repositories themselves, so an admin cannot hand
+  that back to a bot; the Owner's request carried by BotOps or the Assistant is refused too.
 - **Creating takes the Owner's own request, or the bot's own turn.** A bot's turn acting for someone (BotOps, the
   Assistant) or an external agent cannot preview or create one, even for the Owner.
-- **No bot has it by default**, by its name, role or template; not BotOps either. The Owner switches it on per bot, for
-  example for Head of Engineering and DevOps.
 - **Private only.** A bot cannot create a public repository: making one public is publishing, which needs a person. Bots
   cannot delete, rename, transfer or change the visibility of a repository either.
 - A bot never creates a `bot-` or `emp-` name, or a name a bot's repository already uses: write to it would reach that
