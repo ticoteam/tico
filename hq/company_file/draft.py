@@ -22,6 +22,7 @@ def _load(name):
 
 SPEC = _load("actions.json")
 ROLES = _load("roles.json")["roles"]
+TEMPLATES = {role["slug"] for role in ROLES}
 PACK = _load("starter_pack.json")
 LIMITS = SPEC["limits"]
 VOCAB = SPEC["vocabulary"]
@@ -222,12 +223,16 @@ def _bot(raw, at):
         raise DraftError(field + ".dept is not a department")
     if bot["existing"] and bot["runtime"] not in HARNESSES:
         raise DraftError(field + ".runtime is not an agent Tico knows")
-    if not bot["existing"] and bot["template"] is None:
-        raise DraftError(field + ".template is missing")
+    if not bot["existing"] and bot["template"] not in TEMPLATES:
+        raise DraftError(field + ".template is not one of Tico's role templates")
     if raw.get("reports_to") is not None:
         bot["reports_to"] = _id(raw["reports_to"], field + ".reports_to")
-    if raw.get("first_job"):
+    if raw.get("first_job") and not bot["existing"]:
         bot["first_job"] = _text(raw["first_job"], field + ".first_job", LIMITS["first_job"])
+    if bot["existing"]:
+        # An agent the visitor already runs keeps its own schedule and work: the file holds no start, routine, tools
+        # or first job for it, so the draft doesn't either.
+        bot.update(start=True, routine="", tools=[])
     if raw.get("isNew") is True:
         bot["isNew"] = True
     return bot

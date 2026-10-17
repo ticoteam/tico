@@ -185,6 +185,9 @@ def deadline(text, today):
     m = re.fullmatch(r"(?:in|within) (\d{1,4}) (day|week|month|year)s?", words)
     if when is None and m:
         n, unit = int(m.group(1)), m.group(2)
+        # Checked before the arithmetic: "in 9999 years" is past the calendar's last year.
+        if n * {"day": 1, "week": 7, "month": 31, "year": 366}[unit] > 3660:
+            raise Refusal("That deadline is more than ten years away; pick a nearer one.")
         when = today + dt.timedelta(days=n if unit == "day" else 7 * n) if unit in ("day", "week") \
             else _add_months(today, n * (12 if unit == "year" else 1))
     if when is None and re.fullmatch(r"(?:end of (?:the |this )?year|this year|eoy)", words):
@@ -418,8 +421,17 @@ def bot_set_reports_to(draft, args, today, notes):
     return "%s now reports to %s." % (bot["title"], _name(draft, target))
 
 
+def _tico_bot(draft, ref):
+    """One of Tico's bots: the visitor's own agents keep their own schedule and work, and the file has no start,
+    routine or first job for them."""
+    bot = find_bot(draft, ref)
+    if bot["existing"]:
+        raise Refusal("%s is an agent you already run; its start, routine and first job stay as they are." % bot["title"])
+    return bot
+
+
 def bot_set_start(draft, args, today, notes):
-    bot = find_bot(draft, args["bot"])
+    bot = _tico_bot(draft, args["bot"])
     if bot["core"]:
         raise Refusal("%s comes with every install and is always on." % bot["title"])
     bot["start"] = args["start"] == "now"
@@ -427,13 +439,13 @@ def bot_set_start(draft, args, today, notes):
 
 
 def bot_set_routine(draft, args, today, notes):
-    bot = find_bot(draft, args["bot"])
+    bot = _tico_bot(draft, args["bot"])
     bot["routine"] = _text(args, "routine", D.LIMITS["routine"])
     return "Set %s's first routine." % bot["title"]
 
 
 def bot_set_first_job(draft, args, today, notes):
-    bot = find_bot(draft, args["bot"])
+    bot = _tico_bot(draft, args["bot"])
     if bot["core"]:
         raise Refusal("Pick one of the team's bots for the first job, not %s." % bot["title"])
     job = _text(args, "job", D.LIMITS["first_job"])

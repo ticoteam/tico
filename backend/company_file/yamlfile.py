@@ -93,7 +93,7 @@ def to_yaml(draft, created=None):
               "    unit: %s" % q(g["unit"]), "    direction: %s" % g["direction"]]
         for key in D.AIM[g["direction"]]:
             L.append("    %s: %s" % (key, g[key] or "null" if key == "deadline" else num(g[key])))
-    L += ["rules:", "  mode: %s" % draft["rules"]["mode"], "  never_without_a_person:"]
+    L += ["rules:", "  mode: %s" % draft["rules"]["mode"], "  never_without_a_person:" + ("" if draft["rules"]["never"] else " []")]
     L += ["    - %s  # %s" % (r, D.RULES[r]) for r in draft["rules"]["never"]]
     L.append("  review: %s  # %s" % (draft["rules"]["review"], D.REVIEW[draft["rules"]["review"]]))
     L += ["tools:", "  mode: %s" % draft["tools"]["mode"],

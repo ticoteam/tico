@@ -232,6 +232,9 @@ BAD = [
     ("rules_set_never", {"never": ["send", "launch"]}), ("rules_set_review", {"review": "none"}),
     ("tools_set", {"connect": ["bank"]}), ("step_go", {"step": "company-ish"}), ("undo", {"steps": 2}), ("undo", {}),
     ("company_set", {}), ("company_set", {"signals": ["rich"]}), ("company_set", {"name": "x" * 81}),
+    ("rules_use_defaults", {"mode": "custom"}),
+    ("goal_add", {"title": "Grow", "measure": "sales", "unit": "$", "direction": "up", "target": 5,
+                  "deadline": "in 9999 years"}),
 ]
 
 
@@ -252,7 +255,8 @@ def test_a_draft_that_breaks_its_shape_or_limits_is_refused():
                 {**good, "goals": [{"id": "g", "title": "x", "owner": "you", "measure": "m", "unit": "", "direction": "up",
                                     "target": float("nan"), "deadline": None}]},
                 {**good, "goals": [{"id": "g", "title": "x", "owner": "you", "measure": "", "target": "50", "due": "x"}]},
-                {**good, "bots": good["bots"] * 2}, {**good, "company": {**good["company"], "about": "x" * 300001}}):
+                {**good, "bots": good["bots"] * 2}, {**good, "company": {**good["company"], "about": "x" * 300001}},
+                {**good, "bots": good["bots"][:2] + [{**good["bots"][2], "template": "wizard"}]}):
         with pytest.raises(C.DraftError):
             C.Turn(bad, TODAY)
     for bad in ("", "version: 0.1\n", "- a\n", "version: 0.2\nemployees:\n  - template: wizard\n", "{"):
@@ -277,6 +281,26 @@ def test_one_bot_has_the_first_job_and_it_starts_now():
     assert all(r["ok"] for r in results) and [(b["title"], b["start"]) for b in marked] == [("Builder", True)]
     assert [e.get("first_job") for e in yaml.safe_load(C.to_yaml(draft, CREATED))["employees"] if e.get("first_job")] == [
         "Fix the signup bug"]
+
+
+def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
+    draft, results = run(started(), ("agent_set", {"runtime": "codex", "job": "Reviews pull requests"}),
+                         ("bot_set_first_job", {"bot": "Builder", "job": "Fix the signup bug"}))
+    agent = next(b for b in draft["bots"] if b["existing"])
+    turn = C.Turn(draft, TODAY)
+    before = copy.deepcopy(turn.draft)
+    for name, args in (("bot_set_first_job", {"bot": agent["id"], "job": "x"}), ("bot_set_start", {"bot": agent["id"], "start": "later"}),
+                       ("bot_set_routine", {"bot": agent["id"], "routine": "Daily"})):
+        assert not turn.apply(name, args)["ok"] and turn.draft == before, name
+    # A page draft that gives its own agent a start, routine or first job is read as the file reads it back.
+    sent = copy.deepcopy(draft)
+    next(b for b in sent["bots"] if b["existing"]).update(start=False, routine="Daily", first_job="x")
+    text = C.to_yaml(sent, CREATED)
+    assert C.to_yaml(C.from_yaml(text), CREATED) == text == C.to_yaml(draft, CREATED)
+    assert [b["title"] for b in C.from_yaml(text)["bots"] if b.get("first_job")] == ["Builder"]
+    # No rule needing a person is written as an empty list, not as nothing.
+    none, _ = run(draft, ("rules_set_never", {"never": []}))
+    assert yaml.safe_load(C.to_yaml(none, CREATED))["rules"]["never_without_a_person"] == []
 
 
 def test_hq_s_copy_runs_the_same_engine():
