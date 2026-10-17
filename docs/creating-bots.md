@@ -46,8 +46,9 @@ New bots start with their own repository unless the team selected all ticked rep
 
 > **Unreleased**: this setting is on `main` and not in a published release yet.
 
-A bot can hear about changes that may matter to it, as information only. In **Bot settings → Edit**, under
-**Subscribe to updates**, people who manage the bot tick either, both or neither:
+A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
+Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
+either, both or neither:
 
 - **Default employee settings**: changes to the template the bot was made from (its `template`), read from that
   template's public changelog feed on tico.team. These are source changes to the template, which may not be in a
@@ -57,12 +58,14 @@ A bot can hear about changes that may matter to it, as information only. In **Bo
 
 Each update reaches the bot as one quiet note: a short quoted summary, links to the release or commit and its
 changelog, and **Action may be needed: yes or no** with a one-line reason. Notes wake nothing; they wait for the bot's
-next run, whatever wakes it, so several updates arrive together. Feed text is shown to the bot as quoted data, never
+next run, whatever wakes it, so several updates arrive together. Tico releases are checked every hour and template
+feeds every six hours. Feed text is shown to the bot as quoted data, never
 as instructions. An update never changes the bot's Instructions, settings or access and grants nothing. To adopt a
 change, use [Edit Instructions](#edit-instructions) as usual, with its approvals.
 
 Turning a category on, or back on, starts from the newest update: the bot gets what comes out from then on, never a
-backlog of what came out while it was off. Unticking a category stops it at once: updates of that category the bot
+backlog of what came out while it was off. The same holds when the bot's template changes: it follows the new
+template from its newest update. Unticking a category stops it at once: updates of that category the bot
 has not picked up yet are cancelled too, and unticking both stops all delivery. A server that was down catches up on
 everything it missed, once each and in order, over as many polls as it takes (up to 40 feed pages back; past that it
 starts from the newest 40 pages). Nothing is fetched while no bot subscribes; `TICO_UPDATE_CHECK=off`
