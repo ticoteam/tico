@@ -81,10 +81,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
     row = await admin.open('linux');
     assert.deepEqual([row.state, row.header], ['not_offered', 0]);
-    assert.match(row.text, /^This computer's screen isn't turned on\. Turn it on on the computer once it is idle, so no running turn is cut off\./);
-    assert.match(row.text, /add TICO_SCREEN=1 to the runner's \.env and run docker compose up -d/);
+    // Docker's main step is live (no restart); the .env fallback says it cuts off a running turn and when it is needed.
+    assert.match(row.text, /^This computer's screen isn't turned on\. Docker: .* turn it on live\. Nothing restarts, so no running turn is cut off:/);
+    assert.match(row.text, /If the runner's \.env says TICO_SCREEN=0, that wins over this\. .*once the computer is idle: this restarts the runner and cuts off a running turn\./);
     assert.deepEqual(await admin.page.locator('#bot-screen-row [data-screen-copy]').evaluateAll(els => els.map(el => el.dataset.screenCopy)),
-      ["sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose up -d", 'scripts/tico screen on']);
+      ['docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on',
+       "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose -f runner.compose.yaml up -d",
+       'scripts/tico screen on']);
     assert.equal(await admin.page.locator('#bot-screen-row a[href$="docs/install.md#screen"]').count(), 1);
     await admin.page.evaluate(() => { window.__copied = []; navigator.clipboard.writeText = async value => { window.__copied.push(value); }; });
     await admin.page.locator('#bot-screen-row [data-screen-copy="scripts/tico screen on"]').click();

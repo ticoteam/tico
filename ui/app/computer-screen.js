@@ -56,7 +56,11 @@ function botScreenState(slug) {
   return {...base, state: base.may ? 'ready' : 'not_allowed'};
 }
 const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
-const SCREEN_DOCKER_CMD = "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose up -d";
+// Docker: `screen on` inside the runner's container turns it on live and saves it in runner.json on the runner-home
+// volume, so it survives updates. A non-empty TICO_SCREEN in .env wins over runner.json; the fallback rewrites that
+// line and recreates the container, which cuts off a running turn.
+const SCREEN_DOCKER_CMD = 'docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on';
+const SCREEN_DOCKER_ENV_CMD = "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose -f runner.compose.yaml up -d";
 const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
 const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
 function botScreenRowHTML(slug) {
@@ -69,8 +73,8 @@ function botScreenRowHTML(slug) {
       ? ` <button class="ghost" type="button" data-screen-on="${esc(s.id)}">Turn on (View)</button><span class="settings-cell-note">Control is a separate choice in Settings > Computers.</span>`
       : `<span class="settings-cell-note">${ask}</span>`),
     not_offered: () => status("This computer's screen isn't turned on.") + (s.may
-      ? `<div class="bot-screen-steps"><p>Turn it on on the computer once it is idle, so no running turn is cut off.</p>
-          <p>Docker: add <code>TICO_SCREEN=1</code> to the runner's <code>.env</code> and run <code>docker compose up -d</code>, in the runner's folder:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
+      ? `<div class="bot-screen-steps"><p>Docker: in the runner's folder on the computer (<code>/opt/tico-runner</code> unless you chose another), turn it on live. Nothing restarts, so no running turn is cut off:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
+          <p>If the runner's <code>.env</code> says <code>TICO_SCREEN=0</code>, that wins over this. Then set <code>TICO_SCREEN=1</code> there instead, once the computer is idle: this restarts the runner and cuts off a running turn.</p>${screenCmdHTML(SCREEN_DOCKER_ENV_CMD, 'Docker .env')}
           <p>A Linux checkout:</p>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}
           <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">How to turn on the screen</a></div>`
       : `<span class="settings-cell-note">${ask.replace('in Settings > Computers', 'on the computer')}</span>`),

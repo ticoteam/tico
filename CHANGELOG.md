@@ -46,7 +46,8 @@ All notable changes to Tico are recorded here. The format follows
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
 - A bot's **More** always has a **Screen** row, so the screen stays findable when it isn't working: ready (open it, View
   or Control), or why not and what to do. Screen off: the computer's operator or an admin turns it on (View) there.
-  No screen offered: the steps on the computer, with commands to copy. Also a Mac, an offline computer, no computer, or
+  No screen offered: the steps on the computer, with commands to copy; on Docker the main one turns the screen on live
+  inside the runner's container, with no restart (install.md says the same). Also a Mac, an offline computer, no computer, or
   not yours to open. The header's Screen button now shows only when the row is ready (not while the computer is offline).
 
 ### Changed

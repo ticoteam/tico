@@ -598,8 +598,14 @@ allowed, take control. The computer itself decides whether it offers one:
 
 - Docker: a new runner offers it. `install.sh --runner` (and `tico setup runner`, and the cloud-init template) writes
   `TICO_SCREEN=1` in the runner's `.env`; `--no-screen` (or `TICO_SCREEN=0` in the cloud-init inputs) writes `0`
-  instead. To change it later, edit that line and run `docker compose up -d`. A runner installed before this default
-  has no such line and keeps its screen off until you add `TICO_SCREEN=1` (or run `install.sh --runner --screen`).
+  instead. A runner installed before this default has no such line and keeps its screen off until you turn it on.
+  To turn it on later, run this in the runner's folder; it takes effect live, with no restart, so no running turn is
+  cut off, and it is saved in `runner.json` on the `runner-home` volume, so it survives updates:
+  `docker compose -f runner.compose.yaml exec runner tico-runner --config /home/runner/runner.json screen on`
+  (`screen off` and `screen status` too). A non-empty `TICO_SCREEN` in `.env` wins over that setting, so with
+  `TICO_SCREEN=0` there the command changes nothing: set the line to `1` and run
+  `docker compose -f runner.compose.yaml up -d`, once the computer is idle, since that recreates the container and
+  cuts off a running turn. `install.sh --runner --screen` writes `TICO_SCREEN=1` too.
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
