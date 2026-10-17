@@ -13,6 +13,10 @@ The same relay signs a login out, switches it to another account, and puts the c
 back (`kind`). A computer's own login that a person signed out stays signed out (`model_login_cleared`):
 the server stops handing that computer the shared "Every computer" key for it, and the runner keeps its
 own mark, until a person signs in again or chooses to use the shared key.
+
+Switch to subscription (`to_subscription`) moves the computer's own login off its API key: a switch, signed in on
+the side, and only once it has worked does the key go (`model_login_key_off`; the runner deletes its copy and keeps
+its own mark). Unlike a sign-out, a later sign-in does not bring the key back; only Use the shared key does.
 """
 
 import json
@@ -29,8 +33,12 @@ PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key")
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "to_subscription")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
+# A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
+SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
+# The kinds that sign in on the side and have a commit point (`finishing`).
+SIDE_KINDS = ("switch", "to_subscription")
 LIFETIME = 15 * 60
 FINISH_SECONDS = 2 * 60
 # `finishing`: a switch signed in on the side and the runner is putting it in place. It can no longer be cancelled;
@@ -42,7 +50,8 @@ ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting",
 ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 # The verdicts each kind may end with; any other is refused as the runner's mistake.
 VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"),
-            "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed")}
+            "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
+            "to_subscription": ("signed_in", "failed")}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -143,6 +152,10 @@ def _signs_out(runner):
     return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
 
+def _switches_type(runner):
+    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
 def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
@@ -156,7 +169,7 @@ def _queue(c, who, runner, runtime, profile, kind, what):
                       "to finish", 409)
     if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
-    if kind != "sign_in" and not _signs_out(runner):
+    if kind != "sign_in" and not _signs_out(runner) or kind == "to_subscription" and not _switches_type(runner):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
@@ -167,34 +180,45 @@ def _queue(c, who, runner, runtime, profile, kind, what):
     return _login(c, runner["id"], lid), True
 
 
-def start(c, who, rid, runtime, profile="", auth=None, switch=False):
+def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     """Sign `runtime` in on a computer (`profile` "" is the computer's own login). `switch` signs in to another
     account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
-    a cancelled or failed switch leaves the old login working."""
-    if switch:
-        _person_only(who, "switch accounts")
+    a cancelled or failed switch leaves the old login working. `to="subscription"` is the same switch for the
+    computer's own login running on an API key: once the subscription is in place the key goes, and stays off."""
+    if to and (switch or profile):
+        raise Problem("kind", "Switch to subscription is for the computer's own login, on its own", 422)
+    kind = "to_subscription" if to else "switch" if switch else "sign_in"
+    what = {"to_subscription": "switch to a subscription", "switch": "switch accounts", "sign_in": "start a sign-in"}[kind]
+    if kind in SIDE_KINDS:
+        _person_only(who, what)
     _operator(c, who, rid, auth)
     if runtime not in RUNTIMES:
         raise Problem("kind", "Browser sign-in works for " + ", ".join(RUNTIMES[:-1]) + " and " + RUNTIMES[-1]
                       + "; set other runtimes up from the computer's terminal", 422)
-    if switch and runtime not in SIGN_OUT_RUNTIMES:
-        raise Problem("kind", "Switching accounts from here isn't available for " + runtime, 422)
+    if kind in SIDE_KINDS and runtime not in SIGN_OUT_RUNTIMES:
+        raise Problem("kind", f"You can't {what} from here for " + runtime, 422)
     runner = _runner(c, rid)
-    if switch and runner["platform"] in manifests.caps(runtime).get("switch_unavailable_on", []):
-        raise Problem("kind", f"Switching accounts isn't available for {runtime} on {runner['label']}: it keeps the "
+    if kind in SIDE_KINDS and runner["platform"] in manifests.caps(runtime).get("switch_unavailable_on", []):
+        raise Problem("kind", f"You can't {what} for {runtime} on {runner['label']} from here: it keeps the "
                       "login in the system keychain. Sign out, then sign in", 422)
-    row, new = _queue(c, who, runner, runtime, profile, "switch" if switch else "sign_in",
-                      "switch accounts" if switch else "start a sign-in")
+    row, new = _queue(c, who, runner, runtime, profile, kind, what)
     if new:
         from .subscription_refresh import invalidate_signin
         invalidate_signin(c, rid, profile, runtime, row["created"])
-        H.event(c, who.actor, "runner.login.switch" if switch else "runner.login.start", rid, {"runtime": runtime})
+        H.event(c, who.actor, {"to_subscription": "runner.login.to_subscription", "switch": "runner.login.switch",
+                               "sign_in": "runner.login.start"}[kind], rid, {"runtime": runtime})
     return view(row)
 
 
 def cleared(c, rid, runtime, profile=""):
     """Whether a person signed this login out (the shared key stays away from it until they sign in again)."""
     return bool(c.execute("SELECT 1 FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
+                          (rid, runtime, profile)).fetchone())
+
+
+def key_off(c, rid, runtime, profile=""):
+    """Whether this login was switched to a subscription: the shared key stays away until Use the shared key."""
+    return bool(c.execute("SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=?",
                           (rid, runtime, profile)).fetchone())
 
 
@@ -234,10 +258,11 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Signing out from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
-    if not cleared(c, rid, runtime):
-        raise Problem("state", "That login was not signed out from here", 409)
+    if not cleared(c, rid, runtime) and not key_off(c, rid, runtime):
+        raise Problem("state", "That login was not signed out or switched to a subscription from here", 409)
     row, _ = _queue(c, who, runner, runtime, "", "use_shared_key", "use the shared key")
     c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
+    c.execute("DELETE FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
     H.event(c, who.actor, "runner.login.use_shared_key", rid, {"runtime": runtime})
     return view(row)
 
@@ -322,7 +347,7 @@ def report(c, runner_id, lid, body):
         return {"state": row["state"]}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
-    if body.state == "finishing" and row["kind"] != "switch":
+    if body.state == "finishing" and row["kind"] not in SIDE_KINDS:
         raise Problem("state", "Only a switch puts a new login in place", 422)
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be cancelled, and it has a little time of its own to finish in.
@@ -346,4 +371,9 @@ def report(c, runner_id, lid, body):
     if (state == "signed_in" or state == "failed" and row["kind"] == "sign_out") and terminal:
         c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=?",
                   (row["runner_id"], row["runtime"], row["profile"]))
+    # Switched to a subscription: the key is off this login from now on (the runner has deleted its copy).
+    if state == "signed_in" and row["kind"] == "to_subscription":
+        c.execute("INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,?,?,?,?) "
+                  "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET set_at=excluded.set_at, set_by=excluded.set_by",
+                  (row["runner_id"], row["runtime"], row["profile"], H.now(), row["requested_by"]))
     return {"state": state}

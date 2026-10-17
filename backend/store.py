@@ -115,6 +115,9 @@ CREATE INDEX IF NOT EXISTS model_logins_by_runner ON model_logins(runner_id,stat
 CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
  cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
+CREATE TABLE IF NOT EXISTS model_login_key_off(
+ runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
+ set_at TEXT NOT NULL, set_by TEXT NOT NULL, PRIMARY KEY(runner_id,runtime,profile));
 CREATE TABLE IF NOT EXISTS runner_harness_actions(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), harness TEXT NOT NULL,
  action TEXT NOT NULL, state TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
