@@ -160,6 +160,8 @@ All notable changes to Tico are recorded here. The format follows
   of "No current status available" until the next refresh (up to two minutes).
 - The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
   sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
 - One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
