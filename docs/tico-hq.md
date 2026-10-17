@@ -12,6 +12,7 @@ has its own image, database and compose file. An install reaches it only through
 | `GET /v1/stats` | The public aggregate of that count | Nothing |
 | (in `GET /v1/latest`) | Tico's short messages for given versions and its known issues by version, the same lists for every install ([Messages, known issues and fixed-in notices](#messages-known-issues-and-fixed-in-notices)) | Nothing from installs |
 | `POST /v1/recruit` | Bot suggestions for one group while a team builds its team chart ([Finish setup](onboarding.md#the-team-builder)) | Nothing |
+| `GET /v1/onboarding/health`, `POST /v1/onboarding/event` | The setup page on tico.team: whether the assistant can answer, and the page's download count ([below](#the-setup-page-v1onboarding)) | With counts switched on, one row of counts per planning session; no text |
 | `/v1/support/...`, `/v1/staff/...` | Support tickets ([support.md](support.md#what-is-sent-and-kept)) and support access, below | The tickets; access sessions and their request log |
 | `GET /healthz` | Liveness | Nothing |
 
@@ -72,6 +73,45 @@ either copy is stale.
 `hq/app.py` adds the route with `recruit.install(app, address=address)`, so the client address comes from the same header as the
 collector's. Set `OPENAI_API_KEY` (without it every answer is local), and optionally `HQ_RECRUIT_DAILY_CAP` and `HQ_RECRUIT_MODEL`, in
 `hq/.env`; `hq/compose.yaml` passes them to the container. The tests are `hq/tests/test_recruit.py`, with the model mocked.
+
+## The setup page: `/v1/onboarding`
+
+The page at [tico.team/setup](https://tico.team/setup) calls these from the visitor's browser (`hq/onboarding.py`). The
+assistant that answers there comes later; these routes work without it, so the page's download count can be measured
+in the browser alone first.
+
+```
+GET  /v1/onboarding/health -> 200 {"ok": false}       (true once the assistant can answer)
+POST /v1/onboarding/event  {"session_id": "<random id>", "kind": "download"}
+                           {"session_id": "<random id>", "kind": "message"}
+                           {"session_id": "<random id>", "kind": "step", "step": 2}
+                           -> 204, whether or not anything is kept
+GET  /v1/staff/onboarding?days=14   (staff key) -> {"counting": bool, "days": [{"day", "sessions",
+                           "sessions_2plus_messages", "sessions_2plus_messages_downloaded", "downloads",
+                           "cost_usd"}]}
+```
+
+- **Input** is checked strictly: a session id of 8 to 64 letters, digits, `-` or `_`, refused before it is hashed when
+  it is shaped like a key or token (a provider prefix such as `sk-` or `ghp_`, or 32 or more characters mixing letters and
+  digits that are not a UUID), so nothing derived from a pasted key is kept; kind `download`, `message` or `step`; `step` a
+  whole number from 0 to 9, only with kind `step`; no other field; at most 512 bytes. Anything else is `422 {"error": "invalid"}`.
+  A `text/plain` body (a beacon) is read the same way.
+- **What is kept.** With `HQ_ONBOARDING_COUNTS=on`, one row per session in `onboarding_sessions`: a salted hash of the
+  session id (the salt is in the database, so a restart keeps the row), the first UTC day, the furthest step, whether
+  the file was downloaded, how many messages the visitor sent (a count, sent once per message by the page), and the
+  turns and cost the assistant adds. No message text and no address; the table has no
+  column for them. Off (the default), no visitor data is written. At most 20,000 new sessions a day are counted. Rows go 13
+  months after their day, with the daily purge, which also runs at start. PRIVACY.md says the same in the page's words.
+- **Browsers.** Only the origins in `HQ_ONBOARDING_ORIGINS` (comma-separated, default `https://tico.team`) get
+  `Access-Control-Allow-Origin` back, on every answer under `/v1/onboarding`, including HQ's `429`, so the page can read
+  it. A preflight (`OPTIONS`) for `GET` or `POST` with at most `Content-Type` is answered `204` before the request limit and
+  is not counted against it. Staff routes send no CORS headers.
+- **Request budget.** `POST /event` is left out of HQ's 60 requests an hour per address, so a long chat still leaves room
+  for its download count, and has its own limit of 300 an hour per address (in memory, salted, as `hq/limits.py`).
+  `/health` stays under the shared limit.
+- **Staff read** for the Customer Insights Analyst's report: totals per UTC day, today last, 1 to 90 days (default 14).
+  `sessions_2plus_messages_downloaded` over `sessions_2plus_messages` is the main measure; `downloads` is every download,
+  for cost per downloaded file.
 
 ## Messages, known issues and fixed-in notices
 

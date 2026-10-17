@@ -2,6 +2,7 @@
 
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
+The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`) and the code that receives them (`hq/`).
 Tico HQ itself is described in [docs/tico-hq.md](docs/tico-hq.md).
@@ -156,6 +157,52 @@ With it off, the suggestions come from `backend/recruit_rank.py` on your own ser
 Your answers are saved in your own database with the rest of setup, so the bots you create can read them.
 
 `TICO_HQ_URL` points your server at another HQ, such as one you run yourself.
+
+## The setup page on tico.team
+
+[tico.team/setup](https://tico.team/setup) helps you plan your AI team before you install anything. It runs in your
+browser and calls Tico HQ at `https://updates.tico.team/v1/onboarding`. No install is involved, and nothing here comes
+from or goes to a Tico server you run.
+
+### What is sent
+
+- `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
+  launches it answers `{"ok": false}`, and the page plans in your browser.
+- `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
+
+```
+{"session_id": "3f6c1a2e-9b7d-4c58-9a10-2d4e8b7f5a63", "kind": "download"}
+```
+
+| Field | What it is |
+|---|---|
+| `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`). One shaped like a key or token is refused before anything is done with it |
+| `kind` | `message` (that you sent one; not what it said), `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
+
+No message text, plan, company name, email address or cookie. Only `https://tico.team` may call these routes from a page.
+
+### What HQ keeps
+
+What we keep: counts for each session: steps reached, whether the file was downloaded, how many turns, and what the
+session cost. No message text.
+
+| Column | Value |
+|---|---|
+| `session_hash` | a salted one-way hash of the session ID, so a session is one row |
+| `day` | the UTC day the session was first seen |
+| `step` | the furthest step reached |
+| `downloaded` | whether the company file was downloaded |
+| `messages` | how many messages you sent; never what they said |
+| `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost; zero until the assistant launches |
+
+- **Counts are off unless HQ is told to keep them** (`HQ_ONBOARDING_COUNTS=on`). While off, HQ answers the same and
+  stores nothing.
+- **No message text is stored anywhere**, and the table has no column for it. Keys and passwords are never stored, in
+  any form: a session ID shaped like one is refused before it is hashed.
+- **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the same limit
+  of 60 requests an hour as every other route.
+- **Retention:** a session row is deleted 13 months after its day, by the daily job.
+- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
 
 ## The server's own model calls
 

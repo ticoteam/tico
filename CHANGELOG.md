@@ -8,9 +8,16 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
+  `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download and message counts. Counts are kept only when
+  `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
+  how many messages were sent, turns and cost, and no message text or address; a session ID shaped like a key is
+  refused before it is hashed. Only `https://tico.team` may call these routes from a browser
+  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`, including how many sessions
+  with 2 or more messages downloaded the file.
 - Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
-  Usage estimates its cost at Anthropic's list price for prompts up to 100,000 tokens ($0.10 in, $0.01 cached, $0.50
-  out per million tokens); a prompt over that costs five times as much, which the estimate does not show.
+  Usage estimates its cost at Anthropic's list price: $0.10 in, $0.01 cached and $0.50 out per million tokens for a
+  prompt up to 100,000 tokens, five times that for a longer one.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
@@ -40,7 +47,12 @@ All notable changes to Tico are recorded here. The format follows
   is today's Product Manager rule, then a Head of Product bot, so a team without a Product Manager still takes
   suggestions; an archived bot never gets them. Reading the settings shows the bot suggestions go to now. With no
   receiving bot a visitor gets "Suggestions aren't being accepted right now." instead of an internal setup error,
-  and trying to change a task type's manager says where to choose the bot instead.
+  and trying to change a task type's manager says where to choose the bot instead. In Settings → Tasks → Public
+  roadmap, **Suggestions go to** picks it and says which bot Automatic means now; a chosen bot that has since been
+  archived shows as archived, not as a blank. Members see the Public roadmap settings read-only.
+- Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
+  suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
+  shows only while a public label is enabled and clears by itself.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -62,6 +74,8 @@ All notable changes to Tico are recorded here. The format follows
   Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
+- **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
+  too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
 - Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
   "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
   set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
@@ -88,6 +102,9 @@ All notable changes to Tico are recorded here. The format follows
   closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one
   card no longer makes the chat jump: the other cards stay exactly as they were, with any **Show more** or Details you
   opened still open, and focus stays where it was.
+- Usage prices each model request at its own rate when the model charges more for long prompts (Claude Haiku 5.5, over
+  100,000 tokens). It used to price a whole run at the lower rate, so a Haiku 5.5 run could read up to five times too
+  low. A run from a runner that doesn't report each request (update the runner) says **estimate, may be low**.
 - Roadmaps keep working after the bot that managed the Product roadmap or Dev tickets type is archived or replaced.
   Tico found both types by their manager's name (`product-manager`, `engineering-lead`), so a type that moved to
   another bot lost its Approved → Building → Shipped sync, its Roadmap tab and its ranked list. Each type now has a
@@ -108,6 +125,10 @@ All notable changes to Tico are recorded here. The format follows
 - A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
   **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
   straight from Done still counts as shipped, as does the default Engineering type's Done step.
+- When a sign-in ends (a Cloudflare Access session expiring, or built-in sign-in), the web app and the desktop app say
+  **You've been signed out** with **Sign in again**, instead of bots looking frozen while every request fails in the
+  background. The live updates stop retrying until then; signing in brings you back to the same page with what you had
+  typed. The desktop app's Dock badge shows "!" while signed out. A dropped network still just reconnects.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at

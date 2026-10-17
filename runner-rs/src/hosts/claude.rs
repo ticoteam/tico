@@ -92,6 +92,22 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64) {
     (inp, count(usage, "output_tokens"))
 }
 
+/// A model request's usage from a stream-json line: (its message id, when the line names one; uncached input with cache
+/// writes, cache reads, output). `message_start` and each content block's `assistant` line carry the request's usage so
+/// far; the `message_delta` that ends it names no id and carries the final output count.
+fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
+    let ev = &msg["event"];
+    let (id, u) = match (msg["type"].as_str()?, ev["type"].as_str().unwrap_or_default()) {
+        ("assistant", _) => (msg["message"]["id"].as_str(), &msg["message"]["usage"]),
+        ("stream_event", "message_start") => (ev["message"]["id"].as_str(), &ev["message"]["usage"]),
+        ("stream_event", "message_delta") => (None, &ev["usage"]),
+        _ => return None,
+    };
+    let cached = count(u, "cache_read_input_tokens");
+    let tokens = [usage_tokens(u).0 - cached, cached, count(u, "output_tokens")];
+    tokens.iter().any(|n| *n > 0).then_some((id.filter(|id| !id.is_empty()), tokens))
+}
+
 pub fn user_line(mid: &str, text: &str) -> String {
     py_dumps(&json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}})) + "\n"
 }
@@ -149,6 +165,10 @@ struct Usage {
     cached: i64,
     cost: Option<f64>,
     texts: Vec<String>,
+    /// Each model request this turn, the bot's and its subagents', in the order Claude made them.
+    requests: Vec<(String, [i64; 3])>,
+    /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
+    streaming: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -632,6 +652,25 @@ impl ClaudeHost {
         if msg.is_object() {
             self.on_tools(msg, tid, turn);
         }
+        if let Some((id, tokens)) = request_usage(msg) {
+            // Some models price each request by its prompt length (backend/providers.py LONG_PROMPT), subagents' too.
+            let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default().to_string();
+            let mut inner = self.inner();
+            let u = inner.usage.entry(turn.into()).or_default();
+            let id = match id {
+                Some(id) => {
+                    u.streaming.insert(stream, id.to_string());
+                    Some(id.to_string())
+                }
+                None => u.streaming.get(&stream).cloned(),
+            };
+            if let Some(id) = id {
+                match u.requests.iter_mut().find(|(seen, _)| *seen == id) {
+                    Some((_, had)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
+                    None => u.requests.push((id, tokens)),
+                }
+            }
+        }
         if !msg.is_object() || crate::util::truthy(msg.get("parent_tool_use_id")) {
             return false; // subagent traffic is not the bot's reply
         }
@@ -843,7 +882,8 @@ impl ClaudeHost {
                 Some(tid),
                 Some(turn),
                 json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "output": u.output}}),
+                       "usage": {"input": u.input, "cached": u.cached, "output": u.output,
+                                 "requests": u.requests.iter().map(|(_, r)| r).collect::<Vec<_>>()}}),
             ));
         }
         self.poll_goal(tid);
@@ -1235,6 +1275,26 @@ mod tests {
         // A turn with no background task ends at its `result`, as before.
         let (got, _) = background_turn(&format!("{}\n", result_line("Done.")), "", "", false).await;
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn each_model_request_is_counted_once_with_its_final_output() {
+        // A request's usage so far rides on message_start and every content block's line; its message_delta has the
+        // final output. A subagent streams its own request meanwhile, under its parent tool call.
+        let long = r#""usage": {"input_tokens": 2, "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 120000, "output_tokens": 16}"#;
+        let start = format!(r#"{{"type": "stream_event", "event": {{"type": "message_start", "message": {{"id": "m1", {long}}}}}}}"#);
+        let think = format!(r#"{{"type": "assistant", "message": {{"id": "m1", "content": [{{"type": "thinking", "thinking": ""}}], {long}}}}}"#);
+        let tool = format!(r#"{{"type": "assistant", "message": {{"id": "m1", "content": [{{"type": "tool_use", "id": "t1", "name": "Task", "input": {{}}}}], {long}}}}}"#);
+        let sub_start = r#"{"type": "stream_event", "parent_tool_use_id": "t1", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 900, "output_tokens": 1}}}}"#;
+        let delta = r#"{"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 78}}}"#;
+        let sub_delta = r#"{"type": "stream_event", "parent_tool_use_id": "t1", "event": {"type": "message_delta", "usage": {"output_tokens": 5}}}"#;
+        let result = r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 902, "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 120000, "output_tokens": 83}}"#;
+        let lines = [start.as_str(), &think, sub_start, &tool, delta, sub_delta, result].join("\n") + "\n";
+        let (got, _) = background_turn(&lines, "", "", false).await;
+        let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(tokens["usage"]["requests"], json!([[3002, 120000, 78], [900, 0, 5]]), "{got:?}");
+        // Together they are the whole run, so the server prices every token at its request's own rate.
+        assert_eq!((&tokens["usage"]["input"], &tokens["usage"]["cached"], &tokens["usage"]["output"]), (&json!(123902), &json!(120000), &json!(83)));
     }
 
     #[tokio::test]
