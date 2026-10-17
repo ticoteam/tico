@@ -129,8 +129,11 @@ What stays on:
 With the setting off, an approve the Assistant tries is refused with `403 approve_setting_off`, and it tells you in one
 sentence that you can turn it on in Settings > Assistant, then puts it on a card.
 
-**Every proposal is shown for what it is.** The card carries the server's own one-line description (route kind and target
-name, never the bot's words), the request body as a key: value list (a long value is folded behind "Show more", never cut), for an approval its kind, requester and subject, and the exact field changes for a task update. Only routes
+**Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
+whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site
+and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
+and path. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
+behind "Show more", never cut); for an approval the card shows its kind, requester and subject, and for a task update the exact field changes. Only routes
 on an allowlist can be proposed (never tokens, sign-in, runner enrollment, this assistant or anything that returns a credential);
 the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exactly that path runs. Only the status and an
 error's detail are kept of the result, never the answer's body.

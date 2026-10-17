@@ -47,15 +47,18 @@ def test_botops_acting_for_a_person_cannot_take_another_bots_access_away(api, bo
     assert cards[2].json()["repeated"] is True
     assert effective(api) == before
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT owner,method,path,summary,body_json FROM assistant_actions WHERE id=?",
+        row = c.execute("SELECT owner,method,path,summary,description,body_json FROM assistant_actions WHERE id=?",
                         (card["action"]["id"],)).fetchone()
         assert (row["owner"], row["method"], row["path"]) == ("human:ana", "PUT", "/api/v2/bots/ops/repositories")
-        assert "Acme/product (write)" in row["summary"] and json.loads(row["body_json"]) == {"mode": "own"}
+        # Plain words on the card: who, and what it loses; no method, path or mode word ("own", "chosen").
+        assert row["description"] == row["summary"] == "ops: loses access to product."
+        assert json.loads(row["body_json"]) == {"mode": "own"}
         assert not c.execute("SELECT 1 FROM events WHERE action='bot.repos_changed' AND target='ops'").fetchone()
     # Write turned to read is taken away too.
     lowered = act(api, ana, "PUT", "bots/ops/repositories",
                   {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "read"}]})
     assert lowered.json()["needs_confirm"] is True and effective(api) == before
+    assert lowered.json()["action"]["description"] == "ops: read-only on product (was write)."
     # Giving access goes through at once, with her rights.
     added = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [
         {"full_name": "Acme/product", "access": "write"}, {"full_name": "Acme/docs", "access": "read"}]})
@@ -109,3 +112,37 @@ def test_only_an_owner_or_admin_lets_a_bot_run_workflows(api, botops, repos):
     put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
     back = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen"})
     assert back.status_code == 403 and effective(api) == []
+
+
+def test_a_repository_card_says_in_plain_words_what_changes():
+    """Chris, Oct 17: the card read "PUT /api/v2/bots/security-engineer-2/repositories" and "access to chosen"."""
+    from backend.repositories import plain_change, plain_request
+    org = "ticoteam/"
+    before = {"effective": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-marketing-site", "tico-recorder")]}
+    result = {"effective": [{"full_name": org + "tico", "access": "read"}],
+              "stopped": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-marketing-site", "tico-recorder")]}
+    assert plain_change("Security Engineer", before, result) == (
+        "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.")
+    gained = {"effective": [{"full_name": org + "tico", "access": "write"}, {"full_name": org + "docs", "access": "read"}],
+              "stopped": [], "workflows_stopped": [org + "tico"], "creation_stopped": True}
+    assert plain_change("Ops", {"effective": [{"full_name": org + "tico", "access": "write"}]}, gained) == (
+        "Ops: gets read-only on docs. Can no longer run workflows in tico. Can no longer create repositories.")
+    assert plain_request("Ops", {"mode": "chosen", "chosen": [{"full_name": org + "tico", "access": "read"}]}) == (
+        "Ops: read-only on tico, besides its own repository.")
+    assert plain_request("Ops", {"mode": "all", "all_access": "read"}) == "Ops: read-only on every repository the team uses."
+    assert plain_request("Ops", {"mode": "own"}) == "Ops: only its own repository."
+
+
+def test_no_card_is_titled_with_its_method_and_path(api):
+    """Every route a card may name has a plain title: a route with no sentence of its own still gets words."""
+    from backend.assistant import describe
+    from backend import botops_act
+    with api.app.state.store.read() as c:
+        for path in ("/api/v2/bots/ops/repositories", "/api/v2/bots/ops/go-live", "/api/v2/bots/ops/tools/t1/delete",
+                     "/api/v2/routines/r1", "/api/v2/groups/g1", "/api/v2/repositories/Acme/product", "/api/v2/slack/channels"):
+            for method in ("POST", "PUT", "DELETE"):
+                what, _ = describe(c, method, path, {"mode": "chosen", "enabled": True})
+                assert "/api/" not in what and not what.startswith(method + " "), (method, path, what)
+        assert describe(c, "DELETE", "/api/v2/groups/g1", {})[0] == "Remove something in Tico (groups)"
+        assert describe(c, "POST", "/api/v2/bots/ops/go-live", {})[0] == "Put bot ops live"
+    assert botops_act.DO     # the routes above are BotOps' own (botops_act.DO)

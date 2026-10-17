@@ -3758,11 +3758,12 @@ def create_app(settings=None):
             return None
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary):
+    def propose_card(c, acting, method, path, body, summary, what=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
-        and the answer BotOps reports back instead of asking them to go to Settings."""
+        and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
+        route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
-        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body)
+        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}

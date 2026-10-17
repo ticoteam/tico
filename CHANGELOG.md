@@ -29,6 +29,11 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- BotOps and Assistant Confirm cards read in plain words: a repository change says who gets what and what they lose
+  ("Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."), never
+  `PUT /api/v2/...` or a word like "chosen"; any other card without a sentence of its own gets a plain one. The method,
+  path and fields are under a closed **Details**. Confirm or Cancel on one card no longer makes the chat jump: the other
+  cards stay drawn and in place instead of reloading one by one, and an open Details stays open.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at

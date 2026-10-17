@@ -495,9 +495,10 @@ def describe(c, method, path, body):
         resolved = H.resolve_actor(c, a)
         return who(resolved) if resolved and resolved != a else a
     body = body if isinstance(body, dict) else {}
+    from .repositories import plain_request
 
     def fields(names):
-        return ", ".join(str(n) for n in names) or "nothing"
+        return ", ".join(spoken(n) for n in names) or "nothing"
 
     def computer(request):
         """The computer a placement names and whether it takes members' bots, from the database."""
@@ -551,15 +552,26 @@ def describe(c, method, path, body):
         (r"/api/v2/bots/([^/]+)/(assignment|placement)", lambda g: f"Place bot {bot(g[0])} on {computer(body)}"),
         (r"/api/v2/credentials/([^/]+)/grants", lambda g: "Give " + ("every computer" if body.get("subject") == "computers" else who(body.get("subject")))
          + " a stored credential"),
+        (r"/api/v2/bots/([^/]+)/repositories", lambda g: plain_request(bot(g[0]), body)),
+        (r"/api/v2/bots/([^/]+)/(restore|go-live|onboarded|quarantine/clear|limit/retry)", lambda g: {
+            "restore": "Bring back bot {}", "go-live": "Put bot {} live", "onboarded": "Mark bot {} as set up",
+            "quarantine/clear": "Let bot {} run again (clear its quarantine)",
+            "limit/retry": "Let bot {} try again after its spending limit"}[g[1]].format(bot(g[0]))),
+        (r"/api/v2/bots/([^/]+)/(model|fallback|tools|routines|access|github-repos|transitions|control)",
+         lambda g: f"Change bot {bot(g[0])}'s {spoken(g[1])}" + (": " + fields(body) if body else "")),
+        (r"/api/v2/bots/([^/]+)/agent-credential(/revoke)?",
+         lambda g: ("Revoke" if g[1] else "Make a new") + f" agent credential for bot {bot(g[0])}"),
+        (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
+        (r"/api/v2/credentials/[^/]+", lambda g: "Delete a stored credential"),
         (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
          "to the roster, and let them sign in" + "".join(f"; {k} {body[k]}" for k in ("team", "reports_to", "title") if body.get(k))),
         (r"/api/v2/access/(?:people|humans)/([^/]+)", lambda g: "Change " + who("human:" + g[0]) + ": "
-         + ", ".join(f"{k} to {v}" for k, v in body.items())),
+         + ", ".join(f"{spoken(k)} to {v}" for k, v in body.items())),
         (r"/api/v2/providers", lambda g: "Change the company's AI providers"),
         (r"/api/v2/access/(limits|allow)", lambda g: "Change who may sign in or what members may do: " + fields(body)),
         (r"/api/v2/usage/limits(?:/([^/]+))?", lambda g: ("Change the spending limit of " + bot(g[0]) if g[0] else "Change the company's spending limit")
-         + ": " + ", ".join(f"{k} {'none' if v is None else '$' + format(v, 'g')}" for k, v in body.items() if k.endswith("_usd"))),
+         + ": " + ", ".join(f"{spoken(k[:-4])} {'none' if v is None else '$' + format(v, 'g')}" for k, v in body.items() if k.endswith("_usd"))),
         (r"/api/v2/(?:runners|computers)/([^/]+)/(member-bots|revoke|restart)", lambda g: {
             "member-bots": "Let a computer take members' bots" if body.get("accepts") else "Stop a computer taking members' bots",
             "revoke": "Remove a computer", "restart": "Restart a computer's runner"}[g[1]]
@@ -576,7 +588,24 @@ def describe(c, method, path, body):
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
             return fn(mm.groups()), diff
-    return f"{method} {path}", diff
+    return unnamed(c, method, path, bot), diff
+
+
+def spoken(name):
+    """A field or route name as words: `thread_mode` and `go-live` read `thread mode` and `go live`."""
+    return re.sub(r"[_\-]+", " ", str(name)).strip()
+
+
+def unnamed(c, method, path, bot):
+    """A plain line for a card whose route has no sentence of its own: what it touches, never the method and path
+    (those are under the card's Details)."""
+    parts = path[len("/api/v2/"):].split("/") if path.startswith("/api/v2/") else []
+    verb = "Remove something from" if method == "DELETE" else "Make a change to"
+    if len(parts) > 1 and parts[0] == "bots":
+        return f"{verb} bot {bot(parts[1])}" + (f" ({spoken(' '.join(parts[2:]))})" if parts[2:] else "")
+    if len(parts) > 1 and parts[0] == "tasks":
+        return f"{verb} task “{(H.task(c, parts[1]) or {}).get('title') or 'a task'}”"
+    return ("Remove something" if method == "DELETE" else "Make a change") + " in Tico" + (f" ({spoken(parts[0])})" if parts else "")
 
 
 # Body fields a proposal may never carry: each has its own explicit confirm that a card's click does not replace.
@@ -634,7 +663,7 @@ def runnable(c, method, path, body):
     return body
 
 
-def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None):
+def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
     The Assistant proposes what its turn may not do on its own; BotOps proposes what a person asked it for
@@ -667,7 +696,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same)), "message_id": None, "repeated": True}
-    what, diff = describe(c, method, path, body)
+    said, diff = describe(c, method, path, body)
+    what = what or said         # a route that tried the change first says what it does (backend/repositories.py)
     if path == BATCH_PATH:
         # One line per step: what it does to which task, and the fields it changes.
         diff = groups(c, body["actions"])
