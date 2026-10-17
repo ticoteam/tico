@@ -408,6 +408,8 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
         assert '"writer"' not in json.dumps(seen), path + ": no hidden author either"
     assert get(api, f"updates/{uid}", token="cara-test")["update"]["inputs"] == [{"id": links["analyst"], "author": "analyst"}]
     assert len(get(api, f"updates/{uid}")["update"]["inputs"]) == 2, "the owner still sees both"
+    direct = next(u for u in get(api, "updates?scope=direct")["updates"] if u["id"] == uid)
+    assert len(direct["inputs"]) == 2, "showing only direct reports narrows the cards, not a card's links"
     # A bot Cara may not read is not in her tree at all; its report moves up under the next one she can see.
     with api.app.state.store.transaction() as c:
         restrict(c, "boss", people=["ana"])
