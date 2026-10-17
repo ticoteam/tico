@@ -535,18 +535,15 @@ fn confirm_switch(s: &Session) -> Result<(), (String, String)> {
     }
 }
 
-/// Switch to subscription, past its commit point: before the new login goes in, the computer's API key comes off this
-/// login (and the company's copy is deleted), and a key login already running is let finish first, so none writes
-/// the key back over the subscription.
-fn key_off(s: &Session, runner: &Runner) -> Result<(), (String, String)> {
-    if let Err(e) = runner.sign_in.mark_key_off(&s.runtime) {
-        return Err(("failed".into(), format!("Could not take the API key off on this computer ({:?}); it stays in use", e.kind())));
-    }
+/// Switch to subscription, past its commit point: before the new login goes in, key logins are held and one already
+/// running is let finish, so none writes the key's login over the subscription. The key itself stays in use, and the
+/// company's copy stays on this computer, until the subscription works in place (then `mark_key_off`).
+fn hold_key_logins<'a>(s: &Session, runner: &'a Runner) -> Result<crate::signin::KeyLoginsHeld<'a>, (String, String)> {
+    let held = runner.sign_in.hold_key_logins(&s.runtime);
     if !runner.sign_in.wait_for_key_logins(&s.runtime, crate::signin::KEY_LOGIN_DRAIN) {
-        let _ = runner.sign_in.unmark_key_off(&s.runtime);
         return Err(("failed".into(), format!("{} is still signing in with its key; try again in a minute", s.runtime)));
     }
-    Ok(())
+    Ok(held)
 }
 
 fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: Duration) {
@@ -668,10 +665,22 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let (home, side) = switch.as_ref().unwrap();
             let files = login.files.clone();
             match signed_in(&s.runtime, &exe, &env, false) {
-                (true, _) => match confirm_switch(&s).and_then(|()| if to_subscription { key_off(&s, &runner) } else { Ok(()) }) {
+                (true, _) => match confirm_switch(&s).and_then(|()| if to_subscription { hold_key_logins(&s, &runner).map(Some) } else { Ok(None) }) {
                     Err(verdict) => verdict,
-                    Ok(()) => match adopt_files(&files, home, side, &real_env) {
+                    Ok(_held) => match adopt_files(&files, home, side, &real_env) {
                         Ok(moved) => match signed_in(&s.runtime, &exe, &real_env, false) {
+                            // Only now, with the subscription working in place, does the key come off: marked first,
+                            // then the company's copy deleted (both in `mark_key_off`).
+                            (true, _) if to_subscription && runner.sign_in.mark_key_off(&s.runtime).is_err() => {
+                                let _ = runner.sign_in.unmark_key_off(&s.runtime);
+                                match restore(&moved, &real_env) {
+                                    Ok(()) => ("failed".into(), "Could not take the API key off on this computer, so it stays in use".into()),
+                                    Err(e) => {
+                                        keep_side = true;
+                                        ("failed".into(), format!("Could not take the API key off, and the old login could not be put back ({e}); its files are in {}", side.display()))
+                                    }
+                                }
+                            }
                             (true, detail) => ("signed_in".into(), if detail.is_empty() { "Switched account".into() } else { detail }),
                             _ => match restore(&moved, &real_env) {
                                 Ok(()) => ("failed".into(), format!("The new account did not work in place of the old one, so the old one is back on {}", s.runtime)),
@@ -698,12 +707,6 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             }
         }
     };
-    // The subscription did not go in after all: the key it switched from is the login again.
-    if to_subscription && state != "signed_in" && runner.sign_in.key_off(&s.runtime) {
-        if let Err(e) = runner.sign_in.unmark_key_off(&s.runtime) {
-            log(&format!("Tico runner: {} kept its key off after a failed switch: {e}", s.runtime));
-        }
-    }
     if let Some((_, side)) = &switch {
         if !keep_side {
             discard(side);
@@ -1216,6 +1219,10 @@ exit 2
         assert_eq!(state(&broken).0, "failed", "{:?}", state(&broken));
         assert!(!runner.sign_in.key_off("codex"), "the key is the login again");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
+        // Nothing was taken off before the subscription worked: the company's copy is still here, so the next turn
+        // has the key at once, with no fetch in between.
+        assert!(std::fs::read_to_string(&team).unwrap().contains("OPENAI_API_KEY=sk-team-0123456789"), "the company key was deleted by a switch that failed");
+        assert!(key_in_use(), "the next turn would start with no key");
         std::fs::remove_file(root.join("refuse")).unwrap();
         // In place: the subscription is the login, the company's copy of the key is deleted and no key reaches it.
         std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();

@@ -76,6 +76,22 @@ pub struct SignIn {
     /// one starts only while the runtime is not signed out, and a sign-out waits for those already running.
     keys: Mutex<HashMap<String, usize>>,
     key_login_ended: Condvar,
+    /// Runtimes whose key logins wait while a switch to a subscription puts its login in place and checks it. The key
+    /// itself stays: in turns and on disk, until the subscription works.
+    held: Mutex<std::collections::HashSet<String>>,
+}
+
+/// No key login starts for `runtime` while this lives; the key and its company copy are untouched.
+pub struct KeyLoginsHeld<'a> {
+    sign: &'a SignIn,
+    runtime: String,
+}
+
+impl Drop for KeyLoginsHeld<'_> {
+    fn drop(&mut self) {
+        let _keys = self.sign.keys.lock().unwrap_or_else(|e| e.into_inner());
+        self.sign.held.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.runtime);
+    }
 }
 
 /// A key login running for `runtime`: counted until it ends, however it ends.
@@ -104,6 +120,7 @@ impl SignIn {
             dirty: Default::default(),
             keys: Mutex::new(HashMap::new()),
             key_login_ended: Condvar::new(),
+            held: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -264,6 +281,15 @@ impl SignIn {
         Ok(())
     }
 
+    /// A switch to a subscription is about to put its login in place: no key login starts for `runtime` until the
+    /// returned guard drops, so none writes the key's login over the new one. Unlike `mark_key_off` the key stays in
+    /// use and the company's copy stays on disk, so a switch that fails or is cancelled leaves everything as it was.
+    pub fn hold_key_logins(&self, runtime: &str) -> KeyLoginsHeld<'_> {
+        let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).insert(runtime.into());
+        KeyLoginsHeld { sign: self, runtime: runtime.into() }
+    }
+
     /// Wait until no key login for `runtime` is running, at most `limit`. After `mark_signed_out` none starts, so
     /// once this is true no key login can write a login back after the CLI's logout. False when one is still running.
     pub fn wait_for_key_logins(&self, runtime: &str, limit: Duration) -> bool {
@@ -396,12 +422,17 @@ impl SignIn {
             if tried.get(&attempt).is_some_and(|at| at.elapsed() < KEY_LOGIN_RETRY) {
                 return false;
             }
-            tried.insert(attempt, Instant::now());
+            tried.insert(attempt.clone(), Instant::now());
         }
         // Counted from here, and only while not signed out: a sign-out marked before this never sees it start, and
         // one marked after it waits for it to end before logging out.
         let _running = {
             let mut running = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+            if self.held.lock().unwrap_or_else(|e| e.into_inner()).contains(runtime) {
+                // Tried again once the switch is over, not KEY_LOGIN_RETRY later.
+                self.key_tried.lock().unwrap().remove(&attempt);
+                return false;
+            }
             if self.no_key(runtime) {
                 return false;
             }
@@ -557,6 +588,32 @@ mod tests {
         restarted.unmark_key_off("codex").unwrap();
         assert!(restarted.team_model_keys(&client, "codex").await);
         assert!(restarted.headless_secret("codex").is_some() && restarted.headless_secret("claude").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_switch_to_a_subscription_that_fails_leaves_the_key_in_use_with_nothing_to_fetch_again() {
+        // While the subscription is put in place and checked only key logins wait; the key still reaches turns and
+        // the company's copy stays, so when the switch fails the next turn has it at once.
+        let dir = projects();
+        let secrets = dir.join("secrets");
+        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        let (exe, runs) = fake_codex(&dir);
+        let (client, asked) = team_server().await;
+        let sign = SignIn::new(&dir);
+        {
+            let _held = sign.hold_key_logins("codex");
+            assert!(sign.wait_for_key_logins("codex", Duration::from_millis(10)));
+            assert!(!sign.key_login("codex", &exe).await);
+            assert!(!runs.exists(), "a key login ran over the subscription being checked");
+            assert!(sign.headless_secret("codex").is_some(), "the key left the turns before the subscription worked");
+        }
+        assert!(!sign.key_off("codex"));
+        assert!(read_env(&secrets.join(TEAM_KEYS_FILE)).contains_key("OPENAI_API_KEY"));
+        assert!(!sign.team_model_keys(&client, "codex").await);
+        assert_eq!(asked.load(Ordering::SeqCst), 0, "the company key was fetched again after a failed switch");
+        assert_eq!(sign.headless_secret("codex").map(|(_, v)| v), Some("sk-team-0123456789".into()));
+        assert!(sign.key_login("codex", &exe).await, "the key login waits KEY_LOGIN_RETRY after the switch");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
