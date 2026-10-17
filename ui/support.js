@@ -381,26 +381,35 @@
       shown('');
       if (!d.message.trim()) { shown('Write a message first.'); return; }
       const thread = selected, key = d.key;
+      // What goes is what was in the box when Send was pressed, with its own attachment: nothing that changes the draft
+      // while it is on its way (a Report this, a setup snapshot) ends up in it.
+      const sent = {message: d.message, diag: d.diag, perf: d.perf, report: d.report, bundle: d.bundle, email: d.email.trim(), ids: d.ids, kind: d.kind};
       sending = d; lockSending();
       try {
-        if (d.diag && !d.bundle) { d.bundle = await capture(d.perf, d.report); updateSent(); }
-        const body = {message: d.message, diagnostics: d.diag ? d.bundle.id : ''};
-        if (!thread) Object.assign(body, {email: d.email.trim(), include_ids: d.ids}, d.ids && appVersion() ? {app_version: appVersion()} : {},
-          d.kind !== 'support' ? {kind: d.kind} : {});
+        let bundle = sent.bundle;
+        if (sent.diag && !bundle) {
+          bundle = await capture(sent.perf, sent.report);
+          // Kept for a retry only while the draft is still the one sent.
+          if (d.key === key) { d.bundle = bundle; updateSent(); }
+        }
+        const body = {message: sent.message, diagnostics: sent.diag ? bundle.id : ''};
+        if (!thread) Object.assign(body, {email: sent.email, include_ids: sent.ids}, sent.ids && appVersion() ? {app_version: appVersion()} : {},
+          sent.kind !== 'support' ? {kind: sent.kind} : {});
         const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, key);
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
-        // A draft that changed while this was on its way (Report this, a setup snapshot) holds newer words: it stays.
-        if (drafts.get(thread) === d && d.key === key) drafts.delete(thread);
-        selected = next.id; view = 'chat';
+        // A draft that changed while this was on its way holds newer words: it stays, and stays on screen.
+        if (drafts.get(thread) === d && d.key === key) { drafts.delete(thread); selected = next.id; view = 'chat'; }
         settled();
         if (isOpen()) { render(); renderThread(true); renderComposer(); pop.querySelector('[name=message]')?.focus(); }
-        say(d.diag ? 'Sent with diagnostics.' : 'Sent.'); schedule();
+        say(sent.diag ? 'Sent with diagnostics.' : 'Sent.'); schedule();
       } catch (error) {
         settled();
         // Said where the person is looking: the message did not arrive and is still in the box.
         shown(!error.status || error.status >= 500 ? 'Not sent. Could not reach Tico support. Try again in a moment.' : 'Not sent. ' + error.message);
         if (isOpen() && draft() === d) pop.querySelector('[data-compose] [name=message]')?.focus();
       }
+      // A Report this or setup snapshot that came while a new request was on its way starts from what is left of it now.
+      if (isOpen()) { openPending(); startPending(); }
     };
     updateSent(); lockSending();
   }
@@ -474,7 +483,10 @@
     dialog.onclose = () => { editor = null; dialog.remove(); };
     if (base) show(base); else await load();
   }
+  // A new request still on its way is not changed under it: what came meanwhile waits until that send settles.
+  const busyNew = () => !!sending && sending === drafts.get('');
   function openPending() {
+    if (pending && busyNew()) return;
     const p = pending; pending = null;
     if (!p || !isOpen() || !state.enabled) return;
     selected = ''; view = 'chat';
@@ -512,6 +524,7 @@
   // "Want help setting up?" starts a new request from text the person reads, edits and sends themselves.
   let starting = null;
   function startPending() {
+    if (starting && busyNew()) return;
     if (!starting || !isOpen() || !state.enabled) { starting = null; return; }
     const {kind} = starting, draft = drafts.get(''), unsent = draft?.message.trim() || '';
     // A new request the person had started keeps their words and choices, with the snapshot after them, once.

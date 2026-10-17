@@ -64,7 +64,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
           if (rest === 'setup-snapshot') return json({message: "I'd like help setting up Tico.\n\n- Computer online: no", kind: 'setup'});
           if (rest === 'feedback') return json({moment: body.moment, answered: !!body.answer, ticket: null});
           if (rest === 'compose') return json({enabled: true, email: 'ana@acme.example', version: '0.2.17', install_id: INSTALL, to: 'updates.tico.team', max: 4000});
-          if (rest === 'diagnostics/capture') return json({id: 'c'.repeat(64), bytes: 2048, text: DIAGNOSTICS_TEXT});
+          if (rest === 'diagnostics/capture' && hq.captureGate) await hq.captureGate;
+          if (rest === 'diagnostics/capture') return json({id: hq.captureId || 'c'.repeat(64), bytes: 2048, text: DIAGNOSTICS_TEXT});
           if (rest === 'diagnostics') return json({id: (req.method() === 'POST' ? 'e' : 'd').repeat(64), bytes: 2048, text: body?.text || DIAGNOSTICS_TEXT});
           if (rest === 'tickets' && req.method() === 'GET') return json(view());
           if (rest === 'tickets/refresh') {
@@ -405,6 +406,48 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await slow.locator('[name=message]').inputValue(), 'Second words');
     v.hq.fail = false;
     assert.equal(posted(), 3);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // A Report this (or a setup snapshot) while a new request's diagnostics are still being captured: the request goes
+    // with the words and attachment it had when Send was pressed, and the newer one waits, unsent, with its own.
+    v = await visit();
+    const holdCapture = () => { let go; v.hq.captureGate = new Promise(r => { go = r; }); return () => { v.hq.captureGate = null; go(); }; };
+    const newTickets = () => v.calls.filter(c => c.startsWith('POST tickets {')).map(c => JSON.parse(c.slice('POST tickets '.length)));
+    const reportsCaptured = () => v.calls.filter(c => c.startsWith('POST diagnostics/capture {')).map(c => JSON.parse(c.slice('POST diagnostics/capture '.length)).report?.kind);
+    await v.page.evaluate(() => talkToUs({kind: 'toast', title: 'Could not save'}));
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Error: details attached. ');
+    let releaseCapture = holdCapture();
+    v.hq.captureId = 'f'.repeat(64);
+    await v.page.locator('[data-compose] [name=message]').pressSequentially('Every time.');
+    await v.page.locator('[data-compose] [name=message]').press('Enter');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
+    await v.page.keyboard.press('Escape');
+    await v.page.evaluate(() => talkToUs({kind: 'health', title: 'Computers: None online'}));
+    await v.page.locator('#support-pop[open] [data-compose] [name=message]').waitFor();
+    await v.page.waitForTimeout(200);
+    assert.equal(await v.page.locator('[data-compose] [name=message]').inputValue(), 'Error: details attached. Every time.', 'the send on its way is not changed');
+    assert.equal(await v.page.locator('[data-compose] [name=message]').isDisabled(), true);
+    releaseCapture();
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Health: details attached. ');
+    assert.deepEqual(newTickets().map(t => [t.message, t.diagnostics]), [['Error: details attached. Every time.', 'f'.repeat(64)]], 'sent once, as pressed');
+    assert.deepEqual(reportsCaptured(), ['toast']);
+    assert.match(await v.page.locator('[data-report]').innerText(), /Attached: Health Computers: None online/);
+    assert.equal(await v.page.locator('[data-compose] [name=message]').isDisabled(), false);
+    assert.equal(await v.page.locator('#support-pop [data-title]').innerText(), 'New request');
+    // Sent in turn, it captures its own attachment; a setup snapshot meanwhile waits the same way.
+    releaseCapture = holdCapture();
+    v.hq.captureId = 'a'.repeat(64);
+    await v.page.locator('[data-compose] [name=message]').press('Enter');
+    await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
+    await v.page.evaluate(() => supportStart('Help me set up.', 'setup'));
+    await v.page.waitForTimeout(200);
+    releaseCapture();
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === 'Help me set up.');
+    assert.deepEqual(newTickets().map(t => [t.message, t.diagnostics, t.kind]),
+      [['Error: details attached. Every time.', 'f'.repeat(64), undefined], ['Health: details attached. ', 'a'.repeat(64), undefined]]);
+    assert.deepEqual(reportsCaptured(), ['toast', 'health']);
+    v.hq.captureId = null;
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
