@@ -426,7 +426,7 @@ function tasksTabsHTML(state) {
   return TASK_VIEWS.filter(([k]) => k !== 'snoozed' || counts.snoozed || state.view === 'snoozed').map(([k, label]) => {
     const on = k === state.view, n = counts[k];
     return `<button type="button" role="tab" id="task-tab-${k}" data-view="${k}" aria-selected="${on}" aria-controls="task-body" tabindex="${on ? 0 : -1}"${n != null ? ` aria-label="${esc(label)}, ${n}"` : ''}>${esc(label)}${n != null ? `<span class="cnt tnum${k === 'foryou' && n ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}</button>`;
-  }).join('') + (pipelineSelectedType(state)?.manager === 'product-manager' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
+  }).join('') + (pipelineSelectedType(state)?.role === 'product-roadmap' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
 }
 function tasksPaint(el, html) {
   if (!el || el.dataset.html === html) return false;

@@ -1,4 +1,4 @@
-/* ui/app/api.js — get/post/put/form requests, API errors, sign-in redirect, toast
+/* ui/app/api.js — get/post/put/form requests, API errors, toast
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -12,13 +12,8 @@ const apiError = (j, r) => {
 // The message is what a person reads; `body` is the one extra fact a refusal carries, such as the
 // task a duplicate feature request already has (`backend/store.py`, Problem.extra).
 const apiFailure = (j, r) => Object.assign(new Error(apiError(j, r)), {body: j, status: r.status});
-// With built-in sign-in a 401 names the login page; go there and come back to this place.
-const signInRedirect = (r, j) => {
-  const to = r.status === 401 && j?.error?.sign_in;
-  if (typeof to !== 'string' || !to.startsWith('/auth/')) return false;
-  location.assign(to + '?next=' + encodeURIComponent(location.pathname + location.search + location.hash));
-  return true;
-};
+// Signed out, by any sign-in (session.js): the built-in login page, or the banner.
+const signInRedirect = (r, j) => r.status === 401 && sessionCheck(r, j);
 // A list the server tags (tasks, labels, routines) is asked for again with its tag: unchanged, the answer is a 304
 // with no body and the copy kept here is read again, so the server neither loads nor sends it. A few dozen at most.
 const GET_TAGGED = new Map();
@@ -33,6 +28,7 @@ const getRaw = p => {
   const kept = GET_TAGGED.get(p);
   return fetch(API + p, {cache:'no-store', headers: kept ? {'If-None-Match': kept.tag} : {}}).then(async r => {
     window.TicoObservability?.response(r.status);
+    if (r.ok) SESSION.seen = true;
     const text = r.status === 304 ? '' : await r.text().catch(() => '');
     if (r.ok) {
       const tag = r.headers.get('ETag');
@@ -40,10 +36,11 @@ const getRaw = p => {
       if (tag && r.status !== 304) { GET_TAGGED.set(p, {tag, text}); if (GET_TAGGED.size > 40) GET_TAGGED.delete(GET_TAGGED.keys().next().value); }
     }
     return {r, text, kept};
-  });
+  }, error => { void sessionProbe(); throw error; });   // offline, or a proxy's login on another origin
 };
 const getPrefetch = p => { if (!GET_PREFETCHED.has(p)) GET_PREFETCHED.set(p, {at: Date.now(), raw: getRaw(p).catch(() => null)}); };
 const get = async p => {
+  if (SESSION.out) throw signedOutError();
   let res = null;
   const pre = GET_PREFETCHED.get(p);
   if (pre) { GET_PREFETCHED.delete(p); if (Date.now() - pre.at < 5000) res = await pre.raw; }
@@ -71,6 +68,7 @@ const newRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4
 // Every JSON write goes through one path so a PUT carries the same Idempotency-Key and the same
 // retry rules as a POST; the method is part of the signature so the two never share a request id.
 const writeRequestOnce = async (method, p, body={}, operationId) => {
+  if (SESSION.out) throw signedOutError(true);
   getForget();
   const payload = JSON.stringify(body), signature = method + ' ' + p + '\n' + payload;
   const key = operationId || pendingWrites.get(signature) || newRequestId();
@@ -79,6 +77,7 @@ const writeRequestOnce = async (method, p, body={}, operationId) => {
     try {
       const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload});
       window.TicoObservability?.response(r.status);
+      if (r.ok) SESSION.seen = true;
       const j = await r.json().catch(()=>({}));
       if ([429,502,503,504].includes(r.status)) throw new TypeError(apiError(j, r));
       pendingWrites.delete(signature);
@@ -86,6 +85,8 @@ const writeRequestOnce = async (method, p, body={}, operationId) => {
       return j;
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
+      // A proxy that signed the person out answered before Tico saw the write, so nothing was saved.
+      if (await sessionProbe()) throw signedOutError(true);
       if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this saved. Retry the same submission in this tab; it will use the same request ID.'), {unconfirmed: true});
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
     }
@@ -137,6 +138,7 @@ async function memoryBody(body, digests) {
 }
 // Keep multipart and binary retries stable across newly constructed bodies.
 const formRequestOnce = async (url, body) => {
+  if (SESSION.out) throw signedOutError(true);
   getForget();
   const digests = S.me?.cloud ? new Map() : null;
   body = await memoryBody(body, digests);
@@ -154,6 +156,7 @@ const formRequestOnce = async (url, body) => {
     try {
       const response = await fetch(url, {method:'POST', body, redirect:'error', headers:{'Idempotency-Key':key}});
       window.TicoObservability?.response(response.status);
+      if (response.status === 401) sessionCheck(response, await response.clone().json().catch(() => ({})));
       if ([429,502,503,504].includes(response.status)) throw new TypeError('Upload temporarily unavailable');
       if (response.ok) {
         const confirmation = await response.clone().json().catch(() => null);
@@ -163,6 +166,7 @@ const formRequestOnce = async (url, body) => {
       return response;
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
+      if (await sessionProbe()) throw signedOutError(true);
       if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this upload saved. Keep the files and retry the same submission in this tab.'), {unconfirmed: true});
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
     }
@@ -182,6 +186,7 @@ async function cloudCompose(path, body, files = []) {
   return result;
 }
 const toast = (msg, isErr, action) => {
+  if (isErr && SESSION.out) return;   // the signed-out banner says why every request fails (session.js)
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
   if (isErr && !action && msg && typeof talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => talkToUs({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;

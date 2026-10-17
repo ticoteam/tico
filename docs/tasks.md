@@ -319,7 +319,9 @@ explicit positions are provided. Omitted steps are removed; new steps omit `id`.
 `GET/POST /api/v2/task-types` list and create types. `GET/POST /api/v2/task-types/{id}` read and
 update one. `DELETE /api/v2/task-types/{id}`, or `POST /api/v2/task-types/{id}/delete`, deletes an
 unused type. Create and update accept `numbered` and `steps_only`; updates accept `name` and a replacement `steps`
-array, retaining existing step ids. All writes use the existing Idempotency-Key contract. Task
+array, retaining existing step ids. A type's answer includes `role`: `product-roadmap` or `engineering` on the types
+roadmaps follow ([roadmaps](roadmaps.md)), else null; Tico sets it, no write does. All writes use the existing
+Idempotency-Key contract. Task
 create and update accept `type`, `step` and `number`, and update accepts `step_rank` and `title`; task answers
 include `type_id`, `step_id`, a `type` object, a `step` object (null when unmapped), `number` and
 `step_rank`.

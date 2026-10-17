@@ -977,12 +977,17 @@ def migrate(conn, adopt_legacy=False):
     # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
     add_column(conn, "approvals", "decided_via", "TEXT")
     add_column(conn, "approvals", "decided_for_json", "TEXT")
+    # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
+    # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
+    add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
+    # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
+    from .roadmap_flow import ensure as ensure_roadmap_types, migrate as migrate_roadmap_roles
+    migrate_roadmap_roles(conn)
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
-        from .roadmap_flow import ensure as ensure_roadmap_types
         ensure_roadmap_types(conn)
     from .roadmaps import migrate as migrate_roadmaps
     migrate_roadmaps(conn)
@@ -2549,6 +2554,8 @@ def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=Fal
         refuse(conn, actor, 'kind', 'default_visibility is public or private')
     conn.execute('UPDATE task_types SET default_visibility=? WHERE id=?', (default_visibility, ident))
     _type_steps(conn, actor, ident, steps)
+    from .roadmap_flow import claim as claim_roles
+    claim_roles(conn)
     row = type_get(conn, ident)
     event(conn, actor, "task_type.create", ident, row)
     return row
@@ -2568,6 +2575,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
     if name is not None:
         name = _type_name(conn, actor, name, row["id"])
         conn.execute("UPDATE task_types SET name=? WHERE id=?", (name, row["id"]))
+        from .roadmap_flow import claim as claim_roles
+        claim_roles(conn)
     if numbered is not None:
         conn.execute("UPDATE task_types SET numbered=? WHERE id=?", (int(bool(numbered)), row["id"]))
     if steps_only is not None:
@@ -5872,9 +5881,11 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
-            conn.execute("INSERT INTO turn_usage_segments VALUES(:turn_id,:position,:input_tokens,:cached_tokens,"
-                         ":output_tokens,:model,:provider,:est_cost_usd,:billing,:runtime,:harness,:effort,:profile)",
-                         {**part, "turn_id": turn_id, "position": position})
+            conn.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,cached_tokens,output_tokens,"
+                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low) "
+                         "VALUES(:turn_id,:position,:input_tokens,:cached_tokens,:output_tokens,:model,:provider,"
+                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low)",
+                         {"est_cost_low": None, **part, "turn_id": turn_id, "position": position})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
     if row:
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))

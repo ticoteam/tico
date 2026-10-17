@@ -29,7 +29,7 @@ cryptography==50.0.2
     # via
     #   -r backend/requirements.in
     #   pyjwt
-dnspython==2.8.0
+dnspython==2.9.0
     # via
     #   -r backend/requirements.in
     #   pymongo
@@ -41,11 +41,11 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httptools==0.8.0
+httptools==0.9.0
     # via -r backend/requirements.in
 httpx==0.28.1
     # via -r backend/requirements.in
-idna==3.19
+idna==3.20
     # via
     #   anyio
     #   httpx
@@ -53,9 +53,9 @@ jmespath==1.1.0
     # via
     #   boto3
     #   botocore
-orjson==3.12.0
+orjson==3.13.0
     # via -r backend/requirements.in
-pillow==12.3.0
+pillow==13.0.0
     # via -r backend/requirements.in
 psycopg==3.3.6
     # via -r backend/requirements.in
@@ -63,17 +63,17 @@ psycopg-binary==3.3.6
     # via psycopg
 pycparser==3.0
     # via cffi
-pydantic==2.13.5
+pydantic==2.14.1
     # via fastapi
-pydantic-core==2.46.5
+pydantic-core==2.50.1
     # via pydantic
 pyjwt==2.15.1
     # via -r backend/requirements.in
-pymongo==4.18.2
+pymongo==4.19.0
     # via -r backend/requirements.in
 pymysql==1.2.3
     # via -r backend/requirements.in
-pypdf==6.19.0
+pypdf==6.21.0
     # via -r backend/requirements.in
 python-dateutil==2.9.0.post0
     # via
@@ -85,13 +85,13 @@ pyyaml==6.0.3
     # via -r backend/requirements.in
 s3transfer==0.19.2
     # via boto3
-sentry-sdk==2.69.1
+sentry-sdk==2.69.2
     # via -r backend/requirements.in
 six==1.17.0
     # via python-dateutil
-slack-sdk==3.44.1
+slack-sdk==3.45.0
     # via -r backend/requirements.in
-starlette==1.6.0
+starlette==1.8.0
     # via fastapi
 typing-extensions==4.16.0
     # via
@@ -111,7 +111,7 @@ urllib3==2.8.0
     #   -r backend/requirements.in
     #   botocore
     #   sentry-sdk
-uvicorn==0.52.4
+uvicorn==0.54.0
     # via -r backend/requirements.in
 uvloop==0.23.0
     # via -r backend/requirements.in

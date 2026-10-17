@@ -7,22 +7,23 @@ instructions kept in Tico in case the account goes away:
 
 | Platform | What it is | On the team chart |
 |---|---|---|
-| **Grok Bot** (grok.com/bot) | xAI's cloud agents, any number on one account | A **Grok Bot** cluster under the human, with Grok's own sections (Pinned, and any section made there) nested inside |
+| **Grok Bot** (grok.com/bot) | xAI's cloud agents, any number on one account | One ordinary row per Bot, initially under the human; place each Bot anywhere on the org chart |
 | **Dots** | OpenAI's always-on agent, one per account | A single **Dots** row under the human |
 | **Muse** | Meta's always-on agent, one per account | A single **Muse** row under the human |
 
-None of these platforms has an API, export or webhook for these bots. The agent itself can call Tico's MCP tools as its
-human on a routine, so the sync runs on the platform, with the human's own sign-in, and Tico only receives
-(`backend/external_sync.py`).
+The agent itself calls Tico's MCP tools as its human on a routine, so the sync runs on the platform, with the human's
+own sign-in (`backend/external_sync.py`). Grok Bot also supports [HTTP-triggered routines](https://cursor.com/help/grok-bot/routines),
+but Tico does not dispatch webhook calls through this sync integration.
 
 ## What Tico does with a sync
 
 - A bot it has not seen becomes a bot with the `grokbot`, `dots` or `muse` harness, **under the human who synced it**
-  (`reports_to: human:<them>`), active, with them as owner. Move it anywhere on the team chart afterwards and it
-  becomes an ordinary row there; a later sync never moves it back. It also joins its human's group (a bot reporting to a
+  (`reports_to: human:<them>`), active, with them as owner. Every synced Bot is an ordinary movable row. Move it anywhere
+  on the team chart afterwards; a later sync never moves it back. It also joins its human's group (a bot reporting to a
   human does not inherit their group on its own), until someone puts it in another group or none.
 - Any human may link their own bots. A new bot counts toward a member's bot limit, like any bot they add.
-- Name, description and section follow the platform. The full instructions are kept in the bot's
+- Name, description and source section follow the platform. The source section is retained as metadata; it does not
+  create groups, reorder Bots or override reporting relationships on Tico's org chart. The full instructions are kept in the bot's
   `config_json.grok.instructions` (Dots: `config_json.dots`), with when they last changed, so the bot can be rebuilt
   on another runtime. Sending an explicit empty description or instructions clears it; leaving either field out
   preserves it.

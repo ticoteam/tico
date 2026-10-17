@@ -72,6 +72,7 @@
 <div id="app-update" role="status" hidden><span id="app-update-text"></span><button class="primary" type="button" id="app-update-go" hidden>Update</button><a class="primary" id="app-update-dl" target="_blank" rel="noopener noreferrer" hidden>Download</a><button class="ghost" type="button" id="app-update-later">Later</button></div>
 <div id="version-message" role="note" hidden><span id="version-message-text"></span><a id="version-message-link" target="_blank" rel="noopener noreferrer" hidden>Read more</a><button class="ghost" type="button" id="version-message-x">Dismiss</button></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
+<div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
 <div id="support-access-banner" role="status" hidden><span data-access-left></span><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
 <div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing leaves this computer.</span></div>
 <aside id="side" aria-label="Primary navigation">
@@ -143,6 +144,7 @@
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
           <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings<span class="hl-alert" data-hl-alert hidden></span></a>
+          <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
           <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
         </nav>
@@ -207,6 +209,7 @@
 <script src="/tico/ui/app/markdown.js"></script>
 <script src="/tico/ui/app/viewer.js"></script>
 <script src="/tico/ui/app/format.js"></script>
+<script src="/tico/ui/app/session.js"></script>
 <script src="/tico/ui/app/api.js"></script>
 <script src="/tico/ui/app/live.js"></script>
 <script src="/tico/ui/app/state.js"></script>

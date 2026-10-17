@@ -272,7 +272,12 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
+        def reason(error):
+            if (error["type"] == "extra_forbidden" and tuple(error["loc"])[-1:] == ("manager",)
+                    and request.url.path.startswith("/api/v2/task-types")):
+                return M.MANAGER_FIXED
+            return error["msg"]
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + reason(error)
                            for error in exc.errors())
         if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
             detail += ". routines must be " + M.ROUTINES_SHAPE
@@ -2045,6 +2050,14 @@ def create_app(settings=None):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
+    def require_update(c, who, row):
+        """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
+        is for everyone on the chart, so anyone else gets 404."""
+        if not updates.is_person(row["bot"]):
+            auth.require_read(c, who, row["bot"], "Update not found")
+        elif row["bot"] not in update_visible(c, who):
+            raise Problem("not_found", "Update not found", 404)
+
     @app.get("/api/v2/updates")
     def updates_list(request: Request, kind: str | None = None, bot: str | None = None, unread: bool = False,
                      before: str | None = None, limit: int = 40, mine: bool = False,
@@ -2089,8 +2102,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             read = c.execute("SELECT 1 FROM update_reads WHERE update_id=? AND actor=?", (uid, who.actor)).fetchone()
             # A reply lands in the replier's own room with the bot; show only rooms this caller may read.
             rooms_ok = {}
@@ -2170,8 +2182,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            if row["bot"] not in update_visible(c, who):
-                raise Problem("not_found", "Update not found", 404)
+            require_update(c, who, row)
             if updates.is_person(row["bot"]):
                 raise Problem("reply", "A person's update takes no replies here; message them instead", 422)
             # A reply is both a comment on the update and a message in the bot's
@@ -3988,8 +3999,10 @@ def create_app(settings=None):
             execution.runner(c, request.state.identity)
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
+        # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
-                                                          "screen_v1": True, "limit_resets_at": True}}
+                                                          "screen_v1": True, "limit_resets_at": True,
+                                                          "usage_requests": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
