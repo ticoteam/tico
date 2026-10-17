@@ -44,6 +44,10 @@ All notable changes to Tico are recorded here. The format follows
   only, **Full access**, for a time they choose (24 hours by default). A banner shows on every screen while it lasts, Stop
   ends it at once, and every request support makes is listed under the request. The install dials out to Tico HQ; nothing
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
+- A bot's **More** always has a **Screen** row, so the screen stays findable when it isn't working: ready (open it, View
+  or Control), or why not and what to do. Screen off: the computer's operator or an admin turns it on (View) there.
+  No screen offered: the steps on the computer, with commands to copy. Also a Mac, an offline computer, no computer, or
+  not yours to open. The header's Screen button now shows only when the row is ready (not while the computer is offline).
 
 ### Changed
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the

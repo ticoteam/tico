@@ -29,8 +29,9 @@ function botScreenComputer(slug) {
   return screenOn(machine) && screenMayOpen(machine) ? id : '';
 }
 const screenHref = id => `#/computers/${encodeURIComponent(id)}/screen`;
+// The bot header's button: only when its Screen row in More says ready (so not while the computer is offline).
 const botScreenLinkHTML = slug => {
-  const id = botScreenComputer(slug);
+  const s = botScreenState(slug), id = s.state === 'ready' ? s.id : '';
   return id ? `<a class="bot-learn bot-screen" id="bot-screen" href="${screenHref(id)}" aria-label="Screen" title="Screen"><span class="nav-icon" aria-hidden="true">computer</span><span class="bl-label">Screen</span></a>` : '';
 };
 // A task's owner bot's screen, beside the owner in the task's head.
@@ -38,6 +39,81 @@ const taskScreenLinkHTML = owner => {
   const id = botScreenComputer(actorSlug(owner));
   return id ? `<a class="ghost tmodal-act" href="${screenHref(id)}">Screen</a>` : '';
 };
+
+// ----------------------------------------------------------------- the Screen row in a bot's More
+// Always there, so the feature stays findable when it is not working: the status, and when it is not ready, why and
+// what to do. Read from the bot row (online, its computer's platform) and the computer's row; no extra request.
+function botScreenState(slug) {
+  const e = (S.emps || []).find(x => x.name === slug);
+  const id = e?.machine?.runner_id, machine = screenMachine(id);
+  if (!machine) return {state: e?.agent ? 'external' : 'none'};
+  const base = {id, machine, operator: botPersonName(machine.operator), may: screenMayOpen(machine)};
+  const platform = e.machine.platform || '';
+  if (platform && platform !== 'linux' && !machine.screen_available) return {...base, state: 'linux_only'};
+  if (!e.online) return {...base, state: 'offline'};
+  if (!machine.screen_available) return {...base, state: 'not_offered'};
+  if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};
+  return {...base, state: base.may ? 'ready' : 'not_allowed'};
+}
+const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
+const SCREEN_DOCKER_CMD = "sed -i '/^TICO_SCREEN=/d' .env && echo TICO_SCREEN=1 >> .env && docker compose up -d";
+const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
+const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
+function botScreenRowHTML(slug) {
+  const s = botScreenState(slug);
+  const ask = `Ask ${esc(s.operator)} or an admin to turn it on in Settings > Computers.`;
+  const status = text => `<span class="bot-screen-status">${text}</span>`;
+  const body = {
+    ready: () => `<a class="bot-screen-open" href="${screenHref(s.id)}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine.screen === 'control' ? 'Control' : 'View'}`)}`,
+    off: () => status('Screen is off for this computer.') + (s.may
+      ? ` <button class="ghost" type="button" data-screen-on="${esc(s.id)}">Turn on (View)</button><span class="settings-cell-note">Control is a separate choice in Settings > Computers.</span>`
+      : `<span class="settings-cell-note">${ask}</span>`),
+    not_offered: () => status("This computer's screen isn't turned on.") + (s.may
+      ? `<div class="bot-screen-steps"><p>Turn it on on the computer once it is idle, so no running turn is cut off.</p>
+          <p>Docker: add <code>TICO_SCREEN=1</code> to the runner's <code>.env</code> and run <code>docker compose up -d</code>, in the runner's folder:</p>${screenCmdHTML(SCREEN_DOCKER_CMD, 'Docker')}
+          <p>A Linux checkout:</p>${screenCmdHTML(SCREEN_CHECKOUT_CMD, 'checkout')}
+          <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">How to turn on the screen</a></div>`
+      : `<span class="settings-cell-note">${ask.replace('in Settings > Computers', 'on the computer')}</span>`),
+    linux_only: () => status('Screen is Linux only for now.'),
+    offline: () => status("This computer is offline. Screen works when it's back."),
+    not_allowed: () => status(`Only ${esc(s.operator)} and admins can open this computer's screen.`),
+    none: () => status('This bot has no computer yet.'),
+    external: () => status("This bot runs outside Tico's computers, so there is no screen to show."),
+  }[s.state]();
+  return `<dt>Screen${betaPill('computer_screen')}</dt><dd class="bot-screen-row" id="bot-screen-row" data-screen-state="${s.state}">${body}</dd>`;
+}
+// Draws the row again, and the header's Screen button, which shows only when the row is ready.
+function botScreenPaint(slug) {
+  const row = $('#bot-screen-row');
+  if (row) {
+    row.previousElementSibling?.remove();
+    row.outerHTML = botScreenRowHTML(slug);
+  }
+  const strip = $('#bot-tool-strip');
+  if (strip && !BOT?.limited) {
+    $('#bot-screen')?.remove();
+    strip.insertAdjacentHTML('beforebegin', botScreenLinkHTML(slug));
+    placeBotHead();
+  }
+  botScreenWire(slug);
+}
+function botScreenWire(slug) {
+  const row = $('#bot-screen-row'); if (!row) return;
+  row.onclick = async event => {
+    const copy = event.target.closest('[data-screen-copy]');
+    if (copy) { copyText(copy.dataset.screenCopy).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
+    const on = event.target.closest('[data-screen-on]'); if (!on) return;
+    const id = on.dataset.screenOn;
+    on.disabled = true;
+    try {
+      const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: 'view'});
+      for (const m of [(SETTINGS_DATA.machines || []).find(x => x.id === id), ...(S.emps || []).filter(x => x.machine?.runner_id === id).map(x => x.machine)])
+        if (m) Object.assign(m, {screen: saved?.screen || 'view'}, saved && 'screen_available' in saved ? {screen_available: saved.screen_available} : {});
+      toast('Screen: view');
+      if (BOT?.slug === slug) botScreenPaint(slug);
+    } catch (error) { toast(error.message, true); on.disabled = false; }
+  };
+}
 
 // ----------------------------------------------------------------- the page
 function screenStop() {
