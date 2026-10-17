@@ -88,6 +88,31 @@ Computers report whether a rejected model key came from Credentials or the compu
 advertises support. After a server rollback, they omit that field and keep reporting readiness; a later server
 upgrade enables it again.
 
+## Python environments on a Docker runner
+
+The runner image brings its own Python, and a release can move it to a new minor version (3.12 to 3.15 in the
+release that moved the images to Debian trixie). The image's own venv (`/opt/tico/.venv`) comes with it. The runner's
+home volume (`/home/runner`) is kept across updates, and a Python environment there belongs to the Python that built it:
+
+- **Tico's mail venv** (`~/tools/mail-venv`, or `TICO_MAIL_VENV`) rebuilds itself on the next `mail.sh`, which logs
+  "built by another Python, rebuilding it". Nothing to do.
+- **A venv a bot or person made** (a project's `.venv`, say) still points at the old interpreter, which the new image
+  does not have, so its `python` fails with "No such file or directory". Delete it and build it again with the image's
+  Python, or let the project's own setup do so.
+- **`pip install --user` packages** sit under `~/.local/lib/python3.12/` and the new Python does not look there.
+  Install them again with the new Python; delete the old folder once nothing needs it.
+
+To list what an update left behind, from the computer that runs the runner (`tico-runner` is the container's name; a
+computer added with `--name` has its own):
+
+```bash
+docker exec tico-runner sh -c 'v=$(python3 -c "import sys; print(\"%d.%d\" % sys.version_info[:2])");
+  find /home/runner -name pyvenv.cfg -not -path "*/node_modules/*" 2>/dev/null \
+    | xargs -r grep -LE "^version(_info)? *= *$v\." ; ls -d /home/runner/.local/lib/python3.* 2>/dev/null | grep -v "python$v\$"'
+```
+
+Each line is a venv (its `pyvenv.cfg`) or a user-install folder built by another Python.
+
 ## Disk space
 
 Health warns when a computer reports that its disk is over 85% full. Free space on that computer; for a Docker install,
