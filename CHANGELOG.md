@@ -8,6 +8,11 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
+  `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download count. Counts are kept only when
+  `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
+  turns and cost, and no message text or address. Only `https://tico.team` may call these routes from a browser
+  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.

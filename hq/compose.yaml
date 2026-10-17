@@ -43,6 +43,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       HQ_RECRUIT_MODEL: ${HQ_RECRUIT_MODEL:-}
       HQ_RECRUIT_DAILY_CAP: ${HQ_RECRUIT_DAILY_CAP:-}
+      # The setup page on tico.team (hq/onboarding.py): which page origins may call /v1/onboarding (default
+      # https://tico.team), and whether the per-session counts are kept (on; empty or anything else: off).
+      HQ_ONBOARDING_ORIGINS: ${HQ_ONBOARDING_ORIGINS:-}
+      HQ_ONBOARDING_COUNTS: ${HQ_ONBOARDING_COUNTS:-}
     volumes:
       - hq-data:/data
       # The cloudflared service's route, written by HQ at every start (hq/tunnel.py). No secret in it.
