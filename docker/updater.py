@@ -175,8 +175,8 @@ def compose(*args, tag=None, timeout=600, extra_env=None):
 
 EDGE_HINT = (" The front doors' edge network (172.30.254.0/28 unless .env moves it) clashes with a network on this "
              "computer: set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS "
-             "in .env to a free range, then run docker compose up -d (run docker compose down first only to move an edge "
-             "network that already exists). See docs/install.md.")
+             "in .env to a free range, then update again (run docker compose down first only to move an edge network that "
+             "already exists). See docs/install.md.")
 
 
 def overlap_hint(output):
