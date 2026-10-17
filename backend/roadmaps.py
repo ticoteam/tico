@@ -13,7 +13,7 @@ from .models import Contract
 from .store import Problem
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
-# addresses queue unbounded work for the Product Manager (the same overall cap as waiting pairings).
+# addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
 VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
 
@@ -91,8 +91,37 @@ def clear_copies(c):
 def settings(c):
     row = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
     return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'suggestion_limit': SUGGESTIONS_WAITING_MAX,
-            'bot_public_approval': True,
+            'bot_public_approval': True, 'suggestions_bot': None,
             **(json.loads(row[0]) if row else {})}
+
+
+def suggestions_receiver(c):
+    """The bot that gets visitor suggestions and the suggestions-full notice, and why: the bot chosen in settings
+    while it is active; otherwise Automatic, the first active or planned Product Manager, then an active Head of
+    Product. Returns (slug or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
+    saying the chosen bot was passed over because it is archived (or gone), or paused, quarantined or planned."""
+    chosen = settings(c)['suggestions_bot']
+    source = 'automatic'
+    if chosen:
+        state = (H._one(c, 'SELECT state FROM bots WHERE slug=?', (chosen,)) or {'state': 'archived'})['state']
+        if state == 'active':
+            return chosen, 'chosen'
+        source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
+    for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
+        row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                        "WHERE json_extract(bc.config_json,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+                        "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
+        if row:
+            return row[0], source
+    return None, source
+
+
+def settings_view(c):
+    """The settings plus the bot suggestions go to right now, so a reader sees what Automatic means today."""
+    bot, source = suggestions_receiver(c)
+    name = H._one(c, 'SELECT display_name FROM bots WHERE slug=?', (bot,)) if bot else None
+    return {**settings(c), 'suggestions_receiver': {
+        'bot': bot, 'name': (name and name['display_name']) or bot, 'source': source}}
 
 
 def publication_payload(task_id, operation, values):

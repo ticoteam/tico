@@ -2,7 +2,7 @@
 
 Roadmaps use tasks, types, labels, comments and parent relations. The Product roadmap type runs
 Suggested → Exploring → Spec → Approved → Building → Shipped (or Declined); Engineering (or an existing Dev tickets
-type) uses the development flow. Every type starts private. A task is public only once someone publishes it with a
+type, as in [The software factory](software-factory.md)) uses the development flow. Every type starts private. A task is public only once someone publishes it with a
 public title written for it: the internal title and body are never copied into the public text. A type set to
 default public publishes a new task only when its public title is given at creation; without one the task starts
 private. A bot (or the Assistant or BotOps acting for a person) cannot create a task with public text or as public;
@@ -63,11 +63,19 @@ attachments, assignees, bot work, labels or child identities. Render public text
 Markdown. Comments, suggestion titles and suggestion summaries allow at most two links and no embedded
 link/script/iframe HTML.
 
-Suggestions create private Product roadmap tasks at Suggested for the configured Product Manager,
-with the label and submitter's request. They queue quietly for the PM's next run and need team
-review before publication. At most 20 visitor suggestions wait at Suggested at once across every visitor
+Suggestions create private Product roadmap tasks at Suggested, owned by the bot that receives suggestions,
+with the label and submitter's request. They queue quietly for that bot's next run and need team
+review before publication. The receiving bot is `suggestions_bot` in settings (an active bot's slug; owners and
+admins set it with `hub roadmap settings --suggestions-bot SLUG`), or **Automatic** when unset (`--automatic`, or
+`null`): the first active or planned bot made from the Product Manager template, else an active bot made from the Head
+of Product (`product-lead`) template. While the chosen bot is not active (archived, paused, quarantined or planned)
+suggestions go to the Automatic bot; they never go to an archived bot. Reading the settings returns
+`suggestions_receiver`, the bot suggestions go to right now (`bot`, display `name`, and `source`: `chosen`,
+`automatic`, `chosen_archived`, or `chosen_inactive` for a chosen bot that is paused, quarantined or planned). With no
+receiving bot a visitor gets 409 "Suggestions aren't being accepted right now.", ahead of either limit below; nothing
+is stored and their daily allowance is not used. At most 20 visitor suggestions wait at Suggested at once across every visitor
 (`suggestion_limit` in settings, 1 to 1000); while that many wait, a new suggestion gets 429 until the team moves
-some on, and the first refusal of each UTC day sends the Product Manager a notice saying so. Successful suggest, add, remove and comment actions share one limit
+some on, and the first refusal of each UTC day sends the receiving bot a notice saying so. Successful suggest, add, remove and comment actions share one limit
 per IP per UTC day across every roadmap (default 10, configurable in settings); exhaustion returns
 429. Failed writes roll back their charge. The server uses the connection IP, with forwarded IPs
 accepted only through the deployment’s trusted proxy configuration (below). IPv6 visitors share
@@ -84,7 +92,8 @@ Use `/api/v2/roadmaps/settings`, `/api/v2/roadmap-tasks`, and `/api/v2/tasks/{id
 (GET/POST), `/requesters/{requester_id}` (POST partial update), and `/requesters/{requester_id}/delete`
 (POST). Internal writes require the usual Idempotency-Key. Requester lists are paged and do not
 return tokens; an internal add shows its token once and an idempotent retry returns only its id. Task updates accept `visibility`, `public_title`, `public_summary`, `size`, and
-`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. Public title and summary
+`approval_id` (`size: null` clears an estimate); type updates accept `default_visibility`. A type's manager is fixed
+by its role: a type update naming `manager` gets 422, which points to `suggestions_bot`. Public title and summary
 start empty and are only what someone writes for them; task creation accepts `public_title` and `public_summary`
 beside `visibility`. Publishing (`visibility: public`, at creation or later) needs a public title, and is refused
 with a clear error without one.
@@ -108,9 +117,12 @@ and the existing outbound send switch.
 The PM gathers requests and comments, researches and drafts a spec, and proposes graduation as an
 existing Decide card. After approval, it moves the roadmap task to Approved and files Engineering
 children through Head of Engineering. The server moves Approved/Building/Shipped between Building
-and Shipped as engineering children open, finish or reopen. All declined children return Approved;
-Shipped requires at least one done/closed child. With no Engineering children, manual steps remain
-unchanged. Done, closed and declined children count as finished. Requesters remain on the roadmap task.
+and Shipped as engineering children open, finish or reopen. Done, closed and declined children count
+as finished, and Shipped requires at least one child that shipped: one at a done step, one closed straight from
+it (accepting finished work closes it), or a closed one whose type has no done step (the default Engineering
+type's Done; there every close counts, since that type has no other closed step). A Dev ticket closed from any
+other step, such as a duplicate or one declined first, did not ship. When every child finished without shipping,
+the item returns to Approved. With no Engineering children, manual steps remain unchanged. Requesters remain on the roadmap task.
 
 
 ## Client addresses behind a proxy

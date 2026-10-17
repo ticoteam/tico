@@ -19,6 +19,10 @@
 .hl-fixes{display:flex;gap:var(--s2);flex-wrap:wrap}
 .hl-check.ok .hl-icon{color:var(--ok, #2f8f4e)}.hl-check.warn .hl-icon{color:var(--warn, #b7791f)}.hl-check.bad .hl-icon{color:var(--fail)}.hl-check.unknown .hl-icon,.hl-check.info .hl-icon{color:var(--muted)}
 .hl-check-result{color:var(--ink)!important}.hl-check-result.err{color:var(--fail)!important}
+/* Setup check on Health (ui/health.js): a card under the list, its result in the same rows. */
+.hl-setup{max-width:760px}.hl-setup>p{margin:0 0 var(--s2);font-size:var(--t-base)}
+.hl-setup-result:empty{display:none}.hl-setup-result{margin-top:var(--s3)}
+.hl-setup-head{font-weight:600;margin:0}.hl-setup-fix{color:var(--ink)!important;font-size:var(--t-sm)!important}
 .hl-models .hl-model-bad{color:var(--fail)}
 .hl-storage{display:flex;align-items:flex-start;gap:var(--s3);padding:var(--s3) 0;border-bottom:1px solid var(--line);font-size:var(--t-base)}
 .hl-storage .hl-icon{color:var(--muted)}

@@ -49,7 +49,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
     hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
     hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
-                         [--bot-public-approval|--no-bot-public-approval]   read, or change (owners and admins)
+                         [--bot-public-approval|--no-bot-public-approval] [--suggestions-bot SLUG|--automatic]
+                                                       read, or change (owners and admins)
     hub task deleted                                   deleted tasks you may restore
     hub task restore <id>                              put a deleted task back
     hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
@@ -194,12 +195,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
     hub health metrics [--minutes N]       the server's flight recorder (owners, admins and bots)
                                            (the Assistant gets the live snapshot)
-    hub update list [--kind daily|weekly] [--bot X] [--unread] [--limit N]
+    hub update list [--kind daily|weekly] [--bot X] [--scope all|direct] [--unread] [--limit N]
                                            the bots' updates, newest first
     hub update show <id>                   one update with its thread
     hub update create "<- bullets>" [--kind daily|weekly]   post your own update when Tico asks
     hub update create --slides-file week.json [--day D]   a week in review: {goal, kpis, done, focus, blockers}
-    hub update redo --day D [--kind weekly|daily] [--bot B ...]   ask the bots to redo a past day (owner)
+    hub update redo --day D [--kind weekly|daily] [--bot B ...] [--with-managers]   ask the bots to redo a past day (owner)
     hub update mark-read [ids...] [--all] [--unread]
     hub update reply <id> "<text>"
     hub update settings <bot> [--daily on|off] [--weekly on|off]
@@ -1461,10 +1462,12 @@ def parser():
     s.add_argument("--day", required=True)
     s.add_argument("--kind", choices=("daily", "weekly"))
     s.add_argument("--bot", dest="bots", action="append", help="only this bot (repeatable)")
+    s.add_argument("--with-managers", dest="managers", action="store_true", help="also the bots above them")
     s.set_defaults(fn="update redo")
-    s = upd.add_parser("list", help="the bots' updates, newest first")
+    s = upd.add_parser("list", help="updates from bots and people, newest first")
     s.add_argument("--kind", choices=("daily", "weekly"))
-    s.add_argument("--bot")
+    s.add_argument("--bot", help="one author: a bot slug or human:<id>")
+    s.add_argument("--scope", choices=("all", "direct"), help="direct: only your direct reports")
     s.add_argument("--unread", action="store_true")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="update list")
@@ -1853,6 +1856,9 @@ def parser():
     s.add_argument("--suggestion-limit", dest="suggestion_limit", type=int, help="visitor suggestions waiting at once")
     s.add_argument("--bot-public-approval", dest="bot_public_approval", action=argparse.BooleanOptionalAction, default=None,
                    help="bots need an approval to publish")
+    who = s.add_mutually_exclusive_group()
+    who.add_argument("--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions")
+    who.add_argument("--automatic", action="store_true", help="suggestions go to the Automatic bot (Product Manager, then Head of Product)")
     s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")

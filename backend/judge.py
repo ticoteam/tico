@@ -69,8 +69,8 @@ def transport(provider):
     return "openrouter" if runtime and runtime == providers.CATCH_ALL_RUNTIME else None
 
 
-def fallback_engine(record, env=None):
-    """A decision model on the company's own provider, or None when no enabled provider has a server key.
+def fallback_model(record, env=None):
+    """(transport, key, model) on the company's own provider, or None when no enabled provider has a server key.
 
     The default model's provider goes first; the rest follow in the order the owner enabled them. A provider the
     server cannot call, or whose key it does not hold, is skipped (and logged) for the next one. Models pi runs
@@ -90,8 +90,14 @@ def fallback_engine(record, env=None):
         if not model:
             _skip(provider, "it has no model")
             continue
-        return J.llm(via, key, openrouter.model_id(model) if via == "openrouter" else model)
+        return via, key, openrouter.model_id(model) if via == "openrouter" else model
     return None
+
+
+def fallback_engine(record, env=None):
+    """A decision model on the company's own provider (`fallback_model`), or None."""
+    found = fallback_model(record, env)
+    return J.llm(*found) if found else None
 
 
 class Ask(Contract):

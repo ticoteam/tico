@@ -13830,6 +13830,22 @@
               "default": false,
               "title": "Include Archive"
             }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
           }
         ],
         "responses": {
@@ -14064,6 +14080,22 @@
               "type": "boolean",
               "default": false,
               "title": "Mine"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
             }
           }
         ],
@@ -22055,6 +22087,17 @@
             ],
             "title": "Notify Slack Bot Messages"
           },
+          "update_draft": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Draft"
+          },
           "slack_muted_bots": {
             "anyOf": [
               {
@@ -23395,6 +23438,18 @@
               }
             ],
             "title": "Bot Public Approval"
+          },
+          "suggestions_bot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Bot"
           }
         },
         "additionalProperties": false,
@@ -26568,6 +26623,11 @@
               }
             ],
             "title": "Bots"
+          },
+          "managers": {
+            "type": "boolean",
+            "title": "Managers",
+            "default": false
           }
         },
         "additionalProperties": false,

@@ -27,6 +27,7 @@ DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
                   "inbox_bot": None, "hidden": False, "photo": "",
                   "slack": "", "slack_id": "", "github": "", "notify_slack_task_done": True,
                   "notify_slack_bot_messages": True, "slack_muted_bots": [], "phone": "", "about": "", "goals": "", "notes": "",
+                  "update_draft": True,
                   "directory": "", "external_id": "", "directory_left": False,
                   # What a member may do (docs/permissions.md): create bots (on by default), and add people
                   # (None = the default: coworkers in the company's email domain may, others may not).
@@ -69,6 +70,8 @@ def _person(row):
             "github": _clean(row.get("github")).lstrip("@").lower(),
             "notify_slack_task_done": row.get("notify_slack_task_done") is not False,
             "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
+            # The Assistant drafts their daily update unless they turn it off.
+            "update_draft": row.get("update_draft") is not False,
             "slack_muted_bots": _list(row.get("slack_muted_bots")),
             "phone": _clean(row.get("phone")),
             "about": _clean(row.get("about")),
@@ -396,6 +399,7 @@ def profile(person_row):
             "github": p.get("github") or "",
             "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
             "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
+            "update_draft": p.get("update_draft") is not False,
             "slack_muted_bots": list(p.get("slack_muted_bots") or []),
             "phone": p.get("phone") or "",
             "about": p.get("about") or "",

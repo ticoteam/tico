@@ -194,6 +194,9 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `podium` | `developer-advocate` | Developer Advocate | A weekly developer pulse: a ready answer for each public question (drafted until sending is on), the friction log with counts, and runnable samples and tutorials | niche | Public web; GitHub and a community channel optional |
 | `architecture` | `software-architect` | Software Architect | Design doc and RFC review notes, proposed ADRs for decisions made without one, the system map and a ranked technical debt register | niche | GitHub connected; docs and meetings optional |
 
+To run these bots as one team that builds, reviews, tests and releases software, see
+[The software factory](software-factory.md): the roles in order, which model each runs on and the Dev tickets steps.
+
 ### Message bots
 
 A message bot serves one human rather than doing a group's job, so its card says `kind: helper` and has no group, pack,

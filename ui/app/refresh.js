@@ -27,6 +27,7 @@ async function refresh(force) {
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
+  if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(S.emps.find(x => x.name === BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
   // Poll data without destroying an expanded document or a comment being typed.
   const reviewing = $('#main .req[open], #main .issue-compose:not([hidden])');

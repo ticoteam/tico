@@ -79,3 +79,21 @@
   /* Day, week, unread and my bots are icons on a phone */
   .upd-seg .nav-icon,.upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
   .upd-seg button{padding:6px 12px}.upd-chip{padding:6px 10px}}
+/* Updates nested by the org chart: each report's card sits under its manager's, behind a small toggle. */
+.upd-node{display:flex;flex-direction:column;gap:6px}
+.upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:22px;padding-left:14px;border-left:2px solid var(--line)}
+.upd-kids{align-self:flex-start;display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted);background:none;border:0;padding:2px 6px;border-radius:8px;cursor:pointer}
+.upd-kids:hover{background:var(--hover, color-mix(in srgb,var(--text) 6%,transparent));color:var(--text)}
+.upd-kids .nav-icon{font-size:18px}
+.upd-none{display:flex;align-items:center;gap:10px;padding:8px 16px;border:1px dashed var(--line);border-radius:14px;font-size:var(--t-sm)}
+.upd-none .upd-av{width:24px;height:24px;overflow:hidden;border-radius:50%}
+.upd-none .upd-write{margin-left:auto}
+.upd-draft{background:color-mix(in srgb,var(--muted) 15%,transparent);color:var(--muted)}
+.upd-edit{grid-template-columns:minmax(0,1fr)}
+.upd-edit textarea{width:100%;margin-top:8px;font:inherit}
+.upd-own{display:flex;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:6px}
+.upd-field{display:block;margin-top:10px;font-size:var(--t-sm);font-weight:600}
+.upd-field .muted{font-weight:400}
+.upd-edit .upd-field input,.upd-edit .upd-field textarea{display:block;width:100%;margin-top:4px;font:inherit;font-weight:400}
+.upd-from{font-size:var(--t-sm);margin-top:6px}
+@media (max-width:600px){.upd-sub{margin-left:8px;padding-left:10px}}
