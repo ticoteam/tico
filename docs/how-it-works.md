@@ -88,8 +88,11 @@ rule, same words): at 10 such repeats the bot is paused for an hour and resumes 
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
 for an hour (a loop over new targets). Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
-A person's message to a
-paused or quarantined bot is kept and runs when it is back; another bot still cannot write to it.
+A message or task comment to a paused or quarantined bot, from a person or a bot, is kept and runs when it is back;
+the reply's `warning` says so and when that is. A new task or hand-off to a paused, quarantined or planned bot is
+refused as `target_inactive`, with when the bot is back. That refusal is the target's state, not the sender reaching
+too far: it opens no review and never counts as a repeat, so one bot's quarantine does not spread to the bots that work
+with it. It does count toward the 30 a day, so a bot retrying it in a loop still stops.
 
 ## The three places
 

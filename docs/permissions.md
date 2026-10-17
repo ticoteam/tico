@@ -9,6 +9,10 @@ team, readable by one group and open to requests from everyone.
 | **Read** | Its activity: its tasks, updates, files, status and run log, routines, the shared rooms and chats it is in, and the activity sections of its page. |
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
+Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
+is back; a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
+never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
+
 An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
 
 New bots, and every bot after an upgrade, start **Open**: Everyone for all three.

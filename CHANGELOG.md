@@ -99,6 +99,10 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
+  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
+  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
+  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
 - Usage prices each model request at its own rate when the model charges more for long prompts (Claude Haiku 5.5, over
   100,000 tokens). It used to price a whole run at the lower rate, so a Haiku 5.5 run could read up to five times too
   low. A run from a runner that doesn't report each request (update the runner) says **estimate, may be low**.

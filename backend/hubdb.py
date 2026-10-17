@@ -1662,8 +1662,17 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
-    count, distinct = conn.execute("SELECT COUNT(*), COUNT(DISTINCT rule || char(31) || detail_json) FROM refusals "
-                                   "WHERE actor=? AND ts>=? AND rule<>'lint'", (actor, since)).fetchone()
+    count, distinct, total = conn.execute(
+        "SELECT COALESCE(SUM(rule<>'target_inactive'), 0), "
+        "COUNT(DISTINCT CASE WHEN rule<>'target_inactive' THEN rule || char(31) || detail_json END), COUNT(*) "
+        "FROM refusals WHERE actor=? AND ts>=? AND rule<>'lint'", (actor, since)).fetchone()
+    if rule == "target_inactive":
+        # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
+        # back every time, so it opens no review and is no repeat. A sender retrying it in a loop still
+        # meets the day's backstop below.
+        if total >= QUARANTINE_TOTAL_AT:
+            quarantine(conn, slug, f"{total} refusals today")
+        return
     # Only a refusal the bot has already had (same rule, same words) counts toward the quarantine: retrying a
     # refused action is what the limit stops. A first try at something new that is refused is recorded, not counted.
     repeats = count - distinct
@@ -1681,9 +1690,9 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
     if repeats >= QUARANTINE_AT:
         quarantine(conn, slug, f"{repeats} repeated refusals today")
-    elif count >= QUARANTINE_TOTAL_AT:
+    elif total >= QUARANTINE_TOTAL_AT:
         # The backstop: refusals that each name a new target are no repeats, but this many still mean a loop.
-        quarantine(conn, slug, f"{count} refusals today")
+        quarantine(conn, slug, f"{total} refusals today")
 
 
 def task_origin(conn, row):
@@ -1761,6 +1770,15 @@ def quarantine_review(conn, slug):
         return None
     return {"what": old.group(1), "found": escape_found(old.group(2), bot_actor(slug), conn),
             "preview": escape_preview(old.group(2)), "task": None}
+
+
+def quarantine_resumes(conn, slug):
+    """Since when a bot is quarantined, whether it lifts by itself (a refusal count), and when (`resumes_at`)."""
+    since = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?",
+                 (bot_actor(slug),))["ts"]
+    auto = not quarantine_is_escape(conn, slug)
+    return {"since": since, "auto": auto,
+            "resumes_at": shift(since, seconds=QUARANTINE_COOLDOWN_S) if auto and since else None}
 
 
 def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
@@ -1860,6 +1878,36 @@ def resolve_actor(conn, value):
 
 
 HELD_STATES = ("quarantined", "paused")
+# A bot that exists but is not running. A write refused only for that says nothing about the sender.
+INACTIVE_STATES = HELD_STATES + ("planned",)
+
+
+def back_when(conn, slug, state):
+    """When a held or planned bot runs again, in words the sender can act on."""
+    if state == "planned":
+        return "has not started yet"
+    resumes = quarantine_resumes(conn, slug)["resumes_at"] if state == "quarantined" else None
+    if resumes:
+        return f"is quarantined until about {resumes[11:16]} UTC, when it resumes by itself"
+    return f"is {state} until a person resumes it"
+
+
+def target_inactive(conn, slug, state):
+    """The refusal text for a write to a bot that is not running: when it is back, and how little it counts
+    against the sender, so the sender waits instead of retrying."""
+    return (f"{slug} {back_when(conn, slug, state)}. This refusal is not a repeat and opens no review of you; "
+            "only the day's limit of 30 refusals counts it. Send it again once it is back")
+
+
+def held_note(conn, target):
+    """What the sender of a kept message reads when its bot is paused or quarantined; else None."""
+    if not is_bot(target):
+        return None
+    slug = actor_id(target)
+    state = (bot(conn, slug) or {}).get("state")
+    if state not in HELD_STATES:
+        return None
+    return f"{slug} {back_when(conn, slug, state)}. Your message is kept for when it is back; no need to resend it."
 
 
 def _reach(conn, actor, target, allow_planned=False, allow_held=False):
@@ -1868,15 +1916,21 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     `allow_planned` is onboarding's one exception: a bot that has been defined but has not
     started yet may still be handed the task that brings it up, so the backlog is waiting
     when its machine comes online. Nothing runs until the bot is active either way.
+
+    A bot that exists but is paused, quarantined or planned is refused as `target_inactive`, not
+    `reach`: the sender broke no rule, so rule 8 does not count it as a repeat (_escalate).
     """
     resolved = resolve_actor(conn, target)
     if not resolved:
         refuse(conn, actor, "reach", f"{target} is not a bot or a person on the roster",
                classify(str(target), conn=conn))
     if is_bot(resolved):
-        state = (bot(conn, actor_id(resolved)) or {}).get("state")
+        slug = actor_id(resolved)
+        state = (bot(conn, slug) or {}).get("state")
         if state != "active" and not (allow_planned and state == "planned") and not (allow_held and state in HELD_STATES):
-            refuse(conn, actor, "reach", f"{actor_id(resolved)} is {state}, not active")
+            if state in INACTIVE_STATES:
+                refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state))
+            refuse(conn, actor, "reach", f"{slug} is {state}, not active")
     return resolved
 
 
@@ -2037,9 +2091,10 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     severity = classify(body, to_actor=resolve_actor(conn, to_actor), where="message", actor=actor, conn=conn)
     on_task = (refs or {}).get("task")
     path_mentioned(conn, actor, "task note" if on_task else "message", body, on_task)
-    # A person's message to a paused or quarantined bot is kept: runners claim only active bots' work
-    # (execution.claim), so it runs when the bot is back. A bot still cannot write to one (rule 2).
-    target = _reach(conn, actor, to_actor, allow_held=is_human(actor))
+    # A message to a paused or quarantined bot is kept: runners claim only active bots' work
+    # (execution.claim), so it runs when the bot is back. Refusing a bot's message instead made the
+    # sender repeat it and quarantined the sender too, spreading one quarantine to every bot it works with.
+    target = _reach(conn, actor, to_actor, allow_held=True)
     refs = dict(refs or {})
     warnings = []
 
@@ -2052,7 +2107,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
     else:
         conv = _pair_conversation(conn, actor, target,
-                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=is_human(actor))
+                                  {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
 
     # rule 3: the loop caps
     if is_bot(actor) and is_bot(target):

@@ -677,7 +677,9 @@ SCHEMAS = {
     "TaskAnswers": obj({"answers": items(ref("ReviewAnswer"))}),
     "TaskAnswerResult": obj({"comment": ref("Message"), "answer": ref("ReviewAnswer"),
                              "comments": items(ref("Message")), "woke": "b"}),
-    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b"}),
+    # `warning`: the bot it went to is paused or quarantined; the comment is kept and runs when it is back.
+    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s"},
+                         required=["comment", "comments", "woke"]),
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
     "UpdateArchiveResult": obj({"updated": "i", "archived": "b", "unread": "i"},
