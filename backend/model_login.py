@@ -323,6 +323,21 @@ def _in_use(bots):
             "first")
 
 
+def hold_removals(c, settings, bots=None):
+    """Refuse a change that makes a bot (any of `bots`, or any bot) run on a subscription being taken off its
+    computer: a placement, a model or tool change, the company's default, a shared bot's original. Called after the
+    change is written, inside its transaction, so the refusal undoes it. A removal is held from its ask to its end,
+    the commit point and the deletion after it included."""
+    for row in c.execute(f"SELECT runner_id, runtime, profile FROM model_logins WHERE kind='remove' AND {ACTIVE_SQL}").fetchall():
+        on = [b for b in _bots_on(c, row["runner_id"], row["runtime"], row["profile"], settings, True)
+              if bots is None or b["bot"] in bots]
+        if on:
+            label = (c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone() or ["the computer"])[0]
+            raise Problem("removing", f"{row['profile']} is being removed from {label}, and {_names([b['name'] for b in on])} "
+                          "would run on it. Wait until it is removed, or choose another connection on the Bots page", 409,
+                          extra={"bots": on})
+
+
 def removing(c, rid, profile):
     """Whether `profile` is being taken off computer `rid` (a removal not yet ended): no bot chooses it meanwhile."""
     return bool(profile) and c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND kind='remove' "

@@ -390,6 +390,35 @@ def test_a_bot_that_comes_onto_a_subscription_being_removed_stops_it_and_nothing
     assert report(api, r, again["id"], state="done", message="Removed work") == {"state": "done"}
 
 
+def test_while_a_removal_runs_no_bot_is_placed_or_switched_onto_it(api):
+    """Past the commit point the computer signs out and deletes with no further check, so until the removal ends no
+    bot comes onto the subscription there: not placed on that computer, not switched onto that tool."""
+    r, elsewhere = online(api, REMOVES), online(api, REMOVES)
+    rid = r["runner_id"]
+    with_profile(api, r)
+    for bot, runtime, runner_id in (("mover", "codex", elsewhere["runner_id"]), ("switcher", "claude", rid)):
+        add_bot(api, bot)
+        put_config(api, bot, runtime)
+        post(api, f"bots/{bot}/assignment", {"runner_id": runner_id, "expected_generation": 0})
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
+    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
+    assert report(api, r, out["id"], state="finishing") == {"state": "finishing"}
+    placed = post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1}, expected=409)
+    assert placed["error"]["code"] == "removing" and "mover would run on it" in placed["error"]["detail"]
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='switcher'").fetchone()[0]
+    switched = post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision}, expected=409)
+    assert switched["error"]["code"] == "removing" and "switcher would run on it" in switched["error"]["detail"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='mover'").fetchone()[0] == elsewhere["runner_id"]
+        assert c.execute("SELECT runtime FROM bots WHERE slug='switcher'").fetchone()[0] != "codex"
+    # Once it has ended, both go ahead.
+    assert report(api, r, out["id"], state="done", message="Removed work") == {"state": "done"}
+    post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1})
+    post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision})
+
+
 def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):
     r = online(api, REMOVES)
     rid = r["runner_id"]

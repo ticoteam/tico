@@ -1276,6 +1276,7 @@ def create_app(settings=None):
 
         def work(c):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
+            model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
                     {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models")},
                      "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models")}})
@@ -4831,6 +4832,8 @@ def create_app(settings=None):
                       (encode(config), bot))
             c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE slug=?",
                       (choice["id"], runtime, effort, bot))
+            # Its shared copies follow it, so any bot may have moved onto another tool.
+            model_login.hold_removals(c, settings)
             reset = reset_bot_sessions(c, bot)
             settings_admin.record(c, who.actor, bot, "model", before,
                                   settings_admin.snapshot(c, bot, "model"))
