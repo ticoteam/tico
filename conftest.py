@@ -26,23 +26,43 @@ def pytest_addoption(parser):
                      help="Build API fixture databases from empty paths (migration checks and benchmarks)")
 
 
+def unix_socket_path_under_tmp_path(address, basetemp=None):
+    """The filesystem path a Unix socket address names, if it lies under pytest's tmp_path; otherwise None.
+
+    A str, bytes or path-like address names a file, relative to the working directory as bind resolves it. Under the
+    default basetemp every tmp_path has a pytest-of-<user> directory in it; an explicit --basetemp (xdist gives each
+    worker one) is compared by whole directory components. An abstract name (leading NUL, Linux) has no path."""
+    if not isinstance(address, (str, bytes, os.PathLike)):
+        return None
+    path = os.fsdecode(address)
+    if not path or path.startswith("\0"):
+        return None
+    full = Path(os.path.realpath(path))
+    root = basetemp and Path(os.path.realpath(basetemp))
+    if any(part.startswith("pytest-of-") for part in full.parts) or (root and (full == root or root in full.parents)):
+        return str(full)
+    return None
+
+
 def _unix_socket_bind_outside_tmp_path(config):
     """A Unix socket path has a length limit (108 bytes on Linux, 104 on macOS). pytest's tmp_path is short on a laptop
     but long under the hosted release gate's TMPDIR, so a socket under tmp_path passed every local run and failed only
-    at release validation (v0.3.50's first candidate). Refuse it on every computer, so it fails at the first run."""
+    at release validation (v0.3.50's first candidate). Refuse it on every computer, so it fails at the first run.
+    The patch covers every thread of this process and any child it forks; a subprocess that execs a new program (or
+    Python) does not inherit it. It is removed when pytest unconfigures."""
     import socket
     bind = socket.socket.bind
-    explicit = config.option.basetemp and str(Path(config.option.basetemp).resolve())
 
     def checked_bind(self, address):
-        if self.family == socket.AF_UNIX and isinstance(address, (str, os.PathLike)):
-            path = os.fspath(address)
-            if "/pytest-of-" in path or (explicit and os.path.abspath(path).startswith(explicit)):
+        if self.family == getattr(socket, "AF_UNIX", None):
+            path = unix_socket_path_under_tmp_path(address, config.option.basetemp)
+            if path:
                 raise OSError(f"Unix socket under pytest's tmp_path: {path}. Its length depends on TMPDIR and breaks "
                               "the hosted release gate; bind it in tempfile.mkdtemp(dir='/tmp') instead.")
         return bind(self, address)
 
     socket.socket.bind = checked_bind
+    config.add_cleanup(lambda: setattr(socket.socket, "bind", bind))
 
 
 def pytest_configure(config):

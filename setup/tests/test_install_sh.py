@@ -177,10 +177,25 @@ def test_build_refuses_a_non_release_version_and_a_script_without_the_placeholde
         build.bake("nothing to replace", "v1.2.3")
 
 
-# The Release workflow runs the same shellcheck after the tag is pushed; v0.2.30 failed there. On a CI VM (shellcheck is
-# preinstalled) a missing shellcheck is a failure, not a skip, so the release gate cannot pass without this check.
-@pytest.mark.skipif(not shutil.which("shellcheck") and not os.environ.get("CI"), reason="shellcheck not installed")
+def shellcheck_skip_reason(environ=os.environ, which=shutil.which):
+    """The Release workflow runs the same shellcheck after the tag is pushed; v0.2.30 failed there. On CI (GitHub sets
+    CI=true; its Ubuntu VMs ship shellcheck) a missing shellcheck is a failure, not a skip, so the release gate cannot
+    pass without this check. None means the test runs."""
+    return None if which("shellcheck") or environ.get("CI") else "shellcheck not installed"
+
+
+@pytest.mark.parametrize("environ, installed, reason", [
+    ({}, True, None), ({"CI": "true"}, True, None), ({"CI": "true"}, False, None),
+    ({}, False, "shellcheck not installed"), ({"CI": ""}, False, "shellcheck not installed"),
+], ids=["local", "CI", "CI-missing-runs-and-fails", "local-missing-skips", "empty-CI-skips"])
+def test_shellcheck_is_skipped_only_off_ci(environ, installed, reason):
+    assert shellcheck_skip_reason(environ, lambda name: "/usr/bin/shellcheck" if installed else None) == reason
+
+
+@pytest.mark.skipif(shellcheck_skip_reason() is not None, reason="shellcheck not installed")
 def test_install_sh_is_shellcheck_clean_posix_sh():
+    if not shutil.which("shellcheck"):
+        pytest.fail("shellcheck is required on CI (CI is set) and is not installed")
     r = subprocess.run(["shellcheck", "-s", "sh", str(SCRIPTS / "install.sh")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
