@@ -306,8 +306,8 @@ user, and each model CLI's first unattended login under a fresh account should b
    that reboots unattended.
 3. Give that user the code. Either clone this repository into its home, or share one read-only
    checkout (`chmod -R a+rX <checkout>`) and let the user keep its own venv:
-   `python3.12 -m venv ~/tico-venv && ~/tico-venv/bin/python -m pip install -r
-   <checkout>/backend/requirements.txt`, then export `TICO_RUNNER_PYTHON=~/tico-venv/bin/python`.
+   `python3.15 -m venv ~/tico-venv && ~/tico-venv/bin/python -m pip install -r
+   <checkout>/backend/requirements.txt` (any Python from 3.12 works; 3.15 is what the images run), then export `TICO_RUNNER_PYTHON=~/tico-venv/bin/python`.
    A shared checkout cannot be updated by `scripts/tico update` from the unprivileged account.
 4. As that user, run the same commands as the quick start: `env create`, `server install`,
    `enroll`, `profile add` and `profile login`, `install bot`, `doctor`.
