@@ -7,6 +7,7 @@
   const css = `
 .asst-card{align-self:flex-start;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0;background:var(--surface)}
 .asst-card b{display:block;margin-bottom:2px}
+.asst-card:focus:not(:focus-visible){outline:none}
 .asst-body{margin:4px 0;padding-left:18px;font-size:13px;overflow-wrap:anywhere}
 .asst-card code{display:block;font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 8px}
 .asst-raw{margin:4px 0 8px;font-size:12.5px}
@@ -57,11 +58,12 @@
     const who = {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
     // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
     const said = String(action.summary || '').trim(), repeats = said === title || said.length >= 300 && title.startsWith(said);
-    return `<div class="asst-card" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
+    return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
       <b data-what>${esc(title)}</b>
       ${said && !repeats ? `<span class="asst-state">${esc(who)}“${esc(said)}”</span>` : ''}
       ${sends}${readable ? fields : ''}
-      <details class="asst-raw"${open ? ' open' : ''}><summary>Details</summary>${readable ? '' : fields}<code>${esc(action.method)} ${esc(action.path)}</code></details>
+      <details class="asst-raw"${open ? ' open' : ''}><summary>Details</summary>${readable ? '' : fields}${action.original_summary
+        ? `<p class="asst-state">First written as: “${esc(action.original_summary)}”</p>` : ''}<code>${esc(action.method)} ${esc(action.path)}</code></details>
       ${action.status === 'pending'
         ? `<div class="asst-row"><button class="primary" type="button" data-confirm>Confirm</button>
             <button class="ghost" type="button" data-cancel>Cancel</button>
@@ -72,11 +74,13 @@
   // The Confirm cards left in a chat (the Assistant's, and BotOps' for what a person asked it for that always needs
   // their click): each message with `refs.action` has a host element, filled from the action.
   // A chat rebuilds its whole thread when a message arrives (the result line a Confirm writes, too), so every card seen
-  // is kept here and painted again at once, inside that rebuild: the thread keeps its height and its place, instead of
-  // every card falling back to "Loading the card…" and growing back one fetch at a time. A Confirm repaints only its card.
+  // is kept here and put back at once, inside that rebuild: the same element when it would draw the same, so a "Show
+  // more" opened on it stays open and it keeps its height and place, instead of every card falling back to "Loading the
+  // card…" and growing back one fetch at a time. A Confirm repaints only its card.
   const seenActions = new Map();
   const openRaw = new Set();             // cards whose Details is open, kept open across a rebuild
   const painted = new WeakMap();         // host -> the card HTML it shows
+  const drawn = new Map();               // action id -> {card, html}: the element last drawn for it
   const UNSETTLED = new Set(['pending', 'running']);
   const deciding = new Set();            // cards whose Confirm / Cancel is on its way: a fetch never repaints them
   async function cards(root, deps) {
@@ -88,14 +92,28 @@
       seenActions.set(action.id, action);
       const html = actionCard(action, esc, openRaw.has(action.id));
       if (painted.get(host) === html) return;            // nothing changed: leave it alone
+      const kept = drawn.get(action.id);
+      // A rebuilt thread's new host gets the card it had before, moved, not drawn again (one shown twice is drawn).
+      if (kept?.html === html && !kept.card.isConnected) {
+        host.replaceChildren(kept.card);
+        painted.set(host, html);
+        return;
+      }
       host.innerHTML = html;
       painted.set(host, html);
-      host.querySelector('details.asst-raw')?.addEventListener('toggle', ev => {
+      const card = host.firstElementChild;
+      drawn.set(action.id, {card, html});
+      // The card moves between hosts, so what it does is found from the card, never from the host it was drawn in.
+      card.querySelector('details.asst-raw')?.addEventListener('toggle', ev => {
         openRaw[ev.target.open ? 'add' : 'delete'](action.id);
-        painted.set(host, actionCard(action, esc, ev.target.open));
+        const now = actionCard(action, esc, ev.target.open);
+        drawn.set(action.id, {card, html: now});
+        if (card.parentElement) painted.set(card.parentElement, now);
       });
       const decide = async verb => {
-        host.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        const host = card.parentElement || host0;
+        const focused = card.contains(document.activeElement);
+        card.querySelectorAll('button').forEach(b => { b.disabled = true; });
         // A thread rebuilt while this runs draws the card as running, not with its buttons live again.
         seenActions.set(action.id, {...action, status: 'running'});
         deciding.add(action.id);
@@ -106,10 +124,13 @@
         deciding.delete(action.id);
         // Only this card is drawn again, wherever it is now; one still waiting gets its buttons back.
         for (const h of new Set([...hostsOf(action.id), host])) { painted.delete(h); paint(h, next || action); }
+        // The button pressed is gone with the old card: focus stays on this card, not thrown back to the page.
+        if (focused || document.activeElement === document.body) drawn.get(action.id)?.card.focus({preventScroll: true});
         reload?.();
       };
-      host.querySelector('[data-confirm]')?.addEventListener('click', () => decide('confirm'));
-      host.querySelector('[data-cancel]')?.addEventListener('click', () => decide('cancel'));
+      const host0 = host;
+      card.querySelector('[data-confirm]')?.addEventListener('click', () => decide('confirm'));
+      card.querySelector('[data-cancel]')?.addEventListener('click', () => decide('cancel'));
     };
     const hosts = [...root.querySelectorAll('[data-action-host]')];
     // At once, before anything is fetched: every card already seen.

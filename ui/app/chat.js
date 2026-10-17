@@ -600,9 +600,12 @@ function v2ChatRender(state) {
   if (html !== state.html) {
     state.html = html;
     state.stick.update(() => {
+      // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
+      const focused = thread.contains(document.activeElement) ? document.activeElement : null;
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
       if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
     }, {fresh: state.rendered && v2Jump(state), prepended: state.prepending});

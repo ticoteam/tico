@@ -79,9 +79,11 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - BotOps and Assistant Confirm cards read in plain words: a repository change says who gets what and what they lose
   ("Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."), never
-  `PUT /api/v2/...` or a word like "chosen"; any other card without a sentence of its own gets a plain one. The method,
-  path and fields are under a closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one card no longer makes the chat jump: the other
-  cards stay drawn and in place instead of reloading one by one, and an open Details stays open.
+  `PUT /api/v2/...` or a word like "chosen" or "all"; any other card without a sentence of its own gets a plain one, and
+  a card made before this reads plainly too, its old line kept under Details. The method, path and fields are under a
+  closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one
+  card no longer makes the chat jump: the other cards stay exactly as they were, with any **Show more** or Details you
+  opened still open, and focus stays where it was.
 - A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
   once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
   stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can

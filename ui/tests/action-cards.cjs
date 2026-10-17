@@ -3,7 +3,11 @@
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
 //    and the sidebar keep their scroll, no card falls back to "Loading the card…", and an open Details stays open.
+//    Every other card is the same element after the rebuild, so a "Show more" opened on one stays open and where it
+//    was, and focus stays put: on a card being read, and on the card whose Confirm was pressed from the keyboard.
 //    A Confirm that fails leaves the card waiting with its buttons usable.
+//  - a repository card stored before the plain wording ("access to chosen") reads as the server now sends it: a plain
+//    title, and the old line only under Details (backend/assistant.py action_view).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,6 +29,16 @@ function fixture() {
     // A card stored before its route had a sentence: the description was the method and path.
     act2: card('act2', {method: 'POST', path: '/api/v2/bots/ops/go-live', summary: 'Ops asked BotOps for this for you: Launch Ops',
       description: 'POST /api/v2/bots/ops/go-live', body: {confirm: true}, diff: [{field: 'confirm', new: true}]}),
+    // Chris's card from before the plain wording, as action_view sends it now: the title read from the stored body,
+    // the old line moved under Details.
+    act0: card('act0', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories', summary: '',
+      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-marketing-site (write)",
+      description: 'Security Engineer: read-only on tico, besides its own repository.',
+      body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
+      diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
+    // A long send above the card clicked: its "Show more" is opened and must stay open.
+    actL: card('actL', {method: 'POST', path: '/api/v2/messages', summary: 'Tell Ben the plan', description: 'Send a message to Ben',
+      body: {to: 'human:ben', body: 'Hi Ben, here is the whole plan. ' + 'Each step is written out so nothing is missed. '.repeat(12)}}),
     act3: card('act3', {method: 'POST', path: '/api/v2/bots/ops/archive', summary: 'Archive the Ops bot', description: 'Archive bot Ops',
       body: {expected_revision: 3}, diff: [{field: 'expected_revision', new: 3}]}),
     // A send: the words that go out are what the person approves, so they show with Details closed.
@@ -35,9 +49,13 @@ function fixture() {
   const messages = [];
   let n = 0;
   const filler = k => { for (let i = 0; i < k; i++) messages.push(say('h' + n, n % 2 ? 'bot:botops' : 'human:ana', `Line ${n}. ` + 'Some words to fill the line. '.repeat(8), n++)); };
-  filler(6);
+  filler(3);
+  messages.push(say('c0', 'bot:botops', 'Needs your OK: ' + actions.act0.description, n++, {assistant: true, action: 'act0'}));
+  filler(3);
   messages.push(say('c1', 'bot:botops', 'Needs your OK: ' + actions.act1.summary, n++, {assistant: true, action: 'act1'}));
-  filler(4);
+  filler(2);
+  messages.push(say('cL', 'bot:botops', 'Needs your OK: ' + actions.actL.summary, n++, {assistant: true, action: 'actL'}));
+  filler(2);
   messages.push(say('c2', 'bot:botops', 'Needs your OK: ' + actions.act2.summary, n++, {assistant: true, action: 'act2'}));
   filler(4);
   messages.push(say('c3', 'bot:botops', 'Needs your OK: ' + actions.act3.summary, n++, {assistant: true, action: 'act3'}));
@@ -94,7 +112,7 @@ async function open(browser, state) {
     const state = fixture();
     const {page, errors} = await open(browser, state);
     await page.goto('https://tico-ui.test/#/bot/botops/chat');
-    await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 4);
+    await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 6);
 
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
@@ -117,13 +135,25 @@ async function open(browser, state) {
     assert.match(title, /^BotOps /, 'old card: a plain sentence naming who asks');
     assert.ok(!(await old.evaluate(el => el.innerText)).includes('/api/v2'), 'old card: path only behind Details');
 
+    // The card Chris saw: no mode word, method, path or JSON until Details opens, and the old line only there.
+    const legacy = page.locator('.asst-card[data-action="act0"]');
+    assert.equal(await legacy.locator('[data-what]').innerText(), 'Security Engineer: read-only on tico, besides its own repository.');
+    const legacySeen = await legacy.evaluate(el => el.innerText);
+    for (const raw of ['chosen', 'PUT', '/api/', '{', 'full_name', 'mode:', 'Set Security']) assert.ok(!legacySeen.includes(raw), `old repo card: "${raw}" is not shown before Details opens`);
+    await legacy.locator('details.asst-raw summary').click();
+    assert.ok((await legacy.evaluate(el => el.innerText)).includes("First written as: “Set Security Engineer's repository access to chosen."), 'old repo card: its old line is under Details');
+    await legacy.locator('details.asst-raw summary').click();
+
     const send = page.locator('.asst-card[data-action="act4"]');
     assert.equal(await send.locator('details.asst-raw').evaluate(d => d.open), false, 'send: Details starts closed');
     assert.equal(await send.locator('.asst-said').innerText(), 'Hi Ben, the launch moves to Friday.', 'send: the words sent are on the card');
     assert.ok(!(await send.evaluate(el => el.innerText)).includes('human:ben'), 'send: the raw fields stay under Details');
 
-    // Open Details on the third card, scroll so the second sits mid-thread, then Confirm the second.
+    // Open Details on the third card and "Show more" on the long send above the second, scroll so the second sits
+    // mid-thread, then Confirm the second from the keyboard.
     await page.locator('.asst-card[data-action="act3"] details.asst-raw summary').click();
+    await page.locator('.asst-card[data-action="actL"] .asst-said details.asst-long summary').click();
+    await page.evaluate(() => document.querySelectorAll('#conv-thread .asst-card').forEach(c => { c.mark_ = c.dataset.action; }));
     await page.evaluate(() => {
       const t = document.querySelector('#conv-thread'), c = document.querySelector('.asst-card[data-action="act2"]');
       t.scrollTop += c.getBoundingClientRect().top - t.getBoundingClientRect().top - 200;
@@ -132,7 +162,8 @@ async function open(browser, state) {
     await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
     const before = await page.evaluate(() => ({top: document.querySelector('#conv-thread').scrollTop,
       side: document.querySelector('#side')?.scrollTop || 0,
-      card: document.querySelector('.asst-card[data-action="act2"]').getBoundingClientRect().top}));
+      card: document.querySelector('.asst-card[data-action="act2"]').getBoundingClientRect().top,
+      long: document.querySelector('.asst-card[data-action="actL"]').getBoundingClientRect().top}));
     assert.ok(before.top > 0 && before.card > 100 && before.card < 400, 'set up: the card is mid-thread, away from the top');
     assert.equal(await page.evaluate(() => V2C.stick.atBottom), false, 'set up: not at the bottom');
 
@@ -143,13 +174,16 @@ async function open(browser, state) {
         const t = document.querySelector('#conv-thread'), c = document.querySelector('.asst-card[data-action="act2"]');
         window.frames_.push({top: t.scrollTop, side: document.querySelector('#side')?.scrollTop || 0, card: c ? c.getBoundingClientRect().top : null,
           loading: [...t.querySelectorAll('[data-action-host]')].filter(h => !h.querySelector('.asst-card')).length,
-          open: !!document.querySelector('.asst-card[data-action="act3"] details.asst-raw')?.open});
+          open: !!document.querySelector('.asst-card[data-action="act3"] details.asst-raw')?.open,
+          more: !!document.querySelector('.asst-card[data-action="actL"] .asst-said details.asst-long')?.open,
+          long: document.querySelector('.asst-card[data-action="actL"]')?.getBoundingClientRect().top ?? null});
         if (window.frames_.length < 120) requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
     });
     state.gets.length = 0;
-    await page.locator('.asst-card[data-action="act2"] [data-confirm]').click();
+    await page.evaluate(() => document.querySelector('.asst-card[data-action="act2"] [data-confirm]').focus({preventScroll: true}));
+    await page.keyboard.press('Enter');
     await page.locator('.asst-card[data-action="act2"][data-status="done"]').waitFor();
     await page.locator('[data-message="ract2"]').waitFor({state: 'attached'});
     await page.waitForFunction(() => window.frames_.length >= 120);
@@ -160,8 +194,22 @@ async function open(browser, state) {
     assert.deepEqual([...new Set(frames.map(f => f.side))], [before.side], 'the sidebar kept its scroll');
     assert.ok(frames.every(f => f.card !== null && Math.abs(f.card - before.card) <= 1), 'the card stayed where it was on screen');
     assert.ok(frames.every(f => f.open), 'an open Details on another card stays open');
+    assert.ok(frames.every(f => f.more), 'a "Show more" opened on another card stays open');
+    assert.ok(frames.every(f => f.long !== null && Math.abs(f.long - before.long) <= 1), 'the card above stayed where it was on screen');
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#conv-thread .asst-card')].filter(c => c.dataset.action !== 'act2')
+      .map(c => c.mark_ || 'redrawn:' + c.dataset.action)), ['act0', 'act1', 'actL', 'act3', 'act4'], 'every other card is the same element');
+    assert.equal(await page.evaluate(() => document.activeElement?.closest('.asst-card')?.dataset.action), 'act2',
+      'focus stays on the card whose Confirm was pressed');
     assert.equal(await page.locator('.asst-card[data-action="act1"] [data-confirm]').count(), 1, 'the other cards are still pending');
     assert.equal(await page.locator('.asst-card[data-action="act3"] [data-confirm]').count(), 1);
+    // A message arriving while a person reads a card: the thread rebuilds and their focus and "Show more" stay.
+    await page.evaluate(() => document.querySelector('.asst-card[data-action="actL"] .asst-said details.asst-long summary').focus({preventScroll: true}));
+    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('read', 'bot:botops', 'While you read.', state.n++));
+    assert.deepEqual(await page.evaluate(() => {
+      const long = document.querySelector('.asst-card[data-action="actL"]');
+      return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('details.asst-long').open,
+        document.activeElement === long.querySelector('details.asst-long summary')];
+    }), [true, 'actL', true, true], 'a rebuild keeps the card being read, open and focused');
     // A refresh asked just before a click and answered while the Confirm is on its way is dropped: a rebuild after it
     // still draws the card as running, with no live button (a second click would be refused).
     Object.assign(state, {slowGet: 300, slowPost: 900});

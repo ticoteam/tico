@@ -357,7 +357,7 @@ def plain_request(name, body):
                 + ' on every repository the team uses')
     elif mode == 'chosen':
         if body.get('chosen') is None:
-            what = 'the repositories chosen for it before, again'
+            what = 'the repositories picked for it before, again'
         else:
             chosen = [g for g in body['chosen'] if isinstance(g, dict)]
             what = ('; '.join(f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}" for g in chosen)

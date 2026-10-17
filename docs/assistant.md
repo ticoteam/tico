@@ -132,7 +132,9 @@ sentence that you can turn it on in Settings > Assistant, then puts it on a card
 **Every proposal is shown for what it is.** The card's title is the server's own plain sentence (what changes and for
 whom, never the bot's words), e.g. "Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site
 and tico-recorder."; a route with no sentence of its own still gets plain words ("Make a change to bot Ops"), never the method
-and path. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
+and path, and a setting's raw value ("all", "own") is never read out as a word: a field that holds a name (a model, a
+title) shows it, any other only names the field. A repository card made before this wording is titled from the request
+it sends, with its old line under Details. Under a closed **Details** are the method, path and the request body as a key: value list (a long value is folded
 behind "Show more", never cut). The words a send carries (a message, a comment, a support request) show on the card
 itself, whole, since they are what you approve; for an approval the card shows its kind, requester and subject, and for a task update the exact field changes. Only routes
 on an allowlist can be proposed (never tokens, sign-in, runner enrollment, this assistant or anything that returns a credential);

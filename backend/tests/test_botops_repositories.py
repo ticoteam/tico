@@ -1,6 +1,7 @@
 """BotOps acting for a person and repository access: it reads its own repositories as itself, it may give another bot
 access with the person's rights, and taking any away is a Confirm card for the person, never done at once."""
 import json
+import re
 
 import pytest
 
@@ -132,7 +133,7 @@ def test_a_repository_card_says_in_plain_words_what_changes():
     assert plain_request("Ops", {"mode": "all", "all_access": "read"}) == "Ops: read-only on every repository the team uses."
     assert plain_request("Ops", {"mode": "own"}) == "Ops: only its own repository."
     # Left out, the list and the level keep what is stored (set_access): the line never guesses "only its own".
-    assert plain_request("Ops", {"mode": "chosen"}) == "Ops: the repositories chosen for it before, again."
+    assert plain_request("Ops", {"mode": "chosen"}) == "Ops: the repositories picked for it before, again."
     assert plain_request("Ops", {"mode": "all"}) == "Ops: the access level set before on every repository the team uses."
 
 
@@ -159,6 +160,24 @@ def test_a_card_made_elsewhere_says_what_confirming_really_does(api, botops, rep
     assert effective(api) == []
 
 
+RAW_WORDS = {"own", "all", "chosen", "none"}
+
+
+def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
+    """{"new_bot_default": "all"} is the card a person confirms for Settings > Repositories > New bots get."""
+    from backend import rooms
+    from backend.assistant import create_proposal
+    state = api.app.state
+    with state.store.transaction() as c:
+        ana = state.auth.identity_for_actor(c, "human:ana")
+        room = rooms.chat_room(c, state.auth, ana, "botops")
+        cards = [create_proposal(c, state.store.settings, ana, room, "botops", "Open up new bots",
+                                 "PUT", "/api/v2/repositories/settings", {"new_bot_default": v})["action"] for v in ("all", "own", "x")]
+    assert [a["description"] for a in cards] == [
+        "New bots get every repository ticked in Settings > Repositories", "New bots get only their own repository",
+        "Change which repositories new bots get"]
+
+
 def test_no_card_is_titled_with_its_method_and_path(api):
     """Every route a card may name has a plain title: a route with no sentence of its own still gets words."""
     from backend.assistant import describe
@@ -169,6 +188,31 @@ def test_no_card_is_titled_with_its_method_and_path(api):
             for method in ("POST", "PUT", "DELETE"):
                 what, _ = describe(c, method, path, {"mode": "chosen", "enabled": True})
                 assert "/api/" not in what and not what.startswith(method + " "), (method, path, what)
+                assert not RAW_WORDS & set(re.findall(r"[a-z]+", what.lower())), (method, path, what)
+        # A setting value is never read out as a word; one whose field holds a name is.
+        assert describe(c, "PUT", "/api/v2/access/rules", {"mode": "own", "scope": "all"})[0] == \
+            "Make a change in Tico (access): mode, scope"
+        assert describe(c, "POST", "/api/v2/bots/ops/model", {"model": "gpt-6.1", "paused": False})[0] == \
+            "Change bot ops's model: model: gpt-6.1, paused: no"
         assert describe(c, "DELETE", "/api/v2/groups/g1", {})[0] == "Remove something in Tico (groups)"
         assert describe(c, "POST", "/api/v2/bots/ops/go-live", {})[0] == "Put bot ops live"
     assert botops_act.DO     # the routes above are BotOps' own (botops_act.DO)
+
+
+def test_a_repository_card_stored_before_the_plain_wording_reads_plainly(api, botops, repos):
+    """Chris's card: stored titled with its method and path and summed up as "access to chosen". It is read again from
+    the request it sends, and the old line is kept, only for Details."""
+    from backend import rooms
+    from backend.assistant import create_proposal
+    state = api.app.state
+    body = {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "read"}]}
+    old = "Set ops's repository access to chosen. This stops: Acme/product (write)"
+    with state.store.transaction() as c:
+        ana = state.auth.identity_for_actor(c, "human:ana")
+        room = rooms.chat_room(c, state.auth, ana, "botops")
+        aid = create_proposal(c, state.store.settings, ana, room, "botops", old, "PUT", "/api/v2/bots/ops/repositories", body)["action"]["id"]
+        c.execute("UPDATE assistant_actions SET description=?, summary=? WHERE id=?", ("PUT /api/v2/bots/ops/repositories", old, aid))
+    action = get(api, f"assistant/actions/{aid}", "ana-test")["action"]
+    assert action["description"] == "ops: read-only on product, besides its own repository."
+    assert action["summary"] == "" and action["original_summary"] == old
+    assert action["body"] == body and action["method"] == "PUT"      # what Confirm sends is untouched

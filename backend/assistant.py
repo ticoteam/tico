@@ -501,16 +501,20 @@ def describe(c, method, path, body):
         return ", ".join(spoken(n) for n in names) or "nothing"
 
     def values(sent):
-        """Field names with their short plain values (`paused: yes`), so a title says which way a change goes."""
-        def plain(v):
+        """Field names with their short plain values (`paused: yes`), so a title says which way a change goes. A text
+        value is a word only when its field holds a name (`model: …`): any other (`all`, `own`, `chosen`) is a setting
+        no title can read as English, so only its field is named and the value stays under the card's Details."""
+        def plain(k, v):
             if isinstance(v, bool):
                 return "yes" if v else "no"
             if v is None:
-                return "none"
-            if isinstance(v, (int, float)) or isinstance(v, str) and len(v) <= 40 and "\n" not in v:
-                return str(v)
+                return "cleared"
+            if isinstance(v, (int, float)):
+                return format(v, "g")
+            if isinstance(v, str) and k in NAMED and len(v) <= 40 and "\n" not in v and v.strip():
+                return v.strip()
             return ""
-        return ", ".join(spoken(k) + (f": {plain(v)}" if plain(v) else "") for k, v in sent.items()
+        return ", ".join(spoken(k) + (f": {plain(k, v)}" if plain(k, v) else "") for k, v in sent.items()
                          if k not in ("expected_revision", "version")) or "nothing"
 
     def computer(request):
@@ -574,6 +578,11 @@ def describe(c, method, path, body):
          lambda g: f"Change bot {bot(g[0])}'s {spoken(g[1])}" + (": " + values(body) if body else "")),
         (r"/api/v2/bots/([^/]+)/agent-credential(/revoke)?",
          lambda g: ("Revoke" if g[1] else "Make a new") + f" agent credential for bot {bot(g[0])}"),
+        (r"/api/v2/repositories/settings", lambda g: {
+            "own": "New bots get only their own repository",
+            "all": "New bots get every repository ticked in Settings > Repositories"}.get(
+                body.get("new_bot_default"), "Change which repositories new bots get")),
+        (r"/api/v2/repositories/refresh", lambda g: "Refresh the repository list from GitHub"),
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
         (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
             "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
@@ -603,6 +612,10 @@ def describe(c, method, path, body):
         if (mm := re.fullmatch(pattern, path)):
             return fn(mm.groups()), diff
     return unnamed(c, method, path, bot) + (": " + values(body) if body else ""), diff
+
+
+# Fields whose text is a name a person reads as is (a model, a title): any other text value is a setting word.
+NAMED = frozenset(("model", "fallback", "provider", "name", "display_name", "title", "label", "email", "team"))
 
 
 def spoken(name):
@@ -709,7 +722,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                      "AND body_json=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
-        return {"action": action_view(dict(same)), "message_id": None, "repeated": True}
+        return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
     said, diff = describe(c, method, path, body)
     if not what and (m := re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", path)) and method == "PUT":
         # What confirming does, from the change tried as this person and rolled back, not read off the request.
@@ -740,7 +753,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
                             {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
     H.event(c, who.actor, "assistant.action.proposed", row["id"],
             {"summary": summary[:200], "method": method, "path": path, "proposer": proposer})
-    return {"action": action_view(row), "message_id": card["id"]}
+    return {"action": action_view(row, c), "message_id": card["id"]}
 
 
 # ------------------------------------------------------------------ the room
@@ -775,15 +788,30 @@ def availability(c, settings, who):
             and state not in ("quarantined",)}
 
 
-def action_view(row):
+# A repository card stored before its route had a sentence: titled "PUT /api/v2/bots/x/repositories", its summary
+# "Set X's repository access to chosen. This stops: …" (backend/repositories.py before the plain wording).
+OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b")
+
+
+def action_view(row, c=None):
     result = json.loads(row["result_json"]) if row.get("result_json") else None
-    return {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
+    view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
             "body": json.loads(row["body_json"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],
             "created": row["created"], "decided_at": row.get("decided_at"),
             "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
             "result": result}
+    m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
+    if m and c is not None:
+        # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
+        # which reads the mode word as English, only under the card's Details.
+        if not view["description"] or re.match(r"(GET|POST|PUT|PATCH|DELETE) /", view["description"]):
+            from .repositories import plain_request
+            view["description"] = plain_request((H.bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
+        if OLD_REPO_SUMMARY.match(view["summary"] or ""):
+            view["original_summary"], view["summary"] = view["summary"], ""
+    return view
 
 
 def actions_for(c, actor, ids):
@@ -791,7 +819,7 @@ def actions_for(c, actor, ids):
         return {}
     rows = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND id IN (%s)" % ",".join("?" * len(ids)),
                      (actor, *ids)).fetchall()
-    return {row["id"]: action_view(dict(row)) for row in rows}
+    return {row["id"]: action_view(dict(row), c) for row in rows}
 
 
 # ------------------------------------------------------------------ the fast path
@@ -1228,7 +1256,7 @@ def install(app, store, auth, mutate, onboarding):
         snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
                                                                      "next_before": None}
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
-        pending = [action_view(dict(r)) for r in c.execute(
+        pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
         return {**availability(c, settings, who), "room_id": room["id"] if room else None,
                 "messages": snap["messages"], "has_more": snap["has_more"], "next_before": snap["next_before"],
@@ -1417,7 +1445,7 @@ def install(app, store, auth, mutate, onboarding):
     def action_show(request: Request, aid: str):
         who = person(request)
         with store.read() as c:
-            return {"action": action_view(load(c, who, aid))}
+            return {"action": action_view(load(c, who, aid), c)}
 
     def settle(aid, who, status, result, note):
         with store.transaction() as c:
@@ -1430,7 +1458,7 @@ def install(app, store, auth, mutate, onboarding):
                 H._write_message(c, "bot:" + (settings.assistant_bot if by == "assistant" else by), who.actor, note,
                                  room, "say", {"assistant": True, "action_result": aid}, None, None,
                                  delivered_at=H.now())
-            return {"action": action_view(row)}
+            return {"action": action_view(row, c)}
 
     @app.post("/api/v2/assistant/actions/{aid}/cancel")
     def action_cancel(request: Request, aid: str, body: M.Empty):
@@ -1442,7 +1470,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.cancelled", aid, {})
-            return {"action": action_view(load(c, who, aid))}
+            return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
