@@ -36,7 +36,7 @@ def _external_harnesses():
 FEATURES = (
     # A WSL computer reports itself as Linux, so the server cannot tell one is connected.
     Feature("windows", "Windows computers through WSL 2", (("install.md", "Windows PC (WSL 2)"),), None),
-    Feature("chat_goals", "Chat goals and steering", (("chat-goals.md", None),),
+    Feature("chat_goals", "Chat goals", (("chat-goals.md", None),),
             lambda c, s, shell: _rows(c, "SELECT 1 FROM chat_goals LIMIT 1")),
     Feature("message_bots", "Message bots: mail and calendar",
             (("messaging.md", None), ("mail.md", None), ("mail-service.md", None)),

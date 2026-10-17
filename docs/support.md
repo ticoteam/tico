@@ -164,7 +164,7 @@ page title or template card), Help lists them under **Beta features**, and its p
 server cannot tell one is connected. One list in `backend/beta.py` drives all of these.
 
 - Windows computers through WSL 2: [install](install.md#windows-pc-wsl-2)
-- Chat goals and steering: [chat-goals](chat-goals.md)
+- Chat goals: [chat-goals](chat-goals.md)
 - Message bots: mail and calendar: [messaging](messaging.md), [mail](mail.md), [mail-service](mail-service.md)
 - Slack gateway: [slack-gateway](slack-gateway.md)
 - Listening: [listening](listening.md)

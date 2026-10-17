@@ -379,10 +379,10 @@ function v2MessageHTML(m) {
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
 // harness's `steer`). Its sender, if they may stop the bot, can have it replace the turn instead: Stop and redirect.
 function v2DeliveryHTML(m) {
-  if (m.run?.state === 'added_to_run') return `<div class="chat-delivery">Steered into the running turn${betaPill('chat_goals')}</div>`;
+  if (m.run?.state === 'added_to_run') return `<div class="chat-delivery">Steered into the running turn</div>`;
   const d = m.delivery;
   if (!d) return '';
-  if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn${betaPill('chat_goals')}</div>`;
+  if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn</div>`;
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
   const slug = String(m.to_actor || '').replace(/^bot:/, '');
   const can = m.from_actor === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));

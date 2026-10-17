@@ -1,6 +1,7 @@
 # Chat goals and commands
 
-> **Beta**: chat goals and steering work today and may still change. See [Beta features](support.md#beta-features).
+> **Beta**: chat goals work today and may still change. See [Beta features](support.md#beta-features). Steering, a message sent
+> while the bot answers going into that turn ([harnesses](harnesses.md)), is no longer Beta.
 
 Pin a goal in a bot conversation to let its native harness keep working toward an outcome.
 Claude Code and Codex support chat goals when the assigned computer reports that capability.
