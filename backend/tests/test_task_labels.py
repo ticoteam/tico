@@ -56,12 +56,12 @@ def test_a_public_roadmap_label_takes_an_approval_both_ways_and_is_never_applied
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
     preview = post(api, "tasks/" + item["id"] + "/publication-preview", {"labels": ["roadmap"]}, token=token)
     approval = post(api, "approvals", {"kind": "publish", "task_id": item["id"], "payload": preview["payload"]}, token=token)
-    label(api, item["id"], ["roadmap"], token, expected=422, approval_id=approval["id"])   # not decided yet
+    label(api, item["id"], ["roadmap"], token, expected=403, approval_id=approval["id"])   # not decided yet
     post(api, "approvals/" + approval["id"], {"decision": "approved"})
     assert label(api, item["id"], ["roadmap"], token, approval_id=approval["id"])["labels"] == ["roadmap"]
     # Taking it off the roadmap is checked the same way, and an approval is used once.
     label(api, item["id"], [], token, expected=403)
-    label(api, item["id"], [], token, expected=422, approval_id=approval["id"])
+    label(api, item["id"], [], token, expected=403, approval_id=approval["id"])
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == ["roadmap"]
     # A team that does not ask bots for approvals leaves the public labels to a person.
     post(api, "roadmaps/settings", {"bot_public_approval": False})
@@ -118,6 +118,16 @@ def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats
         label(api, ticket["id"], ["qa"], token, expected=403)
     assert state(api, "cpo") == "active"
     assert sum(rule == "label" for rule, _ in refusals(api, "cpo")) == H.QUARANTINE_AT + 2, "each is still recorded"
+    # Retrying a public label with an approval that is not decided yet is the same known refusal.
+    public_setup(api)
+    own = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap"})
+    preview = post(api, "tasks/" + own["id"] + "/publication-preview", {"labels": ["roadmap"]}, token=token)
+    pending = post(api, "approvals", {"kind": "publish", "task_id": own["id"], "payload": preview["payload"]}, token=token)
+    for _ in range(H.QUARANTINE_AT + 2):
+        refused = label(api, own["id"], ["roadmap"], token, expected=403, approval_id=pending["id"])["error"]
+    assert refused["code"] == "label" and "does not cover this change" in refused["detail"]
+    assert get(api, "tasks/" + own["id"])["task"]["labels"] == [] and state(api, "cpo") == "active"
+    assert sum(rule == "label" for rule, _ in refusals(api, "cpo")) == 2 * (H.QUARANTINE_AT + 2)
     item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x"})
     for _ in range(H.QUARANTINE_AT + 1):
         r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 992}, headers=headers(token))

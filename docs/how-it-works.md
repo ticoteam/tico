@@ -93,7 +93,7 @@ A person's message, note or task comment to a paused or quarantined bot is kept 
 quarantined bot, so is its manager bot's (the bot it reports to on the org chart); any other bot, and any bot
 writing to a bot a person paused, still cannot. When a
 quarantine lifts, by the cooldown or by a person or BotOps clearing it, Tico leaves the bot a quiet note that its
-next run carries: the refusal that stopped it, and "Do not retry this action; leave a note for a person if you
+next run carries ahead of any older notes: the refusal that stopped it, and "Do not retry this action; leave a note for a person if you
 still need it."
 
 ## The three places

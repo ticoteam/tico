@@ -2990,7 +2990,17 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     public = [k for k in changed if k in settings["labels"]]
     flow = [k for k in changed if k in WORKFLOW_LABELS]
     if public and settings["bot_public_approval"] and approval_id and not flow:
-        approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
+        # An approval that is pending, spent or for other labels is still this label refusal: a bot retrying
+        # it would otherwise count every retry and quarantine itself, as before.
+        try:
+            approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
+        except Refused as exc:
+            if exc.rule != "approval":
+                raise
+            refuse(conn, actor, "label",
+                   f"approval {approval_id} does not cover this change: a publish approval is used once, must be "
+                   f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
+                   f"label the task keeps; request a new one, or ask a person on the {teams} teams", task=row["id"])
         return True
     held = []
     if flow:
@@ -5559,10 +5569,11 @@ def note_cancel(conn, actor, note_id, human=False):
 
 
 def notes_waiting(conn, bot, limit=50):
-    """The notes waiting for `bot` (a slug), oldest first."""
+    """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
+    (quarantine_lifted_note) must reach the next run even behind a full backlog."""
     return _rows(conn.execute(
-        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} ORDER BY n.created,n.id LIMIT ?",
-        ("bot:" + bot, limit)))
+        f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL} "
+        f"ORDER BY n.from_actor<>?,n.created,n.id LIMIT ?", ("bot:" + bot, KEEPER, limit)))
 
 
 def notes_waiting_counts(conn, bots, limit=500):

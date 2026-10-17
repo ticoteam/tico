@@ -459,7 +459,8 @@ tickets), and only when it can already read the task. Two kinds of tag keep thei
 both to add and to remove: a tag on a public roadmap (Settings → Public roadmap) needs the bot's
 exact approved publish approval, as public text does ([Roadmaps](roadmaps.md)), or a mover when the
 team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the task, so only a
-mover changes them. A refusal says which tags need a person or an approval and why. It counts
+mover changes them. A refusal says which tags need a person or an approval and why; an approval that is
+not decided yet, already used or for other tags is the same refusal. It counts
 toward the bot's quarantine once per task an hour, so retrying it cannot quarantine the bot; any
 other refusal counts as before. Lane and number stay a mover's, and nothing here makes a bot a
 mover. Creating and editing a tag is for those movers or that tag's owner, including
