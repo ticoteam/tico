@@ -10,13 +10,30 @@
 # Health checks probe every 2 seconds while a container starts (Docker 25+), so an update sees it healthy at once.
 # Layer order is for release speed: system packages, tools and the venv come first, and the source tree is
 # copied last, so a release that changes only source rebuilds one small layer per image.
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+ARG PYTHON_IMAGE=python:3.15.0-slim-trixie@sha256:d802f03223b9e00604cd54574bcac1a4638914c43683d3f0afd6ebee35f25313
 
 FROM ${PYTHON_IMAGE} AS download
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/versions.env /tmp/versions.env
 COPY docker/fetch-tool.sh /usr/local/bin/fetch-tool
+
+# SQLite at SQLITE_VERSION (docker/versions.env), built from the amalgamation: Debian trixie ships 3.46.1.
+FROM download AS sqlite
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/sqlite.sh /usr/local/bin/tico-sqlite
+RUN tico-sqlite build /out
+
+# What every image below starts from: the Python image with that SQLite in place of Debian's, checked here (the
+# build fails unless Python's sqlite3 reports it), and libyaml for PyYAML's C loader (backend/onboarding.py).
+FROM ${PYTHON_IMAGE} AS python
+RUN apt-get update && apt-get install -y --no-install-recommends libyaml-0-2 \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,from=sqlite,source=/out,target=/tmp/sqlite \
+    --mount=type=bind,source=docker/versions.env,target=/tmp/versions.env \
+    --mount=type=bind,source=docker/sqlite.sh,target=/tmp/sqlite.sh \
+    sh /tmp/sqlite.sh install /tmp/sqlite
 
 FROM download AS litestream
 RUN fetch-tool litestream /out
@@ -31,7 +48,11 @@ FROM ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef302
 
 # The Python dependencies, kept apart from the source so a source change reuses this layer. uv installs the same
 # pinned requirements as pip, about ten times faster; it is only mounted here, so no image ships it.
-FROM ${PYTHON_IMAGE} AS venv
+FROM python AS venv
+# A compiler and libyaml headers for any package without a wheel for this Python (PyYAML 6.0.3 on 3.15); this
+# stage is not shipped, only its venv.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libyaml-dev \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/tico/.venv
 COPY backend/requirements.txt /tmp/requirements.txt
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
@@ -40,7 +61,7 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
 
 FROM docker:cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca AS dockercli
 
-FROM ${PYTHON_IMAGE} AS updater
+FROM python AS updater
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY LICENSE NOTICE /usr/share/doc/tico/
@@ -56,7 +77,7 @@ CMD ["python", "/usr/local/bin/tico-updater"]
 
 # What both the server and the runner run: this source tree, checked against the shared venv. The two images
 # copy it after their system packages, so those layers stay cached across releases.
-FROM ${PYTHON_IMAGE} AS source
+FROM python AS source
 ARG TICO_VERSION=dev
 ARG TICO_COMMIT
 ARG TICO_REPOSITORY
@@ -84,12 +105,12 @@ PY
 RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
-    .venv/bin/python -c 'import backend.app, runner.connectors, runner.close_calls, runner.importers.service, clients.environments' \
+    .venv/bin/python -c 'import backend.app, runner.connectors, runner.close_calls, runner.importers.service, clients.environments, yaml; yaml.CSafeLoader' \
     && .venv/bin/python -m compileall -q backend runner clients
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
-FROM rust:1.92.0-slim-bookworm@sha256:f1f73538ebe623fd3673a35aff3df358ae1084c64c55646516e5b17b321b6c9b AS runner-bin
+FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
@@ -99,11 +120,11 @@ COPY runner/harnesses /src/runner/harnesses
 COPY LICENSE /src/LICENSE
 RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner
 
-FROM ${PYTHON_IMAGE} AS runner
+FROM python AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git curl openssh-client build-essential ripgrep jq procps \
-      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libgbm1 \
-      libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+      libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 \
+      libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
       libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 fonts-liberation \
       xvfb x11vnc matchbox-window-manager \
     && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix \
@@ -111,6 +132,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10002 ticorun \
     && useradd --uid 10002 --gid ticorun --home-dir /home/runner --no-create-home --shell /bin/bash ticorun \
     && useradd --uid 10003 --gid ticorun --home-dir /home/runner --no-create-home --shell /bin/bash bot
+# The SQLite check again, after this image's own apt installs.
+RUN --mount=type=bind,source=docker/versions.env,target=/tmp/versions.env \
+    --mount=type=bind,source=docker/sqlite.sh,target=/tmp/sqlite.sh \
+    sh /tmp/sqlite.sh check
 COPY --from=node /opt/node /opt/node
 COPY --from=gh /out/gh /usr/local/bin/gh
 # The runner (TICO_RUNNER_BIN): docker/runner-entrypoint.sh enrolls with it and execs it.
@@ -148,18 +173,22 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s -
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
-FROM rust:1.92.0-slim-bookworm@sha256:f1f73538ebe623fd3673a35aff3df358ae1084c64c55646516e5b17b321b6c9b AS screen-bin
+FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS screen-bin
 WORKDIR /src/relay-rs
 COPY LICENSE /src/LICENSE
 COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
 COPY relay-rs/src ./src
 RUN cargo build --release --locked && install -D -m 0755 target/release/tico-screen-relay /out/tico-screen-relay
 
-FROM ${PYTHON_IMAGE} AS server
+FROM python AS server
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 tico \
     && useradd --uid 10001 --gid tico --home-dir /data --no-create-home --shell /usr/sbin/nologin tico
+# The SQLite check again, after this image's own apt installs.
+RUN --mount=type=bind,source=docker/versions.env,target=/tmp/versions.env \
+    --mount=type=bind,source=docker/sqlite.sh,target=/tmp/sqlite.sh \
+    sh /tmp/sqlite.sh check
 COPY --from=litestream /out/litestream /usr/local/bin/litestream
 COPY --from=screen-bin /out/tico-screen-relay /usr/local/bin/tico-screen-relay
 COPY docker/entrypoint.sh /usr/local/bin/tico-entrypoint
