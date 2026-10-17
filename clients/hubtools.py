@@ -2815,25 +2815,30 @@ def update_post(api, args):
 @tool("hub_update_redo", "Ask the bots again for a past day's update in the current shape, such as last "
       "Friday's week in review as slides (the owner). Every active bot with that update on, or only `bots`.",
       {"day": _s("YYYY-MM-DD"), "kind": _s("daily or weekly (default weekly)", enum=["daily", "weekly"]),
-       "bots": {"type": "array", "items": {"type": "string"}, "description": "Only these bots"}},
+       "bots": {"type": "array", "items": {"type": "string"}, "description": "Only these bots"},
+       "managers": {"type": "boolean", "description": "With bots: also the bots above them, so their roll-up is rewritten"}},
       required=("day",), writes=True)
 def update_redo(api, args):
-    fields = (("day", args["day"]), ("kind", args.get("kind")), ("bots", args.get("bots") or None))
+    fields = (("day", args["day"]), ("kind", args.get("kind")), ("bots", args.get("bots") or None),
+              ("managers", True if args.get("managers") else None))
     return api.post("updates/redo", {k: v for k, v in fields if v is not None}, key=_key(args))
 
 
-@tool("hub_update_list", "The bots' updates, newest first, with your read state: what each bot did, does "
-      "next and needs from you. `unread` for what you have not read; `missed` lists bots that did not report.",
-      {"kind": _s("daily or weekly", enum=["daily", "weekly"]), "bot": _s("One bot's updates"),
+@tool("hub_update_list", "Updates from bots and people, newest first, with your read state: what each did, does "
+      "next and needs from you. `unread` for what you have not read; `missed` lists bots that did not report; "
+      "`scope` direct for only your direct reports on the org chart.",
+      {"kind": _s("daily or weekly", enum=["daily", "weekly"]), "bot": _s("One author's updates: a bot slug or human:<id>"),
+       "scope": _s("all (default) or direct: only your direct reports", enum=["all", "direct"]),
        "unread": {"type": "boolean", "description": "Only what you have not read"},
        "before": _s("Older than this created time (paging)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
 def updates_list(api, args):
-    return api.get("updates", kind=args.get("kind"), bot=args.get("bot"),
+    return api.get("updates", kind=args.get("kind"), bot=args.get("bot"), scope=args.get("scope"),
                    unread=("true" if args.get("unread") else None), before=args.get("before"), limit=args.get("limit"))
 
 
-@tool("hub_update_show", "One update in full with its thread: your replies and the bot's answers.",
+@tool("hub_update_show", "One update in full with its thread: your replies and the bot's answers, and in `inputs` "
+      "the reports' updates it was written from that you may read.",
       {"update": _s("Update id")}, required=("update",))
 def update_show(api, args):
     return api.get("updates/" + args["update"])

@@ -56,6 +56,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     page.on('pageerror', e => errors.push(e.message));
     // Every value the rail badge shows, in order: seen-is-read can lower it within a second of the first paint.
     await page.addInitScript(() => {
+      localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cjs
       window.__badges = [];
       new MutationObserver(() => {
         const b = document.querySelector('.side-scroll [data-upd-badge]');

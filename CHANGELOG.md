@@ -8,6 +8,29 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
+  everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
+  update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
+  `hub update list --scope direct` (and `scope=direct` on the API) keeps only your direct reports on the org chart,
+  the one level that raises alerts.
+- Updates roll up the org chart. Tico asks the bots lowest on the chart first. A manager is asked once each of its
+  direct reports has posted, missed or skipped, or 90 minutes after it was first held for them, whichever comes first. Its
+  request carries its reports' updates and names who had none, so its update sums up the team in its own words and
+  links the updates it was written from. Friday's week in review rolls up the same way. Redoing a past day can take
+  the managers above too (`hub update redo --bot X --with-managers`).
+- Each person's update is drafted for them, labelled **Drafted by Assistant**. Once the bots and the person's reports
+  are in, Tico writes the draft with one call to the company's own model. That call gets only what every member can
+  already see: their shared tasks and goals, the status changes, comments and answers they made on those tasks,
+  the meetings they were in that are not private, and their reports' updates. Approvals, private tasks, restricted
+  bots and Assistant chats are never part of it. The draft posts at once as theirs, and they can edit or replace it
+  all day; once they have posted words of their own that day, it is never drafted. **Assistant drafts my update** on a person's page turns it off.
+- **Updates** shows the day as the org chart. Your card is on top, with **Write your update** or **Edit**. Each card
+  with reports has a small icon that opens its reports' cards, and theirs below. You see the cards below you by
+  default, and **Whole org** shows the chart from the top (the choice is kept). The badge and unread dots count only
+  your direct reports, so a report's report never alerts. **List** keeps the plain newest-first feed. On Friday the
+  **Weekly** tab has your week in review to write or edit as its slides (goal, done, focus, blockers, KPIs). A
+  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card;
+  `hub update show` lists them too, and you only see those you may read.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -23,6 +46,8 @@ All notable changes to Tico are recorded here. The format follows
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
 
 ### Changed
+- Faster image handling and startup with Pillow 13, plus pydantic 2.14, pypdf 6.21, Starlette 1.8 and Uvicorn 0.54.
+  Python and browser tests use one Playwright version (1.64), so they share one Chromium and WebKit.
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -39,6 +64,9 @@ All notable changes to Tico are recorded here. The format follows
   default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
   Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
   Engineering did.
+- A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
+  **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
+  straight from Done still counts as shipped, as does the default Engineering type's Done step.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
@@ -47,6 +75,8 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
+  so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 
 ## [0.3.52] - 2026-10-16
 

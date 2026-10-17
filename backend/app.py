@@ -1810,6 +1810,8 @@ def create_app(settings=None):
                     row = {**row, "github": login}
                 if body.notify_slack_bot_messages is not None:
                     row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
+                if body.update_draft is not None:
+                    row = {**row, "update_draft": body.update_draft}
                 if body.slack_muted_bots is not None:
                     row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
                 if body.reports_to is not None:
@@ -1824,6 +1826,7 @@ def create_app(settings=None):
                                                               "notify_slack_task_done": body.notify_slack_task_done,
                                                               "github": body.github is not None,
                                                               "notify_slack_bot_messages": body.notify_slack_bot_messages,
+                                                              "update_draft": body.update_draft,
                                                               "slack_muted_bots": body.slack_muted_bots,
                                                               "reports_to": body.reports_to, "left": bool(body.left)})
                 if caller is not who:
@@ -2004,17 +2007,31 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     # ------------------------------------------------------------------ updates (backend/updates.py)
-    def update_visible(c, who, mine=False):
-        """The bots whose updates `who` may read; with `mine`, only the bots they operate (for the
-        owner, also bots with no operator), the Updates page's My bots filter (the count must match
-        what the feed shows). Updates are a bot's activity, so this is Read."""
+    def update_visible(c, who, mine=False, scope=None):
+        """The authors whose updates `who` may read: bots they have Read on, and every person on the
+        chart (`human:<id>`), since a person's update is for the whole company. An external agent
+        (`who.agent`) is outside the company and sees only its bots. With `mine`, only
+        the bots they operate (for the owner, also bots with no operator) and their own update, the
+        Updates page's My bots filter (the count must match what the feed shows). With
+        `scope=direct`, only their direct reports on the org chart: the one level that alerts."""
         readable = {slug for slug, level in auth.bot_accesses(c, who).items() if level["read"]}
-        if not mine:
-            return readable
-        pid = H.actor_id(who.actor)
-        operators = {r[0]: r[1] for r in c.execute("SELECT bot, operator FROM bot_config")}
-        return {slug for slug in readable if operators.get(slug) == pid
-                or (not operators.get(slug) and who.role == "owner")}
+        if who.role in ("owner", "human") or (who.role == "bot" and not who.agent):
+            readable |= {H.human_actor(p["id"]) for p in P.visible_people(views.roster(c))}
+        if mine:
+            pid = H.actor_id(who.actor)
+            operators = {r[0]: r[1] for r in c.execute("SELECT bot, operator FROM bot_config")}
+            readable = {slug for slug in readable if slug == who.actor or operators.get(slug) == pid
+                        or (not updates.is_person(slug) and not operators.get(slug) and who.role == "owner")}
+        if scope == "direct":
+            archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+            reports = G.reports_of(who.actor, views.roster(c), views.entries(c), archived)
+            readable &= {a if H.actor_kind(a) == "human" else H.actor_id(a) for a in reports}
+        return readable
+
+    def update_scope(scope):
+        if scope not in (None, "", "all", "direct"):
+            raise Problem("scope", "scope is all or direct", 422)
+        return scope or None
 
     def readable_update_ids(c, who, ids):
         """Validate the whole personal batch before a read/archive write can mutate any row."""
@@ -2028,27 +2045,49 @@ def create_app(settings=None):
             raise Problem("not_found", "Update not found", 404)
         return ids
 
+    def require_update(c, who, row):
+        """A bot's update takes the bot's own gate (404 unseen, 403 seen without Read); a person's
+        is for everyone on the chart, so anyone else gets 404."""
+        if not updates.is_person(row["bot"]):
+            auth.require_read(c, who, row["bot"], "Update not found")
+        elif row["bot"] not in update_visible(c, who):
+            raise Problem("not_found", "Update not found", 404)
+
     @app.get("/api/v2/updates")
     def updates_list(request: Request, kind: str | None = None, bot: str | None = None, unread: bool = False,
                      before: str | None = None, limit: int = 40, mine: bool = False,
-                     archive: bool = False, include_archive: bool = False):
+                     archive: bool = False, include_archive: bool = False, scope: str | None = None):
         who = request.state.identity
         auth.domain(who)
         if kind and kind not in updates.KINDS:
             raise Problem("kind", "kind is daily or weekly", 422)
         with store.read() as c:
-            return updates.listing(c, who.actor, update_visible(c, who, mine), kind=kind, bot=bot, unread=unread,
+            return updates.listing(c, who.actor, update_visible(c, who, mine, update_scope(scope)), kind=kind, bot=bot, unread=unread,
                                    before=before, limit=max(1, min(limit, 100)), archive=archive,
-                                   include_archive=include_archive)
+                                   include_archive=include_archive, may_read=update_visible(c, who))
 
     @app.get("/api/v2/updates/unread")
-    def updates_unread(request: Request, mine: bool = False):
+    def updates_unread(request: Request, mine: bool = False, scope: str | None = None):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             from .meetings import pending_count
-            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine)),
+            return {"unread": updates.count_unread(c, who.actor, update_visible(c, who, mine, update_scope(scope))),
                     "meetings_pending": pending_count(c, who)}
+
+    @app.get("/api/v2/updates/tree")
+    def updates_tree(request: Request, kind: str = "daily", day: str | None = None, scope: str | None = None):
+        """One day's updates nested by the org chart: below you by default, or the whole chart."""
+        who = request.state.identity
+        auth.domain(who)
+        if kind not in updates.KINDS:
+            raise Problem("kind", "kind is daily or weekly", 422)
+        if scope not in (None, "", "below", "all"):
+            raise Problem("scope", "scope is below or all", 422)
+        if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise Problem("day", "day is YYYY-MM-DD", 422)
+        with store.read() as c:
+            return updates.tree(c, who.actor, update_visible(c, who), kind, day or None, scope or None)
 
     @app.get("/api/v2/updates/{uid}")
     def update_show(request: Request, uid: str):
@@ -2058,7 +2097,7 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            auth.require_read(c, who, row["bot"], "Update not found")
+            require_update(c, who, row)
             read = c.execute("SELECT 1 FROM update_reads WHERE update_id=? AND actor=?", (uid, who.actor)).fetchone()
             # A reply lands in the replier's own room with the bot; show only rooms this caller may read.
             rooms_ok = {}
@@ -2072,6 +2111,7 @@ def create_app(settings=None):
                         rooms_ok[cid] = False
                 return rooms_ok[cid]
             thread = [m for m in updates.thread(c, uid) if readable(m)]
+            row = updates.with_inputs(c, row, update_visible(c, who))
             return {"update": {**row, "read": bool(read), "archived": updates.archived(c, who.actor, uid)},
                     "thread": thread}
 
@@ -2079,12 +2119,18 @@ def create_app(settings=None):
     def update_post(request: Request, body: M.UpdatePost):
         who = request.state.identity
         def work(c):
-            if who.role != "bot":
-                raise Problem("identity", "Only a bot posts an update", 403)
+            # A bot posts its own; a person posts their own, for today, as `human:<id>`. A person's
+            # draft is written by the server (updates.write_draft), never posted through here.
+            if who.role == "bot":
+                author = H.actor_id(who.actor)
+            elif who.role in ("owner", "human") and not who.via:
+                author = who.actor
+            else:
+                raise Problem("identity", "A bot or a person posts their own update", 403)
             slides = body.slides.model_dump(exclude_none=True) if body.slides else None
-            updates.check_day(c, H.actor_id(who.actor), body.day)
-            return {"update": updates.post(c, H.actor_id(who.actor), body.body, kind=body.kind, day=body.day,
-                                           slides=slides)}
+            updates.check_day(c, author, body.day)
+            return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
+                                           replace_draft=body.replace_draft)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/redo")
@@ -2093,7 +2139,7 @@ def create_app(settings=None):
         who = request.state.identity
         owner_only(who, "asks the bots to redo an update")
         def work(c):
-            return {"kind": body.kind, "day": body.day, "bots": updates.redo(c, body.kind, body.day, body.bots)}
+            return {"kind": body.kind, "day": body.day, "bots": updates.redo(c, body.kind, body.day, body.bots, body.managers)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/updates/read")
@@ -2131,7 +2177,9 @@ def create_app(settings=None):
             row = updates.one(c, uid)
             if not row:
                 raise Problem("not_found", "Update not found", 404)
-            auth.require_read(c, who, row["bot"], "Update not found")
+            require_update(c, who, row)
+            if updates.is_person(row["bot"]):
+                raise Problem("reply", "A person's update takes no replies here; message them instead", 422)
             # A reply is both a comment on the update and a message in the bot's
             # chat, so the bot's session gets it and it shows in both places.
             text = f"Re your update \"{row['headline']}\": {body.text}"

@@ -322,6 +322,34 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
     return engine
 
 
+def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
+    """Writing on the company's own provider: `write(system, user)` sends those two texts and nothing
+    else (no tools, no memory, no history) and returns the JSON object the model answered with."""
+    if provider not in LLM_URLS or not api_key or not model:
+        raise JudgeError("unconfigured", "no provider key or model to write with")
+    opener = opener or urllib.request.urlopen
+
+    def write(system, user):
+        try:
+            with opener(llm_request(provider, api_key, model, system, user), timeout=timeout) as response:
+                text = llm_text(provider, json.load(response)).strip()
+        except urllib.error.HTTPError as exc:
+            raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code, retryable=True)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+            raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
+        if text.startswith("```"):
+            text = text.strip("`").removeprefix("json").strip()
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            raise JudgeError("shape", "the model did not answer with JSON")
+        if not isinstance(parsed, dict):
+            raise JudgeError("shape", "the model did not answer with an object")
+        return parsed
+    write.model = model
+    return write
+
+
 def through_hub(client):
     """The hub's `POST /api/v2/decisions` with a turn's credential (`clients.tico.Client`)."""
     def engine(state, questions, label=None):
