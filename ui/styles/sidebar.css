@@ -87,6 +87,9 @@ button.nav-librarian{border:0;background:none;cursor:pointer;padding:0}
 #account::after{content:'⌃';margin-left:auto;padding:0 4px}
 #account-menu{position:absolute;bottom:calc(100% + 8px);left:0;right:0;min-width:150px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:21}
 #account .account-email{overflow:hidden;text-overflow:ellipsis}
+/* At least as wide as the account button, wider when an item needs it (Take the tour is a button in it). */
+#account-menu{width:max-content;min-width:100%;box-sizing:border-box}#account-menu .nav-link{white-space:nowrap}
+#account-menu button.nav-link{width:100%;border:0;background:none;text-align:left;cursor:pointer}#account-menu button.nav-link:hover{background:var(--surface2)}
 .tree,.tree ul{list-style:none;margin:0;padding:0}
 .tree ul{margin-left:12px;border-left:1px solid var(--line);padding-left:2px}
 .tree li.dept{margin-top:4px}

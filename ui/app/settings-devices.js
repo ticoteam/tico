@@ -429,7 +429,8 @@ function renderSettingsMachines() {
       const id = screenBox.dataset.computerScreen, before = SETTINGS_DATA.machines.find(m => m.id === id)?.screen || 'off';
       screenBox.querySelectorAll('input').forEach(input => { input.disabled = true; });
       try {
-        await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
+        const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode: event.target.value});
+        screenSaved(id, {screen: event.target.value, ...saved});
         toast(event.target.value === 'off' ? 'Screen off' : `Screen: ${event.target.value}`);
         await loadSettings();
       } catch (error) {

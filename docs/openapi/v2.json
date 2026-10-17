@@ -23438,6 +23438,18 @@
               }
             ],
             "title": "Bot Public Approval"
+          },
+          "suggestions_bot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Bot"
           }
         },
         "additionalProperties": false,

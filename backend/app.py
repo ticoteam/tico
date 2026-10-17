@@ -272,7 +272,12 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"]
+        def reason(error):
+            if (error["type"] == "extra_forbidden" and tuple(error["loc"])[-1:] == ("manager",)
+                    and request.url.path.startswith("/api/v2/task-types")):
+                return M.MANAGER_FIXED
+            return error["msg"]
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + reason(error)
                            for error in exc.errors())
         if request.url.path.endswith("/go-live") and any("routines" in error["loc"] for error in exc.errors()):
             detail += ". routines must be " + M.ROUTINES_SHAPE
