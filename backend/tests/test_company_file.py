@@ -257,6 +257,41 @@ def test_10_a_password_in_json_inside_a_json_string_goes_whole():
     assert "Kumquat" not in C.to_yaml(draft, CREATED)
 
 
+# A label at the end of a longer name, as an env file writes it: an explicit = or : and the whole value goes.
+PREFIXED = ["DB_PASSWORD", "STRIPE_API_KEY", "GITHUB_TOKEN", "api_token", "MY_APP_CLIENT_SECRET"]
+ASSIGNED = ["{l}={v}", "{l}: {v}", "export {l}={v}", '{l}="{v}"', "{l}='{v}'", '{{"{l}": "{v}", "name": "Ann"}}',
+            "{l}={v}\nNAME=Ann"]
+
+
+@pytest.mark.parametrize("label", PREFIXED)
+@pytest.mark.parametrize("value", ["Q", "Qz", "5", "Qz\"x"])
+@pytest.mark.parametrize("form", ASSIGNED)
+def test_10_a_label_ending_a_longer_name_loses_its_value(label, value, form):
+    if '"{v}"' in form:
+        value = value.replace('"', '\\"')
+    text = "Set " + form.format(l=label, v=value) + " then go"
+    out, hit = C.scrub(text)
+    assert hit and out == "Set " + form.format(l=label, v="[removed]") + " then go"
+    assert C.scrub(out) == (out, False)
+
+
+@pytest.mark.parametrize("text", [
+    "PASSWORD_FILE=/run/pw", "TOKEN_COUNT=5", "MAX_TOKENS=5", "x_api_keys=abc", "DB_PASSWORD is set on the install",
+    "token: 5 per user", "Token: 120 a day", "the api_key is optional",
+])
+def test_10_names_that_only_contain_a_label_are_left_alone(text):
+    assert C.scrub(text) == (text, False)
+
+
+def test_10_an_env_line_is_cut_in_the_turn_and_the_file():
+    draft = started()
+    draft["company"]["about"] = "Our .env: DB_PASSWORD=Qz STRIPE_API_KEY='ab' GITHUB_TOKEN: 5 NAME=Ann"
+    gone = "Our .env: DB_PASSWORD=[removed] STRIPE_API_KEY='[removed]' GITHUB_TOKEN: [removed] NAME=Ann"
+    turn = C.Turn(draft, TODAY)
+    assert turn.keys_removed and turn.finish()["company"]["about"] == gone
+    assert yaml.safe_load(C.to_yaml(draft, CREATED))["company"]["about"] == gone
+
+
 @pytest.mark.parametrize("text", [
     "The token is optional", "the api key is set on your install", "Our secret is good coffee", "token: 5 per user",
     "Token: 120 a day", '{"token": 12}', "password:\nname: Ann", '{"password": ""}', "password: [removed]",

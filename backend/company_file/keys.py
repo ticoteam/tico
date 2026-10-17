@@ -27,14 +27,17 @@ PATTERNS = [re.compile(p) for p in (
 # has none; separator and value stay on the label's line.
 # Inside a JSON string the value's own escapes are escaped again: its \" is \\\", so a backslash pair there takes the
 # token after it, and only a bare \" closes the value.
-LABELLED = re.compile(r"(?i)(\b(?:password|passwd|passcode|pwd|secret|token|api[ _-]?key|access[ _-]?key|"
-                      r"client[ _-]?secret|private[ _-]?key)\b(?:\\?[\"'])?[ \t]*(?:[:=]|\bis\b)[ \t]*)"
+# A label may end a longer identifier, as in an env file (DB_PASSWORD=x, STRIPE_API_KEY: x); such a label needs an
+# explicit `=` or `:`.
+LABELLED = re.compile(r"(?i)((?:(\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_)|\b)(?:password|passwd|passcode|pwd|secret|token|"
+                      r"api[ _-]?key|access[ _-]?key|client[ _-]?secret|private[ _-]?key)\b(?:\\?[\"'])?[ \t]*"
+                      r"([:=]|\bis\b)[ \t]*)"
                       r"(\\\"(?:\\\\(?:\\.|[^\\\n])|\\[^\"\\\n]|[^\\\n])*(?:\\\"|(?=\n)|\Z)|"
                       r"\"(?:[^\"\\\n]|\\.)*(?:\"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.|'')*(?:'|(?=\n)|\Z)|"
                       r"(?!\[removed\])[^\s,;}\]]+)")
 PASSWORD = re.compile(r"(?i)\s*[\"']?(?:password|passwd|passcode|pwd)\b")
-LABELLED_IS = re.compile(r"(?i)\bis\b")
-# "token: 5 per user" is a count, not a token: one to three digits after a bare `token` label are kept.
+# "token: 5 per user" is a count, not a token: one to three digits after a bare `token` label are kept (API_TOKEN=5 is
+# not a count).
 COUNT = re.compile(r"(?i)token\W*$")
 QUOTES = ('\\"', '"', "'")
 # A long run of token characters with letters and digits mixed, and close to random.
@@ -52,13 +55,14 @@ def _random(word):
 
 
 def _labelled(match):
-    label, value = match.group(1), match.group(2)
-    # "the token is optional": with "is", only a password-like label counts.
-    if LABELLED_IS.search(label) and not PASSWORD.match(label):
+    label, prefix, separator, value = match.groups()
+    # "the token is optional": with "is", only a password-like label counts, and never one inside an identifier.
+    if separator.lower() == "is" and (prefix or not PASSWORD.match(label)):
         return match.group(0)
     quote = next((q for q in QUOTES if len(value) >= 2 * len(q) and value.startswith(q) and value.endswith(q)), "")
     inner = value[len(quote):len(value) - len(quote)]
-    if not inner or inner == MARK or (not quote and inner.isdigit() and len(inner) <= 3 and COUNT.search(label)):
+    if not inner or inner == MARK or (not quote and not prefix and inner.isdigit() and len(inner) <= 3
+                                           and COUNT.search(label)):
         return match.group(0)
     return label + quote + MARK + quote
 
