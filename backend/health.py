@@ -977,7 +977,7 @@ def _signin(settings):
         return _check("signin", "Sign-in", "ok", "Local sign-in on this computer.")
     return _check("signin", "Sign-in", "warn",
                   "No identity proxy is configured for this address, so people cannot sign in safely.",
-                  [_fix("Sign-in settings", "#/settings", "access")])
+                  [_fix("Sign-in settings", "https://github.com/ticoteam/tico/blob/main/docs/install.md#sign-in")])
 
 
 def _server_settings(c, settings):

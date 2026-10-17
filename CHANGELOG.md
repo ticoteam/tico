@@ -133,6 +133,9 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
   `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
+- Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
+  about sign-in. It now opens the sign-in section of the install guide. Every link that names a Settings tab is now checked
+  against the tabs that exist, and chat's and the Goal Manager's links to a tab are tested by clicking them.
 - BotOps and Assistant Confirm cards read in plain words: a repository change says who gets what and what they lose
   ("Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."), never
   `PUT /api/v2/...` or a word like "chosen" or "all"; any other card without a sentence of its own gets a plain one, and
