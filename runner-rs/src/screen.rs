@@ -71,6 +71,8 @@ const HUB_EVERY: Duration = Duration::from_secs(300);
 const BACKOFF_MAX_S: u64 = 60;
 /// Xvfb failing this many starts in a row is reported as the reason the screen is unavailable.
 const XVFB_GIVE_UP: u32 = 3;
+/// How long a new Xvfb has to serve its display before it counts as a failed start.
+const XVFB_WAIT: Duration = Duration::from_secs(10);
 
 // ------------------------------------------------------------------------------------------ the local lock
 
@@ -459,6 +461,11 @@ pub fn start(config_path: PathBuf, client: Client) {
 }
 
 async fn tick(procs: &mut [Proc]) {
+    tick_in(procs, Path::new(X_ROOT), XVFB_WAIT).await
+}
+
+/// One supervisor step, with X servers' files under `root`.
+async fn tick_in(procs: &mut [Proc], root: &Path, wait: Duration) {
     let s = shared();
     let dir = s.dir.lock().unwrap().clone();
     let dir = match dir {
@@ -481,7 +488,6 @@ async fn tick(procs: &mut [Proc]) {
             p.stop().await; // they draw on a display that is gone
         }
         // A display another X server holds is never started on, so its socket is never taken for ours.
-        let root = Path::new(X_ROOT);
         let n = match choose(root, std::env::var("TICO_SCREEN_DISPLAY").ok().as_deref()) {
             Ok(n) => n,
             Err(reason) => {
@@ -501,7 +507,7 @@ async fn tick(procs: &mut [Proc]) {
         // Up once its socket is there and its lock names it; Xvfb removes a stale lock from a display whose server is gone.
         let pid = xvfb.child.as_ref().and_then(|c| c.id());
         let ready = || display_socket(root, n).exists() && ours(root, n, pid);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + wait;
         while !ready() && Instant::now() < deadline && xvfb.running() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -898,6 +904,50 @@ mod tests {
         }
     }
 
+    /// An "Xvfb" that stays alive without serving a display of its own: it records its pid, then (when `foreign`)
+    /// writes the display's lock naming another live process (this test) and puts a socket file in place.
+    #[cfg(target_os = "linux")]
+    fn stalled_xvfb(root: &Path, foreign: bool) -> Proc {
+        let r = root.display();
+        let other = if foreign { format!("printf '%10d\n' {} > {r}/.X$n-lock; : > {r}/.X11-unix/X$n; ", std::process::id()) } else { String::new() };
+        let script = format!("n=${{1#:}}; echo $$ > {r}/xvfb.pid; {other}exec sleep 30");
+        Proc::new("sh", &["-c", &script, "sh", AT_DISPLAY])
+    }
+
+    /// The supervisor's own checks after a start: a display is up only when its lock names our Xvfb, and an Xvfb that
+    /// stays alive without serving is stopped and counted as a failed start, also on the next tick.
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn an_xvfb_that_does_not_serve_its_own_display_is_never_taken_as_up() {
+        let s = shared();
+        s.hub.store(true, Ordering::SeqCst);
+        s.on.store(true, Ordering::SeqCst);
+        for foreign in [false, true] {
+            let root = x_root();
+            let mut procs = children();
+            procs[0] = stalled_xvfb(&root, foreign);
+            tick_in(&mut procs, &root, Duration::from_millis(300)).await;
+            let pid: i32 = std::fs::read_to_string(root.join("xvfb.pid")).unwrap().trim().parse().unwrap();
+            assert!(procs[0].child.is_none(), "foreign={foreign}: the stalled Xvfb is still ours");
+            assert!(!alive(pid), "foreign={foreign}: the stalled Xvfb (pid {pid}) was not stopped");
+            assert_eq!(procs[0].failures, 1, "foreign={foreign}");
+            // The next tick neither takes it as up nor starts anything on it.
+            tick_in(&mut procs, &root, Duration::from_millis(300)).await;
+            assert_eq!(display(), None, "foreign={foreign}");
+            assert!(!s.up.load(Ordering::SeqCst), "foreign={foreign}");
+            assert!(!offers(readiness().as_ref()), "foreign={foreign}: {:?}", readiness());
+            assert!(procs[1..].iter().all(|p| p.child.is_none()), "foreign={foreign}: a window manager or x11vnc started");
+            assert_eq!(procs[0].failures, 1, "foreign={foreign}");
+            if foreign {
+                // :99 is now the other server's, so the next start moves on to :100.
+                assert!(holder(&root, FIRST_DISPLAY).is_some_and(|h| h.pid == Some(std::process::id() as i32)));
+                assert_eq!(*s.display.lock().unwrap(), Some(FIRST_DISPLAY + 1));
+            }
+            stop_all(&mut procs).await;
+            *s.failure.lock().unwrap() = None;
+        }
+    }
+
     /// The real programs on this computer's /tmp: another Xvfb holds the first free display, and the screen comes up
     /// on the next one; then TICO_SCREEN_DISPLAY picks one exactly. Needs Xvfb, x11vnc and a window manager:
     /// `cargo test screen::tests::live -- --ignored`.
@@ -907,8 +957,11 @@ mod tests {
     async fn live_the_screen_takes_the_next_free_display_or_the_override() {
         let root = Path::new(X_ROOT);
         let taken = choose(root, None).unwrap();
-        let other = Other(std::process::Command::new("Xvfb").args([format!(":{taken}").as_str(), "-nolisten", "tcp"]).spawn().unwrap());
+        let mut other = Other(std::process::Command::new("Xvfb").args([format!(":{taken}").as_str(), "-nolisten", "tcp"]).spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !(display_socket(root, taken).exists() && holder(root, taken).is_some()) {
+            assert!(other.0.try_wait().unwrap().is_none(), "the other Xvfb on :{taken} exited");
+            assert!(Instant::now() < deadline, "the other Xvfb never served :{taken}");
             std::thread::sleep(Duration::from_millis(50));
         }
         let s = shared();
