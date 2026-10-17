@@ -27,11 +27,15 @@ RUN fetch-tool node /opt/node
 FROM download AS gh
 RUN fetch-tool gh /out
 
-# The Python dependencies, kept apart from the source so a source change reuses this layer.
+FROM ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 AS uv
+
+# The Python dependencies, kept apart from the source so a source change reuses this layer. uv installs the same
+# pinned requirements as pip, about ten times faster; it is only mounted here, so no image ships it.
 FROM ${PYTHON_IMAGE} AS venv
 RUN python -m venv /opt/tico/.venv
 COPY backend/requirements.txt /tmp/requirements.txt
-RUN /opt/tico/.venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /tmp/requirements.txt \
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv pip install --python /opt/tico/.venv/bin/python --no-cache --compile-bytecode -r /tmp/requirements.txt \
     && chmod -R go-w,go+rX /opt/tico/.venv
 
 FROM docker:cli@sha256:018edbc908e08fcc9dbf029c812c34251e9b4719e6f71ca0e5eae2a987d014ca AS dockercli
@@ -85,7 +89,7 @@ RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
-FROM rust:1.90-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 AS runner-bin
+FROM rust:1.92.0-slim-bookworm@sha256:f1f73538ebe623fd3673a35aff3df358ae1084c64c55646516e5b17b321b6c9b AS runner-bin
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
@@ -144,7 +148,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s -
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
-FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS screen-bin
+FROM rust:1.92.0-slim-bookworm@sha256:f1f73538ebe623fd3673a35aff3df358ae1084c64c55646516e5b17b321b6c9b AS screen-bin
 WORKDIR /src/relay-rs
 COPY LICENSE /src/LICENSE
 COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
