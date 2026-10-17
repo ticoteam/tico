@@ -36,9 +36,15 @@ PY
     ext=$(python -c 'import _sqlite3; print(_sqlite3.__file__)')
     lib=$(readlink -f "$(ldd "$ext" | awk '$1 == "libsqlite3.so.0" { print $3 }')")
     [ -f "$lib" ] || { echo "$ext does not link libsqlite3.so.0" >&2; exit 1; }
-    dpkg-divert --quiet --local --rename --divert "$lib.debian" --add "$lib"
+    # Debian's copy is kept outside every loader directory: beside the new one it has the same SONAME, and
+    # ldconfig (which apt's libc-bin trigger reruns) would link libsqlite3.so.0 back to it.
+    mkdir -p /usr/lib/tico-sqlite-debian
+    dpkg-divert --quiet --local --rename --divert "/usr/lib/tico-sqlite-debian/${lib##*/}" --add "$lib"
     install -m 0644 "$2/libsqlite3.so.0" "$lib"
     ldconfig
+    for found in $(ldconfig -p | awk '$1 == "libsqlite3.so.0" { print $NF }'); do
+      [ "$(readlink -f "$found")" = "$lib" ] || { echo "the loader still finds $found" >&2; exit 1; }
+    done
     exec sh "$0" check ;;
   check)
     python - "$SQLITE_VERSION" <<'PY'
