@@ -26,7 +26,7 @@ Links to other sites, and any link that would open a new tab (links in chat and 
 default browser, and email links in your mail app. A sign-in stays in the app window from start to finish,
 whichever identity provider it goes through (Cloudflare Access with Google, Microsoft, Okta, GitHub or a one-time PIN,
 or the server's own sign-in), and so does any link you follow on its pages until you are back in Tico; **Reload**
-(Cmd+R) takes you back. Your team's own files and run logs open in a separate app window, so they keep the app's sign-in.
+(Cmd+R) takes the main window back, and closing a file or meeting window ends its sign-in. Your team's own files and run logs open in a separate app window, so they keep the app's sign-in.
 
 Tico is one ordinary window with the Mac's own title bar: drag it by its title on any page and
 resize it from any edge, down to 360 by 400 pixels. At 760 pixels wide or less the page switches to its
