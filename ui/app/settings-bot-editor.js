@@ -12,7 +12,7 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
-    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
+    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
     ${settingsCompactRow(e)}
@@ -41,6 +41,49 @@ async function settingsSetCompact(select) {
     await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: Number(select.value), expected_revision: e.revision});
     await loadSettings();
     toast(`${e.display_name} compacts at ${select.selectedOptions[0]?.textContent || select.value}`);
+  } catch (error) {
+    select.value = select.dataset.current;
+    toast(error.message, true);
+  } finally { if (select.isConnected) select.disabled = false; }
+}
+// A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
+// through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
+// computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
+// off. Everyone else reads the current value. It saves on its own, like the computer.
+function settingsAppDeliveryRow(e) {
+  // The server names the app a synced bot can be delivered through; none means the bot has no app.
+  const app = e.agent?.synced && e.app_delivery_app;
+  if (!app) return '';
+  const current = e.app_delivery?.computer || '', name = machineAppName(app);
+  const label = id => SETTINGS_DATA.machines.find(machine => machine.id === id)?.label || e.app_delivery?.computer_label || 'a computer';
+  const mine = !!S.me?.id && e.operator === S.me.id;
+  const off = 'Off (daily sync)';
+  if (!mine && !(current && settingsIsAdmin())) {
+    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.name)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
+  }
+  const own = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.operator === S.me.id) : [];
+  const options = own.map(machine => {
+    const report = machine.readiness?.appdriver?.apps?.[app];
+    const why = report?.ready === true ? '' : report ? [machineAppState(report), report.detail].filter(Boolean).join(': ') : `${name} not reported`;
+    // The chosen computer stays selectable even when its app stops being ready, so the select shows it.
+    return `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : why ? 'disabled' : ''}>${esc(machine.label)}${why ? ` · ${esc(why)}` : ''}</option>`;
+  });
+  if (current && !own.some(machine => machine.id === current)) options.push(`<option value="${esc(current)}" selected>${esc(label(current))}</option>`);
+  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.name)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
+      <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
+    </select><span></span></div>`;
+}
+async function settingsSetAppDelivery(select) {
+  const slug = select.dataset.botAppDelivery, e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === select.dataset.current) return;
+  const chosen = select.value, where = select.selectedOptions[0]?.textContent.split(' · ')[0] || 'that computer';
+  select.disabled = true;
+  try {
+    // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
+    await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
+      app_delivery: chosen ? {computer: chosen, app: select.dataset.app} : null, expected_revision: e.revision});
+    await loadSettings();
+    toast(chosen ? `${e.display_name} is delivered through the app on ${where}` : `${e.display_name} is back on the daily sync`);
   } catch (error) {
     select.value = select.dataset.current;
     toast(error.message, true);
@@ -163,6 +206,8 @@ function settingsEditBot(slug = '') {
       if (machine) { touched = true; void settingsMoveBot(machine); }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) { touched = true; void settingsSetCompact(compact); }
+      const delivery = event.target.closest('[data-bot-app-delivery]');
+      if (delivery) { touched = true; void settingsSetAppDelivery(delivery); }
     });
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js

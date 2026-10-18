@@ -8,7 +8,7 @@ import time
 
 from clients import sessions
 
-from . import check_models, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits
+from . import app_delivery, check_models, inbox_isolation, providers, routines, run_triggers, runner_versions, screen, usage_limits
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -871,7 +871,8 @@ class Execution:
             if row['operator'] != runner['operator'] and runner['operator'] != owner and not takes:
                 continue
             result.append({**dict(row), 'computer_label': runner['label'], 'profile': effective(c, row['bot'], subscription_context)[0],
-                           'config': providers.fill(company, follow(c, row['bot'], json.loads(row['config_json']), configs.get)),
+                           'config': app_delivery.job_config(providers.fill(company, follow(
+                               c, row['bot'], json.loads(row['config_json']), configs.get))),
                            'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
                            'mail_agent': bool(P.inbox_person(row['bot'], people))})
         return result
@@ -1256,6 +1257,8 @@ class Execution:
         # A bot that names no runtime or model runs on the company default, resolved here the way
         # runners/assignments resolves it: the runner starts exactly what this says.
         config = providers.fill(providers.load(c, self.store.settings), followed)
+        # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
+        config = app_delivery.job_config(config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
@@ -1752,6 +1755,8 @@ class Execution:
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
             task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
+            # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
+            same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):
                 target = msg["from_actor"]
                 replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
@@ -1957,6 +1962,18 @@ class Execution:
             # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
             from .worktree_waits import cancel_for_attempt
             cancel_for_attempt(c, aid, f"Stopped by {name}")
+        elif limited and check and not body.profile_used and (moved := check_models.move_on(
+                c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
+            # The computer's default login for the check's model is already out of quota (Health's
+            # default_login_limited): retrying it every half hour only fails again, so the check's next turn runs
+            # on its next check model at once, and goes back to its first when that login works again.
+            hit = H.now()
+            settle_status(c, row["bot"], "idle", f"{runtime} is out of quota on this computer's default login; the "
+                          f"check moved to {moved['runtime']} ({moved['model']}) at {hit[11:16]}",
+                          began=row["started"] or row["created"])
+            H.event(c, H.KEEPER, "attempt.check_moved", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
+                     "to_runtime": moved["runtime"], "to_model": moved["model"]})
         elif limited and check:
             # A check has no fallback, and its model's limit is not the bot's: hold the check alone, and leave
             # the bot's own work, its status and its Health finding to its own provider.
