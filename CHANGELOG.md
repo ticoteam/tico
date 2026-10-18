@@ -12,6 +12,15 @@ All notable changes to Tico are recorded here. The format follows
   another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
   turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
   owner's comment) and the bot's other tasks still run side by side.
+- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
+  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
+  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
+  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
+  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
+  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
+  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
+  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
+  before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
 - **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
@@ -25,17 +34,6 @@ All notable changes to Tico are recorded here. The format follows
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
-
-### Fixed
-- **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
-  the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
-  remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
-  epoch (`session_epoch`) and its bot's (`bot_session_epoch`), moved by Clear and by the session resets after a
-  model, placement or thread-mode change; when the one for its thread moves, the runner starts a new provider thread
-  from Tico's history. The thread a bot's direct chats share starts over on the next turn of any of them, while each
-  other chat keeps its own history. Without a clear the bot resumes its thread as before. After the upgrade, a thread
-  that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
-  before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ## [0.3.58] - 2026-10-18
 
