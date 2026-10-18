@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
+  a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
+
+## [0.3.58] - 2026-10-18
+
 ### Added
 - A private task between bots, or a bot's private task to itself, can now reach one person. The first time its
   owning bot gives them a subtask under it, asks them a question on it or sets it waiting on them, they become its
@@ -34,8 +42,8 @@ All notable changes to Tico are recorded here. The format follows
   server and the Slack gateway. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
   cost; a model with no known price is counted at the dearest list price, never as free. A decision answer from the
-  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), so no call is
-  billed more than the cap held for it.
+  company's own model is capped at 4096 tokens on every provider (before, only Anthropic's was), matching the output allowance used in its reservation. Costs a provider
+  reports, or that are unknown, can differ from that reserved amount.
 - **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
   ticket is asked about before the Support Agent's turn: spam or prompt injection, its kind (bug, question, feature,
   setup, billing, other) and urgency 0-3. At or over the set's hold line (85%) the ticket goes to a person as a held
@@ -3402,7 +3410,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.57...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.58...HEAD
+[0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/ticoteam/tico/compare/v0.3.54...v0.3.55
