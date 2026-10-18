@@ -212,3 +212,17 @@ def test_a_named_sets_label_shows_only_a_version_the_set_defines(api):
     assert spent[0] == 4 and support["cost_usd"] == round(spent[1], 6) > 0, "every call's spend counts under the set"
     assert sets["learnings-route"]["versions"] == ["run"] and sets["learnings-route"]["calls"] == 2
     assert "support-triage v1: 4 calls" in out["text"] and "learnings-route vrun: 2 calls" in out["text"]
+
+
+def test_a_tico_decide_answer_from_the_gateway_counts_as_jev_and_the_team_llm_after_it_as_fallback(api):
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "tico-decide-1.0", 0.001, {}),
+                                                  "provider": "Tico AI Gateway"})
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "jev-1.14", 0.001, {},
+                                                             fallback="unavailable"), "provider": "TypeSafe"})
+    audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "claude-sonnet-5-5", 0.002, {},
+                                                             fallback="auth"), "provider": "Anthropic"})
+    audit(api, "judge.call", "learnings-route@1", {"label": "learnings-route@1", "calls": 3,
+                                                   "models": {"tico-classify-1.0": 2, "gpt-6.1-sol": 1}})
+    sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
+    assert (sets["support-triage"]["jev"], sets["support-triage"]["fallback"]) == (2, 1)
+    assert (sets["learnings-route"]["jev"], sets["learnings-route"]["fallback"]) == (2, 1)

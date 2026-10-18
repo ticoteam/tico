@@ -99,18 +99,23 @@ def spread_key(qid, answer, questions):
     return None
 
 
+def _on_jev(model):
+    """Whether `model` is Jev: TypeSafe's own name, or a Tico model the Tico AI Gateway answers with on Jev."""
+    return str(model or "").lower().startswith("jev") or model in J.GATEWAY_MODELS
+
+
 def _calls(detail):
     """(answered on Jev, answered on another model, {error code: failed calls}) for one `judge.call` row."""
     if isinstance(detail.get("models"), dict):                  # one nightly learnings run: its calls added up
         models = {str(m): int(n) for m, n in detail["models"].items() if isinstance(n, int) and not isinstance(n, bool)}
-        jev = sum(n for m, n in models.items() if m.lower().startswith("jev"))
+        jev = sum(n for m, n in models.items() if _on_jev(m))
         failed = {str(code): int(n) for code, n in (detail.get("failed") or {}).items()
                   if isinstance(n, int) and not isinstance(n, bool) and n > 0} if isinstance(detail.get("failed"), dict) else {}
         return jev, sum(models.values()) - jev, failed
     calls = detail.get("calls") if isinstance(detail.get("calls"), int) and detail.get("calls") > 0 else 1
     if detail.get("error"):
         return 0, 0, {str(detail["error"]): calls}
-    return (calls, 0, {}) if str(detail.get("model") or "").lower().startswith("jev") else (0, calls, {})
+    return (calls, 0, {}) if _on_jev(detail.get("model")) else (0, calls, {})
 
 
 def _empty():
