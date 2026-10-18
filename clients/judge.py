@@ -1,4 +1,5 @@
-"""Decisions (TypeSafe's Jev is the optional provider; the question format matches OpenRouter's Decisions API),
+"""Decisions (the Tico AI Gateway's Tico Decide 1.0 is the default provider, TypeSafe's Jev an optional own key; the
+question format matches OpenRouter's Decisions API),
 the one decision primitive the hub and every bot share. The module keeps its old name, `judge`.
 
 One call takes a JSON `state` and a map of typed questions and returns a calibrated answer per
@@ -9,10 +10,12 @@ the whole contract, and it never changes:
     score    place the state on ordered levels -> {"score": float, "confidence": 0-1, "probabilities": {...}}
     noul     is this statement true          -> {"noul": probability that the answer is yes}
 
-Three ways to reach it, one signature (`engine(state, questions, label=None) -> result`):
+Four ways to reach it, one signature (`engine(state, questions, label=None) -> result`):
 
-    direct(api_key)        POST https://api.typesafe.ai/v1/systemone with the key; the hub server
-                           and the Slack gateway use this.
+    gateway(key, url)      POST the Tico AI Gateway's decisions endpoint with a gateway key, as
+                           `tico-decide-1.0`; the hub server and the Slack gateway ask it first.
+    direct(api_key)        POST https://api.typesafe.ai/v1/systemone with a customer's own TypeSafe
+                           key; the server's second choice, never set by default.
     through_hub(client)    POST /api/v2/decisions on the hub with the turn's own credential; the
                            `hub decision ask` command, the `hub_decision_ask` MCP tool and the mail CLI use
                            this, so no bot ever holds the key and every call is audited.
@@ -40,6 +43,16 @@ from pathlib import Path
 URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
+# The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. `tico-classify-1.0` is the Gateway's name
+# for a choice-mode classify; the app asks as `tico-decide-1.0` and keeps whichever of the two the Gateway answers as.
+GATEWAY_PROVIDER = "Tico AI Gateway"
+GATEWAY_MODEL = "tico-decide-1.0"
+GATEWAY_MODELS = ("tico-decide-1.0", "tico-classify-1.0")
+GATEWAY_PATH = "/v1/gateway/decisions"
+GATEWAY_TIMEOUT = 8
+TYPESAFE_PROVIDER = "TypeSafe"
+LLM_PROVIDERS = {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google", "xai": "xAI",
+                 "openrouter": "OpenRouter"}
 TYPES = ("choice", "score", "noul")
 QUESTIONS_DIR = Path(__file__).resolve().parents[1] / "questions"
 _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
@@ -218,7 +231,51 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
             raise JudgeError("shape", "TypeSafe answered with something other than an object")
         answers = check_answers(payload.get("answers"), questions)
         return {"model": str(payload.get("model") or model), "answers": answers,
-                "usage": payload.get("usage") or {}, "ms": ms}
+                "usage": payload.get("usage") or {}, "ms": ms, "provider": TYPESAFE_PROVIDER}
+    engine.model, engine.provider = model, TYPESAFE_PROVIDER
+    return engine
+
+
+def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=None):
+    """The Tico AI Gateway with a gateway key: one try of at most `timeout` seconds, no retry (the Gateway makes none
+    either; the server falls back instead). A refusal keeps the HTTP status and a code, never the Gateway's text.
+    `opener(request, timeout)` is the seam the tests use."""
+    if not api_key or not url:
+        raise JudgeError("unconfigured", "no Tico AI Gateway key or URL")
+    opener = opener or urllib.request.urlopen
+
+    def engine(state, questions, label=None):
+        validate(state, questions, label)
+        body = {"state": state, "model": model, "questions": clean(questions)}
+        if label:
+            body["label"] = label
+        request = urllib.request.Request(url, data=json.dumps(body, default=str).encode(), method="POST", headers={
+            "Authorization": "Bearer " + api_key, "Content-Type": "application/json", "Accept": "application/json"})
+        started = time.monotonic()
+        try:
+            with opener(request, timeout=timeout) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status in (401, 403):                    # unknown or revoked key
+                raise JudgeError("auth", f"the Tico AI Gateway refused the key ({status})", status)
+            if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
+                raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
+            # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
+            # caller's, and the next provider is asked (an `invalid` is never asked elsewhere).
+            raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
+                             retryable=True)
+        ms = round((time.monotonic() - started) * 1000)
+        if not isinstance(payload, dict):
+            raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
+        answers = check_answers(payload.get("answers"), questions)
+        answered = payload.get("model")
+        return {"model": answered if answered in GATEWAY_MODELS else model, "answers": answers,
+                "usage": payload.get("usage") if isinstance(payload.get("usage"), dict) else {}, "ms": ms,
+                "provider": GATEWAY_PROVIDER}
+    engine.model, engine.provider = model, GATEWAY_PROVIDER
     return engine
 
 
@@ -328,8 +385,8 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         return {"model": model, "answers": llm_answers(text, questions),
                 "usage": payload.get("usage") or payload.get("usageMetadata") or {},
-                "ms": round((time.monotonic() - started) * 1000)}
-    engine.model = model
+                "ms": round((time.monotonic() - started) * 1000), "provider": LLM_PROVIDERS[provider]}
+    engine.model, engine.provider = model, LLM_PROVIDERS[provider]
     return engine
 
 

@@ -42,6 +42,13 @@ All notable changes to Tico are recorded here. The format follows
   had no fallback and the learnings run waited up to 20 seconds with two retries per call.
 
 ### Changed
+- **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
+  (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
+  TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
+  the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
+  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
+  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
+  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
 - Screen: on a bot's page, when its computer's screen is off in Tico, the operator's or an admin's **Turn on** button
   now reads **Turn on (Control)** and turns the screen on at Control, matching a new computer's default, so they can
   drive it at once. View and Off stay choices in Settings > Computers; who sees the button and who may change the
