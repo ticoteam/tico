@@ -7,6 +7,10 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A bot's usage-limit cooldown survives other task turns starting, restoring a lease or finishing. Queued work
+  waits for recovery instead of repeatedly retrying an exhausted subscription.
+
 ### Changed
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that

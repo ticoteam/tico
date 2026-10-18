@@ -181,25 +181,27 @@ def current_task_goal(c, bot, task):
     return task_goal(c, bot, follow(c, bot, json.loads(found[0] or "{}")) if found else {}, task)
 
 
-def settle_status(c, bot, state, focus, began=None):
+def settle_status(c, bot, state, focus, claimed=None, task_id=None):
     """The status a finished or lapsed turn leaves its bot in. While another of its turns is still out,
     the bot is still at work, so an idle or crashed turn does not mark the whole bot idle or crashed;
     the held run keeps its own item in Health. A usage limit is the subscription's, so one lane's limit
-    holds for the whole bot until its cooldown passes, whatever a turn begun before it ends with; a turn
-    begun after it (a person's message, Try now) that settles shows the limit has lifted. `began` is
-    when the settling turn started, None when unknown."""
-    if state in ("idle", "crashed"):
+    holds for the whole bot until its cooldown passes, even when a previously claimed turn starts or
+    restores its lease afterwards. A turn claimed after it (a person's message, Try now) that settles
+    shows the limit has lifted. `claimed` is when the turn was leased, None when unknown."""
+    if state in ("idle", "crashed", "running"):
         status = H.status(c, bot) or {}
         if (status.get("state") == "limited" and status.get("since")
                 and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))
-                and (began is None or began < status["since"])):
+                and (state == "running" or claimed is None or claimed < status["since"])):
             return
+    if state in ("idle", "crashed"):
         if c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1",
                      (bot,)).fetchone():
             # No count and no task: the other turns may be on private tasks this status's readers cannot see.
             H.status_set(c, H.KEEPER, bot, state="running", focus="Working on other tasks", task_id="")
             return
-    H.status_set(c, H.KEEPER, bot, state=state, focus=focus)
+    H.status_set(c, H.KEEPER, bot, state=state, focus=focus,
+                 **({"task_id": task_id} if task_id is not None else {}))
 
 
 def queued_task_sql():
@@ -999,7 +1001,7 @@ class Execution:
                 if H.bot(c, row["bot"]):
                     settle_status(c, row["bot"], "crashed",
                                   reason if state == "failed" else "One run stopped; saved for later",
-                                  began=row["started"] or row["created"])
+                                  claimed=row["created"])
                 H.event(c, H.KEEPER, "attempt.expired", row["id"], {"job_state": state})
 
     @staticmethod
@@ -1438,8 +1440,8 @@ class Execution:
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
         c.execute("UPDATE turns SET finished=NULL,exit=NULL,summary=NULL WHERE id=?", (row["id"],))
         current = H.message(c, job["message_id"])
-        H.status_set(c, H.KEEPER, row["bot"], state="running", focus="Responding to queued work",
-                     task_id=H.message_task_id(current) or "")
+        settle_status(c, row["bot"], "running", "Responding to queued work",
+                      claimed=row["created"], task_id=H.message_task_id(current) or "")
         H.event(c, H.KEEPER, "attempt.lease-restored", row["id"],
                 {"bot": row["bot"], "job_id": row["job_id"], "lapsed": row["finished"], "lease_until": until})
         return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
@@ -1577,8 +1579,8 @@ class Execution:
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
         H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
         H.mark_delivered(c, H.KEEPER, msg)
-        H.status_set(c, H.KEEPER, row["bot"], state="running", focus="Responding to queued work",
-                     task_id=H.message_task_id(H.message(c, msg)) or "")
+        settle_status(c, row["bot"], "running", "Responding to queued work",
+                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
         return {"started": True}
 
     def inputs(self, c, who, aid):
@@ -1958,7 +1960,7 @@ class Execution:
         if stopped:
             person = row["stop_requested"]
             name = (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
-            settle_status(c, row["bot"], "idle", "", began=row["started"] or row["created"])
+            settle_status(c, row["bot"], "idle", "", claimed=row["created"])
             # Quiet: the bot reads it with the room next time; it does not start a run of its own.
             H.say(c, H.KEEPER, actor, f"Stopped by {name}", conversation_id=conv["id"], kind="notice",
                   refs={"quiet": True, "stopped_by": person, "turn_id": aid})
@@ -1974,7 +1976,7 @@ class Execution:
             hit = H.now()
             settle_status(c, row["bot"], "idle", f"{runtime} is out of quota on this computer's default login; the "
                           f"check moved to {moved['runtime']} ({moved['model']}) at {hit[11:16]}",
-                          began=row["started"] or row["created"])
+                          claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.check_moved", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "to_runtime": moved["runtime"], "to_model": moved["model"]})
@@ -1985,7 +1987,7 @@ class Execution:
             retry = H.shift(hit, seconds=reset_cooldown(c, aid, hit, LIMIT_COOLDOWN, body.limit_resets_at))
             check_models.hold(c, check_task, runtime, retry)
             settle_status(c, row["bot"], "idle", f"{runtime} usage limit on a check at {hit[11:16]}; the check "
-                          f"retries after {retry[:10]} {retry[11:16]} UTC", began=row["started"] or row["created"])
+                          f"retries after {retry[:10]} {retry[11:16]} UTC", claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.check_limited", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
                      "retry_after": retry})
@@ -2010,11 +2012,11 @@ class Execution:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
                           ("sign in on this computer to continue" if requeue else "this run is saved for review"),
-                          began=row["started"] or row["created"])
+                          claimed=row["created"])
         elif silent:
             settle_status(c, row["bot"], "idle",
                           f"{runtime} failed before the run began at {H.now()[11:16]} UTC; the run is back in the queue",
-                          began=row["started"] or row["created"])
+                          claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.no_effect_retry", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         elif retryable:
@@ -2022,7 +2024,7 @@ class Execution:
             # bot claimable, and let the requeued job run again as soon as it is handed out.
             settle_status(c, row["bot"], "idle",
                           f"{runtime} sign-in could not be renewed at {H.now()[11:16]} UTC; the run is back in the queue",
-                          began=row["started"] or row["created"])
+                          claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.sign_in_retry", aid,
                     {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime})
         else:
@@ -2032,7 +2034,7 @@ class Execution:
             healthy = body.outcome == "completed"
             settle_status(c, row["bot"], "idle" if healthy else "crashed",
                           "" if healthy else "One run stopped; saved for later",
-                          began=row["started"] or row["created"])
+                          claimed=row["created"])
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 
     def retry(self, c, who, job_id, body):
