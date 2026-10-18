@@ -103,9 +103,35 @@ def test_product_repository_cli_refuses_missing_capability_and_noninteractive_co
     with pytest.raises(remotecli.APIError, match="not available"):
         remotecli.product_repo_create(Api("missing"), "tico-recorder", stdin=StringIO(""), stderr=StringIO())
     available = Api("available")
-    with pytest.raises(remotecli.APIError, match="requires an interactive terminal"):
+    with pytest.raises(remotecli.APIError, match="--confirm Acme/tico-recorder, or type it at an interactive terminal"):
         remotecli.product_repo_create(available, "tico-recorder", stdin=StringIO("Acme/tico-recorder\n"), stderr=StringIO())
     assert available.writes == 0
+
+
+def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_target():
+    """A bot's turn has no terminal: `--confirm org/name` stands in for typing it, and must match the preview."""
+    from clients import remotecli
+    from io import StringIO
+    sent = []
+
+    class Api:
+        def get(self, path, **query):
+            return {"org": "Acme", "name": "tico-services", "repository": "Acme/tico-services",
+                    "visibility": "private", "auto_init": False, "capability": "available",
+                    "capability_detail": "Administration: write verified"}
+        def post(self, path, body, key=None):
+            sent.append((path, body))
+            return {"repository": "Acme/tico-services"}
+
+    args = hubcli.parser().parse_args(["repo", "product-create", "tico-services", "--confirm", "Acme/tico-services"])
+    assert args.confirm == "Acme/tico-services"
+    for wrong in ("tico-services", "Acme/other", "acme/tico-services"):
+        with pytest.raises(remotecli.APIError, match="exact preview target Acme/tico-services"):
+            remotecli.product_repo_create(Api(), "tico-services", confirm=wrong, stdin=StringIO(""), stderr=StringIO())
+    assert sent == []
+    remotecli.product_repo_create(Api(), "tico-services", confirm=args.confirm, stdin=StringIO(""), stderr=StringIO())
+    assert sent == [("github/product-repos", {"org": "Acme", "name": "tico-services", "visibility": "private",
+                                              "auto_init": False, "confirmed": True})]
 
 
 class Parser(unittest.TestCase):

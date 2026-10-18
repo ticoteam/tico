@@ -54,7 +54,11 @@ class FakeGitHub:
         path = request.url.path
         if path == "/installation/repositories":
             page = int(request.url.params.get("page", 1))
-            seen = [r for r in self.repositories if r["full_name"].split("/")[1] not in self.missing]
+            # An installation on all repositories lists one created through it, as GitHub does.
+            listed = {r["full_name"] for r in self.repositories}
+            made = [{"full_name": name} for name in sorted(self.created_repositories)
+                    if self.selection == "all" and name not in listed]
+            seen = [r for r in self.repositories + made if r["full_name"].split("/")[1] not in self.missing]
             if self.list_status != 200:
                 return httpx.Response(self.list_status)
             return httpx.Response(200, json={"total_count": len(seen), "repositories": seen[(page-1)*100:page*100]})
@@ -573,6 +577,9 @@ def test_product_repository_preview_is_owner_only_and_rejects_paths_before_githu
     gh.permissions = {"administration": "write", "metadata": "read"}
     path = "/api/v2/github/product-repos/preview"
     botops_turn(api)
+    # Every bot may create product repositories unless switched off (test_bot_product_repos.py): BotOps is, here.
+    assert api.put("/api/v2/bots/botops/repositories", json={"mode": "own", "create_product_repositories": False},
+                   headers=auth()).status_code == 200
     before = len(gh.calls)
     body = {"org": "Acme", "name": "tico-recorder", "visibility": "private",
             "auto_init": False, "confirmed": True}
@@ -1062,3 +1069,21 @@ def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says
     assert r.status_code == 200, r.text
     assert turn_token(api).status_code == 200
     assert turns()[-1]["actions"] == "read"
+
+
+def test_the_fake_installation_lists_a_repository_created_through_it_only_when_it_has_every_repository():
+    """The fake behaves like GitHub: an all-repositories installation lists what was created through it, once; a
+    selected-repositories one lists only what was selected."""
+    fake = FakeGitHub()
+    fake.repositories = [{"full_name": "Acme/docs", "default_branch": "trunk"}]
+    client = httpx.Client(transport=httpx.MockTransport(fake), base_url="https://api.github.com")
+    for name in ("docs", "tico-services"):
+        assert client.post("/orgs/Acme/repos", json={"name": name, "private": True}).status_code == 201
+
+    def listed():
+        return client.get("/installation/repositories").json()["repositories"]
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}, {"full_name": "Acme/tico-services"}]
+    fake.missing = {"tico-services"}
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
+    fake.missing, fake.selection = set(), "selected"
+    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]

@@ -8,8 +8,80 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, in each computer's pop-up on
-  Settings > Computers, for the computer's own login and each named subscription. Sign out names the bots that stop first;
+
+- The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
+  up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
+  Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
+  working, with silences over 30 minutes inside a run left out; human hours are the people on the org chart × 40 h a
+  week. Totals only, for every person who can open the Overview.
+- The owner can change their own sign-in email and stay the same person, with every task, approval, bot and role:
+  **Settings > Humans**, the ⋯ menu on their own row, **Change my sign-in email**, typed twice. One step moves the
+  address everywhere Tico keeps it (the roster, the owner record with the old address in its history, the allow list,
+  the Admins, meetings filed for them) and writes an `owner.email_changed` audit event. The old address stops signing
+  in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
+  out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
+  sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
+- **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
+  waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
+  of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
+  depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
+  computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
+  connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
+  and **Revoke computer**. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
+  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
+  accounts and changes anything on it.
+
+### Changed
+
+- On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over
+  HTTPS, behind Caddy): 8-14x less CPU than gzip at the same or smaller size. Python 3.12 keeps gzip.
+- Tico HQ's code (the service at `https://updates.tico.team`) moved out of this repository. Installs talk to
+  `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
+  support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
+  is sent.
+- Bots can create private repositories by default; the Owner can switch it off per bot. **Create product
+  repositories** is on for every bot, BotOps and new bots included. The Owner or an admin switches it off in the bot's
+  **Settings → Repositories**; an off stays off, and only the Owner switches it back on. A bot's turn acting for
+  someone (BotOps, the Assistant) or an external agent still can't create one.
+- **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
+  **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
+  the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Private only: a public repository is publishing and
+  stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
+  to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
+  bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
+  so.
+  Without the right a bot is refused with the right named; if the GitHub App lacks Administration: write, the refusal
+  says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
+  stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
+  [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
+- **Sign out** and **Switch account** moved into each computer's pop-up on **Settings > Computers**, on each connection
+  line, for the computer's own login and each named subscription (they were on the tool table and in Manage subscription
+  on AI providers). A subscription is now signed in from a computer on **Settings > Computers**.
+- Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
+  The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
+  are not moved to the bots; choose one per bot where it is needed.
+
+### Fixed
+
+- `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
+  so every call failed before it reached the computer's CPU, memory and disk history.
+- The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
+  of "No current status available" until the next refresh (up to two minutes).
+- The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
+  sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
+- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
+  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
+  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
+  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+
+## [0.3.54] - 2026-10-17
+
+### Added
+- **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
+  subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
   Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
   the new one doesn't take; it isn't offered for Claude Code on a Mac, which keeps its login in the Keychain. After any
   of these the page waits for the computer's next report before redrawing. A computer login someone signed
@@ -106,18 +178,6 @@ All notable changes to Tico are recorded here. The format follows
   "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
   set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
   everywhere a model is named.
-- **Settings → Computers** shows one compact row per computer: name, Tico version (with **Update** only when one is
-  waiting), operator, bots, a chip for each AI connection, and status. A chip shows the tool, a thin bar and the share
-  of the weekly allowance that is left; hover for when it resets and how old the reading is. A red dot means bots
-  depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
-  computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
-  connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
-  and **Revoke computer**. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
-  everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
-  accounts and changes anything on it.
-- Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
-  The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
-  are not moved to the bots; choose one per bot where it is needed.
 - What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
   button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
   the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
@@ -172,7 +232,7 @@ All notable changes to Tico are recorded here. The format follows
   default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
   Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
   Engineering did.
-- A subscription you sign in from a computer on **Settings > Computers** shows up on that computer at
+- A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
   once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
   stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can
   sign it in again; one taken out of the computer's `runner.json` goes from the list within 15 seconds.
@@ -3190,7 +3250,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.54...HEAD
+[0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49
