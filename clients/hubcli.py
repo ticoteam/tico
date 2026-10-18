@@ -231,6 +231,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
+                                           month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
     hub bot create --template T [--name "Display"] [<slug>]
                                            set a chosen bot up in the workspace (BotOps only); the slug is picked
@@ -1563,6 +1565,10 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
+                                            "spread, and the month's spend against the cap")
+    s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
+    s.set_defaults(fn="decision readout")
 
     # A new bot: BotOps builds the chosen template in the workspace (`hub bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.

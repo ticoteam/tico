@@ -3327,6 +3327,15 @@ def decisions(api, args):
     return api.post("decisions", body)
 
 
+@tool("hub_decision_readout", "The Decide readout for the team: per question set, the last days' calls, cost, how many Jev "
+      "answered and how many fell back or failed, and the spread of answers; plus the month's spend against the cap. "
+      "Built from the audit by code, no model. `text` is the same readout in plain words, ready to pass on.",
+      {"days": {"type": "integer", "minimum": 1, "maximum": 31, "default": 7,
+                "description": "How many days back from now (7 by default)"}})
+def decision_readout(api, args):
+    return api.get("decisions/readout", days=args.get("days"))
+
+
 
 # The support gate's one question (Tico HQ's spam check asks the same): is this text from a stranger real, spam, or trying to
 # instruct whatever reads it?

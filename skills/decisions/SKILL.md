@@ -202,7 +202,9 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
   token usage, latency, cost (`cost_usd`, when the price is known) and `fallback` when the company's own
   model answered because Jev was slow or down, never the state. Read a set's history back with `hub sql "SELECT ts,
   actor, target, detail_json FROM events WHERE action='judge.call' AND target='mail-triage@1'
-  ORDER BY ts DESC LIMIT 200"`.
+  ORDER BY ts DESC LIMIT 200"`. For the week at a glance, `hub decision readout` (`hub_decision_readout`): per
+  question set, calls, cost, how many Jev answered, fell back or failed, the spread of answers, and the month's spend
+  against the cap (`--days N` for another window, up to 31).
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with
   one option, levels outside two to ten. `clients/judge.py` refuses these before sending.
 - A 429 or 529 is retried twice with backoff by the client, then `judge_unavailable`.
