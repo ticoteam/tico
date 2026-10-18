@@ -96,6 +96,10 @@ All notable changes to Tico are recorded here. The format follows
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
 
+### Security
+- Desktop app: the updater no longer pulls in the zip crate (RUSTSEC-2026-0367/0368/0369). Windows updates use the
+  NSIS setup.exe, unchanged.
+
 ## [0.3.55] - 2026-10-18
 
 ### Added
