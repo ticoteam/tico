@@ -15,10 +15,11 @@ import secrets
 import sqlite3
 from email.parser import BytesParser
 from email.policy import HTTP
+from typing import Annotated
 from urllib.parse import quote, urlsplit
 
 from fastapi import Query, Request
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from . import docs_import
 from . import manual
@@ -333,17 +334,22 @@ def refresh_generated_docs(c):
 
 
 # ------------------------------------------------------------------ request bodies
+# A doc's body is kept exactly as sent: models.Contract trims every other text field, which would drop a
+# final newline or the indentation of a code block on line 1. Titles, paths and notes still trim.
+Body = Annotated[str, StringConstraints(strip_whitespace=False)]
+
+
 class DocCreate(M.Contract):
     path: str | None = Field(default=None, max_length=300)
     title: str = Field(min_length=1, max_length=300)
-    body: str = Field(default="", max_length=MAX_BODY)
+    body: Body = Field(default="", max_length=MAX_BODY)
     note: str = Field(default="", max_length=300)
 
 
 class DocEdit(M.Contract):
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
-    body: str | None = Field(default=None, max_length=MAX_BODY)
+    body: Body | None = Field(default=None, max_length=MAX_BODY)
     path: str | None = Field(default=None, max_length=300)
     locked: bool | None = None
     archived: bool | None = None

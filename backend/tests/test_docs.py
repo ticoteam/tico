@@ -53,6 +53,19 @@ def test_create_edit_conflict_history_and_restore(api):
         call(api, "POST", "docs", {"title": "x", "path": bad}, expected=422)
 
 
+def test_a_doc_body_reads_back_exactly_as_sent_while_its_title_and_path_trim(api):
+    body = "    indented code on line 1\n\nText.\n\n"            # leading indentation, a final newline and a blank line
+    doc = call(api, "POST", "docs", {"title": "  Runbook  ", "path": " ops/runbook.md ", "body": body})["doc"]
+    assert (doc["title"], doc["path"], doc["body"]) == ("Runbook", "ops/runbook.md", body)
+    assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == body
+    assert call(api, "GET", "docs/%s/versions/1" % doc["id"])["version"]["body"] == body
+    edited = edit(api, doc, body="\tTabbed.\r\n", title=" Runbook 2 ")["doc"]
+    assert (edited["title"], edited["body"], edited["version"]) == ("Runbook 2", "\tTabbed.\r\n", 2)
+    again = edit(api, edited, body="\tTabbed.\r\n\n")["doc"]             # only the ends differ: still a new version
+    assert again["version"] == 3 and call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == "\tTabbed.\r\n\n"
+    assert make(api, "Blank", "   ")["body"] == "   "
+
+
 def test_a_locked_doc_belongs_to_owners_and_bot_administrators(api):
     doc = make(api, who=CARA)                                                # anyone may write
     call(api, "PATCH", "docs/" + doc["id"], {"version": 1, "locked": True}, CARA, 403)
