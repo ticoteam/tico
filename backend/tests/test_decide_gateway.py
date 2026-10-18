@@ -41,7 +41,7 @@ def answer_all(questions):
 
 class Internet:
     """`urllib.request.urlopen` for the three providers. `fail[url] = <status | exception | "garbled" | "shape" |
-    ("choice", value) | ("usage", value)>` makes that provider fail that way ("shape" and a bad choice still come with usage: paid for);
+    ("choice", value) | ("usage", value) | ("extra", text) | ("trickle", seconds)>` makes that provider fail that way ("shape" and a bad choice still come with usage: paid for);
     every request is kept as (url, headers, body, timeout). With a `clock`, a timeout takes all of its seconds."""
 
     def __init__(self, clock=None):
@@ -82,11 +82,36 @@ class Internet:
                        "usage": {"input_tokens": 300, "output_tokens": 40}}
         if isinstance(how, tuple) and how[0] == "usage":
             payload["usage"] = how[1]
+        if isinstance(how, tuple) and how[0] == "extra":         # text riding along an otherwise valid answer
+            payload["answers"]["leak"] = {"choice": how[1], "note": how[1]}
+            for answer in payload["answers"].values():
+                answer["note"] = how[1]
+                if isinstance(answer.get("probabilities"), dict):
+                    answer["probabilities"][how[1]] = 0.5
+        if isinstance(how, tuple) and how[0] == "trickle":
+            return Trickle(json.dumps(payload).encode(), self.clock, how[1])
         if isinstance(how, tuple) and how[0] == "choice":
             for answer in payload["answers"].values():
                 if "choice" in answer:
                     answer["choice"] = how[1]
         return io.BytesIO(json.dumps(payload).encode())
+
+
+class Trickle(io.BytesIO):
+    """An answer that arrives one byte every `every` seconds on `clock`: read whole, it takes all of that time."""
+
+    def __init__(self, data, clock, every):
+        super().__init__(data)
+        self.clock, self.every = clock, every
+
+    def read1(self, size=-1):
+        self.clock.now += self.every
+        return super().read1(1)
+
+    def read(self, size=-1):
+        data = super().read(size)
+        self.clock.now += self.every * len(data)
+        return data
 
 
 @pytest.fixture
@@ -385,6 +410,56 @@ def test_the_providers_together_answer_within_the_chain_deadline_on_a_controlled
     monkeypatch.setattr(B, "CHAIN_SECONDS", 16.5)
     asked = len(net.requests)
     assert ask(api).status_code == 503 and [r[0] for r in net.requests[asked:]] == [GATEWAY_URL, J.URL]
+
+
+MARKER = "upstream-echo-of-the-mail"
+
+
+@pytest.mark.parametrize("provider", ["gateway", "own key"])
+def test_only_the_contracts_answer_fields_reach_the_caller_never_extra_text_from_a_provider(api, monkeypatch, net,
+                                                                                             provider):
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    if provider == "own key":
+        net.fail[GATEWAY_URL] = 503
+    net.fail[J.URL if provider == "own key" else GATEWAY_URL] = ("extra", MARKER)
+    r = ask(api)
+    assert r.status_code == 200, r.text
+    assert MARKER not in r.text and MARKER not in json.dumps(audits(api))
+    answers = r.json()["answers"]
+    assert set(answers) == set(QUESTIONS)
+    assert set(answers["bucket"]) == {"choice", "confidence", "probabilities"}
+    assert set(answers["bucket"]["probabilities"]) == {"archive", "reply"} and answers["is_ask"] == {"noul": 0.1}
+
+
+def test_a_score_answer_keeps_its_levels_probabilities_and_the_questions_own_legend():
+    questions = {"urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "high"]}}
+    for given in ({"0": 0.9, "1": 0.1, "2": 0.5, "x": MARKER}, [0.9, 0.1]):
+        got = J.check_answers({"urgency": {"score": 0.1, "confidence": 0.9, "probabilities": given, "why": MARKER},
+                               "other": {"noul": 0.5}}, questions)
+        assert got == {"urgency": {"score": 0.1, "confidence": 0.9, "probabilities": {0: 0.9, 1: 0.1},
+                                   "legend": ["low", "high"]}}
+
+
+def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_provider_answers(api, monkeypatch, net):
+    clock = Seconds()
+    monkeypatch.setattr(J, "clock", clock)
+    net.clock = clock
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    net.fail[GATEWAY_URL] = ("trickle", 2)                     # a byte every 2 s: each wait is under the 8 s timeout
+    start = clock.now
+    r = ask(api)
+    assert r.status_code == 200 and r.json()["model"] == "jev-1.14", "the Gateway's slow answer is not waited for"
+    assert audits(api)[-1]["fallback"] == "unavailable" and clock.now - start <= J.GATEWAY_TIMEOUT + 2
+    # Every provider trickling: the whole chain still ends by its deadline.
+    net.fail[J.URL] = net.fail[ANTHROPIC] = ("trickle", 2)
+    start = clock.now
+    assert ask(api).status_code == 503 and clock.now - start <= B.CHAIN_SECONDS + 2
+    # One transport on its own, outside any chain, is held to its own timeout from start to last byte.
+    engine = J.gateway("gw-synthetic", GATEWAY_URL, opener=net)
+    start = clock.now
+    with pytest.raises(J.JudgeError) as caught:
+        engine({"team": "Acme"}, QUESTIONS)
+    assert caught.value.code == "unavailable" and clock.now - start <= J.GATEWAY_TIMEOUT + 2
 
 
 def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes(monkeypatch):

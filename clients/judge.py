@@ -137,6 +137,42 @@ def within(seconds):
         _DEADLINE.reset(token)
 
 
+MAX_ANSWER_BYTES = 4_000_000               # a decision answer is a few KB; more than this is not one
+
+
+def read_json(response):
+    """A provider's JSON answer, read piece by piece under the deadline (`within`): a peer that sends a byte now and
+    then is cut off when the deadline passes (`unavailable`), not let run another socket timeout after each byte."""
+    read = getattr(response, "read1", None) or response.read
+    chunks, size = [], 0
+    while True:
+        deadline = _DEADLINE.get()
+        if deadline is not None:
+            left = deadline - clock()
+            if left <= 0:
+                raise JudgeError("unavailable", "the answer did not finish arriving in time", retryable=True)
+            sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+            if hasattr(sock, "settimeout"):
+                sock.settimeout(left)       # no single wait for bytes outlasts the deadline either
+        chunk = read(65536)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_ANSWER_BYTES:
+            raise JudgeError("unavailable", "the answer was too large to be a decision", retryable=True)
+        chunks.append(chunk)
+    return json.loads(b"".join(chunks))
+
+
+@contextlib.contextmanager
+def one_try(timeout):
+    """One HTTP attempt: at most `timeout` seconds from its start to the last byte of its answer, and never past the
+    chain's deadline. Yields the socket timeout to open it with."""
+    seconds = time_left(timeout)
+    with within(seconds):
+        yield seconds
+
+
 def time_left(timeout):
     """`timeout`, cut to what is left of the deadline; `unavailable`, asking nothing, when less than MIN_ATTEMPT is."""
     deadline = _DEADLINE.get()
@@ -207,7 +243,9 @@ def clean(questions):
 
 
 def check_answers(answers, questions):
-    """Every question answered, in its type's shape; anything else is `JudgeError("shape")`."""
+    """Every question answered, in its type's shape; anything else is `JudgeError("shape")`. Returns the answers rebuilt
+    from what each type answers (`_project`): only the questions asked, only their fields, so nothing else a provider
+    sent (an extra answer, an extra field, text) reaches the caller."""
     if not isinstance(answers, dict):
         raise JudgeError("shape", "answers is not a map")
     for qid, q in questions.items():
@@ -227,7 +265,30 @@ def check_answers(answers, questions):
                 raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
         if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
             raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
-    return answers
+    return {qid: _project(answers[qid], q) for qid, q in questions.items()}
+
+
+def _project(answer, question):
+    """One checked answer, as the contract has it: a choice's `choice`, `confidence` and `probabilities` per option;
+    a score's `score`, `confidence`, `probabilities` per level and `legend` (the question's own levels); a noul's
+    `noul`. A probability that is not a number in [0,1] for one of the question's own options or levels is dropped."""
+    kind, criteria = question["type"], question.get("criteria")
+    if kind == "noul":
+        return {"noul": float(answer["noul"])}
+    out = {kind: answer[kind] if kind == "choice" else float(answer[kind]), "confidence": float(answer["confidence"])}
+    given = answer.get("probabilities")
+    if kind == "choice" and isinstance(given, dict):
+        out["probabilities"] = {name: float(given[name]) for name in criteria
+                                if name in given and _bounded(given[name], 0, 1)}
+    if kind == "score":
+        levels = range(len(criteria))
+        if isinstance(given, list) and len(given) == len(criteria):
+            given = dict(enumerate(given))
+        if isinstance(given, dict):
+            out["probabilities"] = {i: float(given.get(i, given.get(str(i)))) for i in levels
+                                    if _bounded(given.get(i, given.get(str(i))), 0, 1)}
+        out["legend"] = list(criteria)
+    return out
 
 
 def _bounded(value, low, high):
@@ -253,8 +314,8 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                 "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
                 "Accept": "application/json"})
             try:
-                with opener(request, timeout=time_left(timeout)) as response:
-                    payload = json.load(response)
+                with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
+                    payload = read_json(response)
                 break
             except urllib.error.HTTPError as exc:
                 status = exc.code
@@ -307,8 +368,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             "Authorization": "Bearer " + api_key, "Content-Type": "application/json", "Accept": "application/json"})
         started = time.monotonic()
         try:
-            with opener(request, timeout=time_left(timeout)) as response:
-                payload = json.load(response)
+            with one_try(timeout) as seconds, opener(request, timeout=seconds) as response:
+                payload = read_json(response)
         except urllib.error.HTTPError as exc:
             status = exc.code
             if status in (401, 403):                    # unknown or revoked key
@@ -445,9 +506,10 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
         user = json.dumps({"state": state, "questions": clean(questions)}, default=str)
         started = time.monotonic()
         try:
-            with opener(llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
-                        timeout=time_left(timeout)) as response:
-                payload = json.load(response)
+            with one_try(timeout) as seconds, opener(
+                    llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
+                    timeout=seconds) as response:
+                payload = read_json(response)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
                              f"{provider} answered {exc.code}", exc.code,
