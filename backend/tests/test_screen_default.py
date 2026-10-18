@@ -1,6 +1,8 @@
 """A new computer's Screen setting starts at Control the first time it offers a screen, unless a person already chose
 one; a computer from before this default keeps what it had."""
 
+import json
+
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (the api fixture)
 
 
@@ -28,8 +30,10 @@ def test_a_new_computer_offering_its_screen_starts_at_control_and_a_persons_choi
     heartbeat(api, r, True)
     assert mode(api, rid) == "control"
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor FROM events WHERE action='runner.screen' AND target=?", (rid,)).fetchall()
-    assert [row["actor"] for row in rows] == ["system"]
+        rows = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.screen' AND target=?",
+                         (rid,)).fetchall()
+    assert [(row["actor"], json.loads(row["detail_json"])) for row in rows] == [
+        ("system", {"mode": "control", "reason": "first offer"})]
     post(api, f"computers/{rid}/screen", {"mode": "view"})
     restart(api, r)
     assert mode(api, rid) == "view"
