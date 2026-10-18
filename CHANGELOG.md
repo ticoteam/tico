@@ -25,6 +25,17 @@ All notable changes to Tico are recorded here. The format follows
   that may have been cleared or reset before its first turn on the new runner starts over once. A runner or Hub from
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
+### Changed
+- **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
+  require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
+  *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
+  starts as soon as the first turn ends. A bot with a ready fallback of its own runs there instead, and its run says
+  *ChatGPT login busy with <bot>; ran this turn on <harness>*. One bot's parallel task lanes on a ChatGPT login now
+  take turns too (shown as waiting, not failed). **Settings → Computers** and **Subscriptions** say when several bots
+  share one ChatGPT sign-in and that they take turns. Codex on an API key, a bot on its own subscription login, and
+  Claude Code are not limited, and no code copies a login file between bots' homes. The holding bot is named only to
+  people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
+
 ## [0.3.61] - 2026-10-18
 
 ### Added
@@ -36,15 +47,6 @@ All notable changes to Tico are recorded here. The format follows
   ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Changed
-- **Codex signed in with ChatGPT runs one turn at a time per login**, as OpenAI's terms for a ChatGPT sign-in
-  require. When two bots on one computer share its ChatGPT login, one Codex turn runs and the other shows
-  *Waiting for this computer's ChatGPT login to be free (busy with <bot>)* in the chat, the task and **Runs**, then
-  starts as soon as the first turn ends. A bot with a ready fallback of its own runs there instead, and its run says
-  *ChatGPT login busy with <bot>; ran this turn on <harness>*. One bot's parallel task lanes on a ChatGPT login now
-  take turns too (shown as waiting, not failed). **Settings → Computers** and **Subscriptions** say when several bots
-  share one ChatGPT sign-in and that they take turns. Codex on an API key, a bot on its own subscription login, and
-  Claude Code are not limited, and no code copies a login file between bots' homes. The holding bot is named only to
-  people who can see it ([how it works](docs/how-it-works.md#one-turn-per-chatgpt-login)).
 - Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
   lists it under **Beta features**.
 
