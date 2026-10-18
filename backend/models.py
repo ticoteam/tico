@@ -1517,6 +1517,15 @@ class OwnerTransfer(Contract):
     confirm: Literal[True]
 
 
+class OwnerEmailChange(Contract):
+    """The owner's own new sign-in address, typed twice (backend/access.py change_owner_email)."""
+    email: str = Field(max_length=320)
+    confirm_email: str = Field(max_length=320)
+    expected_revision: int = Field(default=0, ge=0)
+    # The client only sends this after its confirm dialog.
+    confirm: Literal[True]
+
+
 # The org builder's departments (templates/groups.yaml, backend/recruit_rank.py DEPARTMENT_IDS).
 Department = Literal["sales", "marketing", "support", "finance", "operations", "legal", "hr", "product", "engineering"]
 

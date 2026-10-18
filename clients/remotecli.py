@@ -31,8 +31,9 @@ def via_tool(client, args, **more):
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
 
-def product_repo_create(client, name, *, stdin=None, stderr=None):
-    """Preview the exact target and require an interactive exact-name confirmation before writing."""
+def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
+    """Preview the exact target and require the exact org/name before writing: typed at a terminal, or given as
+    `confirm` (`--confirm`, for a bot's turn, which has no terminal) and checked against the preview."""
     stdin = stdin or sys.stdin
     stderr = stderr or sys.stderr
     request_id = os.environ.get("HUB_OPERATION_ID") or uuid.uuid4().hex
@@ -44,11 +45,15 @@ def product_repo_create(client, name, *, stdin=None, stderr=None):
     print(f"GitHub App capability: {preview['capability']}. {preview['capability_detail']}", file=stderr)
     if preview["capability"] != "available":
         raise APIError("github_capability", preview["capability_detail"], 409)
-    if not stdin.isatty():
-        raise APIError("confirmation_required", "This command requires an interactive terminal. Type the exact org/name shown to confirm; no repository was created")
-    print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
-    if stdin.readline().strip() != preview["repository"]:
-        raise APIError("cancelled", "Confirmation did not match; no repository was created")
+    if confirm is not None:
+        if confirm != preview["repository"]:
+            raise APIError("confirmation_required", f"--confirm must be the exact preview target {preview['repository']}; no repository was created", 409)
+    elif not stdin.isatty():
+        raise APIError("confirmation_required", f"Confirm the exact target: run it again with --confirm {preview['repository']}, or type it at an interactive terminal; no repository was created")
+    else:
+        print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
+        if stdin.readline().strip() != preview["repository"]:
+            raise APIError("cancelled", "Confirmation did not match; no repository was created")
     return client.post("github/product-repos", {
         "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
         "auto_init": preview["auto_init"], "confirmed": True,
@@ -82,7 +87,7 @@ def run(args, who=None):
     if args.cmd == "repo":
         from clients import hubtools
         if args.fn == "repo product-create":
-            return product_repo_create(client, args.name)
+            return product_repo_create(client, args.name, confirm=args.confirm)
         if args.sub == "list":
             return hubtools.repo_list(client, {})
         return hubtools.repo_update(client, {"full_name": args.full_name, "enabled": args.sub == "tick"})
@@ -98,6 +103,7 @@ def run(args, who=None):
         lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
         lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
         lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
+        lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
         if lost:
             print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
         return result

@@ -103,6 +103,21 @@ def can_create_repositories(c, bot):
     return bot == _botops() or metadata(c, 'repository-creation-grants').get(bot) is True
 
 
+PRODUCT_GRANTS = 'product-repository-creation-grants'
+
+
+def can_create_product_repositories(c, bot):
+    """Create product repositories: every bot has it unless the Owner or an admin switched it off for that bot (Chris,
+    Oct 17). The grants keep only explicit choices: `False` is a switch-off, kept until the Owner switches it back on,
+    and a bot with no entry, including one made later, has the default. Nothing writes the default in, so no
+    migration or template can overwrite an off."""
+    return product_creation(metadata(c, PRODUCT_GRANTS), bot)
+
+
+def product_creation(grants, bot):
+    return grants.get(bot) is not False
+
+
 _NOCASE = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
 
 
@@ -129,6 +144,7 @@ class Reads:
                 self.chosen[r['bot']].append({'full_name': r['full_name'], 'access': r['access']})
         self.missing = unreachable(c)
         self.creation = metadata(c, 'repository-creation-grants')
+        self.product_creation = metadata(c, PRODUCT_GRANTS)
         self.workflows = metadata(c, WORKFLOWS)
         self._enabled = self._bot_repos = self._all = None
 
@@ -184,12 +200,13 @@ def access(c, bot, org, reads=None):
     missing = reads.missing
     effective = [r for _, r in sorted(grants.items()) if (r['full_name'].lower() not in missing or r['full_name'].lower() == str(own).lower()) and org and r['full_name'].split('/')[0].lower() == org.lower()]
     return {'mode': mode, 'all_access': all_access, 'chosen': chosen, 'effective': effective,
-            'create_repositories': bot == _botops() or reads.creation.get(bot) is True}
+            'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
+            'create_product_repositories': product_creation(reads.product_creation, bot)}
 
 
-def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True):
+def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True, owner=False):
     """`own_click` is False when a bot's turn makes the change for a person: it may grant with their rights, but
-    not let a bot run workflows."""
+    not let a bot run workflows. `owner`: the Owner is making the change."""
     from .github_app import repo_of, save_extra_repos
     before = access(c, bot, org)
     if body.create_repositories is not None:
@@ -198,6 +215,14 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             raise Problem('forbidden', 'Only an Owner or admin grants repository creation', 403)
         if bot == BOTOPS and not body.create_repositories:
             raise Problem('forbidden', 'BotOps retains its built-in repository creation access', 403)
+    product = body.create_product_repositories
+    if product is not None and product != before['create_product_repositories']:
+        # On by default. Switching it back on after an off widens a bot, so it is the Owner's own click, as the Owner
+        # creates product repositories themselves. Switching it off is a narrowing: an admin may too.
+        if product and not (owner and own_click and H.is_human(actor)):
+            raise Problem('forbidden', 'Only the Owner turns on Create product repositories, in the bot\'s settings', 403)
+        if not product and (not team_list or not H.is_human(actor)):
+            raise Problem('forbidden', 'Only the Owner or an admin turns off Create product repositories', 403)
     wanted = {}
     was = {r['full_name'].lower() for r in before['chosen'] if r.get('run_workflows')}
     workflows = set(was)
@@ -251,6 +276,10 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         else:
             grants.pop(bot, None)
         save_metadata(c, 'repository-creation-grants', grants)
+    if product is not None and product != before['create_product_repositories']:
+        grants = metadata(c, PRODUCT_GRANTS)
+        grants[bot] = bool(product)                           # an explicit choice either way; an off must stick
+        save_metadata(c, PRODUCT_GRANTS, grants)
     after = access(c, bot, org)
     # Kept flags apply again when a grant returns to effect (Own or All back to Chosen): that is a gain too.
     running = {r['full_name'].lower() for r in before['effective'] if r.get('run_workflows')}
@@ -278,6 +307,8 @@ def stopped(before, after):
         out['workflows_stopped'] = workflows
     if before['create_repositories'] and not after['create_repositories']:
         out['creation_stopped'] = True
+    if before.get('create_product_repositories') and not after.get('create_product_repositories'):
+        out['product_creation_stopped'] = True
     return out
 
 
@@ -285,7 +316,8 @@ def describe_stopped(result):
     """`Acme/product (write), repository creation` for a reply or a card."""
     parts = [r['full_name'] + ' (' + r['access'] + ')' for r in result.get('stopped') or []]
     parts += [name + ' (run workflows)' for name in result.get('workflows_stopped') or []]
-    return ', '.join(parts + (['repository creation'] if result.get('creation_stopped') else []))
+    parts += ['repository creation'] if result.get('creation_stopped') else []
+    return ', '.join(parts + (['product repository creation'] if result.get('product_creation_stopped') else []))
 
 
 LEVEL = {'read': 'read-only', 'write': 'write'}
@@ -340,6 +372,8 @@ def plain_change(name, before, result):
         lines.append('can no longer run workflows in ' + _and(_short(n) for n in result['workflows_stopped']))
     if result.get('creation_stopped'):
         lines.append('can no longer create repositories')
+    if result.get('product_creation_stopped'):
+        lines.append('can no longer create product repositories')
     if not lines:
         return name + ': no change to the repositories it can reach.'
     return name + ': ' + '. '.join(line[0].upper() + line[1:] if i else line for i, line in enumerate(lines)) + '.'
@@ -368,6 +402,10 @@ def plain_request(name, body):
         what += '; may create repositories'
     elif body.get('create_repositories') is False:
         what += '; may no longer create repositories'
+    if body.get('create_product_repositories') is True:
+        what += '; may create product repositories'
+    elif body.get('create_product_repositories') is False:
+        what += '; may no longer create product repositories'
     return name + ': ' + what + '.'
 
 
@@ -606,6 +644,8 @@ class Grant(Contract):
 
 class RepoAccessUpdate(Contract):
     create_repositories: bool | None = None
+    # On by default; the Owner or an admin turns it off, only the Owner back on. Left out, the bot keeps what it has.
+    create_product_repositories: bool | None = None
     mode: Literal['own', 'all', 'chosen']
     all_access: Literal['read', 'write'] | None = None
     chosen: list[Grant] | None = None
@@ -709,14 +749,16 @@ def install(app, store, service):
             row = service.row(c)
             org = row['org'] if row else store.settings.github_owner
             if not who.task_actor or who.task_actor == 'bot:' + bot:
-                return set_access(c, bot, body, org, who.actor, team_list=True, own_click=not who.task_actor)
+                return set_access(c, bot, body, org, who.actor, team_list=True, own_click=not who.task_actor,
+                                  owner=who.role == 'owner')
             # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked.
             before = access(c, bot, org)
             c.execute('SAVEPOINT repo_narrowing')
             result = set_access(c, bot, body, org, who.actor, team_list=True, own_click=False)
-            if not result['stopped'] and not result.get('creation_stopped') and not result.get('workflows_stopped'):
+            if not result['stopped'] and not result.get('creation_stopped') and not result.get('workflows_stopped') \
+                    and not result.get('product_creation_stopped'):
                 c.execute('RELEASE repo_narrowing')
                 return result
             c.execute('ROLLBACK TO repo_narrowing')

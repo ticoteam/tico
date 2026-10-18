@@ -342,7 +342,7 @@ Tico HQ can also show a short message for a version once in the app ([tico-hq.md
 
 - **v0.2.16 to v0.2.18:** the update is in the app, with no manual steps. Browser tabs left open show "New version · Reload".
   A Mac runner's background jobs now restart on their own after an update; on v0.2.17 or older, run `scripts/tico restart all` once
-  after updating. If you run your own HQ, its `backup` service in `hq/compose.yaml` must run as uid 10005 (fixed in v0.2.18).
+  after updating.
 
 ## For maintainers
 

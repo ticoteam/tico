@@ -729,7 +729,13 @@ class GitHubApp:
         if permissions is None:
             return {"status": "unknown", "detail": "Could not verify the installation's current Administration permission. No repository has been created."}
         if permissions.get("administration") != "write":
-            return {"status": "missing", "detail": "The GitHub App installation is missing Administration: write. An Owner must update and accept that permission in GitHub."}
+            from .repo_waits import permissions_url
+            with self.store.read() as c:
+                url = permissions_url(c, row)
+            return {"status": "missing", "detail": (
+                "The GitHub App installation is missing Administration: write, so it cannot create repositories. "
+                f"The Owner changes this once on GitHub: set Administration to Read and write on {url}, then accept "
+                "the new permission for the organization when GitHub asks. No repository has been created.")}
         return {"status": "available", "detail": "The connected installation currently has Administration: write."}
 
     def prepare_product_repo(self, org):
@@ -877,6 +883,41 @@ def install_github_app(app, settings, store):
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner connects GitHub", 403)
         return who
+
+    def product_creator(request):
+        """The Owner, or a bot's own run with Create product repositories (`can_create_product_repositories`: every
+        bot unless switched off for it).
+        Connecting or disconnecting the App stays the Owner's (`owner`). Never a carried identity: a bot's turn acting
+        for the Owner (BotOps' on-behalf-of, the Assistant) or an external agent would create without any bot's right,
+        name rule, grant or notice."""
+        who = request.state.identity
+        if who.task_actor or who.agent:
+            raise Problem("forbidden", "A bot's turn acting for someone, or an external agent, does not create product "
+                          "repositories. The Owner creates one in Tico, or a bot with the Create product repositories "
+                          "right in its own turn.", 403)
+        if who.role == "owner":
+            return who
+        if who.role == "bot":
+            from .repositories import can_create_product_repositories
+            with store.read() as c:
+                validate_identity(c, who)
+                if can_create_product_repositories(c, H.actor_id(who.actor)):
+                    return who
+        raise Problem("forbidden", "Creating a product repository needs the Owner, or a bot with the Create product "
+                      "repositories right. Every bot has it unless the Owner or an admin switched it off; only the "
+                      "Owner switches it back on, in the bot's settings under Repositories.", 403)
+
+    def bot_product_name(c, who, name):
+        """A bot never creates a name a bot repository uses or would use: write to it would reach that bot's Instructions."""
+        if who.role != "bot":
+            return
+        lowered = name.lower()
+        row = service.row(c)
+        taken = {str(repo_of(r[0], row["org"] if row else "") or "").split("/")[-1].lower()
+                 for r in c.execute("SELECT repo FROM bot_config")}
+        if lowered.startswith(("bot-", "emp-")) or lowered in taken:
+            raise Problem("forbidden", f"{name} is a bot repository name. Bots create product repositories only; a new "
+                          "bot's repository is made with `hub bot repo-create`", 403)
 
     def manager(request, bot):
         """The owner, or whoever manages this bot (`Auth.bot_manager`): the extra repositories are the bot's settings."""
@@ -1305,12 +1346,77 @@ def install_github_app(app, settings, store):
                     {"empty": True} if body.empty else {"template": template})
         return result
 
+    def bot_created(c, who, result):
+        """A bot made it: the bot gets write to it (Repositories > Chosen) and the Owner a notice. In the receipt's
+        transaction, so a replay neither grants nor tells twice; a refused grant is said, never a lost receipt."""
+        from . import repositories as R
+        bot, repository = H.actor_id(who.actor), result["repository"]
+        org = repository.split("/")[0]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        moved = None
+        c.execute("SAVEPOINT product_repo_grant")
+        try:
+            # Granting needs it on the team list; a bot set to every ticked repository then reaches it too.
+            c.execute("INSERT INTO repositories(id,full_name,enabled,added_by,updated) VALUES(?,?,1,?,?) "
+                      "ON CONFLICT(full_name) DO UPDATE SET enabled=1", (uuid.uuid4().hex, repository, who.actor, H.now()))
+            before = R.access(c, bot, org)
+            if before["mode"] == "all" and before["all_access"] == "write":
+                pass                                          # it writes every ticked repository, this one now too
+            else:
+                if before["mode"] == "chosen":
+                    keep = [R.Grant(**r) for r in before["chosen"]]
+                elif before["mode"] == "all":
+                    # All ticked repos has one level for every repository, so a read-only bot moves to Chosen
+                    # repos: read on each repository it reaches now, write on the new one. Nothing gets wider.
+                    # Its own repository is the one write in what it reaches; it stays write whatever the mode.
+                    keep = [R.Grant(full_name=r["full_name"], access="read") for r in before["effective"]
+                            if r["access"] == "read"]
+                    moved = len([g for g in keep if g.full_name.lower() != repository.lower()])
+                else:
+                    keep = []
+                keep = [g for g in keep if g.full_name.lower() != repository.lower()]
+                R.set_access(c, bot, R.RepoAccessUpdate(mode="chosen", chosen=keep + [R.Grant(full_name=repository)]),
+                             org, who.actor, own_click=False)
+            access = "write"
+            c.execute("RELEASE product_repo_grant")
+        except Problem as problem:
+            c.execute("ROLLBACK TO product_repo_grant")
+            c.execute("RELEASE product_repo_grant")
+            log.warning("A bot's product repository was created, but its access could not be granted: %s", problem.code)
+            access, moved = "none", None
+        others = []
+        if access != "none":
+            for r in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                               "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
+                if json.loads(r["config_json"] or "{}").get("repo_access_mode") == "all":
+                    others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["bot"])
+        said = {"write": f"{name} has write access to it.",
+                "none": f"{name} could not be given access to it; an Owner or admin can give it in Settings > "
+                        "Repositories."}[access]
+        if moved is not None:
+            kept = f"read on the {moved} repositor{'y' if moved == 1 else 'ies'} it reached and " if moved else ""
+            said += (f" It was on All ticked repos with read access, so it is now on Chosen repos: {kept}write on this "
+                     "one. A repository ticked later reaches it only once chosen.")
+        if others:
+            said += f" Bots set to every ticked repository reach it too: {', '.join(others)}."
+        if result["installation_access"] == "owner_action_required":
+            said += (" The GitHub App is installed on selected repositories only and cannot reach it yet: an Owner "
+                     "adds it in the app's installation settings on GitHub.")
+        owner_id = app.state.auth.owner_id(c)
+        if owner_id:
+            H.notice(c, H.KEEPER, H.human_actor(owner_id),
+                     f"{name} created private repo {repository.split('/')[1]} ({repository}). {said}",
+                     refs={"repository": repository, "created_by": who.actor})
+        return {**result, "bot_access": access, "note": "Created as a private empty repository. " + said,
+                "_notified": bool(owner_id), "_moved": moved is not None}
+
     @app.get("/api/v2/github/product-repos/preview")
     def product_repo_preview(request: Request, name: str):
-        who = owner(request)
+        who = product_creator(request)
         name = validate_product_repo_name(name)
         with store.read() as c:
             validate_identity(c, who)
+            bot_product_name(c, who, name)
         row = service.row()
         if not row:
             raise Problem("github_not_connected", "Connect the GitHub App before creating a product repository", 409)
@@ -1321,7 +1427,7 @@ def install_github_app(app, settings, store):
 
     @app.post("/api/v2/github/product-repos")
     def create_product_repo(request: Request, body: ProductRepoCreate):
-        who = owner(request)
+        who = product_creator(request)
         name = validate_product_repo_name(body.name)
         if body.visibility != "private" or body.auto_init is not False or body.confirmed is not True:
             raise Problem("github_repo_confirmation", "Confirm the reviewed private, empty repository preview before creating it", 422)
@@ -1388,6 +1494,8 @@ def install_github_app(app, settings, store):
 
             # Capability checks and token minting are safe to retry. Bind the exact Owner operation
             # only after those succeed, and commit that binding before the side-effecting GitHub POST.
+            with store.read() as c:
+                bot_product_name(c, who, name)
             org, token = service.prepare_product_repo(row["org"])
             with store.transaction() as c:
                 validate_identity(c, who)
@@ -1428,9 +1536,13 @@ def install_github_app(app, settings, store):
                                          (who.actor, operation, key)).fetchone()
                     if previous and previous["request_hash"] != request_hash:
                         raise Problem("idempotency_conflict", "This key was used for different content", 409)
+                    if who.role == "bot":
+                        result = bot_created(c, who, result)
                     H.event(c, who.actor, "github.product_repo_created", result["repository"],
                             {"visibility": "private", "auto_init": False,
-                             "installation_access": result["installation_access"]})
+                             "installation_access": result["installation_access"],
+                             **({"bot_access": result["bot_access"], "owner_notified": result.pop("_notified"),
+                                 "moved_to_chosen": result.pop("_moved")} if who.role == "bot" else {})})
                     if not previous:
                         c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                                   (who.actor, operation, key, request_hash, encode(result), H.now()))

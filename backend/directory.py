@@ -82,9 +82,10 @@ def _blank_name(p):
     return not p["name"] or p["name"] == p["id"].title()
 
 
-def plan(roster, records, source, owner_email, complete):
+def plan(roster, records, source, owner_email, complete, retired=()):
     """What syncing `records` would do to `roster`. Pure. `complete` says the records are the
-    whole directory (a pull), so a linked person missing from it has left."""
+    whole directory (a pull), so a linked person missing from it has left. `retired`: the owner's old sign-in
+    addresses (backend/access.py retired_emails), which a sync never adds as a second person."""
     people = roster["people"]
     by_email = {p["email"]: p for p in people if p["email"]}
     out = {"adds": [], "updates": [], "restores": [], "leaves": [], "protected": [], "skipped": []}
@@ -97,7 +98,10 @@ def plan(roster, records, source, owner_email, complete):
         seen.add(email)
         p = by_email.get(email)
         if p is None:
-            if r["active"]:
+            if r["active"] and email in retired:
+                out["skipped"].append({"email": email, "reason": "the owner's old sign-in address; add it by hand if "
+                                       "it is someone else"})
+            elif r["active"]:
                 out["adds"].append({"email": email, "name": r["name"], "title": r["title"],
                                     "manager": r.get("manager") or "", "external_id": r.get("external_id") or ""})
             continue
@@ -375,7 +379,8 @@ class Directory:
         records, _ = self.fetch(source)
         with self.store.read() as c:
             from .views import roster
-            found = plan(roster(c), records, source, Access.load_owner(c, self.settings)["email"], True)
+            found = plan(roster(c), records, source, Access.load_owner(c, self.settings)["email"], True,
+                         Access.retired_emails(c))
         return self._describe(cfg, found)
 
     @staticmethod
@@ -402,7 +407,8 @@ class Directory:
                 from .views import roster
                 cfg = load(c)
                 live = roster(c)
-                found = plan(live, records, source, Access.load_owner(c, self.settings)["email"], True)
+                found = plan(live, records, source, Access.load_owner(c, self.settings)["email"], True,
+                             Access.retired_emails(c))
                 described = self._describe(cfg, found)
                 need = described["needs_confirmation"]
                 held = (need["first"] or need["mass_leave"]) and not (confirm and plan_hash == found["hash"])
