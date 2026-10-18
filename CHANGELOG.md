@@ -14,7 +14,7 @@ All notable changes to Tico are recorded here. The format follows
   and only sent to runs on a Tico model. The owner sees the 80% monthly cap warning and a key the Gateway doesn't
   recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
   refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
-  note ([harnesses](docs/harnesses.md#the-tico-ai-gateway)).
+  note ([Tico AI Gateway](docs/ai-gateway.md)).
 
 ## [0.3.58] - 2026-10-18
 
