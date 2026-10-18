@@ -17,6 +17,7 @@ from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
+from starlette.requests import ClientDisconnect
 
 from clients.agent_skill import WHO_NEEDS_ME
 
@@ -24,7 +25,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import check_models, run_triggers, team_rules, update_feeds, usage_limits
+from . import check_models, run_triggers, team_rules, update_feeds, usage_limits, wake_presets
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -641,6 +642,13 @@ def create_app(settings=None):
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
             return response
+        except ClientDisconnect:
+            # The caller hung up while its request body was read (a closed tab, a cancelled call): nothing failed here.
+            # It ends as 499, client closed request, which the flight recorder and Sentry don't count as a server error.
+            # The method only: some addresses carry their own secret (a webhook trigger's).
+            logging.getLogger("tico.request").info("%s request: the client disconnected before its body was read",
+                                                   request.method)
+            return Response(status_code=499)
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
@@ -1653,6 +1661,7 @@ def create_app(settings=None):
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
                         "compact_at": compact_at_of(declared),
+                        "wake": wake_presets.effective(declared),
                         "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"], config)})
         configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
         owner_rows = ([rows.human(owner) for owner in configured] if configured is not None
@@ -4902,6 +4911,20 @@ def create_app(settings=None):
     def bot_compact_at(request: Request, bot: str, body: M.BotCompactAt):
         return mutate(request, body, lambda c: settings_admin.set_compact_at(
             c, request.state.identity, bot, body))
+
+    @app.post("/api/v2/bots/{bot}/wake-preset")
+    def bot_wake_preset(request: Request, bot: str, body: M.BotWakePreset):
+        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py)."""
+        return mutate(request, body, lambda c: settings_admin.set_wake_preset(
+            c, request.state.identity, bot, body))
+
+    @app.get("/api/v2/wake-presets/measures")
+    def wake_preset_measures(request: Request, since: str | None = None, until: str | None = None):
+        """Per wake preset, over jobs queued in [since, until) (the last 7 days by default): turns and tokens per accepted
+        ticket, pickup latency, blocked time and missed actions. Owners and admins."""
+        admin_only(request.state.identity, "sees wake preset measures")
+        with store.read() as c:
+            return wake_presets.measures(c, since or H.shift(H.now(), days=-7), until)
 
     @app.post("/api/v2/bots/{bot}/transitions")
     def begin_transition(request: Request, bot: str, body: M.BotTransitionCreate):

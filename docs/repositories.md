@@ -68,6 +68,6 @@ Clone and fetch operations check a free-space floor of 5 GB plus twice the repos
 
 When a GitHub App is connected, a failed token request blocks GitHub Git and CLI operations. The message names the cause, for example that the App is not installed on the repository or that the repository is outside the connected organization. Machine credential helpers and askpass cannot supply wider credentials. With no App connected, the computer's existing Git login keeps working. Text supplied through GitHub CLI options such as `--comment`, `--body`, `--title`, `--notes`, `--jq`, `-m`, `-f` and `-F` does not select a repository token.
 
-Computer answers (`GET /api/v2/computers`, Operations and `hub_computer_list`) include `release`
+Computer answers (`GET /api/v2/computers`, Operations, `hub_computer_list` and its one-computer detail) include `release`
 for the installed Tico release. The legacy `version` field is the runner software version.
 A Computer that does not report its release returns an empty `release`.

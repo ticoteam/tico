@@ -10,10 +10,17 @@ Each part is skipped when its credential is not set, so with neither it prints S
 It never gates a release: run it by hand or on a schedule, and read a DRIFT as "update the fixtures in
 backend/tests/fixtures/granola/ and the parser", not as a broken build.
 
---record DIR writes DIR/mcp_shapes.json in the fixture format, rebuilt rather than copied: it keeps the shape of
-each answer (status, encoding, JSON or event stream, XML-like or JSON notes, which tags and fields carry them, how
-many meetings and people) and fills it with made-up ids, names, titles and notes. No value Granola sent is written. An
-answer it cannot rebuild is refused and nothing is written. Read the file before committing it all the same.
+--record DIR writes DIR/mcp_shapes.json in the fixture format, rebuilt rather than copied. Kept: each answer's
+status, encoding and JSON or event-stream form; the protocol version, error codes, Retry-After seconds and schema limits;
+tool and argument names Tico knows; and, row by row, the form of every meeting: XML-like or JSON (structured or as
+text), which id, title, date, summary and link fields it has and whether each is a tag, an attribute (and its quote) or
+a key, each attendee's form, the known_participants line forms and which private sections it has. Everything else is
+made up: ids, names, emails, titles, dates, notes, cursors, descriptions and error wording.
+
+It is a projection, not a full capture. Dropped: content blocks after the first, unknown tags, attributes and keys
+(with anything nested in them), text after the notes, events after the 20th, tools after the 50th and people after the
+20th in a meeting. A private section's text is replaced. An answer it cannot rebuild, or whose rebuild Tico would read
+differently, is refused and nothing is written. Read the file before committing it all the same.
 
 A probe Granola rate-limits is waited out once (its Retry-After, at most a minute); if it is throttled again, that
 probe is reported INCOMPLETE and the run never says OK. The throttle's own shape is still checked.
@@ -28,6 +35,7 @@ import re
 import sys
 import time
 import uuid
+from html import escape, unescape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -256,6 +264,10 @@ class Unrecordable(Exception):
     """A fixed category name; never the provider's text."""
 
 
+class WriteFailed(Exception):
+    """The recording could not be saved: the error's kind and the staging file left behind, if it could not be removed."""
+
+
 TOOLS = ("list_meetings", "get_meetings", "get_meeting_transcript", "get_account_info")
 ARGUMENTS = ("since", "until", "start_date", "end_date", "after", "before", "created_after", "time_range",
              "custom_start", "custom_end", "date_range", "start", "end", "from", "to", "involvement", "captured_by_me",
@@ -265,7 +277,10 @@ FORMATS = ("date", "date-time")
 RANGES = ("custom", "last_30_days", "last_7_days", "this_week", "last_week", "this_month", "last_month", "today",
           "yesterday")
 SUMMARIES = ("summary_markdown", "summary_text", "ai_summary", "enhanced_notes", "summary")
-WRAPPERS = ("meetings_data", "meetings", "notes")
+PRIVATE = ("private_notes", "raw_notes", "note_taker_notes")
+ID_KEYS = ("id", "meeting_id", "note_id")
+DATES = ("date", "created_at", "start_time")
+ROW_KEYS = ID_KEYS + ("title",) + DATES + SUMMARIES + ("web_url",)
 CONTENT_TYPES = ("application/json", "text/event-stream")
 ENCODINGS = ("gzip", "br", "deflate", "identity")
 RATE_LIMIT_TEXT = "Rate limit exceeded. Please slow down requests."
@@ -273,6 +288,7 @@ PLAN_TEXT = "Transcripts are only available to paid Granola tiers"
 INTRO = "Synthetic provider introduction:\n"
 NOTE = "## Notes\n- Synthetic note %d: budget < 15%% & plan approved"
 DEPTH = 8
+PEOPLE = 20
 
 
 def scrub(exchanges):
@@ -340,6 +356,25 @@ def scrub(exchanges):
         except ValueError:
             return "xml_text", raw
 
+    def date_like(value):
+        if not isinstance(value, str) or not value:
+            return value if value in (None, "") else "2026-10-01T16:00:00Z"
+        return "2026-10-01T16:00:00Z" if re.match(r"\d{4}-\d{2}-\d{2}", value) else "Oct 1, 2026 4:00 PM"
+
+    def note_of(value, index):
+        if value is None or isinstance(value, str):
+            return NOTE % index if value else value
+        if isinstance(value, dict):
+            return {k: note_of(v if isinstance(v, str) or v is None else "x", index)
+                    for k, v in value.items() if k in ("markdown", "text")}
+        raise Unrecordable("summary the recorder does not know")
+
+    def projection(rows):
+        """What Tico reads from a meeting list, with made-up values set aside: the rebuild must not change it."""
+        return [(sorted(k for k in ROW_KEYS if row.get(k) is not None), has_notes(row),
+                 [(bool(a.get("name")), bool(a.get("email"))) if isinstance(a, dict) else str
+                  for a in (row.get("attendees") or row.get("participants") or [])[:PEOPLE]]) for row in rows]
+
     def meetings(result):
         form, raw = form_of(result)
         try:
@@ -349,73 +384,173 @@ def scrub(exchanges):
         rows = value.get("meetings") if isinstance(value, dict) else None
         if not isinstance(rows, list) or len(rows) > 100 or not all(isinstance(r, dict) for r in rows):
             raise Unrecordable("meetings answer without a meeting list")
-        made = []
-        for index, row in enumerate(rows, 1):
-            people = row.get("attendees") or row.get("participants") or []
-            made.append({"id": synthetic_id(row.get("note_id") or row.get("id") or row.get("meeting_id") or index),
-                         "title": f"Meeting {index}", "people": min(len(people) if isinstance(people, list) else 0, 20),
-                         "notes": has_notes(row)})
-        cursor = "cursor-placeholder" if isinstance(value, dict) and value.get("next_cursor") else None
+        cursor = "cursor-placeholder" if value.get("next_cursor") else None
         if form == "xml_text":
-            text = render_xml(raw, made, cursor)
-            return {"content": [{"type": "text", "text": text}]}
-        summary = next((k for k in SUMMARIES if any(k in r for r in rows)), "summary")
-        nested = any(isinstance(r.get(summary), dict) for r in rows)
-        people_key = "participants" if any("participants" in r for r in rows) else "attendees"
-        listed = [{"id": m["id"], "title": m["title"], "date": "2026-10-01T16:00:00Z",
-                   people_key: [{"name": f"Person {p}", "email": f"person{p}@example.com"} for p in range(1, m["people"] + 1)],
-                   **({summary: {"markdown": NOTE % i} if nested else NOTE % i} if m["notes"] else {})}
-                  for i, m in enumerate(made, 1)]
-        body = {"meetings": listed, **({"next_cursor": cursor} if cursor else {})}
-        if form == "structured":
-            return {"structuredContent": body}
-        return {"content": [{"type": "text", "text": json.dumps(body)}]}
+            made = {"content": [{"type": "text", "text": render_xml(raw, len(rows), cursor)}]}
+        else:
+            body = {"meetings": [json_row(i, row) for i, row in enumerate(rows, 1)],
+                    **({"next_cursor": cursor} if cursor else {})}
+            made = {"structuredContent": body} if form == "structured" else {
+                "content": [{"type": "text", "text": json.dumps(body)}]}
+        if projection(GranolaMCP.content(made)["meetings"]) != projection(rows):
+            raise Unrecordable("meetings answer the rebuild would change")
+        return made
 
-    def render_xml(raw, made, cursor):
-        start = re.search(r"<(meetings_data|meetings|notes|meeting|note)\b", raw)
-        wrapper = start[1] if start and start[1] in WRAPPERS else "meetings"
-        element_titles = bool(re.search(r"<title\b", raw))
-        quote = "'" if re.search(r"\btitle\s*=\s*'", raw) and not element_titles else '"'
-        summary = next((k for k in SUMMARIES if re.search(r"<%s\b" % k, raw)), "summary")
-        known = "<known_participants" in raw
-        private = bool(re.search(r"<(private_notes|raw_notes|note_taker_notes)\b", raw))
-        out = [INTRO] if start and raw[:start.start()].strip() else []
-        out.append(f'<{wrapper} count="{len(made)}">')
-        for i, m in enumerate(made, 1):
-            title = "" if element_titles else f" title={quote}{m['title']}{quote}"
-            out.append(f'<meeting id="{m["id"]}"{title} date="Oct 1, 2026 4:00 PM">')
-            if element_titles:
-                out.append(f"  <title>{m['title']}</title>")
-            people = [(f"Person {p}", f"person{p}@example.com") for p in range(1, m["people"] + 1)]
-            if people and known:
-                out.append("  <known_participants>\n" + "\n".join(f"  {n} from Company <{e}>" for n, e in people)
-                           + "\n  </known_participants>")
-            elif people:
-                out.append("  <attendees>" + "".join(f'<attendee name="{n}" email="{e}"/>' for n, e in people)
-                           + "</attendees>")
-            if m["notes"]:
-                out.append(f"  <{summary}>\n{NOTE % i}\n</{summary}>")
-            if private:
-                out.append("  <private_notes><summary>Synthetic private note</summary></private_notes>")
-            out.append("</meeting>")
+    def json_row(index, row):
+        out = {}
+        for key, value in row.items():
+            if key in ID_KEYS:
+                out[key] = synthetic_id(value) if value not in (None, "") else value
+            elif key == "title":
+                out[key] = f"Meeting {index}" if value is not None else None
+            elif key in DATES:
+                out[key] = date_like(value)
+            elif key in SUMMARIES:
+                out[key] = note_of(value, index)
+            elif key == "notes" and isinstance(value, dict):
+                out[key] = {k: note_of(v, index) for k, v in value.items() if k in ("summary", "ai_summary")}
+            elif key == "web_url":
+                out[key] = "https://notes.granola.ai/d/synthetic" if value else value
+            elif key in ("attendees", "participants") and isinstance(value, list):
+                out[key] = [f"Person {p}" if isinstance(a, str) else
+                            {k: f"Person {p}" if k == "name" else f"person{p}@example.com"
+                             for k in ("name", "email") if isinstance(a, dict) and a.get(k)}
+                            for p, a in enumerate(value[:PEOPLE], 1) if isinstance(a, (str, dict))]
+        return out
+
+    def children(body):
+        """The direct child tags of a row, read as Tico's parser reads them: (name, attributes, inner or None)."""
+        out, position = [], 0
+        while match := re.search(r"<([\w:-]+)\b([^>]*)>", body[position:]):
+            start = position + match.end()
+            if match[0].rstrip().endswith("/>"):
+                out.append((match[1], match[2].rstrip().rstrip("/"), None))
+                position = start
+                continue
+            close = re.search(r"</" + re.escape(match[1]) + r"\s*>", body[start:])
+            if close is None:
+                break
+            out.append((match[1], match[2], body[start:start + close.start()]))
+            position = start + close.end()
+        return out
+
+    def attrs_of(text):
+        return [(m[1], m[2], unescape(m[3])) for m in re.finditer(r'''([\w:-]+)\s*=\s*(["'])(.*?)\2''', text, re.S)]
+
+    def made_up(key, value, index):
+        if key in ID_KEYS:
+            return synthetic_id(value) if value else ""
+        if key == "title":
+            return f"Meeting {index}"
+        if key in DATES:
+            return date_like(value)
+        if key in SUMMARIES:
+            return NOTE % index if value.strip() else ""
+        return "https://notes.granola.ai/d/synthetic" if value.strip() else ""
+
+    def render_attendees(inner, people):
+        out = []
+        for match in re.finditer(r"<attendee\b([^>]*?)(?:/\s*>|>(.*?)</attendee\s*>)", inner or "", re.S):
+            if len(people) >= PEOPLE:
+                break
+            p = len(people) + 1
+            people.append(p)
+            values = {"name": f"Person {p}", "email": f"person{p}@example.com"}
+            attrs = [(k, q, values[k] if v else "") for k, q, v in attrs_of(match[1]) if k in values]
+            nested = [(k, values[k] if (v or "").strip() else "") for k, _, v in children(match[2] or "")
+                      if k in values and k not in [a[0] for a in attrs]]
+            head = "".join(f" {k}={q}{v}{q}" for k, q, v in attrs)
+            if match[2] is None:
+                out.append(f"<attendee{head}/>")
+            elif nested or any(k == "name" and v for k, _, v in attrs) or not re.sub(r"<[^>]*>", "", match[2]).strip():
+                out.append(f"<attendee{head}>" + "".join(f"<{k}>{v}</{k}>" for k, v in nested) + "</attendee>")
+            else:
+                out.append(f"<attendee{head}>{values['name']}</attendee>")
+        return "<attendees>" + "".join(out) + "</attendees>"
+
+    def render_known(inner, people):
+        out = []
+        for line in (inner or "").splitlines():
+            if not line.strip() or len(people) >= PEOPLE:
+                continue
+            p = len(people) + 1
+            people.append(p)
+            line = unescape(line).strip()
+            email = re.search(r"<([^<>\s]+@[^<>\s]+)>", line)
+            name = re.sub(r"\s*\(note creator\)", "", line[:email.start()] if email else line, flags=re.I).strip()
+            named = bool(re.split(r"(?:^|\s+)from\s+", name, maxsplit=1, flags=re.I)[0].strip())
+            made = " ".join(part for part in (
+                f"Person {p}" if named else "", "(note creator)" if re.search(r"\(note creator\)", line, re.I) else "",
+                "from Company" if re.search(r"(?:^|\s)from\s", line, re.I) else "",
+                f"<person{p}@example.com>" if email else "") if part)
+            out.append("  " + made)
+        return "<known_participants>\n" + "\n".join(out) + "\n  </known_participants>"
+
+    def render_xml(raw, count, cursor):
+        """Each row in the form it came in, filled with made-up values; Tico's own row split decides the rows."""
+        start = re.search(r"<(meetings_data|meetings|notes|meeting|note|transcript)\b", raw)
+        body = raw[start.start():]
+        scan = re.sub(r"<(%s)\b[^>]*>.*?</\1\s*>" % "|".join(SUMMARIES + PRIVATE), lambda m: " " * len(m[0]), body,
+                      flags=re.S)
+        nodes = list(re.finditer(r'''<(meeting|note)\b((?:[^<>"']|"[^"]*"|'[^']*')*?)(/?)>''', scan, re.S))
+        if len(nodes) != count:
+            raise Unrecordable("meetings answer whose rows the recorder cannot find")
+        out = [INTRO.rstrip()] if raw[:start.start()].strip() else []
+        wrapper = re.match(r"<(meetings_data|meetings|notes)\b([^>]*)>", body)
+        if wrapper:
+            counted = any(k == "count" for k, _, _ in attrs_of(wrapper[2]))
+            out.append(f"<{wrapper[1]}" + (f' count="{count}"' if counted else "") + ">")
+        for index, node in enumerate(nodes, 1):
+            end = nodes[index].start() if index < len(nodes) else len(body)
+            close = re.search(r"</" + node[1] + r"\s*>", scan[node.end():end])
+            if not node[3] and close is None:
+                raise Unrecordable("meeting without its closing tag")
+            head = "".join(f" {k}={q}{escape(made_up(k, v, index), quote=True)}{q}"
+                           for k, q, v in attrs_of(node[2]) if k in ROW_KEYS)
+            if node[3]:
+                out.append(f"<{node[1]}{head}/>")
+                continue
+            people, parts, seen = [], [], set()
+            for name, _, inner in children(body[node.end():node.end() + close.start()]):
+                inner = inner or ""
+                if name in ("attendees", "known_participants") and name in seen:
+                    continue      # Tico reads only the first of each
+                seen.add(name)
+                if name in ROW_KEYS:
+                    parts.append(f"  <{name}>{made_up(name, inner, index)}</{name}>")
+                elif name == "attendees":
+                    parts.append("  " + render_attendees(inner, people))
+                elif name == "known_participants":
+                    parts.append("  " + render_known(inner, people))
+                elif name in PRIVATE:
+                    nested = re.search(r"<(%s)\b" % "|".join(SUMMARIES), inner)
+                    text = f"<{nested[1]}>Synthetic private note</{nested[1]}>" if nested else "Synthetic private note"
+                    parts.append(f"  <{name}>{text}</{name}>")
+            out.append(f"<{node[1]}{head}>\n" + "".join(p + "\n" for p in parts) + f"</{node[1]}>")
         if cursor:
             out.append(f"<next_cursor>{cursor}</next_cursor>")
-        out.append(f"</{wrapper}>")
+        if wrapper:
+            out.append(f"</{wrapper[1]}>")
         return "\n".join(out)
 
     def transcript(result):
         form, raw = form_of(result)
         try:
-            GranolaMCP.content(result, allow_text=True)
+            value = GranolaMCP.content(result, allow_text=True)
         except GranolaError:
             raise Unrecordable("transcript Tico cannot parse") from None
+        line = "Person 1: Synthetic line"
         if form == "structured":
-            return {"structuredContent": {"transcript": "Person 1: Synthetic line"}}
-        if form == "xml_text" and "<transcript" in raw:
+            return {"structuredContent": {"transcript": line}}
+        if form == "json_text":
+            if not isinstance(value, dict) or not isinstance(value.get("transcript"), str):
+                raise Unrecordable("transcript form the recorder does not know")
+            return {"content": [{"type": "text", "text": json.dumps({"transcript": line})}]}
+        if "<transcript" in raw:
             intro = INTRO if raw[:raw.index("<transcript")].strip() else ""
-            text = intro + '<transcript meeting_id="%s">[00:00:15] Person 1: Synthetic line</transcript>' % synthetic_id("t")
+            text = intro + '<transcript meeting_id="%s">[00:00:15] %s</transcript>' % (synthetic_id("t"), line)
             return {"content": [{"type": "text", "text": text}]}
-        return {"content": [{"type": "text", "text": "Person 1: Synthetic line"}]}
+        return {"content": [{"type": "text", "text": line}]}
 
     def result_of(name, result):
         if not isinstance(result, dict):
@@ -497,20 +632,33 @@ def encode_text(value):
 def write_recording(directory, exchanges):
     """Rebuild first, then replace the file in one step: a refused recording writes nothing."""
     made = json.dumps({"about": ["Recorded by scripts/granola_live_check.py --record and rebuilt from made-up values:",
-                                 "only the shape of Granola's answers is kept."], "exchanges": scrub(exchanges)},
-                      indent=2) + "\n"
+                                 "each meeting keeps its form; the projection's limits are in the script's help."],
+                       "exchanges": scrub(exchanges)}, indent=2) + "\n"
     directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
     target = directory / "mcp_shapes.json"
     temporary = directory / ".mcp_shapes.json.partial"
-    temporary.write_text(made)
-    os.replace(temporary, target)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(made)
+        os.replace(temporary, target)
+    except BaseException as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+            left = None
+        except OSError:
+            left = temporary.name
+        if isinstance(exc, OSError):
+            raise WriteFailed(type(exc).__name__, left) from None
+        raise
     return target
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--record", metavar="DIR", help="write the scrubbed answers to DIR/mcp_shapes.json")
+    title, _usage, *details = __doc__.split("\n\n")
+    parser = argparse.ArgumentParser(description=title, epilog="\n\n".join(details),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--record", metavar="DIR",
+                        help="write answers rebuilt from made-up values to DIR/mcp_shapes.json (what it keeps and drops: below)")
     args = parser.parse_args(argv)
     token, key = os.environ.get("GRANOLA_MCP_TOKEN", "").strip(), os.environ.get("GRANOLA_API_KEY", "").strip()
     if not token and not key:
@@ -532,6 +680,11 @@ def main(argv=None):
                     print(f"recorded {len(exchanges)} answers, rebuilt from made-up values, to {out}")
                 except Unrecordable as exc:
                     print(f"CANNOT RECORD: {exc}; nothing was written")
+                    return 2
+                except WriteFailed as exc:
+                    kind, left = exc.args
+                    print(f"CANNOT RECORD: could not save the file ({kind}); "
+                          + (f"remove {left} by hand, the old file is unchanged" if left else "nothing was written"))
                     return 2
                 except Exception as exc:  # a recorder fault is never reported as Granola's
                     print(f"CANNOT RECORD: recorder error ({type(exc).__name__}); nothing was written")

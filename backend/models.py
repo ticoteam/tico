@@ -1470,6 +1470,11 @@ class BotCompactAt(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotWakePreset(Contract):
+    wake_preset: Literal["current", "token_saver", "performance"]
+    expected_revision: int = Field(ge=1)
+
+
 class BotTransitionCreate(Contract):
     kind: Literal["model", "machine"]
     model: ID | None = None

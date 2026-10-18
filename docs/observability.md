@@ -188,7 +188,7 @@ the same rows to a local file that can be read without the server (below).
 
 | Table | What | Kept |
 | --- | --- | --- |
-| `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. After two days, minutes become hours (`span` 3600). | 14 days |
+| `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
 | `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |

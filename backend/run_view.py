@@ -143,7 +143,7 @@ def run_view(c, auth, who, tid):
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,"
+            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,a.wake_json,"
             "m.conversation_id FROM turns t JOIN attempts a ON a.id=t.id JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
@@ -202,7 +202,9 @@ def run_view(c, auth, who, tid):
             "reason": failure_reason(r["state"], r["result_json"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
-            "subagents": subagents, "background": background})
+            "subagents": subagents, "background": background,
+            # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
+            "wake": H._json(r["wake_json"])})
     return {"task_id": tid, "checkpoint": checkpoint, "attempts": out}
 
 

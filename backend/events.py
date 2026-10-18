@@ -254,6 +254,9 @@ RUNNER_TRIGGERS = [
     ("changes_runner_jobs_insert", "INSERT", "jobs", "NEW.state='queued'", _bot_runner("work", "NEW.bot")),
     ("changes_runner_jobs_update", "UPDATE", "jobs", "NEW.state='queued' AND OLD.state IS NOT 'queued'",
      _bot_runner("work", "NEW.bot")),
+    # A wake preset's held job let go (backend/wake_presets.py tick).
+    ("changes_runner_jobs_released", "UPDATE", "jobs", "NEW.state='queued' AND OLD.held=1 AND NEW.held=0",
+     _bot_runner("work", "NEW.bot")),
     ("changes_runner_bots_update", "UPDATE", "bots", _changed("state"),
      _bot_runner("work", "NEW.slug") + _bot_runner("assignments", "NEW.slug")),
     ("changes_runner_bot_control_update", "UPDATE", "bot_control", None, _bot_runner("work", "NEW.bot")),
