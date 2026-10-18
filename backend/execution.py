@@ -2213,10 +2213,12 @@ class Execution:
                 held.append(row["id"])
         # A check its model's usage limit held, whose task is done, closed or declined, would go on retrying after
         # every reset and run once on a finished task: its owner's queued turns on it are let go. A person's message
-        # stays queued. From the held checks (check_models.hold) to their owner's queue (jobs_queue).
+        # stays queued, and so does a check handed to another bot: it is that bot's ordinary task (H.check_model).
+        # From the held checks (check_models.hold) to their owner's queue (jobs_queue).
         for row in c.execute("SELECT j.id,t.id AS task_id,t.status FROM registry_metadata r "
-                             "JOIN tasks t ON t.id=substr(r.key,15) CROSS JOIN jobs j CROSS JOIN messages m "
-                             "JOIN conversations cv ON cv.id=m.conversation_id "
+                             "JOIN tasks t ON t.id=substr(r.key,15) "
+                             "JOIN task_check_models k ON k.task_id=t.id AND k.created_by=t.owner "
+                             "CROSS JOIN jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
                              "WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
                              f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
                              "AND t.owner LIKE 'bot:%' AND j.bot=substr(t.owner,5) AND j.state='queued' "

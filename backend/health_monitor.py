@@ -331,17 +331,16 @@ def _check_hold_checks(c):
                        H.ACTIVE_STATUSES).fetchall():
         bot = H.actor_id(t["owner"])
         check = check_models.of(c, t["id"], bot)
-        job = check and c.execute("SELECT j.id FROM jobs j CROSS JOIN messages m "
-                                  "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' "
-                                  f"AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created,j.id LIMIT 1",
-                                  (bot, t["id"])).fetchone()
-        if not job:
+        if not check:
             continue
-        # The limits since the job's last turn that ended any other way (attempts_job).
+        # The limits on its queued jobs since the last turn on any of them that ended another way. One pool, not the
+        # oldest job: the claim hands out a person's message before an older notice, and one turn takes several.
+        queued = ("SELECT j.id FROM jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                  f"WHERE j.bot=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
         since, tries = c.execute(
-            f"SELECT min(finished),count(*) FROM attempts WHERE job_id=? AND finished IS NOT NULL AND {limited} "
-            "AND finished>coalesce((SELECT max(finished) FROM attempts WHERE job_id=? AND finished IS NOT NULL "
-            f"AND NOT {limited}),'')", (job["id"], job["id"])).fetchone()
+            f"WITH a AS (SELECT finished,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
+            "AND finished IS NOT NULL) SELECT min(finished),count(*) FROM a WHERE hit "
+            "AND finished>coalesce((SELECT max(finished) FROM a WHERE NOT hit),'')", (bot, t["id"])).fetchone()
         if not tries or since > H.shift(now, hours=-CHECK_HELD_HOURS):
             continue
         hours = int((H.parse_ts(now) - H.parse_ts(since)).total_seconds() // 3600)
