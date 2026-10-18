@@ -113,7 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
       {url: 'https://gateway.example.test/v1/gateway', expected_revision: 1}, 'an empty field keeps the saved key');
     // What the Gateway says about the key reads plainly to the owner.
     const says = async (state, message, used, pill) => {
-      gateway = {...gateway, state, message, used, working: !['revoked', 'invalid'].includes(state)};
+      gateway = {...gateway, state, message, used, working: !['revoked', 'unknown'].includes(state)};
       await open();
       assert.equal(await card.locator('.pill').innerText(), pill, `${state} badge`);
       assert.equal(await card.locator('[data-gateway-message]').innerText(), message, `${state} message`);

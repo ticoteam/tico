@@ -11,12 +11,15 @@ clearing it turns them off. A bot on a Tico model gets the key and URL in its ru
 read by runner-rs/src/hosts/pi.rs), and no other bot does.
 
 The Gateway's own word on the key (`<base>/key`: working, revoked, how much of the month's cap is used) is read on
-save, on Check now and hourly (backend/scheduler.py), and kept with the connection for Settings and Health.
+save, on Check now, when the owner opens the page and hourly (backend/scheduler.py), never more than once a minute
+unasked (`check_soon`: the Gateway answers it 6 times a minute per key), and kept with the connection for Settings and
+Health.
 """
 
 import json
 import os
 import threading
+import time
 
 from clients import gateway as G
 
@@ -29,6 +32,9 @@ ENV_KEY, ENV_URL = "TICO_GATEWAY_KEY", "TICO_GATEWAY_URL"
 # What a Tico-model bot's run gets them as. Not TICO_: the runner keeps those names for itself (runner-rs/src/env.rs).
 RUN_KEY_ENV, RUN_URL_ENV = "TICOAI_GATEWAY_KEY", "TICOAI_GATEWAY_URL"
 MODEL_PREFIX = "tico-"
+# Unasked checks (page loads, the hourly sweep) are at least this far apart for one key.
+CHECK_EVERY = 60
+_tried, _tried_lock = {}, threading.Lock()
 
 
 def is_tico(model):
@@ -100,7 +106,7 @@ def view(c, settings=None, *, manage=False):
             "env": ENV_KEY if where == "environment" else "",
             "revision": int(record.get("revision") or 0),
             "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
-            "state": state, "working": state not in ("revoked", "invalid"),
+            "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
             "used": fresh.get("used"), "checked": fresh.get("at", "")}
 
@@ -187,6 +193,9 @@ def record_check(c, result, fingerprint, now, settings=None):
     if _fingerprint(c, settings) != fingerprint:
         return False
     record = _row(c)
+    known = record.get("check") if isinstance(record.get("check"), dict) else {}
+    if result["state"] in G.TRANSIENT and known.get("for") == fingerprint and known.get("state") not in G.TRANSIENT:
+        return False                                  # a Gateway that was down or busy says nothing new about the key
     record["check"] = {"state": result["state"], "message": result["message"], "used": result.get("used"),
                        "at": now, "for": fingerprint}
     _write(c, record)
@@ -205,14 +214,31 @@ def check_now(store, vault, settings=None, opener=None):
     return result
 
 
-def check_later(store, vault, settings=None):
-    """`check_now` on a background thread: the hourly sweep never waits on the Gateway."""
+def check_soon(store, vault, settings=None, opener=None):
+    """`check_now` on a background thread, unless this key was asked about less than CHECK_EVERY seconds ago. For the
+    checks nobody pressed a button for: the page opening and the hourly sweep. Returns the thread, or None."""
+    with store.read() as c:
+        fingerprint = _fingerprint(c, settings)
+    if not fingerprint:
+        return None
+    now = time.monotonic()
+    with _tried_lock:
+        if now - _tried.get(fingerprint, -CHECK_EVERY) < CHECK_EVERY:
+            return None
+        _tried[fingerprint] = now
+    return check_later(store, vault, settings, opener)
+
+
+def check_later(store, vault, settings=None, opener=None):
+    """`check_now` on a background thread: the sweep and page loads never wait on the Gateway."""
     def run():
         try:
-            check_now(store, vault, settings)
+            check_now(store, vault, settings, opener)
         except Exception:
-            pass                                          # the next hour tries again; the last answer stays
-    threading.Thread(target=run, name="gateway-check", daemon=True).start()
+            pass                                          # the next check tries again; the last answer stays
+    thread = threading.Thread(target=run, name="gateway-check", daemon=True)
+    thread.start()
+    return thread
 
 
 def wanted(config):
@@ -266,7 +292,7 @@ def run_credentials(c, vault, settings, model):
 def health(c, settings=None):
     """The Health row for the people who manage the connection, or None when there is nothing to say."""
     shown = view(c, settings, manage=True)
-    if not shown["connected"] or shown["state"] in ("connected", "unchecked", "unreachable"):
+    if not shown["connected"] or shown["state"] in ("connected", "unchecked", *G.TRANSIENT):
         return None
     status = "warn" if shown["state"] in ("warning", "not_ready") else "bad"
     return {"status": status, "summary": shown["message"]}

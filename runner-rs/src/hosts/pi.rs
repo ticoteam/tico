@@ -85,22 +85,69 @@ fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     let body = serde_json::to_vec_pretty(&gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default())).ok()?;
     std::fs::write(dir.join("models.json"), body).ok()?;
     crate::isolation::chown(&dir.join("models.json"));
+    // pi retries any 429 or 5xx within seconds, and never waits for Retry-After. The Gateway's `rate_limited` asks for
+    // an hour (more refused keys from this address extend it), so a Gateway turn does not retry in pi: the server
+    // retries by the Gateway's code instead (backend/execution.py).
+    std::fs::write(dir.join("settings.json"), br#"{"retry": {"enabled": false}}"#).ok()?;
+    crate::isolation::chown(&dir.join("settings.json"));
     Some(dir)
 }
 
-/// A model error in words a person reads, for the Tico AI Gateway's refusals (its codes, or its messages as pi prints
-/// them); anything else as it came. The cap still reads as a spend limit and a refused key as a revoked API key, so the
-/// runner's limit and sign-in rules (hosts/mod.rs) classify them as before.
-pub fn plain_error(text: &str) -> String {
+/// The Tico AI Gateway's error codes (the same on every endpoint), each with the fixed message it is sent with. pi
+/// prints a refusal as `<status>: <the error object>`, code included, but an error inside a stream only by its message,
+/// so either names it.
+const GATEWAY_ERRORS: &[(&str, &str)] = &[
+    ("cap_reached", "monthly cap is reached"),
+    ("revoked_key", "gateway key was revoked"),
+    ("unknown_key", "unknown gateway key"),
+    ("rate_limited", "too many refused keys"),
+    ("unknown_model", "unknown model. tico models"),
+    ("unsupported_field", "take text and tools only"),
+    ("bad_request", "not a chat completion the gateway can send"),
+    ("upstream_refused", "refused this request as it was sent"),
+    ("no_route", "no route for this model"),
+    ("upstream_unavailable", "the model is unavailable"),
+];
+
+/// The Gateway's code in a model error pi printed, if it is one of the Gateway's.
+pub fn gateway_code(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    if lower.contains("cap_reached") || lower.contains("gateway cap reached") {
-        "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)".into()
-    } else if lower.contains("key_revoked") {
-        "Tico AI Gateway: api key revoked (key_revoked)".into()
-    } else if lower.contains("invalid_key") {
-        "Tico AI Gateway: invalid api key (invalid_key)".into()
-    } else {
-        text.to_string()
+    let squeezed: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    GATEWAY_ERRORS.iter().find(|(code, _)| squeezed.contains(&format!("\"code\":\"{code}\""))).map(|(code, _)| *code).or_else(|| {
+        GATEWAY_ERRORS.iter().find(|(code, said)| lower.contains(code) || lower.contains(said)).map(|(code, _)| *code)
+    })
+    .or_else(|| lower.contains("gateway cap reached").then_some("cap_reached"))
+}
+
+/// The Gateway's own message in a refusal pi printed as `<status>: {"code": .., "message": ..}`, if it has one.
+fn gateway_said(text: &str) -> Option<String> {
+    let body = &text[text.find('{')?..];
+    let error: Value = serde_json::from_str(body).ok()?;
+    let error = if error["error"].is_object() { &error["error"] } else { &error };
+    error["message"].as_str().map(|m| m.trim().chars().take(200).collect()).filter(|m: &String| !m.is_empty())
+}
+
+/// A model error of a turn on the Tico AI Gateway in words a person reads, ending with the Gateway's code; anything
+/// that isn't the Gateway's as it came. The cap still reads as a spend limit, `rate_limited` as a rate limit and a
+/// refused key as an invalid API key, so the runner's limit and sign-in rules (hosts/mod.rs) classify them; the server
+/// (backend/execution.py) decides from the code what is retried, when.
+pub fn plain_error(text: &str) -> String {
+    let Some(code) = gateway_code(text) else { return text.to_string() };
+    match code {
+        "cap_reached" => "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)".into(),
+        // One plain message for both: a person can't tell a revoked key from a mistyped one, and needn't.
+        "revoked_key" | "unknown_key" => format!("Tico AI Gateway: key not recognised (api key invalid: {code})"),
+        "rate_limited" => "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)".into(),
+        "unknown_model" => {
+            let names: Vec<&str> = GATEWAY_MODELS.iter().map(|(_, name)| *name).collect();
+            format!("Tico AI Gateway: this model isn't offered. Tico models: {} (unknown_model)", names.join(", "))
+        }
+        "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
+        "upstream_unavailable" => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
+        _ => {
+            let said = gateway_said(text).unwrap_or_else(|| "the request can't be sent as it is".into());
+            format!("Tico AI Gateway refused the request as sent: {said} ({code})")
+        }
     }
 }
 
@@ -256,12 +303,29 @@ impl Wire for Pi {
             }
             "message_end" => {
                 let done = &msg["message"];
-                if done["role"] == "assistant" && done["stopReason"] == "error" && truthy(done.get("errorMessage")) {
+                let gateway = done["provider"] == GATEWAY_PROVIDER;
+                if gateway {
+                    turn.extra["gateway"] = json!(true);
+                }
+                let failed = done["role"] == "assistant" && done["stopReason"] == "error" && truthy(done.get("errorMessage"));
+                let partial = if failed { assistant_text(done) } else { String::new() };
+                if failed && gateway && !partial.trim().is_empty() {
+                    // The Gateway's stream broke after it began: the reply keeps what came, and says it was cut off.
+                    let said = plain_error(&text_of(&done["errorMessage"]));
+                    turn.reply = format!("{}\n\n(The Tico AI Gateway cut this reply off: {said})", partial.trim_end());
+                    turn.emit("message", json!({"text": turn.reply, "final": false}));
+                    turn.extra["cut_off"] = json!(true);
+                    return;
+                }
+                if failed {
                     // A model call that failed (the Gateway's cap, a refused key): pi ends the message with its error.
-                    turn.error = plain_error(&text_of(&done["errorMessage"]));
+                    let text = text_of(&done["errorMessage"]);
+                    turn.error = if gateway { plain_error(&text) } else { text };
                     turn.extra["model_error"] = json!(true);
                 }
-                if done["role"] == "assistant" && done["usage"].is_object() {
+                // A refused call used nothing: no zero count, so a turn that did nothing else still reads as having done nothing.
+                let nothing = failed && gateway && usage_tokens(&done["usage"]).2 == 0;
+                if done["role"] == "assistant" && done["usage"].is_object() && !nothing {
                     // One assistant message ends once, so this is where its tokens are counted.
                     let (inp, out, total) = usage_tokens(&done["usage"]);
                     turn.emit("tokens", json!({"input": inp, "output": out, "total": total, "usage": usage_increment(&done["usage"])}));
@@ -274,16 +338,17 @@ impl Wire for Pi {
             }
             "turn_end" => {
                 let text = assistant_text(&msg["message"]);
-                if !text.is_empty() {
+                if !text.is_empty() && !truthy(turn.extra.get("cut_off")) {
                     turn.reply = text;
                 }
             }
             "error" => {
                 let err = [m.get("error"), m.get("message")].into_iter().flatten().find(|v| truthy(Some(v))).cloned().unwrap_or(json!("pi error"));
-                turn.error = plain_error(&match &err {
+                let text = match &err {
                     Value::Object(e) => e.get("message").filter(|v| truthy(Some(v))).map(text_of).unwrap_or_else(|| err.to_string()),
                     other => text_of(other),
-                });
+                };
+                turn.error = if truthy(turn.extra.get("gateway")) { plain_error(&text) } else { text };
             }
             "agent_end" => turn.ended = true,
             kind @ ("tool_execution_start" | "tool_execution_end") => {
@@ -349,20 +414,13 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[tokio::test]
-    async fn a_tico_model_runs_on_the_gateway_and_its_cap_reads_as_gateway_cap_reached() {
+    /// The events of one turn of a Tico-model bot whose fake pi prints `lines`, and the turn's workspace.
+    async fn gateway_turn(lines: &[&str]) -> (Vec<Value>, PathBuf) {
         let dir = std::env::temp_dir().join(format!("fake-pi-gw-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake(&dir, "pi");
-        // pi ends a failed model call with the error on the assistant message, then exits 0.
-        let fixture = dir.join("cap.jsonl");
-        std::fs::write(&fixture, [
-            r#"{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}"#,
-            r#"{"type":"agent_start"}"#,
-            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"429 Gateway cap reached for this key this month"}}"#,
-            r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
-            r#"{"type":"agent_end"}"#,
-        ].join("\n")).unwrap();
+        let fixture = dir.join("gateway.jsonl");
+        std::fs::write(&fixture, lines.join("\n")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = PiHost::new("acme", vec![cmd.clone()], tx);
         host.start();
@@ -372,34 +430,93 @@ mod tests {
         }
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "hello", Some("high")).unwrap();
-        assert_eq!(turn_events(&mut rx).await, vec![
+        let events = turn_events(&mut rx).await;
+        host.stop().await;
+        (events, dir)
+    }
+
+    const SESSION: &str = r#"{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}"#;
+
+    #[tokio::test]
+    async fn a_tico_model_runs_on_the_gateway_and_its_cap_reads_as_gateway_cap_reached() {
+        // pi ends a refused model call with the error on the assistant message (`<status>: <error object>`), then exits 0.
+        let (events, dir) = gateway_turn(&[
+            SESSION,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"cap_reached\",\"message\":\"The Tico AI Gateway's monthly cap is reached.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
+            r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
+            r#"{"type":"agent_end"}"#,
+        ]).await;
+        // No zero token count: a refused call did nothing, so the server may treat the turn as having done nothing.
+        assert_eq!(events, vec![
             json!({"kind": "status", "state": "active"}),
             json!({"kind": "turn_failed", "error": "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)", "limit": true}),
             json!({"kind": "status", "state": "idle"}),
         ]);
-        host.stop().await;
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
         assert!(args.lines().last().unwrap().starts_with("--mode json -p --provider tico --model tico-mid-1.0 --thinking high"), "{args}");
-        // pi's models.json names the Gateway and the key's variable, never the key.
+        // pi's models.json names the Gateway and the key's variable, never the key; pi itself never retries.
         let written = std::fs::read_to_string(dir.join("runtime/pi-gateway/models.json")).unwrap();
         assert!(!written.contains("tgw-synthetic-fixture"));
         let models: Value = serde_json::from_str(&written).unwrap();
         assert_eq!(models["providers"]["tico"]["baseUrl"], "https://gw.example/v1/gateway");
         assert_eq!(models["providers"]["tico"]["apiKey"], "$TICOAI_GATEWAY_KEY");
         assert_eq!(models["providers"]["tico"]["api"], "openai-completions");
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("runtime/pi-gateway/settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["retry"]["enabled"], false);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn a_gateway_stream_that_breaks_keeps_its_partial_reply_and_says_so() {
+        // The Gateway sent two chunks, then `data: {"error": ...}` and no [DONE]: pi ends the message with what came.
+        let (events, dir) = gateway_turn(&[
+            SESSION,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello there, "}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"friend"}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[{"type":"text","text":"Hello there, friend"}],"stopReason":"error","errorMessage":"The model is unavailable. Try again later."}}"#,
+            r#"{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"Hello there, friend"}]}}"#,
+            r#"{"type":"agent_end"}"#,
+        ]).await;
+        std::fs::remove_dir_all(dir).unwrap();
+        let said = "Hello there, friend\n\n(The Tico AI Gateway cut this reply off: Tico AI Gateway is unavailable, try again (upstream_unavailable))";
+        assert!(!events.iter().any(|e| e["kind"] == "turn_failed"), "{events:?}");
+        assert!(events.contains(&json!({"kind": "message", "text": said, "final": true})), "{events:?}");
+        assert!(events.contains(&json!({"kind": "turn_completed", "status": "completed"})), "{events:?}");
+    }
+
     #[test]
-    fn the_gateways_refusals_read_plainly_and_keep_their_classification() {
-        let cap = plain_error("429 {\"error\":{\"code\":\"cap_reached\"}}");
-        assert!(cap.starts_with("Gateway cap reached") && crate::hosts::limit_re().is_match(&cap));
-        let revoked = plain_error("401 key_revoked");
-        assert!(crate::hosts::is_auth_rejected(&revoked), "{revoked}");
-        assert!(crate::hosts::is_auth_rejected(&plain_error("401 invalid_key")));
-        let rate = plain_error("429 rate_limited: slow down");
-        assert_eq!(rate, "429 rate_limited: slow down");
-        assert!(!rate.contains("Gateway cap"));
+    fn every_gateway_code_reads_plainly_and_keeps_its_classification() {
+        use crate::hosts::{is_auth_rejected, is_limit};
+        // As pi prints a refusal (`<status>: <the error object>`) and an error inside a stream (its message only).
+        let refusal = |status: u16, code: &str, message: &str| {
+            format!("{status}: {}", json!({"code": code, "message": message, "type": "x", "param": null}))
+        };
+        let table: &[(u16, &str, &str, &str)] = &[
+            (429, "cap_reached", "The Tico AI Gateway's monthly cap is reached.", "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)"),
+            (401, "revoked_key", "This gateway key was revoked.", "Tico AI Gateway: key not recognised (api key invalid: revoked_key)"),
+            (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
+            (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited after too many refused keys from this address; wait an hour (rate_limited)"),
+            (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0 (unknown_model)"),
+            (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
+            (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
+            (400, "upstream_refused", "The model refused this request as it was sent.", "Tico AI Gateway refused the request as sent: The model refused this request as it was sent. (upstream_refused)"),
+            (503, "no_route", "No route for this model meets the request's filters.", "Tico AI Gateway: no Tico route for this request (no_route)"),
+            (503, "upstream_unavailable", "The model is unavailable. Try again later.", "Tico AI Gateway is unavailable, try again (upstream_unavailable)"),
+        ];
+        for (status, code, message, plain) in table {
+            let said = plain_error(&refusal(*status, code, message));
+            assert_eq!(&said, plain, "{code}");
+            assert_eq!(gateway_code(message), Some(*code), "{code} inside a stream");
+            // What the runner and server classify by: a cap or rate limit is a limit, a refused key a refused sign-in,
+            // and nothing else is either.
+            assert_eq!(is_limit(&said), matches!(*code, "cap_reached" | "rate_limited"), "{code}");
+            assert_eq!(is_auth_rejected(&said), matches!(*code, "revoked_key" | "unknown_key"), "{code}");
+            assert!(!crate::hosts::rejection_reason(&said).contains("[redacted]"), "{code}");
+        }
+        // Not the Gateway's: as it came.
+        assert_eq!(plain_error("429 rate limit: slow down"), "429 rate limit: slow down");
         assert_eq!(gateway_models_json("")["providers"]["tico"]["baseUrl"], GATEWAY_DEFAULT_URL);
         // A Tico-model bot needs no OpenRouter grant on its computer.
         let (state, _) = sign_in(&[json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}})]);

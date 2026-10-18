@@ -230,7 +230,7 @@ class Scheduler:
                 with self.store.read() as c:
                     due = gateway_connection.connected(c, self.store.settings)
                 if due:
-                    gateway_connection.check_later(self.store, Vault(self.store), self.store.settings)
+                    gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
             except Exception as exc:
                 failures.append({"gateway": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):

@@ -1304,6 +1304,8 @@ def create_app(settings=None):
         the key (working, revoked, the month's cap) only to the owner, who manages it. Never the key."""
         who = request.state.identity
         auth.domain(who)
+        if who.role == "owner":
+            gateway_connection.check_soon(store, app.state.vault, settings)   # the page's answer is the last check's
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=who.role == "owner")
 

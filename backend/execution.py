@@ -347,10 +347,18 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
     finished = H.parse_ts(finished)
     if not finished:
         return cooldown
+    errors = limit_errors(c, attempt_id)
+    if any(gateway.cap_reached(error) for error in errors):
+        # The Tico AI Gateway's cap is the key's for the UTC month: no retry before the next one, whatever a reported
+        # reset or Retry-After said.
+        return max(cooldown, int((gateway.month_after(finished) - finished).total_seconds()) + 1)
     reported = provider_reset({"resets_at": resets_at}, finished)
+    if any(gateway.rate_limited(error) for error in errors):
+        # Its address block lasts the Gateway's Retry-After, and every early retry with a refused key extends it.
+        return reported or max(cooldown, gateway.RETRY_AFTER)
     if reported:
         return reported
-    for error in limit_errors(c, attempt_id):
+    for error in errors:
         match = re.search(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", error, re.I)
         reset = H.parse_ts(match[1]) if match else None
         if reset:
@@ -1833,12 +1841,21 @@ class Execution:
         # unlucky but broken, and waits for a person as before.
         # Codex and Claude never report their tool calls, so for them silence is only evidence
         # together with speed: the Grok failures came back within a second or two of starting.
+        # A run on a Tico model the Tico AI Gateway refused ends with the Gateway's code (clients/gateway.py): asking
+        # again gets the same answer for a refusal of the request as sent, and an unavailable model is worth a retry.
+        tico_code, tico_error = "", ""
+        if body.outcome == "failed" and not stopped and body.auth_rejected is None:
+            tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
+            if tico_error and gateway_connection.is_tico(
+                    gateway_connection.run_config(c, self.store.settings, row["bot"], aid).get("model")):
+                tico_code = gateway.run_code(tico_error)
         silent = False
         if body.outcome == "failed" and not limited and not retryable and not stopped:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
-            silent = kinds <= SILENT_KINDS and quick and tries < NO_EFFECT_TRIES
+            silent = (kinds <= SILENT_KINDS and (quick or tico_code == gateway.UNAVAILABLE) and tries < NO_EFFECT_TRIES
+                      and tico_code not in gateway.FINAL)
         # A refused key or sign-in blocks this profile until its credential changes.
         # Only runs with no evidence of actions may wait queued rather than held for review.
         rejected = body.outcome == "failed" and body.auth_rejected is not None and not stopped
@@ -1857,11 +1874,8 @@ class Execution:
             (aid,)).fetchone() is not None
         if rejected:
             silent = False
-        # A bot on a Tico model whose Gateway has no chat endpoint (or no such model) yet: said as it is, not as a crash.
-        not_served = (body.outcome == "failed" and not (limited or retryable or rejected or stopped)
-                      and any(gateway.not_served(error) for error in limit_errors(c, aid))
-                      and gateway_connection.is_tico(
-                          gateway_connection.run_config(c, self.store.settings, row["bot"], aid).get("model")))
+        # What the bot says about a run the Gateway refused, in its words rather than as a crash.
+        refused = gateway.run_status(tico_code, tico_error) if tico_code and not (limited or retryable or rejected) else ""
         requeue = not rejected_acted if rejected else limited or retryable or silent
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "cancelled" if stopped
@@ -2004,6 +2018,9 @@ class Execution:
                 # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
                 focus = (f"{gateway.CAP_MESSAGE} at {hit[11:16]}: the gateway key has used this month's cap; "
                          f"retrying after {retry[:10]} {retry[11:16]} UTC")
+            elif tico_code == gateway.RATE_LIMITED:
+                focus = (f"Tico AI Gateway rate limited at {hit[11:16]} after too many refused keys from this "
+                         f"address; retrying after {retry[:10]} {retry[11:16]} UTC")
             elif body.limit_resets_at and provider_reset(last_limit(c, row["bot"]), H.parse_ts(hit)):
                 focus = (f"{runtime} {kind} at {hit[11:16]}; resumes at {retry[11:16]} UTC"
                          + ("" if retry[:10] == hit[:10] else f" on {retry[:10]}") + " when it resets")
@@ -2027,7 +2044,7 @@ class Execution:
                           began=row["started"] or row["created"])
         elif silent:
             settle_status(c, row["bot"], "idle",
-                          f"{gateway.NOT_SERVED} ({H.now()[11:16]} UTC); the run is back in the queue" if not_served else
+                          f"{refused} ({H.now()[11:16]} UTC); the run is back in the queue" if refused else
                           f"{runtime} failed before the run began at {H.now()[11:16]} UTC; the run is back in the queue",
                           began=row["started"] or row["created"])
             H.event(c, H.KEEPER, "attempt.no_effect_retry", aid,
@@ -2046,8 +2063,8 @@ class Execution:
             # it into a crash, so a working bot looked broken.
             healthy = body.outcome == "completed"
             settle_status(c, row["bot"], "idle" if healthy else "crashed",
-                          "" if healthy else f"{gateway.NOT_SERVED}; check the Gateway URL in Settings > AI providers. "
-                          "This run is saved for later" if not_served else "One run stopped; saved for later",
+                          "" if healthy else f"{refused}. This run is saved for later" if refused
+                          else "One run stopped; saved for later",
                           began=row["started"] or row["created"])
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 

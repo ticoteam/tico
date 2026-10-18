@@ -94,10 +94,27 @@ preview of its first and last three characters.
 A bot on a Tico model, or whose own fallback is one, gets the key and the Gateway's URL as `TICOAI_GATEWAY_KEY` and
 `TICOAI_GATEWAY_URL` from `GET /api/v2/credential-runtime`; no other bot does. pi reads them through a `tico` provider
 in its `models.json` (OpenAI chat completions, streamed). The server reads the Gateway's word on the key
-(`<gateway>/key`) on save, on **Check now** and hourly: the owner sees the 80% warning, **Gateway cap reached** and a
-revoked key in Settings and Health, and a bot stopped by the cap says "Gateway cap reached" in its status. A Gateway
-that answers 404 (no chat endpoint yet, or a wrong URL) shows as **Not ready**, and a bot whose model call it refuses
-that way says the Gateway doesn't serve Tico models at its URL yet.
+(`<gateway>/key`) on save, on **Check now**, hourly, and when an owner opens the page (at most once a minute, since
+the Gateway answers that six times a minute per key): the owner sees the 80% warning, **Gateway cap reached** and a
+key the Gateway doesn't recognise (revoked or unknown, one plain message) in Settings and Health. A Gateway that
+answers 404 (no chat endpoint yet, or a wrong URL) shows as **Not ready**.
+
+The Gateway names every refusal with a code, the same on every endpoint (`error.code`, or a flat `error` from
+decisions). pi's own retry is off for Tico models, so the server decides what happens next from the code:
+
+| Code | What the bot says | The run |
+|---|---|---|
+| `cap_reached` | Gateway cap reached | Waits until the next UTC month, whatever Retry-After says |
+| `revoked_key`, `unknown_key` | The Tico AI Gateway key is not working | Waits for a new key |
+| `rate_limited` | Tico AI Gateway rate limited | Waits the Gateway's Retry-After (an hour), never sooner |
+| `unknown_model` | The Gateway doesn't offer this model, and the three it does | Saved for later, not retried |
+| `unsupported_field`, `bad_request`, `upstream_refused` | Refused as sent, with the Gateway's message | Saved for later, not retried |
+| `no_route` | No Tico route for this request | Saved for later, not retried |
+| 404 | The Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried |
+| `upstream_unavailable` | Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran |
+
+A reply the Gateway cuts off after it began streaming is posted as far as it got, with a note saying the Gateway cut
+it off. Only codes are logged, never the key.
 
 ## Choosing a harness, model and effort
 

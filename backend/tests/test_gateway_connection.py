@@ -16,10 +16,26 @@ from clients import gateway as G
 
 KEY = "tgw-synthetic-fixture-key-0042"
 OTHER = "tgw-synthetic-fixture-key-0099"
+# The Gateway's error table (Dev 181, tico-services PR #11): code -> (HTTP status, message). The same on every endpoint.
+ERRORS = {
+    "unknown_key": (401, "Unknown gateway key."),
+    "revoked_key": (401, "This gateway key was revoked."),
+    "rate_limited": (429, "Too many refused keys from this address. Try again later."),
+    "cap_reached": (429, "The Tico AI Gateway's monthly cap is reached."),
+    "unknown_model": (400, "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0."),
+    "unsupported_field": (400, "Tico models here take text and tools only: no images, audio, files or more than one "
+                               "choice."),
+    "bad_request": (400, "The request is not a chat completion the gateway can send."),
+    "upstream_refused": (400, "The model refused this request as it was sent."),
+    "no_route": (503, "No route for this model meets the request's filters."),
+    "upstream_unavailable": (503, "The model is unavailable. Try again later."),
+}
 
 
 class FakeGateway:
-    """The Gateway's `GET <base>/key`: what each key answers is set per test (`keys`); every call is kept."""
+    """The Gateway's `GET <base>/key`: what each key answers is set per test (`keys`); every call is kept. An unknown
+    key gets 401 `unknown_key`. Errors come in the Gateway's two shapes: nested `{"error": {"code": ...}}` (chat) or a
+    flat `{"error": "<code>"}` (decisions)."""
 
     def __init__(self):
         self.keys, self.calls = {}, []
@@ -32,7 +48,7 @@ class FakeGateway:
             def do_GET(self):
                 key = self.headers.get("Authorization", "").removeprefix("Bearer ")
                 owner.calls.append((self.path, key))
-                status, body = owner.keys.get(key, (401, {"error": {"code": "invalid_key"}}))
+                status, body = owner.keys.get(key, (401, {"error": {"code": "unknown_key", "message": "Unknown key"}}))
                 data = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -48,8 +64,13 @@ class FakeGateway:
         self.keys[key] = (200, {"status": "active", "month": "2026-10", "cap_usd": 50.0, "spent_usd": 50.0 * used,
                                 "used": used, "warning": used >= 0.8, "cap_reached": used >= 1})
 
-    def revoked(self, key):
-        self.keys[key] = (401, {"error": {"code": "key_revoked", "message": "This key was revoked"}})
+    def refuse(self, key, status, code, flat=False):
+        message = ERRORS.get(code, (status, "Refused"))[1]
+        self.keys[key] = (status, {"error": code} if flat else {"error": {"code": code, "message": message,
+                                                                          "type": "invalid_request_error"}})
+
+    def revoked(self, key, flat=False):
+        self.refuse(key, 401, "revoked_key", flat)
 
 
 @contextmanager
@@ -61,7 +82,11 @@ def fake_gateway():
         fake.server.shutdown()
 
 
-def setup(api, monkeypatch):
+def setup(api, monkeypatch, page_checks=False):
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "_tried", {})
+    if not page_checks:   # opening the page asks the Gateway on a thread; only the test about that lets it
+        monkeypatch.setattr(gateway_connection, "check_soon", lambda *args, **kwargs: None)
     monkeypatch.delenv("TICO_GATEWAY_KEY", raising=False)
     monkeypatch.delenv("TICO_GATEWAY_URL", raising=False)
     api.app.state.store.settings.credential_kms_key = "test-key"
@@ -191,8 +216,12 @@ def test_a_key_the_environment_sets_shows_as_connected_and_is_not_edited_here(ap
     (lambda f: f.active(KEY, 0.79), "connected", None, "Connected."),
     (lambda f: f.active(KEY, 0.8), "warning", "warn", "80% of its monthly Gateway cap"),
     (lambda f: f.active(KEY, 1.0), "cap_reached", "bad", "Gateway cap reached"),
-    (lambda f: f.revoked(KEY), "revoked", "bad", "Not working: Tico has revoked this gateway key"),
-    (lambda f: None, "invalid", "bad", "Not working: the Gateway does not know this key"),
+    (lambda f: f.refuse(KEY, 429, "cap_reached"), "cap_reached", "bad", "Gateway cap reached"),
+    (lambda f: f.refuse(KEY, 429, "cap_reached", flat=True), "cap_reached", "bad", "Gateway cap reached"),
+    (lambda f: f.revoked(KEY), "revoked", "bad", "Not working: key not recognised"),
+    (lambda f: f.revoked(KEY, flat=True), "revoked", "bad", "Not working: key not recognised"),
+    (lambda f: None, "unknown", "bad", "Not working: key not recognised"),
+    (lambda f: f.refuse(KEY, 401, "unknown_key", flat=True), "unknown", "bad", "Not working: key not recognised"),
 ])
 def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(api, monkeypatch, answer, state,
                                                                               status, words):
@@ -201,12 +230,27 @@ def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(api
         answer(fake)
         shown = save(api, fake)
         assert shown["state"] == state and words in shown["message"]
-        assert shown["working"] is (state not in ("revoked", "invalid"))
+        assert shown["working"] is (state not in ("revoked", "unknown"))
         rows = {r["id"]: r for r in get(api, "health")["checks"]}
         assert (rows["gateway"]["status"], words in rows["gateway"]["summary"]) == (status, True) if status \
             else "gateway" not in rows
         # The connection's people only: an admin who does not own it is not told.
         assert "gateway" not in {r["id"] for r in get(api, "health", "ben-test")["checks"]}
+
+
+@pytest.mark.parametrize("flat", [False, True])
+@pytest.mark.parametrize("code", list(ERRORS))
+def test_every_gateway_code_on_the_key_endpoint_reads_plainly(code, flat):
+    """Each row of the Gateway's table, in both its shapes: only a refused key says the connection is not working,
+    the cap says so, and the rest say nothing about the key (never the Gateway's raw text, never the key)."""
+    with fake_gateway() as fake:
+        fake.refuse(KEY, ERRORS[code][0], code, flat)
+        seen = G.check(KEY, fake.url)
+    state = {"unknown_key": "unknown", "revoked_key": "revoked", "cap_reached": "cap_reached",
+             "rate_limited": "busy"}.get(code, "unreachable")
+    assert seen["state"] == state and seen["working"] is (code not in ("unknown_key", "revoked_key"))
+    assert seen["message"] == G.MESSAGES[state] or state == "cap_reached"
+    assert ERRORS[code][1] not in seen["message"] and KEY not in json.dumps(seen)
 
 
 def test_an_unreachable_gateway_is_not_called_broken(api, monkeypatch):
@@ -215,6 +259,56 @@ def test_an_unreachable_gateway_is_not_called_broken(api, monkeypatch):
         url = fake.url
     shown = put(api, "providers/gateway", {"key": KEY, "url": url, "expected_revision": 0})
     assert shown["state"] == "unreachable" and shown["working"] is True
+
+
+@pytest.mark.parametrize("flat", [False, True])
+def test_a_busy_or_down_gateway_never_replaces_what_it_said_about_the_key(api, monkeypatch, flat):
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.85)
+        assert save(api, fake)["state"] == "warning"
+        fake.refuse(KEY, 429, "rate_limited", flat)            # 6 a minute per key; past that, rate_limited
+        assert post(api, "providers/gateway/check", {})["state"] == "warning"
+        url = fake.url
+    assert post(api, "providers/gateway/check", {})["state"] == "warning"   # and the Gateway gone altogether
+    # With nothing known yet, a busy Gateway says so, without calling the key broken.
+    with fake_gateway() as fake:
+        fake.refuse(OTHER, 429, "rate_limited", flat)
+        shown = put(api, "providers/gateway", {"key": OTHER, "url": fake.url, "expected_revision": _revision(api)})
+        assert shown["state"] == "busy" and shown["working"] is True
+    assert url
+
+
+def test_opening_the_page_asks_the_gateway_at_most_once_a_minute(api, monkeypatch):
+    setup(api, monkeypatch, page_checks=True)
+    from backend import gateway_connection
+    clock = [1000.0]
+    monkeypatch.setattr(gateway_connection.time, "monotonic", lambda: clock[0])
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)                                         # the save's own check
+        def asked(n):
+            for _ in range(100):
+                if len(fake.calls) >= n:
+                    break
+                threading.Event().wait(0.05)
+            return len(fake.calls)
+        get(api, "providers/gateway")
+        assert asked(2) == 2                                    # the owner opened the page: asked once
+        get(api, "providers/gateway")
+        get(api, "providers/gateway", "ben-test")               # a member's view never asks
+        clock[0] += 59
+        get(api, "providers/gateway")
+        assert asked(3) == 2                                    # not again within the minute
+        clock[0] += 1
+        fake.active(KEY, 0.8)
+        get(api, "providers/gateway")
+        assert asked(3) == 3
+        for _ in range(100):
+            if get(api, "providers/gateway")["state"] == "warning":
+                break
+            threading.Event().wait(0.05)
+        assert get(api, "providers/gateway")["state"] == "warning"
 
 
 def test_a_check_is_about_the_key_it_was_made_with(api, monkeypatch):
@@ -302,46 +396,121 @@ def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch):
     ready(api, machine, ["ops"])
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
+    # The Gateway's Retry-After (here as the reset the runner reported) is not believed for the cap.
+    soon = H.shift(H.now(), seconds=60)
     finish(api, machine, attempt, "Gateway cap reached: this gateway key has used its monthly spend limit (cap_reached)",
-           limited=True)
+           limited=True, limit_resets_at=soon)
     with api.app.state.store.read() as c:
         status = H.status(c, "ops")
     assert status["state"] == "limited" and status["focus"].startswith("Gateway cap reached at ")
     assert "usage limit" not in status["focus"]
+    # No retry this UTC month: the bot waits for the next one.
+    month = G.month_after(H.parse_ts(H.now()))
+    assert status["focus"].endswith(f"retrying after {month:%Y-%m-%d} 00:00 UTC"), status["focus"]
+    assert claim(api, machine, "ops") is None
 
 
-def test_a_rate_limit_is_not_called_a_cap(api, monkeypatch):
+def tico_run(api, monkeypatch):
     setup(api, monkeypatch)
     put_bot_on(api, "ops", "tico-mid-1.0")
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    attempt = claim(api, machine, "ops")
-    finish(api, machine, attempt, "429 rate limited (rate_limited)", limited=True)
-    with api.app.state.store.read() as c:
-        assert "Gateway cap reached" not in H.status(c, "ops")["focus"]
+    return machine, claim(api, machine, "ops")
 
 
-def test_a_revoked_key_says_the_connection_is_not_working(api, monkeypatch):
-    setup(api, monkeypatch)
-    put_bot_on(api, "ops", "tico-mid-1.0")
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    attempt = claim(api, machine, "ops")
-    finish(api, machine, attempt, "Tico AI Gateway: api key revoked (key_revoked)",
-           auth_rejected={"runtime": "pi", "reason": "api key revoked (key_revoked)"})
+def ended(api, attempt):
+    """The bot's status focus and what became of the run's job."""
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["focus"].startswith("The Tico AI Gateway key is not working")
+        job = c.execute("SELECT j.state FROM jobs j JOIN attempts a ON a.job_id=j.id WHERE a.id=?",
+                        (attempt["id"],)).fetchone()[0]
+        return H.status(c, "ops"), job
+
+
+def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch):
+    machine, attempt = tico_run(api, monkeypatch)
+    finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
+           "an hour (rate_limited)", limited=True)
+    status, job = ended(api, attempt)
+    assert status["state"] == "limited" and job == "queued"
+    assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]
+    # Never a tight retry: an early one with a refused key would extend the address block.
+    with api.app.state.store.read() as c:
+        from backend.execution import limit_cooldown
+        assert limit_cooldown(c, "ops") >= G.RETRY_AFTER
+    assert claim(api, machine, "ops") is None
+
+
+@pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
+def test_a_refused_key_says_the_connection_is_not_working(api, monkeypatch, code):
+    machine, attempt = tico_run(api, monkeypatch)
+    finish(api, machine, attempt, f"Tico AI Gateway: key not recognised (api key invalid: {code})",
+           auth_rejected={"runtime": "pi", "reason": f"key not recognised (api key invalid: {code})"})
+    assert ended(api, attempt)[0]["focus"].startswith("The Tico AI Gateway key is not working")
+
+
+REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
+
+
+# What the runner ends a refused Tico run with (runner-rs/src/hosts/pi.rs `plain_error`), and what the bot says.
+@pytest.mark.parametrize("code,error,focus", [
+    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.0, Tico Mid 1.0, Tico "
+     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.0, Tico Mid "
+     "1.0, Tico Power 1.0"),
+    ("unsupported_field", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["unsupported_field"][1]),
+    ("bad_request", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["bad_request"][1]),
+    ("upstream_refused", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["upstream_refused"][1]),
+    ("no_route", "Tico AI Gateway: no Tico route for this request (no_route)", "No Tico route for this request"),
+])
+def test_a_request_the_gateway_refused_as_sent_is_not_retried(api, monkeypatch, code, error, focus):
+    machine, attempt = tico_run(api, monkeypatch)
+    # Refused at once, before anything ran: still not back in the queue, since asking again gets the same answer.
+    finish(api, machine, attempt, error.format(code=code, message=ERRORS[code][1]))
+    status, job = ended(api, attempt)
+    assert status["focus"] == f"{focus}. This run is saved for later", status["focus"]
+    assert job == "uncertain" and status["state"] == "crashed"
+
+
+@pytest.mark.parametrize("acted", [False, True])
+def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
+    machine, attempt = tico_run(api, monkeypatch)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    events = [{"seq": 1, "kind": "tool", "payload": {"name": "read"}}] if acted else []
+    events.append({"seq": len(events) + 1, "kind": "error", "payload": {
+        "error": "Tico AI Gateway is unavailable, try again (upstream_unavailable)"}})
+    post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": len(events), "text": ""},
+         machine["token"])
+    status, job = ended(api, attempt)
+    assert status["focus"].startswith("Tico AI Gateway is unavailable, try again"), status["focus"]
+    # Nothing ran: back in the queue. A run that had acted is kept for a person, as any interrupted run.
+    assert (job, "back in the queue" in status["focus"]) == (("uncertain", False) if acted else ("queued", True))
+
+
+def test_a_reply_the_gateway_cut_off_is_posted_with_what_happened(api, monkeypatch):
+    """A stream that broke after its first chunk: the runner completes the turn with the partial reply and a note
+    (runner-rs/src/hosts/pi.rs), so the bot never stops mid-sentence without a word."""
+    machine, attempt = tico_run(api, monkeypatch)
+    reply = ("Hello there, friend\n\n(The Tico AI Gateway cut this reply off: Tico AI Gateway is unavailable, try "
+             "again (upstream_unavailable))")
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "message", "payload": {
+        "text": reply, "final": True}}]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 1, "text": reply},
+         machine["token"])
+    status, job = ended(api, attempt)
+    assert job == "completed" and status["state"] == "idle"
+    with api.app.state.store.read() as c:
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE from_actor='bot:ops'")]
+    assert any("cut this reply off" in body and body.startswith("Hello there") for body in said), said
 
 
 @pytest.mark.parametrize("acted", [False, True])
 def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, acted):
     """Dev 181 not deployed: the key is saved, but the Gateway answers `<base>/key` and `<base>/chat/completions` with
     404. Settings says it is not ready (not broken, not "did not answer"), and the bot says the Gateway doesn't serve
-    Tico models yet, whether its run had begun (held for later) or not (back in the queue)."""
+    Tico models yet. Asking again gets the same 404, so the run is saved for later either way."""
     setup(api, monkeypatch)
     with fake_gateway() as fake:
         fake.keys[KEY] = (404, {"error": {"message": "Not Found"}})
@@ -363,8 +532,8 @@ def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, act
          machine["token"])
     with api.app.state.store.read() as c:
         focus = H.status(c, "ops")["focus"]
-    assert focus.startswith("The Tico AI Gateway doesn't serve Tico models at its URL yet"), focus
-    assert ("back in the queue" in focus) is not acted and "404" not in focus
+    assert focus == ("The Tico AI Gateway doesn't serve Tico models at its URL yet; check the Gateway URL in "
+                     "Settings > AI providers. This run is saved for later"), focus
 
 
 def test_a_404_on_another_model_is_not_blamed_on_the_gateway(api, monkeypatch):

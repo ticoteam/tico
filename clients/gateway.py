@@ -6,8 +6,14 @@
 
 `check(key, base)` reads `<base>/key` and says, in words a person reads, whether the connection works. It never
 returns or logs the key, and it keeps only the Gateway's code, never its text.
+
+The Gateway's error codes, the same on every endpoint, in `error.code` (nested, chat) or `error` (a flat string,
+decisions): 401 `revoked_key` and `unknown_key` (both read "key not recognised"), 429 `cap_reached` (no retry this UTC
+month, whatever Retry-After says) and 429 `rate_limited` (retry after Retry-After). `<base>/key` answers 6 times a
+minute per key, so the server asks it gently (backend/gateway_connection.py `check_soon`).
 """
 
+import datetime
 import json
 import re
 import urllib.error
@@ -19,7 +25,12 @@ LABEL = "Tico AI Gateway"
 TIMEOUT = 8
 # The share of a key's monthly cap from which its holders are warned (Dev 183).
 WARN_AT = 0.8
-CAP_REACHED = "cap_reached"
+CAP_REACHED, RATE_LIMITED = "cap_reached", "rate_limited"
+REVOKED_KEY, UNKNOWN_KEY = "revoked_key", "unknown_key"
+# States that say nothing about the key: the Gateway was down or asked to slow down. They never replace a real answer.
+TRANSIENT = ("unreachable", "busy")
+# States where the Gateway refuses the key: the connection is not working.
+REFUSED = ("revoked", "unknown")
 CAP_MESSAGE = "Gateway cap reached"
 # What each state says to the people who own the connection.
 MESSAGES = {
@@ -27,14 +38,29 @@ MESSAGES = {
     "warning": "This key has used {percent}% of its monthly Gateway cap. Bots stop at 100% until next month.",
     "cap_reached": "Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next "
                    "month, or until Tico raises the cap.",
-    "revoked": "Not working: Tico has revoked this gateway key. Ask Tico for a new key and save it here.",
-    "invalid": "Not working: the Gateway does not know this key. Check you pasted the whole key.",
+    # One message for a revoked and an unknown key: the Gateway's answer doesn't say which keys ever existed.
+    "revoked": "Not working: key not recognised. Check you pasted the whole key, or ask Tico for a new one and save it "
+               "here.",
+    "unknown": "Not working: key not recognised. Check you pasted the whole key, or ask Tico for a new one and save it "
+               "here.",
     "unreachable": "Not checked: the Gateway did not answer. Bots keep trying; check again later.",
+    "busy": "Not checked: the Gateway asked to slow down. Checking again in a minute.",
     "not_ready": "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait "
                  "until Tico turns them on.",
 }
-# What a bot says when the Gateway answered its model call with "not here" (404, or an unknown model).
+# What a bot says when the Gateway answered its model call with 404: no chat endpoint there (yet), or a wrong URL.
 NOT_SERVED = "The Tico AI Gateway doesn't serve Tico models at its URL yet"
+NOT_FOUND = "not_found"
+# How long the Gateway's `rate_limited` asks a caller to wait (its Retry-After): more refused keys extend the block.
+RETRY_AFTER = 3600
+UNAVAILABLE = "upstream_unavailable"
+# Refusals of the request as it was sent: asking again gets the same answer, so a bot's run is not retried.
+FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused", "no_route", NOT_FOUND)
+# Every code a bot's model call can end with, as the runner names it at the end of its error
+# (runner-rs/src/hosts/pi.rs `plain_error`).
+CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
+         "upstream_refused", "no_route", UNAVAILABLE)
+TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
 
 
 def base_url(url=""):
@@ -89,6 +115,19 @@ def state_of(payload):
     return "connected", used
 
 
+def state_of_error(status, code):
+    """The connection's state from an error answer of `<base>/key`: its HTTP status and the Gateway's code."""
+    if code == REVOKED_KEY:
+        return "revoked"
+    if code == UNKNOWN_KEY or status in (401, 403):
+        return "unknown"
+    if code == CAP_REACHED:
+        return "cap_reached"
+    if code == RATE_LIMITED or status == 429:
+        return "busy"
+    return "not_ready" if status == 404 else "unreachable"
+
+
 def describe(state, used=None):
     """What the connection says for `state`, with the used share as a whole percent."""
     percent = int(min(max(used or WARN_AT, 0), 1) * 100)
@@ -112,12 +151,18 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
             code = _code(exc.read())
         except Exception:
             code = ""
-        state, used = ("revoked" if code == "key_revoked" or exc.code == 403 else "invalid"
-                       if exc.code == 401 else "not_ready" if exc.code == 404 else "unreachable"), None
+        state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         state, used = "unreachable", None
-    return {"state": state, "working": state not in ("revoked", "invalid"), "message": describe(state, used),
+    return {"state": state, "working": state not in REFUSED, "message": describe(state, used),
             "used": round(used, 4) if used is not None else None}
+
+
+def month_after(moment):
+    """The start of the UTC month after `moment` (an aware datetime): when a key's spent cap is lifted."""
+    moment = moment.astimezone(datetime.timezone.utc)
+    year, month = (moment.year + 1, 1) if moment.month == 12 else (moment.year, moment.month + 1)
+    return datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
 
 
 def cap_reached(text):
@@ -125,15 +170,45 @@ def cap_reached(text):
     return CAP_REACHED in str(text or "")
 
 
+def run_code(text):
+    """The Gateway's code a bot's model error ends with, `not_found` for a 404 from it, or ''. Only read for runs on a
+    Tico model."""
+    text = str(text or "")
+    named = [code for code in CODES if f"({code})" in text or f": {code})" in text]
+    if named:
+        return named[0]
+    bare = [code for code in CODES if code in text]
+    return bare[0] if bare else NOT_FOUND if not_served(text) else ""
+
+
+def run_status(code, text=""):
+    """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
+    if code == "unknown_model":
+        return f"The Tico AI Gateway doesn't offer this model. Tico models: {TICO_MODELS}"
+    if code == "no_route":
+        return "No Tico route for this request"
+    if code == NOT_FOUND:
+        return NOT_SERVED + "; check the Gateway URL in Settings > AI providers"
+    if code == UNAVAILABLE:
+        return "Tico AI Gateway is unavailable, try again"
+    # unsupported_field, bad_request, upstream_refused: the Gateway's own (fixed) words on what it refused.
+    said = re.search(r"refused the request as sent: (.+?) \(" + re.escape(code) + r"\)", str(text or ""))
+    return "The Tico AI Gateway refused the request as sent" + (f": {said[1][:200]}" if said else "")
+
+
+def rate_limited(text):
+    """Whether a model error is the Gateway's `rate_limited` (too many refused keys from this address)."""
+    return f"({RATE_LIMITED})" in str(text or "") and LABEL in str(text or "")
+
+
 def not_served(text):
-    """Whether a model error a bot's turn ended with is the Gateway saying it has no such endpoint or model: a 404
-    (a Gateway with no chat endpoint yet, or a wrong URL) or `unknown_model`. Only read for runs on a Tico model."""
+    """Whether a model error a bot's turn ended with is a 404 from the Gateway: no chat endpoint there yet, or a wrong
+    URL. Only read for runs on a Tico model."""
     text = str(text or "").lower()
-    return ("unknown_model" in text or "model_not_found" in text or re.search(r"\b404\b", text) is not None
-            or "not found" in text)
+    return "model_not_found" in text or re.search(r"\b404\b", text) is not None or "not found" in text
 
 
 def key_refused(text):
     """Whether a model error a bot's turn ended with is the Gateway refusing the key (revoked or unknown)."""
     text = str(text or "")
-    return "key_revoked" in text or ("invalid_key" in text and LABEL in text)
+    return REVOKED_KEY in text or UNKNOWN_KEY in text
