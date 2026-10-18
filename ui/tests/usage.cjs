@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {unrouted} = require('./support/routes.cjs');
 
 const day = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
 const figures = (runs, i, c, o, est, sub = 0) => ({runs, input_tokens: i, cached_tokens: c, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
@@ -66,7 +67,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
                                                       limit: {period: 'daily', spent: 6.1, limit: 5, until: day(-1) + 'T00:00:00Z'}}]});
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/support');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));

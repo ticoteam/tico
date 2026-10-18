@@ -201,8 +201,8 @@ A Linux computer can show its screen in the app, so people watch its bots work o
 
 - **On the computer**, its owner turns the screen on (`TICO_SCREEN=1` in Docker, which a new Docker runner has; or
   `tico-runner screen on`). Until then the computer offers no screen and the hub refuses any mode but Off.
-- **Screen** in Settings > Computers: **Off**, **View** or **Control**. It starts at **View** the first time a new computer offers
-  a screen, unless someone already chose a mode for it (audit: `runner.screen` by `system`); a computer added before this
+- **Screen** in Settings > Computers: **Off**, **View** or **Control**. It starts at **Control** the first time a new computer
+  offers a screen, unless someone already chose a mode for it (audit: `runner.screen` by `system`); a computer added before this
   default keeps its setting. The computer's operator or an admin sets it
   (`POST /api/v2/computers/<id>/screen {"mode": "view"}`), or BotOps as one of them. Off closes open screens; View closes the
   ones in control.

@@ -6,6 +6,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
@@ -57,7 +58,7 @@ async function run(viewport, shot) {
       }
       if (p === '/api/v2/bots/botops/stop' && req.method() === 'POST') { stops.push(req.postDataJSON()); return json({ok: true}); }
       if (p.endsWith('/files')) return json({files: []});
-      return json({});
+      return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/bot/botops');
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);

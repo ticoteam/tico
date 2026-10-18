@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const shots = process.env.GRANOLA_SHOTS || '';
@@ -75,7 +76,7 @@ async function open(browser, viewport, w, scheme = 'dark') {
       return json({state: 'syncing', last_sync: w.granola.last_sync});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/meetings');
   return {page, errors, context};
