@@ -10,6 +10,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const now = new Date().toISOString();
@@ -60,7 +61,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
         title: 'Approve the notes', owner: 'human:ana', requester: 'bot:ops', status: 'open', created: now}]});
       return json(url.searchParams.get('version') === 'v0' ? {count: 0, version: 'v0', unchanged: true} : {items: [], version: 'v0'});
     }
-    return json({});
+    return json(unrouted(p));
   });
   // The newest stream the page holds that `match` accepts, answered with `blocks` (it then ends, and the page reconnects).
   const send = async (match, ...blocks) => {

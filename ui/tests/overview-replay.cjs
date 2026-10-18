@@ -5,6 +5,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const SCENE = `export function createBuilding(data) {
   const rec = window.__scene = {created: (window.__scene?.created || 0) + 1, data, updates: [], links: []};
@@ -56,7 +57,7 @@ const SCENE = `export function createBuilding(data) {
             {at: at(5), kind: 'task.owner', who: 'bot:writer', task: {id: 't1', title: 'Launch post'}, old: 'bot:writer', new: 'bot:editor'},
           ]});
       }
-      return json({});
+      return json(unrouted(p));
     });
     // Opened by its address, the campus is drawn once the team has loaded (switching the hash earlier would draw it
     // before the roster arrives and draw it again after).

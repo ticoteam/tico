@@ -58,7 +58,8 @@ The decision model reading the previous routing and the open ask in its state, n
 | asks-for-anything below `TICO_SLACK_ASK_THRESHOLD` (0.5) | records the message on the thread's conversations, wakes nobody |
 | one or more bots at or above `TICO_SLACK_ROUTE_THRESHOLD` (0.6) | routes to each, best `TICO_SLACK_MAX_RECIPIENTS` (3) by confidence, ties by slug |
 | no bot at threshold | routes to the assistant (`TICO_ASSISTANT_BOT`) with the top three candidates on the message, so it can ask the one clarifying question the write layer allows. A team that chose no assistant (it is optional) gets BotOps instead; with neither active, the message is recorded and nobody is woken |
-| a chosen bot the write layer refuses (paused or quarantined since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
+| a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
+| a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
 
 Without a decisions key every message goes to the assistant (or BotOps) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
@@ -96,7 +97,8 @@ Stored answer for one routed message, as the message's `refs.routing` carries it
 The Tico message is written through `hubdb.say` as the verified human (`human:<id>`), never as
 Tico, into a `direct` conversation between that human and the bot, mapped to the Slack thread
 in `slack_threads`. The guardrails in `docs/how-it-works.md` apply unchanged: an active bot only,
-the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
+except that a person's message, a new thread or a reply in one, to a paused or quarantined bot is kept and runs when the
+bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
 
 A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that line is an

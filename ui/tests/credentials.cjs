@@ -5,6 +5,7 @@ const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const SECRET = 'jira-token-value-9f8e7d6c5b4a';
 
@@ -37,7 +38,7 @@ async function open(browser, me, vault) {
       return json({id: 'g1'});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    return json({});
+    return json(unrouted(p));
   });
   return {page, seen};
 }

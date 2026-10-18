@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 async function offlineRetry(browser) {
   const page = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,serviceWorkers:'block'});
@@ -48,7 +49,7 @@ async function offlineRetry(browser) {
       if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
       return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created:new Date().toISOString()}});
     }
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/legal/chat');
   await page.waitForFunction(()=>BOT?.slug==='legal' && V2C?.rendered);
@@ -122,7 +123,7 @@ async function liveReply(browser) {
     if(p==='/api/v2/bots/ops/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
     // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
     if(p==='/api/v2/support/tickets')return json({enabled:false});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.locator('#v2-live').waitFor();
@@ -256,7 +257,7 @@ async function outlineJump(browser) {
     if(p==='/api/v2/conversations/c-ops/snapshot')return json(snapshot);
     if(p==='/api/v2/conversations/c-ops/outline')return json({prompts});
     if(p==='/api/v2/conversations/c-ops/messages'){pages.push(url.searchParams.get('before'));return json({messages:older,next_before:null});}
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(()=>V2C?.rendered&&V2C.loaded);
@@ -335,7 +336,7 @@ async function activityFold(browser) {
         : {messages:[{id:'older-b',kind:'say',from_actor:'bot:ops',body:'Earlier answer',created:at(-1),refs:{}}],next_before:null});
     }
     if (p === '/api/v2/conversations/c-ops/goal') return json({goal:endedGoal,supported:true,commands:[]});
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded);
@@ -454,7 +455,7 @@ async function sideThreads(browser) {
       if (url.searchParams.get('limit') === '1') return json({messages: talk.slice(-1), has_more: true, next_before: 'b2'});
       return json(url.searchParams.get('before') === 'b1' ? {messages: talk.slice(0, 1)} : {messages: talk.slice(1), has_more: true, next_before: 'b1'});
     }
-    return json({});
+    return json(unrouted(p));
   });
   const asked = [];
   await page.goto('https://tico-ui.test/#/bot/cmo/chat');
@@ -560,7 +561,7 @@ async function stickToBottom(browser) {
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot') ? []
       : [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}]});
     if (p === '/api/v2/conversations/c-ops/snapshot' || p === '/api/v2/conversations/c-ops/messages') return json(snapshot);
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/ops/chat');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded && document.querySelectorAll('#conv-thread .bubble').length === 30);
@@ -642,7 +643,7 @@ async function settingsLinks(browser) {
       return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot());
     if(p==='/api/v2/support/tickets')return json({enabled:false});
-    return json({});
+    return json(unrouted(p));
   });
   for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'providers'],
     ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {

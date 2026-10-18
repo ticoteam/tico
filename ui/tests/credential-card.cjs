@@ -5,6 +5,7 @@ const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
 const now = new Date().toISOString();
@@ -46,7 +47,7 @@ async function open(browser, viewport, view) {
       return json(seen.view);
     }
     if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'cancelled'}; return json(seen.view); }
-    return json({});
+    return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/botops/chat');
   return {page, seen};

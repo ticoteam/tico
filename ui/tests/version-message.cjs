@@ -4,6 +4,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const MESSAGE = {id: 2, versions: '0.3', body: 'You are on 0.3.52: update for faster boards.', url: 'https://github.com/ticoteam/tico/blob/main/docs/updates.md'};
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.50', fixed_in: '0.3.53', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.3.51', fixed_in: '', url: 'javascript:alert(1)'}];
@@ -32,7 +33,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-        return json({});
+        return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));

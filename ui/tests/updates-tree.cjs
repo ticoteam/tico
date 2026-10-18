@@ -7,6 +7,7 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const fs = require('node:fs');
 const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
@@ -66,7 +67,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         mine = update('u-ana', 'human:ana', body.body, true);
         return json({update: mine});
       }
-      return json({});
+      return json(unrouted(p));
     });
     return {page, errors};
   };

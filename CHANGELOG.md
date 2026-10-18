@@ -27,7 +27,9 @@ All notable changes to Tico are recorded here. The format follows
   depend on a connection that is signed out or rejected. Click a row for everything else: its connections (the
   computer's own login and a named subscription on the same account show as one), Screen, the bots on it and the
   connection each one actually runs on, versions and updates, and settings, including **Keep for inbox bots only**
-  and **Revoke computer**. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
+  and **Revoke computer**. Its **Add connection** signs in an installed tool (in the browser, or with the command to
+  copy and run on the computer for a tool such as Grok Build that signs in only from a terminal) or adds a named
+  subscription. Subscriptions moved here from **Settings → AI providers**, and usage reads as "% left"
   everywhere. Every member now sees every computer; only an admin or the computer's operator sees its signed-in
   accounts and changes anything on it.
 
@@ -61,9 +63,18 @@ All notable changes to Tico are recorded here. The format follows
 - Groups no longer give their bots a subscription: a bot runs on its own choice, or else on its computer's own login.
   The bot editor's **Connection** line says "Runs on <tool> · <connection> on <computer>". Existing group choices
   are not moved to the bots; choose one per bot where it is needed.
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
 
 ### Fixed
 
+- Health no longer says a bot that ran out of quota has no fallback when the company fallback (*Fall back when a plan
+  runs out*, **Settings > AI providers**) covers it. And Health now says when a computer's default login for an AI tool
+  (the one bots without a subscription use) is out of quota, e.g. "Team box's default Codex login is out of quota":
+  turns there keep stopping on a usage limit with no reset time, so bots that fall back to it fail. It clears once a
+  turn on that login completes or the reset time passes.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
@@ -76,6 +87,9 @@ All notable changes to Tico are recorded here. The format follows
   quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
   one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
   never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+- A person's new Slack thread to a bot that is paused or quarantined is kept and runs when the bot is back, as a reply
+  in an existing thread already was, instead of being dropped. The person is told in the thread that the bot is held
+  and when it is back, with no need to resend.
 
 ## [0.3.54] - 2026-10-17
 
