@@ -16,9 +16,9 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 ## The fast path
 
-1. **Every PR** runs only the tests for what it changed (below).
-2. **Before you tag**, and only then, the full suite: the default suites, the opt-in tests and a short whole-product
-   check: the manual Release validation workflow on a fresh GitHub-hosted Linux VM, or
+1. **While building a PR**, run the focused tests for its changes; CI also runs the default suite (below).
+2. **Before you tag**, the release candidate must pass the full suite: the default suites, the opt-in tests and a short whole-product
+   check: the manually dispatched Release validation workflow across fresh GitHub-hosted Linux VMs, or
    `python scripts/release_checks.py --release` on a suitable local machine. The 8-minute target is report-only.
 3. **Tag and push.** The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
 4. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
@@ -26,10 +26,12 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 ## Tests on a PR
 
-Tests run on your computer, not in CI: nothing in GitHub Actions runs the suite on a push or a pull request. Write unit
+Run tests on your computer while you work. The PR checks workflow also runs the default suite (pytest without `slow`,
+plus the core browser scripts) on every pull request to main and every push to main, so a failure shows on the pull
+request. Write unit
 tests while you build and run them as you go; once the change passes, keep only the highest-value ones. Before merging,
-run the test files for what you touched and the checks the change obviously affects, not the full suite. The full
-suite runs as late as possible: once, right before a release.
+run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
+suite once on its frozen candidate. The scheduled nightly gate on main runs separately.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -46,15 +48,14 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load and fails
 if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
 that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. The Docker workflow builds the three images for a `v*` tag and the Release workflow publishes the
-GitHub release. The manual Release validation workflow runs the full gate only when explicitly dispatched;
-there are no push or PR test triggers. The manual screenshots workflow
-generates documentation images from the Actions tab (Run workflow). `--release` runs this suite too, so a
-release is the one place it runs.
+GitHub release. The PR checks workflow runs this default suite on every pull request to main and every push to main. Release validation runs the full gate for an explicitly dispatched immutable candidate and is also scheduled nightly on main against the latest published release. The configured nightly cron is 10:17 UTC (03:17 PDT / 02:17 PST); see `.github/workflows/ci.yml`. The manual screenshots workflow
+generates documentation images from the Actions tab (Run workflow). `--release` runs this suite too, along with the
+slow tests and every browser script. Both release candidate validation and the scheduled nightly gate cover that full suite.
 
 ## Hosted release validation
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
-interactive work. It uses a standard ephemeral native Ubuntu24.04 x64 VM for this public repository, with read-only
+interactive work. Its five gate jobs run in parallel on standard ephemeral native Ubuntu24.04 x64 VMs for this public repository, with read-only
 repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy.
 
 ```sh
@@ -64,14 +65,14 @@ gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA
 The reviewed workflow controls and selected candidate have separate checkouts: a workflow merged after a candidate was
 frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
 It can also run one slice of the gate (`--part product|browser|python`, with `--shard K/N` splitting the Python test
-files into N groups balanced by test count) so the gate can be spread over parallel VMs; without them it runs whole.
+files into N groups balanced by test count). The hosted workflow selects product, browser and three Python shards; without `--part`, the command runs the whole gate.
 Native runner/relay prerequisites are built from that candidate and their fingerprints checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
 architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must
 stay clean through completion. It checkpoints the command and actual process start so an interrupted run stays honest.
 Only one manual release validation runs at a time. A missing prerequisite, insufficient space or failed phase blocks it.
 
-On this disposable hosted VM only, the controls may remove fixed unused Android, .NET and Haskell SDK directories to
+On each disposable hosted VM only, the controls may remove fixed unused Android, .NET and Haskell SDK directories to
 retain at least30GiBfree after prerequisites and before the gate. They refuse local/self-hosted execution. No paid runner,
 new machine, production mount or broad Docker prune is used. A capacity refusal requires fixing that environment rather
 than skipping tests. Keep affected Linux/root two-user contracts explicit; ordinary Cargo tests ignore those fixtures.
