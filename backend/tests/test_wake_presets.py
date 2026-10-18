@@ -45,8 +45,13 @@ def settled(api):
         c.execute("UPDATE jobs SET state='completed' WHERE bot='ops' AND state='queued'")
 
 
-def finish(api, machine, attempt, **tokens):
+def start(api, machine, attempt):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["id"]}, machine["token"])
+
+
+def finish(api, machine, attempt, started=False, **tokens):
+    if not started:
+        start(api, machine, attempt)
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done.", **tokens},
          machine["token"])
 
@@ -278,6 +283,34 @@ def test_a_duplicate_is_one_event_through_its_turn_and_a_new_event_is_not(api):
         H.say(c, "bot:ops", "human:ana", "Ship the other one as well?", conversation_id=said["conversation_id"])
     post(api, "chat/ops", {"text": "Yes"})
     assert [j["state"] for j in jobs(api) if j["body"] == "Yes"] == ["queued", "queued"]
+
+
+@pytest.mark.parametrize("name,rooms", [("performance", 1), ("token_saver", 3)])
+def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over(api, name, rooms):
+    machine = task_bot(api, lanes=True)
+    preset(api, "ops", name)
+    tasks = [new_task(api, "fix")] * 3 if rooms == 1 else [new_task(api, f"report {n}") for n in range(3)]
+    settled(api)
+    since, t0 = H.now(), H.shift(H.now(), hours=-1)
+    sent = [(task, f"Finished: part {n}") for n, task in enumerate(tasks)]
+    for n, (task, body) in enumerate(sent):
+        notice(api, task, body, wake_batch="completion")
+        at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=20 * n))
+    tick(api, H.shift(t0, minutes=31))                                   # one room: the newest carries; else a digest
+    released = len(jobs(api, since=since))
+    redeliver = lambda: [notice(api, task, body, wake_batch="completion") for task, body in sent]
+    redeliver()                                                          # while the carrier is queued
+    attempt = claim(api, machine)
+    start(api, machine, attempt)
+    assert "running" in [j["state"] for j in jobs(api, since=since)]
+    redeliver()                                                          # while it runs
+    assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 6
+    finish(api, machine, attempt, started=True)
+    with api.app.state.store.transaction() as c:                         # long after the turn ended: a new event
+        c.execute("UPDATE attempts SET finished=? WHERE id=?",
+                  (H.shift(H.now(), seconds=-W.DUPLICATE_SECONDS - 60), attempt["id"]))
+    redeliver()
+    assert all(j["state"] == "queued" for j in jobs(api, since=since)[-3:])
 
 
 def test_a_batch_bigger_than_the_room_page_goes_out_as_a_digest_that_names_it(api):

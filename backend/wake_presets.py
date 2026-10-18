@@ -14,9 +14,10 @@ The scheduler plans each held job's release (`tick`) and lets it go when it is d
 
 Under a preset a job whose message repeats another of the bot's in the same conversation (same sender, kind, text,
 refs and reply) is dropped as a duplicate, so a duplicated event wakes the bot once: while the first is queued or
-being worked, and for DUPLICATE_SECONDS after its turn ended. A message from a person or a bot repeats only when
-nothing else was said in between, so the same words sent again after an answer are a new request. A preset grants
-nothing: it is one key in the bot's configuration and the hold reads nothing else.
+being worked, and for DUPLICATE_SECONDS after its turn ended. A notice a batch carried (its newest, or its digest) is
+live while its carrier is, so a redelivery after the batch is let go still matches. A message from a person or a bot
+repeats only when nothing else was said in between, so the same words sent again after an answer are a new request.
+A preset grants nothing: it is one key in the bot's configuration and the hold reads nothing else.
 
 The values below are starting points to evaluate, not measured optima. TICO_WAKE_PRESETS overrides them
 per install without a code change, e.g. `{"token_saver": {"batch_seconds": 900}}`.
@@ -58,11 +59,11 @@ _BATCH_SQL = ("json_extract(m.refs_json,'$.wake_batch') IN (" + ",".join(f"'{k}'
 _SWEEP_SQL = ("(json_extract(m.refs_json,'$.wake') IN (" + ",".join(f"'{k}'" for k in SWEEP_WAKES) + ") "
               "OR json_extract(m.refs_json,'$.sweep') IS NOT NULL)")
 _PRESET_SQL = "(SELECT wake_preset FROM jobs WHERE id=NEW.id) IN ('" + TOKEN_SAVER + "','" + PERFORMANCE + "')"
-# The same event as an earlier job's message: same room, sender, kind, text, refs and reply, the same hold, and for a
-# person or a bot nothing said in between.
+# The same event as an earlier job's message: same room, sender, kind, text, refs and reply, and for a person or a bot
+# nothing said in between. Only the message's own fields: a job's hold flag changes when its batch is let go.
 _SAME_EVENT = (f"om.rowid<m.rowid AND om.from_actor IS m.from_actor AND om.kind IS m.kind AND om.body=m.body "
                f"AND om.refs_json IS m.refs_json AND om.in_reply_to IS m.in_reply_to AND om.conversation_id=m.conversation_id "
-               f"AND o.held=(SELECT held FROM jobs WHERE id=NEW.id) AND (m.from_actor='{H.KEEPER}' OR NOT EXISTS("
+               f"AND (m.from_actor='{H.KEEPER}' OR NOT EXISTS("
                f"SELECT 1 FROM messages x WHERE x.conversation_id=m.conversation_id AND x.rowid>om.rowid AND x.rowid<m.rowid))")
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
  UPDATE jobs SET wake_preset=coalesce((SELECT json_extract(config_json,'$.wake_preset') FROM bot_config
@@ -73,9 +74,10 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
    AND m.from_actor='{H.KEEPER}' AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
  UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
    AND EXISTS(SELECT 1 FROM messages m JOIN messages om ON om.conversation_id=m.conversation_id
-   JOIN jobs o ON o.message_id=om.id AND o.bot=NEW.bot AND o.state<>'cancelled' AND o.id<>NEW.id
-   LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(o.attempt_id,cj.attempt_id)
-   WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (o.state IN ('queued','leased','running','input')
+   JOIN jobs o ON o.message_id=om.id AND o.bot=NEW.bot AND o.id<>NEW.id
+   AND (o.state<>'cancelled' OR o.wake_carrier IS NOT NULL)
+   LEFT JOIN jobs cj ON cj.id=o.wake_carrier LEFT JOIN attempts a ON a.id=coalesce(cj.attempt_id,o.attempt_id)
+   WHERE m.id=NEW.message_id AND {_SAME_EVENT} AND (coalesce(cj.state,o.state) IN ('queued','leased','running','input')
    OR a.finished>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created,'-{DUPLICATE_SECONDS} seconds')));
 END"""
 
