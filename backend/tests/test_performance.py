@@ -200,3 +200,14 @@ def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id
         assert failed and f"No computer named {wanted!r}; hub computer list names them" in str(seen), seen
     for wanted in ("Test Mac", "No such box"):     # a runner credential is neither a person nor a bot
         assert api.get(f"/api/v2/computers/{wanted}/performance", headers=headers(r["token"])).status_code == 403
+    # Two computers whose labels match once case and spaces are ignored: the label is refused, each id still reads its own.
+    twins = [runner(api, label=label) for label in ("Shared Mac", "Shared Mac 2")]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label=' shared MAC ' WHERE id=?", (twins[1]["runner_id"],))
+    for twin, cpu in zip(twins, (31.0, 62.0)):
+        post(api, "runners/performance", {"samples": [sample(time.time() - 30, cpu=cpu)]}, token=twin["token"])
+    failed, seen = call(api, "hub_computer_performance", {"computer": "Shared Mac"}, token=bot)
+    assert failed and "No computer named 'Shared Mac'; more than one has that label, use its id" in str(seen), seen
+    for twin, cpu in zip(twins, (31.0, 62.0)):
+        failed, seen = call(api, "hub_computer_performance", {"computer": twin["runner_id"], "hours": 1}, token=bot)
+        assert not failed and seen["computer"]["id"] == twin["runner_id"] and seen["points"][0][1] == cpu, seen
