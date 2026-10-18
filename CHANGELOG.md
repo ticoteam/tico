@@ -7,6 +7,11 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
+
 ### Changed
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that

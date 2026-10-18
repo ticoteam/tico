@@ -1218,6 +1218,7 @@ class Execution:
         msg = H.message(c, row["message_id"])
         if not privacy.message_readable(c, "bot:" + row["bot"], msg):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
@@ -2165,6 +2166,26 @@ class Execution:
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "Bot is archived"})
                 held.append(row["id"])
         return held
+
+    def drop_unreadable(self, c):
+        """Cancel every queued job whose message its bot may no longer read: a private task it was taken off, say.
+
+        The claim passes over such a job for good (job_refusal's "unreadable"), so it would sit queued forever,
+        never claimed or expired, and age Health's queue_idle. The bot never read the message, so nothing it was
+        owed is lost; the message itself stays where it is. Held jobs too: a wake preset's release or a drain's end
+        would only hand the claim the same unreadable message. Runs from the scheduler, once a minute."""
+        dropped = []
+        # From the bots to their queued jobs (jobs_queue), not from every job ever run.
+        for row in c.execute("SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j "
+                             "WHERE j.bot=b.slug AND j.state='queued' ORDER BY j.created,j.id").fetchall():
+            with isolated(c, "drop_unreadable", row["id"]):
+                # job_refusal's own check, with its arguments.
+                if privacy.message_readable(c, "bot:" + row["bot"], H.message(c, row["message_id"])):
+                    continue
+                c.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (row["id"],))
+                H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
+                dropped.append(row["id"])
+        return dropped
 
     def release_limits(self, c):
         """Runs from the scheduler's tick: lift each usage limit whose hold has passed."""
