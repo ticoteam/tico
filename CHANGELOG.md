@@ -49,6 +49,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Fixed
 
+- On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
+  reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
+  the usual bottom sheet again.
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
 - The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead

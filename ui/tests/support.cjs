@@ -18,9 +18,16 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light'} = {}) => {
+    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false} = {}) => {
       const ctx = await browser.newContext({viewport, serviceWorkers: 'block'});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
+      // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
+      // shrinks to what is left above the keyboard and pans (offsetTop). __keys(height, top) opens it, __keys(0) closes it.
+      if (keyboard) await ctx.addInitScript(() => {
+        const vv = Object.assign(new EventTarget(), {height: 0, width: 0, offsetTop: 0, offsetLeft: 0, scale: 1});
+        Object.defineProperty(window, 'visualViewport', {value: vv, configurable: true});
+        window.__keys = (height, top = 0) => { Object.assign(vv, {height, offsetTop: top}); vv.dispatchEvent(new Event('resize')); };
+      });
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
         window.__posted = [];
@@ -555,6 +562,50 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await v.page.locator('[data-compose] [name=diag]').isChecked(), true);
     await v.page.waitForTimeout(300);
     await v.page.screenshot({path: '/tmp/tico-support-phone-dark.png'});
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // An iPhone (390x844) with the keyboard up: the box is 16 px so Safari doesn't zoom in on it, and the sheet fills
+    // exactly what is visible above the keyboard: the box, Send and the newest reply on screen, nothing of the page
+    // behind it showing and the page not scrolling under it. With the keyboard down it is the usual bottom sheet again.
+    v = await visit({viewport: {width: 390, height: 844}, keyboard: true, seed: [{id: 'sup_9', created: at(30), status: 'answered', message: 'Roadmap suggestions go to an archived bot.', sent: {},
+      messages: [reply(1, 25), {id: 2, created: at(20), from: 'person', body: 'Still there on 0.3.54.'},
+        {id: 3, created: at(10), from: 'staff', body: 'The setting now decides who gets suggestions.\n\nAfter that, it is safe to turn public roadmap suggestions back on. Reply here if anything still goes to the archived bot.'}]}]});
+    await openSupport(v.page, '#mobile-support');
+    const kpop = v.page.locator('#support-pop'), kbox = kpop.locator('[data-compose] [name=message]');
+    await kbox.focus();
+    assert.ok(parseFloat(await kbox.evaluate(el => getComputedStyle(el).fontSize)) >= 16, 'the box is at least 16 px: no zoom on focus');
+    assert.equal(await v.page.evaluate(() => document.querySelector('meta[name=viewport]').content.includes('user-scalable=no') || /maximum-scale=1(\D|$)/.test(document.querySelector('meta[name=viewport]').content)), false, 'zoom itself stays allowed');
+    const sheetAt = () => kpop.evaluate(el => {
+      const r = el.getBoundingClientRect(), inside = (sel, all) => { const b = (all ? [...el.querySelectorAll(sel)].at(-1) : el.querySelector(sel)).getBoundingClientRect(); return {top: b.top, bottom: b.bottom}; };
+      const thread = inside('[data-thread]'), newest = inside('.support-msg', true);
+      // Every point along the top and bottom edges and down both sides is the sheet, not the page behind it.
+      const probes = [];
+      for (let x = 2; x < innerWidth; x += 48) probes.push([x, r.top + 1], [x, r.bottom - 1]);
+      for (let y = r.top + 1; y < r.bottom; y += 40) probes.push([2, y], [innerWidth - 2, y]);
+      return {top: r.top, bottom: r.bottom, height: r.height, box: inside('[name=message]'), send: inside('[type=submit]'), thread, newest,
+        covered: probes.every(([x, y]) => el.contains(document.elementFromPoint(x, y))), bodyScroll: getComputedStyle(document.body).overflowY};
+    });
+    // Safari leaves 844 - 386 = 458 px above the keyboard and its bar, panned down 120 px to keep the box in view.
+    await v.page.evaluate(() => window.__keys(458, 120));
+    await v.page.waitForFunction(() => Math.abs(document.getElementById('support-pop').getBoundingClientRect().bottom - 578) < 1, null, {timeout: t(3000)}).catch(() => {});   // asserted below
+    await v.page.waitForTimeout(100);   // the thread re-pins to its newest reply on the resize (ui/app/stick-scroll.js)
+    let k = await sheetAt();
+    assert.ok(Math.abs(k.top - 120) < 1 && Math.abs(k.bottom - 578) < 1, `the sheet fills what is visible above the keyboard (${JSON.stringify(k)})`);
+    for (const part of ['box', 'send']) assert.ok(k[part].top >= 120 && k[part].bottom <= 578, `${part} visible above the keyboard (${JSON.stringify(k[part])})`);
+    assert.ok(k.newest.top >= k.thread.top - 1 && k.newest.bottom <= k.thread.bottom + 1, `the newest reply is whole on screen (${JSON.stringify(k)})`);
+    assert.ok(k.newest.bottom <= k.box.top, 'above the box');
+    assert.equal(k.covered, true, 'nothing of the page behind shows around the sheet');
+    assert.equal(k.bodyScroll, 'hidden', 'the page behind does not scroll while the sheet is open');
+    await v.page.screenshot({path: '/tmp/tico-support-phone-keyboard.png'});
+    // The keyboard goes down: the usual bottom sheet, most of the screen.
+    await v.page.evaluate(() => window.__keys(844, 0));
+    await v.page.waitForFunction(() => Math.abs(document.getElementById('support-pop').getBoundingClientRect().bottom - 844) < 1, null, {timeout: t(3000)}).catch(() => {});   // asserted below
+    k = await sheetAt();
+    assert.ok(Math.abs(k.bottom - 844) < 1 && k.height > 844 * 0.8, `back to the bottom sheet (${JSON.stringify(k)})`);
+    await v.page.keyboard.press('Escape');
+    await kpop.waitFor({state: 'hidden'});
+    assert.notEqual(await v.page.evaluate(() => getComputedStyle(document.body).overflowY), 'hidden', 'closing the sheet lets the page scroll again');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
