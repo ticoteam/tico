@@ -95,7 +95,9 @@ A bot on a Tico model, or whose own fallback is one, gets the key and the Gatewa
 `TICOAI_GATEWAY_URL` from `GET /api/v2/credential-runtime`; no other bot does. pi reads them through a `tico` provider
 in its `models.json` (OpenAI chat completions, streamed). The server reads the Gateway's word on the key
 (`<gateway>/key`) on save, on **Check now** and hourly: the owner sees the 80% warning, **Gateway cap reached** and a
-revoked key in Settings and Health, and a bot stopped by the cap says "Gateway cap reached" in its status.
+revoked key in Settings and Health, and a bot stopped by the cap says "Gateway cap reached" in its status. A Gateway
+that answers 404 (no chat endpoint yet, or a wrong URL) shows as **Not ready**, and a bot whose model call it refuses
+that way says the Gateway doesn't serve Tico models at its URL yet.
 
 ## Choosing a harness, model and effort
 

@@ -1857,6 +1857,11 @@ class Execution:
             (aid,)).fetchone() is not None
         if rejected:
             silent = False
+        # A bot on a Tico model whose Gateway has no chat endpoint (or no such model) yet: said as it is, not as a crash.
+        not_served = (body.outcome == "failed" and not (limited or retryable or rejected or stopped)
+                      and any(gateway.not_served(error) for error in limit_errors(c, aid))
+                      and gateway_connection.is_tico(
+                          gateway_connection.run_config(c, self.store.settings, row["bot"], aid).get("model")))
         requeue = not rejected_acted if rejected else limited or retryable or silent
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "cancelled" if stopped
@@ -2022,6 +2027,7 @@ class Execution:
                           began=row["started"] or row["created"])
         elif silent:
             settle_status(c, row["bot"], "idle",
+                          f"{gateway.NOT_SERVED} ({H.now()[11:16]} UTC); the run is back in the queue" if not_served else
                           f"{runtime} failed before the run began at {H.now()[11:16]} UTC; the run is back in the queue",
                           began=row["started"] or row["created"])
             H.event(c, H.KEEPER, "attempt.no_effect_retry", aid,
@@ -2040,7 +2046,8 @@ class Execution:
             # it into a crash, so a working bot looked broken.
             healthy = body.outcome == "completed"
             settle_status(c, row["bot"], "idle" if healthy else "crashed",
-                          "" if healthy else "One run stopped; saved for later",
+                          "" if healthy else f"{gateway.NOT_SERVED}; check the Gateway URL in Settings > AI providers. "
+                          "This run is saved for later" if not_served else "One run stopped; saved for later",
                           began=row["started"] or row["created"])
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 

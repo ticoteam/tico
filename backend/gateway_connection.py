@@ -268,5 +268,5 @@ def health(c, settings=None):
     shown = view(c, settings, manage=True)
     if not shown["connected"] or shown["state"] in ("connected", "unchecked", "unreachable"):
         return None
-    status = "warn" if shown["state"] == "warning" else "bad"
+    status = "warn" if shown["state"] in ("warning", "not_ready") else "bad"
     return {"status": status, "summary": shown["message"]}

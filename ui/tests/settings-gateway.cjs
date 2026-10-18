@@ -120,6 +120,7 @@ const {unrouted} = require('./support/routes.cjs');
     };
     await says('warning', 'This key has used 80% of its monthly Gateway cap. Bots stop at 100% until next month.', 0.8, 'Connected');
     await says('cap_reached', 'Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap.', 1, 'Gateway cap reached');
+    await says('not_ready', "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait until Tico turns them on.", null, 'Not ready');
     await says('revoked', 'Not working: Tico has revoked this gateway key. Ask Tico for a new key and save it here.', null, 'Not working');
     await card.locator('[data-gateway-check]').click();
     await page.waitForFunction(() => !document.querySelector('#set-gateway [data-gateway-check]')?.disabled);

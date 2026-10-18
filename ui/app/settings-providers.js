@@ -100,12 +100,13 @@ async function renderSettingsProviders() {
 // ----------------------------------------------------------------- Tico AI Gateway
 // One key (and the Gateway's URL) for everything the app asks Tico's Gateway: Decide and the Tico models. The key is
 // typed once and never shown again: the server keeps it sealed and answers with its first and last three characters.
-const GATEWAY_STATE = {connected: 'ok', unchecked: 'ok', warning: 'needs', cap_reached: 'fail', revoked: 'fail', invalid: 'fail'};
+const GATEWAY_STATE = {connected: 'ok', unchecked: 'ok', warning: 'needs', not_ready: 'needs', cap_reached: 'fail', revoked: 'fail', invalid: 'fail'};
 function gatewayHTML(gateway, owner) {
   const state = gateway.state || (gateway.connected ? 'connected' : 'none');
   const badge = gateway.connected
     ? `<span class="pill ${GATEWAY_STATE[state] || ''}" data-gateway-state="${esc(state)}">${esc(
-      gateway.working === false ? 'Not working' : state === 'cap_reached' ? 'Gateway cap reached' : 'Connected')}</span>`
+      gateway.working === false ? 'Not working' : state === 'cap_reached' ? 'Gateway cap reached'
+        : state === 'not_ready' ? 'Not ready' : 'Connected')}</span>`
     : '<span class="pill" data-gateway-state="none">Not connected</span>';
   const head = `<h3 class="prov-gateway-title">Tico AI Gateway ${badge}</h3>
     <p class="muted">Tico's own models, Tico Cheap, Mid and Power 1.0, and Decide, with one gateway key from Tico.</p>`;

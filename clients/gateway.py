@@ -9,6 +9,7 @@ returns or logs the key, and it keeps only the Gateway's code, never its text.
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -29,7 +30,11 @@ MESSAGES = {
     "revoked": "Not working: Tico has revoked this gateway key. Ask Tico for a new key and save it here.",
     "invalid": "Not working: the Gateway does not know this key. Check you pasted the whole key.",
     "unreachable": "Not checked: the Gateway did not answer. Bots keep trying; check again later.",
+    "not_ready": "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait "
+                 "until Tico turns them on.",
 }
+# What a bot says when the Gateway answered its model call with "not here" (404, or an unknown model).
+NOT_SERVED = "The Tico AI Gateway doesn't serve Tico models at its URL yet"
 
 
 def base_url(url=""):
@@ -108,7 +113,7 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
         except Exception:
             code = ""
         state, used = ("revoked" if code == "key_revoked" or exc.code == 403 else "invalid"
-                       if exc.code == 401 else "unreachable"), None
+                       if exc.code == 401 else "not_ready" if exc.code == 404 else "unreachable"), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         state, used = "unreachable", None
     return {"state": state, "working": state not in ("revoked", "invalid"), "message": describe(state, used),
@@ -118,6 +123,14 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
 def cap_reached(text):
     """Whether a model error a bot's turn ended with is the Gateway's cap (`cap_reached`), not a rate limit."""
     return CAP_REACHED in str(text or "")
+
+
+def not_served(text):
+    """Whether a model error a bot's turn ended with is the Gateway saying it has no such endpoint or model: a 404
+    (a Gateway with no chat endpoint yet, or a wrong URL) or `unknown_model`. Only read for runs on a Tico model."""
+    text = str(text or "").lower()
+    return ("unknown_model" in text or "model_not_found" in text or re.search(r"\b404\b", text) is not None
+            or "not found" in text)
 
 
 def key_refused(text):

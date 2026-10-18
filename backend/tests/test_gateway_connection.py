@@ -337,6 +337,48 @@ def test_a_revoked_key_says_the_connection_is_not_working(api, monkeypatch):
         assert H.status(c, "ops")["focus"].startswith("The Tico AI Gateway key is not working")
 
 
+@pytest.mark.parametrize("acted", [False, True])
+def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, acted):
+    """Dev 181 not deployed: the key is saved, but the Gateway answers `<base>/key` and `<base>/chat/completions` with
+    404. Settings says it is not ready (not broken, not "did not answer"), and the bot says the Gateway doesn't serve
+    Tico models yet, whether its run had begun (held for later) or not (back in the queue)."""
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.keys[KEY] = (404, {"error": {"message": "Not Found"}})
+        shown = save(api, fake)
+        assert shown["state"] == "not_ready" and shown["working"] is True
+        assert shown["message"].startswith("Not ready: the Gateway at this URL doesn't serve Tico models yet")
+        assert {r["id"]: r for r in get(api, "health")["checks"]}["gateway"]["status"] == "warn"
+    put_bot_on(api, "ops", "tico-mid-1.0")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    attempt = claim(api, machine, "ops")
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    events = [{"seq": 1, "kind": "tokens", "payload": {"input": 0, "output": 0, "total": 0}}] if acted else []
+    events.append({"seq": len(events) + 1, "kind": "error", "payload": {"error": "404 status code (no body)"}})
+    post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": len(events), "text": ""},
+         machine["token"])
+    with api.app.state.store.read() as c:
+        focus = H.status(c, "ops")["focus"]
+    assert focus.startswith("The Tico AI Gateway doesn't serve Tico models at its URL yet"), focus
+    assert ("back in the queue" in focus) is not acted and "404" not in focus
+
+
+def test_a_404_on_another_model_is_not_blamed_on_the_gateway(api, monkeypatch):
+    setup(api, monkeypatch)
+    put_bot_on(api, "ops", "kimi-k3")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    finish(api, machine, claim(api, machine, "ops"), "404 status code (no body)")
+    with api.app.state.store.read() as c:
+        assert "Tico AI Gateway" not in H.status(c, "ops")["focus"]
+
+
 def test_the_servers_default_gateway_url_does_not_hide_the_saved_one(api, monkeypatch):
     """Dev 178's settings always carry a gateway URL, Tico HQ's decisions endpoint by default; only one the
     environment chose wins over the URL saved here."""
