@@ -236,6 +236,25 @@ def test_switch_off_lists_no_candidates_and_makes_no_calls(stale):
         assert SR.last_pass(c) is None
 
 
+def test_the_scheduler_runs_the_pass_on_its_own_thread_and_never_in_rehearsal(stale, monkeypatch):
+    api, store, task = stale
+    tid = task("Ship the export button", pr="merged")
+    model = FakeDecide("update")
+    monkeypatch.setattr(SR, "server_engine", lambda *a, **k: model)
+    store.settings.rehearsal = True
+    try:
+        assert SR.tick(store) is None and not model.calls
+        with store.read() as c:
+            assert SR.last_pass(c) is None
+    finally:
+        store.settings.rehearsal = False
+    thread = SR.tick(store)
+    assert thread.name == "stale-review"
+    thread.join(10)
+    assert len(model.calls) == 1 and len(comments(store, tid)) == 1
+    assert SR.tick(store) is None, "the next pass waits for the hour"
+
+
 def test_a_decide_error_leaves_no_comment_and_the_task_is_judged_next_pass(stale):
     api, store, task = stale
     tid = task("Ship the export button", pr="merged")
