@@ -36,7 +36,7 @@ All notable changes to Tico are recorded here. The format follows
   off, an error, a timeout, the spend cap or the bot's daily budget open the ticket as before. Each call is a
   `judge.call` row.
 - A Slack DM to Tico or an @Tico mention that the decision model reads as asking for nothing now goes to the
-  assistant (or BotOps) instead of only being recorded on the thread, so a person's message is never left unheard.
+  assistant (or BotOps) instead of only being recorded on the thread.
 - Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
   at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
   had no fallback and the learnings run waited up to 20 seconds with two retries per call.
@@ -59,6 +59,10 @@ All notable changes to Tico are recorded here. The format follows
 - A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
   indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
   and paths still drop surrounding spaces.
+
+### Security
+- Desktop app: the updater no longer pulls in the zip crate (RUSTSEC-2026-0367/0368/0369). Windows updates use the
+  NSIS setup.exe, unchanged.
 
 ## [0.3.57] - 2026-10-18
 
@@ -155,10 +159,6 @@ All notable changes to Tico are recorded here. The format follows
 - On a phone, the Support pop-up fits the space above the keyboard while you type: the box, Send and the newest
   reply stay on screen, and the page behind no longer shows below it or scrolls under it. With the keyboard down it is
   the usual bottom sheet again.
-
-### Security
-- Desktop app: the updater no longer pulls in the zip crate (RUSTSEC-2026-0367/0368/0369). Windows updates use the
-  NSIS setup.exe, unchanged.
 
 ## [0.3.55] - 2026-10-18
 
