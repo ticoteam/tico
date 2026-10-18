@@ -30,6 +30,8 @@ read back per question set.
 Pure stdlib on purpose: the runner venv, the mail venv, the cloud venv and the `hub` CLI all
 import it.
 """
+import contextlib
+import contextvars
 import hashlib
 import json
 import math
@@ -95,6 +97,42 @@ def error_code(exc):
     """`exc`'s code when it is one of `ERROR_CODES`, else `unreadable`: the one part of a failed call that may be kept."""
     code = getattr(exc, "code", "")
     return code if isinstance(code, str) and code in ERROR_CODES else "unreadable"
+
+
+def _paid(exc, model, usage):
+    """`exc` for an answer that came back and could not be used: it was still paid for, so it carries `paid`, the
+    model and usage that the server's monthly cap counts (backend/judge.py `metered`)."""
+    exc.paid = [{"model": model, "usage": usage if isinstance(usage, dict) else {}}]
+    return exc
+
+
+# A chain of providers (backend/judge.py `ordered`) asks each under one deadline, so a slow one leaves the next only
+# what is left, and the whole chain answers before its callers stop waiting. `clock` is the seam the tests use.
+clock = time.monotonic
+_DEADLINE = contextvars.ContextVar("tico_judge_deadline", default=None)
+MIN_ATTEMPT = 1.0                           # seconds: with less left, a provider is not asked at all
+
+
+@contextlib.contextmanager
+def within(seconds):
+    """Every provider asked in this block answers within `seconds` of its start, or within an outer block's end."""
+    outer = _DEADLINE.get()
+    token = _DEADLINE.set(min(clock() + seconds, outer) if outer is not None else clock() + seconds)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def time_left(timeout):
+    """`timeout`, cut to what is left of the deadline; `unavailable`, asking nothing, when less than MIN_ATTEMPT is."""
+    deadline = _DEADLINE.get()
+    if deadline is None:
+        return timeout
+    left = deadline - clock()
+    if left < MIN_ATTEMPT:
+        raise JudgeError("unavailable", "no time was left to ask this provider", retryable=True)
+    return min(timeout, left)
 
 
 # ----------------------------------------------------------------------------- the contract
@@ -165,7 +203,7 @@ def check_answers(answers, questions):
             raise JudgeError("shape", f"{qid}: no answer")
         kind = q["type"]
         if kind == "choice":
-            if a.get("choice") not in q["criteria"]:
+            if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
                 raise JudgeError("shape", f"{qid}: choice is not one of the options")
             if not _bounded(a.get("confidence"), 0, 1):
                 raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
@@ -202,7 +240,7 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
                 "Authorization": "Bearer " + api_key, "Content-Type": "application/json",
                 "Accept": "application/json"})
             try:
-                with opener(request, timeout=timeout) as response:
+                with opener(request, timeout=time_left(timeout)) as response:
                     payload = json.load(response)
                 break
             except urllib.error.HTTPError as exc:
@@ -229,7 +267,10 @@ def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep,
         ms = round((time.monotonic() - started) * 1000)
         if not isinstance(payload, dict):
             raise JudgeError("shape", "TypeSafe answered with something other than an object")
-        answers = check_answers(payload.get("answers"), questions)
+        try:
+            answers = check_answers(payload.get("answers"), questions)
+        except JudgeError as exc:
+            raise _paid(exc, str(payload.get("model") or model), payload.get("usage"))
         return {"model": str(payload.get("model") or model), "answers": answers,
                 "usage": payload.get("usage") or {}, "ms": ms, "provider": TYPESAFE_PROVIDER}
     engine.model, engine.provider = model, TYPESAFE_PROVIDER
@@ -253,7 +294,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             "Authorization": "Bearer " + api_key, "Content-Type": "application/json", "Accept": "application/json"})
         started = time.monotonic()
         try:
-            with opener(request, timeout=timeout) as response:
+            with opener(request, timeout=time_left(timeout)) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
             status = exc.code
@@ -262,7 +303,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
             if status in (402, 429, 529) or status >= 500:  # the Gateway's cap, a rate limit, or down
                 raise JudgeError("unavailable", f"the Tico AI Gateway answered {status}", status, retryable=True)
             # A 422 too: the request passed `validate` here, so the Gateway disagreeing is its problem, not the
-            # caller's, and the next provider is asked (an `invalid` is never asked elsewhere).
+            # caller's, and the next provider is asked.
             raise JudgeError("http", f"the Tico AI Gateway answered {status}", status)
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"the Tico AI Gateway did not answer: {type(exc).__name__}",
@@ -270,11 +311,13 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         ms = round((time.monotonic() - started) * 1000)
         if not isinstance(payload, dict):
             raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
-        answers = check_answers(payload.get("answers"), questions)
-        answered = payload.get("model")
-        return {"model": answered if answered in GATEWAY_MODELS else model, "answers": answers,
-                "usage": payload.get("usage") if isinstance(payload.get("usage"), dict) else {}, "ms": ms,
-                "provider": GATEWAY_PROVIDER}
+        answered = payload.get("model") if payload.get("model") in GATEWAY_MODELS else model
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        try:
+            answers = check_answers(payload.get("answers"), questions)
+        except JudgeError as exc:
+            raise _paid(exc, answered, usage)
+        return {"model": answered, "answers": answers, "usage": usage, "ms": ms, "provider": GATEWAY_PROVIDER}
     engine.model, engine.provider = model, GATEWAY_PROVIDER
     return engine
 
@@ -335,6 +378,8 @@ def llm_text(provider, payload):
 
 def llm_answers(raw, questions):
     """Turn the model's probabilities into the decisions contract's answers."""
+    if not isinstance(raw, str):
+        raise JudgeError("shape", "the model did not answer with text")
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
@@ -348,7 +393,10 @@ def llm_answers(raw, questions):
         if not isinstance(got, dict):
             raise JudgeError("shape", f"{qid}: no answer")
         if q["type"] == "noul":
-            answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
+            try:
+                answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
+            except (TypeError, ValueError):
+                raise JudgeError("shape", f"{qid}: noul is not a number")
             continue
         raw_p = got.get("probabilities")
         names = list(q["criteria"]) if q["type"] == "choice" else list(range(len(q["criteria"])))
@@ -385,17 +433,26 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
         started = time.monotonic()
         try:
             with opener(llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS),
-                        timeout=timeout) as response:
+                        timeout=time_left(timeout)) as response:
                 payload = json.load(response)
-            text = llm_text(provider, payload)
         except urllib.error.HTTPError as exc:
             raise JudgeError("unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
                              f"{provider} answered {exc.code}", exc.code,
                              retryable=exc.code in (429, 529) or exc.code >= 500)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
-        return {"model": model, "answers": llm_answers(text, questions),
-                "usage": payload.get("usage") or payload.get("usageMetadata") or {},
+        # An answer came back, so it was paid for, even when it cannot be used.
+        usage = (payload.get("usage") or payload.get("usageMetadata") or {}) if isinstance(payload, dict) else {}
+        try:
+            text = llm_text(provider, payload)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise _paid(JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
+                        model, usage)
+        try:
+            answers = llm_answers(text, questions)
+        except JudgeError as exc:
+            raise _paid(exc, model, usage)
+        return {"model": model, "answers": answers, "usage": usage,
                 "ms": round((time.monotonic() - started) * 1000), "provider": LLM_PROVIDERS[provider]}
     engine.model, engine.provider = model, LLM_PROVIDERS[provider]
     return engine

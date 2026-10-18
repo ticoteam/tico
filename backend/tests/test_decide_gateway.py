@@ -40,11 +40,12 @@ def answer_all(questions):
 
 
 class Internet:
-    """`urllib.request.urlopen` for the three providers. `fail[host] = <status | exception | "garbled" | "shape">`
-    makes that provider fail that way; every request is kept as (url, headers, body, timeout)."""
+    """`urllib.request.urlopen` for the three providers. `fail[url] = <status | exception | "garbled" | "shape" |
+    ("choice", value)>` makes that provider fail that way ("shape" and a bad choice still come with usage: paid for);
+    every request is kept as (url, headers, body, timeout). With a `clock`, a timeout takes all of its seconds."""
 
-    def __init__(self):
-        self.requests, self.fail = [], {}
+    def __init__(self, clock=None):
+        self.requests, self.fail, self.clock = [], {}, clock
 
     def calls(self, url):
         return [r for r in self.requests if r[0] == url]
@@ -58,6 +59,8 @@ class Internet:
             raise urllib.error.HTTPError(url, how, "no", {}, io.BytesIO(json.dumps(
                 {"error": "cap_reached" if how == 429 else "revoked_key", "detail": "echo: " + SECRET}).encode()))
         if isinstance(how, BaseException):
+            if isinstance(how, TimeoutError) and self.clock:
+                self.clock.now += timeout
             raise how
         if how == "garbled":
             return io.BytesIO(b"<html>bad gateway " + SECRET.encode() + b"</html>")
@@ -67,7 +70,7 @@ class Internet:
                        "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.000012}, "ms": 140,
                        "label": body.get("label")}
         elif url == J.URL:
-            payload = {"model": "jev-1.14", "answers": answer_all(body["questions"]),
+            payload = {"model": "jev-1.14", "answers": {} if how == "shape" else answer_all(body["questions"]),
                        "usage": {"input_tokens": 120, "output_tokens": 0}}
         else:
             questions = json.loads(body["messages"][0]["content"])["questions"]
@@ -75,7 +78,12 @@ class Internet:
                            {"probabilities": ({n: 1 for n in q["criteria"]} if q["type"] == "choice"
                                               else [1] * len(q["criteria"]))})
                      for qid, q in questions.items()}
-            payload = {"content": [{"text": json.dumps(reply)}], "usage": {"input_tokens": 300, "output_tokens": 40}}
+            payload = {"content": [{"text": "not JSON" if how == "shape" else json.dumps(reply)}],
+                       "usage": {"input_tokens": 300, "output_tokens": 40}}
+        if isinstance(how, tuple) and how[0] == "choice":
+            for answer in payload["answers"].values():
+                if "choice" in answer:
+                    answer["choice"] = how[1]
         return io.BytesIO(json.dumps(payload).encode())
 
 
@@ -251,6 +259,136 @@ def test_a_request_the_contract_refuses_is_refused_before_any_provider_is_asked(
     r = api.post("/api/v2/decisions", headers=headers(), json={"state": {}, "questions": {
         "x": {"type": "choice", "instructions": "Pick", "criteria": {"only": None}}}})
     assert r.status_code == 422 and net.requests == []
+
+
+# ----------------------------------------------------------------------------- 3. what each failure costs and takes
+def test_typesafe_refusing_a_request_that_passed_the_contract_falls_through_to_the_team_llm(api, monkeypatch, net):
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    net.fail[GATEWAY_URL], net.fail[J.URL] = 503, 422
+    r = ask(api)
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "claude-sonnet-5-5" and len(net.calls(J.URL)) == 1 and len(net.calls(ANTHROPIC)) == 1
+    assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "unavailable"
+
+
+@pytest.mark.parametrize("bad", [[], {}, 7, None], ids=["list", "map", "number", "none"])
+def test_a_choice_that_is_not_an_option_name_is_a_bad_shape_and_the_next_provider_answers(api, monkeypatch, net, bad):
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    net.fail[GATEWAY_URL] = ("choice", bad)
+    r = ask(api)
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == "jev-1.14" and audits(api)[-1]["fallback"] == "shape"
+    with pytest.raises(J.JudgeError) as caught:
+        J.check_answers({"bucket": {"choice": bad, "confidence": 0.5}, "is_ask": {"noul": 0.1}}, QUESTIONS)
+    assert caught.value.code == "shape"
+
+
+def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_the_one_after_it(api, monkeypatch, net):
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 50.0
+    net.fail[GATEWAY_URL], net.fail[J.URL] = "shape", 503
+    r = ask(api)
+    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
+    llm_cost = B.cost_usd(store.settings, "claude-sonnet-5-5", {"input_tokens": 300, "output_tokens": 40})
+    unusable, answered = spends(api)
+    assert unusable == {"label": "mail-triage@1", "model": "tico-decide-1.0", "cost_usd": 0.000012, "unusable": True}
+    assert answered["model"] == "claude-sonnet-5-5" and answered["cost_usd"] == llm_cost and "unusable" not in answered
+    assert audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6) and B._RESERVED[0] == 0
+
+    # Every provider answers unusably: each is still counted, the reservation is released, and once the counted spend
+    # reaches the cap the next call asks no one.
+    net.fail[ANTHROPIC] = "shape"
+    r = ask(api)
+    assert r.status_code == 502 and r.json()["error"]["code"] == "judge_shape" and B._RESERVED[0] == 0
+    assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
+        ("tico-decide-1.0", True), ("claude-sonnet-5-5", True)]
+    assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)
+    store.settings.decisions_monthly_usd = round(sum(row["cost_usd"] for row in spends(api)), 6)
+    asked = len(net.requests)
+    r = ask(api)
+    assert r.status_code == 429 and r.json()["error"]["code"] == "spend_cap" and len(net.requests) == asked
+
+
+def test_a_call_in_flight_reserves_what_every_provider_it_may_ask_could_cost(api, monkeypatch, net):
+    settings = api.app.state.store.settings
+    chain = [J.GATEWAY_MODEL, J.MODEL, "claude-sonnet-5-5"]
+    each = [B.reservation(settings, [model], {"team": "Acme"}, QUESTIONS) for model in chain]
+    assert B.reservation(settings, chain, {"team": "Acme"}, QUESTIONS) == pytest.approx(sum(each))
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    with api.app.state.store.read() as c:
+        engine = B.server_engine(api.app.state.store, c, api.app.state.judge)
+    seen = []
+    real = B.reservation
+    monkeypatch.setattr(B, "reservation", lambda s, models, *a: seen.append(list(models)) or real(s, models, *a))
+    engine({"team": "Acme"}, QUESTIONS)
+    assert seen == [chain]
+
+
+def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, monkeypatch, net):
+    for name in J.LLM_KEYS.values():
+        monkeypatch.delenv(name, raising=False)
+    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = "gw-synthetic", GATEWAY_URL, ""
+    monkeypatch.setattr(B, "fallback_engine",
+                        lambda *args, **kwargs: J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5"))
+    net.fail[GATEWAY_URL] = "shape"
+    gw = G.Gateway(hub, FakeSlack(), clock=Clock())
+    gw.verify_app()
+    assert gw.receive(envelope("hello there", channel=DM, kind="message")) == "queued"
+    gw.tick()
+    spent = [json.loads(r["detail_json"]) for r in rows(hub, "SELECT detail_json FROM events WHERE action='judge.spend'")]
+    assert [(row["model"], row.get("unusable")) for row in spent] == [("tico-decide-1.0", True), ("claude-sonnet-5-5", None)]
+    detail = json.loads(rows(hub, "SELECT detail_json FROM events WHERE action='judge.call'")[-1]["detail_json"])
+    assert detail["provider"] == "Anthropic" and detail["cost_usd"] == round(sum(row["cost_usd"] for row in spent), 6)
+
+
+class Seconds:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_the_providers_together_answer_within_the_chain_deadline_on_a_controlled_clock(api, monkeypatch, net):
+    clock = Seconds()
+    monkeypatch.setattr(J, "clock", clock)
+    net.clock = clock
+    wire(api, monkeypatch, own_key="ts-synthetic")
+    net.fail[GATEWAY_URL] = net.fail[J.URL] = TimeoutError()
+    r = ask(api)
+    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
+    # The Gateway and TypeSafe take their full 8 s each; the team's LLM gets what is left of 25 s, not its own 20 s.
+    assert [req[3] for req in net.requests] == [8, 8, B.CHAIN_SECONDS - 16]
+
+    net.fail[ANTHROPIC] = TimeoutError()
+    start = clock.now
+    assert ask(api).status_code == 503 and clock.now - start == B.CHAIN_SECONDS
+
+    # With less than a second left, a provider is not asked at all.
+    monkeypatch.setattr(B, "CHAIN_SECONDS", 16.5)
+    asked = len(net.requests)
+    assert ask(api).status_code == 503 and [r[0] for r in net.requests[asked:]] == [GATEWAY_URL, J.URL]
+
+
+def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes(monkeypatch):
+    from clients import remotecli
+    waits = []
+
+    class Stop(Exception):
+        pass
+
+    def client(url, token, timeout=15, retries=3):
+        waits.append(timeout)
+        raise Stop()
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example")
+    monkeypatch.setattr(remotecli, "Client", client)
+    with pytest.raises(Stop):
+        remotecli.run(type("Args", (), {"cmd": "decision", "fn": "decision ask"})())
+    assert waits == [30]
+    assert J.TIMEOUT + 10 > B.CHAIN_SECONDS                     # `J.from_env` through the Hub
+    assert "Client(url, token, timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()     # the MCP tools
+    assert B.CHAIN_SECONDS + 1 < min(waits)
 
 
 # ----------------------------------------------------------------------------- 4. no provider at all

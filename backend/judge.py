@@ -54,6 +54,9 @@ DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role
 # The Gateway and TypeSafe each get one short try from the server; when one is slow, down or refuses the key, the next
 # provider answers, so a caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
+# The most one chain of providers takes, all of them together: each is asked with what is left (`J.within`), so the
+# server answers before its slowest caller stops waiting (30 s: `hub decision ask`, the MCP tools, `J.from_env`).
+CHAIN_SECONDS = 25
 # Tico Decide's price in USD per 1M input and output tokens (Tico AI Gateway lineup 1.0): what the team's monthly cap
 # counts a Gateway call at when its answer carries no cost.
 GATEWAY_USD_PER_MTOK = (0.06, 0.0)
@@ -197,10 +200,11 @@ _METER, _RESERVED = threading.Lock(), [0.0]
 
 
 def reservation(settings, models, state, questions):
-    """The most one call can cost: all of its input and MAX_OUTPUT_TOKENS of output, at the dearest of `models`."""
+    """The most one call can cost: all of its input and MAX_OUTPUT_TOKENS of output at each of `models`, the providers
+    a chain asks in turn. Each can be paid: an answer that comes back unusable still costs, and the next is asked."""
     size = len(json.dumps(state, default=str)) + len(json.dumps(questions, default=str))
     usage = {"input_tokens": size // 3 + 1000, "output_tokens": MAX_OUTPUT_TOKENS}
-    return max(cost_usd(settings, model, usage) for model in models or [""])
+    return sum(cost_usd(settings, model, usage) for model in models or [""])
 
 
 def metered(store, models, state, questions, label, call):
@@ -208,7 +212,8 @@ def metered(store, models, state, questions, label, call):
 
     Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here
     and this call's own most, refuse `spend_cap` if that is over the cap, else reserve it. After the call its real cost
-    is written as a `judge.spend` row before the reservation is released, so the next check sees one or the other.
+    is written as `judge.spend` rows before the reservation is released, so the next check sees one or the other: one
+    for the answer, and one for each answer before it that came back unusable (`paid`), even when no step answered.
     Another process (the Slack gateway's container) sees this one's calls once they are written, and admits its own
     only if they fit too; so the cap can be passed by at most one process's calls in flight, each at most its
     reservation. That bound is for the two processes that ask today, the server and the Slack gateway: each further
@@ -227,16 +232,33 @@ def metered(store, models, state, questions, label, call):
                                    f"${cap:.2f} until the 1st (UTC)", 429)
         _RESERVED[0] += reserved
     try:
-        result = call()
-        cost = cost_usd(settings, result.get("model"), result.get("usage"))
-        with store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.spend", label or "", {
-                "label": label, "model": result.get("model"), "cost_usd": cost,
-                **({} if priced(settings, result.get("model")) or _own_cost(result) else {"price": "ceiling"})})
-        return {**result, "cost_usd": cost}
+        try:
+            result = call()
+        except J.JudgeError as exc:
+            if getattr(exc, "paid", None):
+                exc.cost_usd = _spend(store, label, exc.paid)
+            raise
+        result = dict(result)
+        paid = result.pop("paid", None) or []
+        return {**result, "cost_usd": _spend(store, label, paid + [result])}
     finally:
         with _METER:
             _RESERVED[0] = max(0.0, _RESERVED[0] - reserved)
+
+
+def _spend(store, label, attempts):
+    """One `judge.spend` row per paid attempt (the answer is the last; any before it were unusable), in one
+    transaction. Returns their total USD."""
+    settings, total = store.settings, 0.0
+    with store.transaction() as c:
+        for i, attempt in enumerate(attempts):
+            cost = cost_usd(settings, attempt.get("model"), attempt.get("usage"))
+            total += cost
+            H.event(c, H.KEEPER, "judge.spend", label or "", {
+                "label": label, "model": attempt.get("model"), "cost_usd": cost,
+                **({} if "answers" in attempt else {"unusable": True}),
+                **({} if priced(settings, attempt.get("model")) or _own_cost(attempt) else {"price": "ceiling"})})
+    return round(total, 6)
 
 
 def _own_cost(result):
@@ -261,26 +283,32 @@ def jev(settings):
 def ordered(steps):
     """One engine that asks each of `steps` in turn and returns the first answer, or None when there are none.
 
-    Any failure moves on to the next step (fail open), except `invalid`: a refused request is not retried elsewhere.
-    An answer after a failure says `fallback` with the first failure's code; when every step fails, the last error is
-    raised. The engine keeps its `steps`, so `server_engine` can put the company's own model after them."""
+    The request is checked against the contract once, first: a request the contract refuses is `invalid` and no
+    provider is asked. After that every failure moves on to the next step (fail open), a provider's own 422 too: the
+    request was valid, so that refusal is the provider's. All of them answer within CHAIN_SECONDS together (`J.within`).
+    An answer after a failure says `fallback` with the first failure's code, and `paid` lists the unusable answers
+    before it (`metered` counts them); when every step fails, the last error is raised, carrying all of `paid`. The
+    engine keeps its `steps`, so `server_engine` can put the company's own model after them."""
     steps = [step for step in steps if step is not None]
     if len(steps) < 2:
         return steps[0] if steps else None
 
     def engine(state, questions, label=None):
-        failed = None
-        for step in steps[:-1]:
-            try:
-                result = step(state, questions, label)
-            except J.JudgeError as exc:
-                if exc.code == "invalid":
-                    raise
-                failed = failed or J.error_code(exc)
-                continue
-            return {**result, "fallback": failed} if failed else result
-        result = steps[-1](state, questions, label)
-        return {**result, "fallback": failed} if failed else result
+        J.validate(state, questions, label)
+        failed, paid = None, []
+        with J.within(CHAIN_SECONDS):
+            for i, step in enumerate(steps):
+                try:
+                    result = step(state, questions, label)
+                except J.JudgeError as exc:
+                    paid += getattr(exc, "paid", None) or []
+                    if i == len(steps) - 1:
+                        exc.paid = paid
+                        raise
+                    failed = failed or J.error_code(exc)
+                    continue
+                result = {**result, "fallback": failed} if failed else result
+                return {**result, "paid": paid} if paid else result
     engine.steps = steps
     engine.model, engine.provider = step_models(steps)[0], getattr(steps[0], "provider", "")
     return engine
@@ -420,7 +448,9 @@ def install_judge(app, store, auth):
             result = engine(body.state, body.questions, body.label)
         except J.JudgeError as exc:
             with store.transaction() as c:
-                H.event(c, who.actor, "judge.call", label, {**detail, "error": J.error_code(exc)})
+                H.event(c, who.actor, "judge.call", label, {
+                    **detail, "error": J.error_code(exc),
+                    **({"cost_usd": exc.cost_usd} if getattr(exc, "cost_usd", None) else {})})
             code = J.error_code(exc)
             if code == "spend_cap":
                 raise Problem("spend_cap", FAILED[code], 429)

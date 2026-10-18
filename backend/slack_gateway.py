@@ -742,8 +742,12 @@ class Gateway:
         answers, self.last_model, self.last_usage, self.last_cost, self.last_provider = {}, "", [], 0.0, ""
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
-            result = metered(self.store, asks_as, state, batch, JUDGE_LABEL,
-                             lambda batch=batch: judge(state, batch, JUDGE_LABEL))
+            try:
+                result = metered(self.store, asks_as, state, batch, JUDGE_LABEL,
+                                 lambda batch=batch: judge(state, batch, JUDGE_LABEL))
+            except J.JudgeError as exc:     # unusable answers before the failure were paid for too
+                self.last_cost += getattr(exc, "cost_usd", 0.0)
+                raise
             answers.update(result["answers"])
             self.last_model = str(result.get("model") or "")
             self.last_provider = str(result.get("provider") or "")
@@ -754,7 +758,7 @@ class Gateway:
     def paid(self):
         """What the last `ask`'s answered batches cost before one failed, or None when none answered. For reading:
         the cap already counted each batch as it returned."""
-        if not self.last_usage:
+        if not self.last_usage and not self.last_cost:
             return None
         return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
                 **({"provider": self.last_provider} if self.last_provider else {})}
