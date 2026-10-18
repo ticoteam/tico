@@ -22,7 +22,7 @@ The **Bot hours vs human hours** card sits at the top of the Overview, above the
 
 How the two numbers are counted:
 
-- **Bot hours** are the time bot runs spent working. Each run counts from its start to its finish (to now while it is still going). A silence of more than 30 minutes inside a run, with no activity from the bot, is left out. Every bot counts, BotOps and the Assistant included, and a run that failed counts for the time it ran.
+- **Bot hours** are the time bot runs spent working. Each run counts from its start to its finish (to now while it is still going). A silence of more than 30 minutes inside a run, with no activity from the bot, is left out. A finished run with no activity recorded inside it counts in full, start to finish. Every bot counts, BotOps and the Assistant included, and a run that failed counts for the time it ran.
 - **Human hours** are the people on the org chart × 40 hours a week. Hidden people and bots don't count. The org chart keeps no history, so every week uses today's count of people.
 - **Weeks** run Monday to Sunday in the company's time zone (Pacific time).
 
