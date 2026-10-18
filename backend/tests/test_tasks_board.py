@@ -206,22 +206,31 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
 
 
-def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api):
+def test_a_comment_on_a_task_a_bot_filed_wakes_it_from_its_owner_or_when_addressed_to_it(api):
     token = bot_token(api, "ops")
-    task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
+    task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
     path = f"tasks/{task['id']}/comments"
     queued = jobs_for(api, "ops")
-    update = post(api, path, {"text": "Testing it on staging for a day."})
-    assert update["woke"] is False and jobs_for(api, "ops") == queued
+    for teammate in ("ana-test", "priya-test"):                       # a mover, then a teammate: neither owns it
+        update = post(api, path, {"text": "Testing it on staging for a day."}, token=teammate)
+        assert update["woke"] is False and jobs_for(api, "ops") == queued
     assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
     assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
+    queued = jobs_for(api, "ops")
+    reply = post(api, path, {"text": "I don't know why this task is assigned to me."}, token="ben-test")
+    assert reply["woke"] is True and reply["comment"]["to_actor"] == "bot:ops"
+    assert jobs_for(api, "ops") == queued + 1, "the owner's reply gives the bot that asked a turn"
+    mine = f"{path}/{reply['comment']['id']}"
+    assert post(api, mine, {"text": "Why is this mine?"}, token="ben-test")["woke"] is False
+    assert post(api, mine + "/delete", {}, token="ben-test")["woke"] is False
+    assert jobs_for(api, "ops") == queued + 1, "an edit or delete wakes nobody"
 
 
 def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api):
     token = bot_token(api, "ops")
     task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
     queued = jobs_for(api, "ops")
-    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"}, token="priya-test")
     assert said["comment"]["kind"] == "ask" and said["comment"]["to_actor"] == "human:ben"
     assert jobs_for(api, "ops") == queued, "the bot that filed it is not woken"
     with api.app.state.store.read() as c:

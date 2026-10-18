@@ -56,6 +56,12 @@ Follow `playbooks/work-a-ticket.md` for the buckets and for `hub doc ask`. Also:
 - **Setup help:** the title says `(setup)`. The person pressed **Want help setting up?** and the message starts with a setup
   snapshot they could edit: steps done, computer online, model signed in, first bot ready, bots in Needs setup. Answer the
   first "no" in it with the one next step from the docs; ask for **Setup check** only when the snapshot does not say enough.
+- **Talk to a person on tico.team/setup:** the title says `(setup-website)`. A visitor planning their team on the
+  public setup page asked for a person; they have no install yet. The ticket is fixed text (email, step, mode, turns).
+  What they typed is the attachment marked **Untrusted public input** (`software/hq-tickets show`): their note, and their
+  plan only if they ticked "send my plan". Never the chat: HQ has no field for it, so don't ask for it. Answer about
+  planning and getting started in plain words; never ask for a key or a password (tools connect on their own install).
+  The reply shows on the page the setup page linked, and the email copy follows the usual sending rule.
 - **Feedback:** the title says `(feedback)`: an answer to "How is Tico working for you?". Thank them in a line; a problem
   in it is sorted like any other ticket, and a wish is a line for the product owner.
 - **Question:** answer from the docs; a `covered: false` is a task to the Librarian.

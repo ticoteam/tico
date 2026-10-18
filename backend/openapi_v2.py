@@ -21,7 +21,8 @@ COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
     "Team": "This installation's names and settings.",
-    "Repositories": "Team repositories, Owner product-repository creation, and bot repository access.",
+    "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
+                    "and bot repository access.",
     "Subscriptions": "Named provider logins on Computers and defaults for groups and bots.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
@@ -110,6 +111,12 @@ STABLE = [
      "Rename a group, move it under another (`parent`, empty for the top) and add or remove teammates (owners and admins)", "Group"),
     ("/api/v2/groups/{gid}", "delete", "Team chart", "deleteGroup",
      "Remove a group; the groups and teammates in it move up to its parent (owners and admins)", None),
+    ("/api/v2/org/order/{manager}", "get", "Team chart", "getReportOrder",
+     "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the "
+     "chart's order", "ReportOrderView"),
+    ("/api/v2/org/order/{manager}", "put", "Team chart", "setReportOrder",
+     "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under "
+     "that manager, and a bot for its own)", "ReportOrderView"),
     ("/api/v2/bots", "get", "Bots", "listBots",
      "Bots the caller can see, each with the caller's own access; ?can=read|write keeps the ones they can read or write to",
      "BotList"),
@@ -600,6 +607,10 @@ SCHEMAS = {
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
                   "bots": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),
+    "ReportOrderView": obj({"manager": "s", "kind": "s", "name": "s", "can_order": "b",
+                            "reports": items(obj({"id": "s", "kind": "s", "name": "s", "saved": "b"},
+                                                 required=["id", "kind", "name", "saved"]))},
+                           required=["manager", "kind", "name", "can_order", "reports"]),
     "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "org_groups": "a", "teams": "o"}),
     "BotList": items(ref("Bot")),
     "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
@@ -677,7 +688,9 @@ SCHEMAS = {
     "TaskAnswers": obj({"answers": items(ref("ReviewAnswer"))}),
     "TaskAnswerResult": obj({"comment": ref("Message"), "answer": ref("ReviewAnswer"),
                              "comments": items(ref("Message")), "woke": "b"}),
-    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b"}),
+    # `warning`: the bot it went to is paused or quarantined; the comment is kept and runs when it is back.
+    "CommentResult": obj({"comment": ref("Message"), "comments": items(ref("Message")), "woke": "b", "warning": "s"},
+                         required=["comment", "comments", "woke"]),
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
     "UpdateArchiveResult": obj({"updated": "i", "archived": "b", "unread": "i"},
@@ -900,7 +913,9 @@ SCHEMAS = {
                                           "null when every such run used a model with no list price"},
                          "subscription_equiv_usd": {"type": "number", "description": "What runs on a ChatGPT or Claude sign-in would "
                                                     "cost through the API: not money spent, never added to est_cost_usd"},
-                         "unpriced_runs": {"type": "integer", "description": "Runs with tokens on a model with no list price"}}),
+                         "unpriced_runs": {"type": "integer", "description": "Runs with tokens on a model with no list price"},
+                         "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
+                                               "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
                   "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
@@ -1011,7 +1026,9 @@ SCHEMAS['Task']['properties'].update({
     'internal_requesters': {'type': 'integer'}, 'important_requesters': {'type': 'integer'},
 })
 SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['public', 'private']},
-                                         'manager': {'type': ['string', 'null']}})
+                                         'manager': {'type': ['string', 'null']},
+                                         'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
+                                                  'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
 ANSWERS = SCHEMAS
 

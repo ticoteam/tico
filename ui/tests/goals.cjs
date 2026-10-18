@@ -181,7 +181,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.locator('[data-gm-provider]').waitFor();
     assert.equal(await page.locator('[data-gm-provider] a').getAttribute('data-gs-tab'), 'providers');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-gm-no-provider-test.png')});
+    await page.locator('[data-gm-provider] a').click();
+    await page.locator('#settings-tabs [data-settings-tab=providers][aria-selected=true]').waitFor();
+    assert.equal(await page.locator('#settings-providers').isVisible(), true, 'the link lands on Settings > AI providers');
     gmQueued = false;
+    await page.goto('http://tico-ui.test/#/goals');
     await page.reload();
     await page.locator('[data-gm-thread]', {hasText: 'Updated the goal.'}).waitFor();
 

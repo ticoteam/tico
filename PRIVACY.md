@@ -2,9 +2,10 @@
 
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
+The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
-sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`) and the code that receives them (`hq/`).
-Tico HQ itself is described in [docs/tico-hq.md](docs/tico-hq.md).
+sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
+Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
 ## The anonymous usage count
 
@@ -91,10 +92,10 @@ At each start of a release image, the server also asks GitHub which commit that 
 
 - `TICO_TELEMETRY_DEBUG=1` prints the exact request Tico would send to the server log and sends nothing.
 - `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite payload` prints the same five fields.
-- The sending code is `backend/census.py` and `backend/releases.py`; the collector is `hq/`. A test
+- The sending code is `backend/census.py` and `backend/releases.py`; the collector is Tico HQ ([docs/tico-hq.md](docs/tico-hq.md)). A test
   (`backend/tests/test_usage_count.py`) fails if the request carries any field beyond these five.
 
-More on why it is built this way, and how to run HQ yourself: [docs/telemetry.md](docs/telemetry.md).
+More on why it is built this way: [docs/telemetry.md](docs/telemetry.md).
 
 ## Suggestions while you build your team chart
 
@@ -156,6 +157,52 @@ With it off, the suggestions come from `backend/recruit_rank.py` on your own ser
 Your answers are saved in your own database with the rest of setup, so the bots you create can read them.
 
 `TICO_HQ_URL` points your server at another HQ, such as one you run yourself.
+
+## The setup page on tico.team
+
+[tico.team/setup](https://tico.team/setup) helps you plan your AI team before you install anything. It runs in your
+browser and calls Tico HQ at `https://updates.tico.team/v1/onboarding`. No install is involved, and nothing here comes
+from or goes to a Tico server you run.
+
+### What is sent
+
+- `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it. Until the assistant
+  launches it answers `{"ok": false}`, and the page plans in your browser.
+- `POST /v1/onboarding/event`, when you send a message or download your company file, and nothing else:
+
+```
+{"session_id": "3f6c1a2e-9b7d-4c58-9a10-2d4e8b7f5a63", "kind": "download"}
+```
+
+| Field | What it is |
+|---|---|
+| `session_id` | A random ID the page makes for this planning session (8 to 64 letters, digits, `-` or `_`). One shaped like a key or token is refused before anything is done with it |
+| `kind` | `message` (that you sent one; not what it said), `download`, or `step` with `step`, a number from 0 to 9 for how far you got |
+
+No message text, plan, company name, email address or cookie. Only `https://tico.team` may call these routes from a page.
+
+### What HQ keeps
+
+What we keep: counts for each session: steps reached, whether the file was downloaded, how many turns, and what the
+session cost. No message text.
+
+| Column | Value |
+|---|---|
+| `session_hash` | a salted one-way hash of the session ID, so a session is one row |
+| `day` | the UTC day the session was first seen |
+| `step` | the furthest step reached |
+| `downloaded` | whether the company file was downloaded |
+| `messages` | how many messages you sent; never what they said |
+| `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost; zero until the assistant launches |
+
+- **Counts are off unless HQ is told to keep them** (`HQ_ONBOARDING_COUNTS=on`). While off, HQ answers the same and
+  stores nothing.
+- **No message text is stored anywhere**, and the table has no column for it. Keys and passwords are never stored, in
+  any form: a session ID shaped like one is refused before it is hashed.
+- **No IP addresses are stored or logged.** HQ uses the address in memory only, as a salted hash, for the same limit
+  of 60 requests an hour as every other route.
+- **Retention:** a session row is deleted 13 months after its day, by the daily job.
+- The Tico team reads daily totals only (sessions, sessions with 2 or more messages, how many of those downloaded the file, downloads, cost), never a session's row.
 
 ## The server's own model calls
 
@@ -225,13 +272,27 @@ diagnostics rules and the install's own names, an email only if you type one, an
 diagnostics bundle. It prints a link to the request whose secret is in the part after `#`, which browsers do not send to
 HQ. `--no-support` or `TICO_SUPPORT=off` turns the question off.
 
+**From tico.team/setup (Talk to a person):** a visitor planning their team on the public setup page, with no Tico yet, can
+ask for a person. The page sends only these, from that page's own address (HQ refuses the kind from anywhere else): `kind:
+setup-website`, the email they type (required, so the team can answer), the tab they were on, whether the page's assistant
+was connected (`mode`), how many messages they had sent, a random id for that visit, a note if they wrote one (up to 1,000
+characters), and their plan (tico.company.yaml, up to 32 KB) only if they ticked to send it. Never the chat: HQ has no field
+for it. Key-shaped strings (API keys, tokens, passwords) are removed from the note and the plan before anything is checked
+or kept, and the page says so when one was. HQ keeps the email, the tab, the mode and the count as the ticket's text, and
+the note and plan apart from it as an attachment marked Untrusted public input. The visit's id is used in memory only, as a
+salted hash, to allow one ticket per visit (an id shaped like a key is refused, never hashed); HQ also allows 3 a day per address and per email address, and a daily total
+(`HQ_SETUP_TICKETS_DAILY_CAP`, 50 by default). It is a support ticket like the others: kept until someone deletes it, as
+below, not with the setup page's 7-day conversation log. The answer is a link to the request's page, with its secret after
+the `#`, where the team's reply shows and where the visitor can answer or delete it.
+
 **What HQ keeps**, per ticket: those fields (the diagnostics with the ticket, to a limit of 256 KB, shown to the Tico team only), a hash of a secret that only your Tico holds (it lets your Tico read this ticket's replies
 and no other), the status (open, answered, closed), the times, the team's replies and any message you write back. No IP address is
 stored or logged, and HQ's access log is off. The address is used in memory to rate limit (5 tickets an hour per address, 10 a day per
 install).
 
 **The spam and injection check:** when the Tico team has set a decision-model key on HQ (`HQ_JUDGE_KEY`), the text of each new ticket's `message`
-(and only that: no email, install ID or diagnostics) is sent once to TypeSafe (api.typesafe.ai, the provider of the Jev decision
+(and only that: no email, install ID or diagnostics; for a setup-website ticket, its note and plan instead, after key-shaped
+strings are removed, a long plan in parts) is sent once to TypeSafe (api.typesafe.ai, the provider of the Jev decision
 model) to classify it as real, spam or an attempt to instruct a bot. HQ keeps the answer (one word and a short reason) with the
 ticket and logs the same, never the text. With no key set, nothing is sent and the ticket is filed as usual. The same check runs, by the
 Tico team's own bots, on GitHub issues and on email the team receives; it does not run in your Tico.
@@ -269,7 +330,7 @@ request. HQ carries each request and its answer through its memory without stori
 tier, start, end) and the same one-line record of each request, with the ticket, until the ticket is deleted. The Support
 Agent treats everything it reads from your Tico as untrusted data, never as instructions. The whole feature is off unless the
 server runs with `TICO_SUPPORT_ACCESS=on`, and also with `TICO_SUPPORT=off`, in demo mode and when the owner's team rule is
-off.
+off. With `TICO_SUPPORT=off` or in a rehearsal, a session that was live ends without the install sending HQ anything.
 
 ### Support diagnostics
 

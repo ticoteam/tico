@@ -16,7 +16,7 @@
     },
     {
       "name": "Repositories",
-      "description": "Team repositories, Owner product-repository creation, and bot repository access."
+      "description": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access."
     },
     {
       "name": "Subscriptions",
@@ -9771,6 +9771,118 @@
         ]
       }
     },
+    "/api/v2/org/order/{manager}": {
+      "get": {
+        "summary": "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the chart's order",
+        "operationId": "getReportOrder",
+        "parameters": [
+          {
+            "name": "manager",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Manager"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOrderView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      },
+      "put": {
+        "summary": "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under that manager, and a bot for its own)",
+        "operationId": "setReportOrder",
+        "parameters": [
+          {
+            "name": "manager",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Manager"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportOrder"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportOrderView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/proposals": {
       "get": {
         "summary": "Proposals (pending by default; status=confirmed|rejected|all), each saying whether the caller may decide it",
@@ -16813,6 +16925,9 @@
           },
           "woke": {
             "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           }
         },
         "required": [
@@ -22776,6 +22891,17 @@
             ],
             "title": "Create Repositories"
           },
+          "create_product_repositories": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Create Product Repositories"
+          },
           "mode": {
             "type": "string",
             "enum": [
@@ -22868,6 +22994,80 @@
         "additionalProperties": false,
         "type": "object",
         "title": "RepoUpdate"
+      },
+      "ReportOrder": {
+        "properties": {
+          "reports": {
+            "items": {
+              "type": "string",
+              "maxLength": 200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Reports"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reports"
+        ],
+        "title": "ReportOrder",
+        "description": "A manager's direct reports in the order the team chart shows them: bot slugs and human ids (`bot:` or `human:`\nin front when one could be either). Reports left out keep their places."
+      },
+      "ReportOrderView": {
+        "type": "object",
+        "properties": {
+          "manager": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "can_order": {
+            "type": "boolean"
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "saved": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "saved"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "can_order",
+          "kind",
+          "manager",
+          "name",
+          "reports"
+        ],
+        "additionalProperties": true
       },
       "Repository": {
         "type": "object",
@@ -23438,6 +23638,18 @@
               }
             ],
             "title": "Bot Public Approval"
+          },
+          "suggestions_bot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestions Bot"
           }
         },
         "additionalProperties": false,
@@ -25786,6 +25998,18 @@
               "string",
               "null"
             ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "product-roadmap",
+              "engineering",
+              null
+            ],
+            "description": "The Product roadmap or Dev tickets type, whoever manages it"
           }
         },
         "required": [
@@ -26825,12 +27049,17 @@
           "unpriced_runs": {
             "type": "integer",
             "description": "Runs with tokens on a model with no list price"
+          },
+          "low_estimate_runs": {
+            "type": "integer",
+            "description": "Priced runs whose estimate may be low: the model charges more for long prompts and the runner did not report every request's tokens"
           }
         },
         "required": [
           "cached_tokens",
           "est_cost_usd",
           "input_tokens",
+          "low_estimate_runs",
           "output_tokens",
           "runs",
           "subscription_equiv_usd",

@@ -4,6 +4,8 @@
 //! persisting or exposing it elsewhere.
 
 use serde_json::Value;
+use reqwest::header::{HeaderMap, HeaderName, LOCATION, WWW_AUTHENTICATE};
+use reqwest::StatusCode;
 use reqwest_updater::header::HeaderValue;
 use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
@@ -14,6 +16,29 @@ use crate::config::Config;
 pub struct HubStatus {
     pub cloud: bool,
     pub needs: usize,
+    /// Cloudflare Access ended the session: the count is unknown until the person signs in again in the window.
+    pub signed_out: bool,
+}
+
+/// Why a read gave nothing.
+#[derive(Debug, PartialEq)]
+enum Failure {
+    SignedOut,
+    Other,
+}
+
+/// Cloudflare Access answers a lapsed session itself, before the hub sees the request: a redirect to its login page
+/// on `<team>.cloudflareaccess.com`, or a 401 carrying `WWW-Authenticate: Cloudflare-Access`.
+pub(crate) fn access_signed_out(status: StatusCode, headers: &HeaderMap) -> bool {
+    let header = |name: HeaderName| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("");
+    if status.is_redirection() {
+        return Url::parse(header(LOCATION)).ok().is_some_and(|to| is_access_login(&to));
+    }
+    status == StatusCode::UNAUTHORIZED && header(WWW_AUTHENTICATE).to_ascii_lowercase().contains("cloudflare-access")
+}
+
+fn is_access_login(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| host.ends_with(".cloudflareaccess.com"))
 }
 
 pub struct Client {
@@ -23,8 +48,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(config: Config) -> Client {
-        let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build().unwrap();
-        Client { config, http }
+        Client { config, http: http_client() }
     }
 
     pub(crate) fn cookie_header<R: Runtime>(&self, app: &AppHandle<R>, url: &Url) -> Option<String> {
@@ -37,27 +61,24 @@ impl Client {
         (!header.is_empty()).then_some(header)
     }
 
-    async fn get<R: Runtime>(&self, app: &AppHandle<R>, url: Url) -> Option<Value> {
-        let mut request = self.http.get(url.clone());
-        if let Some(cookie) = self.cookie_header(app, &url) {
-            request = request.header("Cookie", cookie);
-        }
-        let response = request.send().await.ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-        response.json().await.ok()
+    async fn get<R: Runtime>(&self, app: &AppHandle<R>, url: Url) -> Result<Value, Failure> {
+        let cookie = self.cookie_header(app, &url);
+        read_json(&self.http, url, cookie).await
     }
 
     pub async fn status<R: Runtime>(&self, app: &AppHandle<R>) -> HubStatus {
         let mut status = HubStatus::default();
-        if let Some(st) = self.get(app, self.config.api("status")).await {
-            status.cloud = st.get("cloud").and_then(Value::as_bool).unwrap_or(false);
+        match self.get(app, self.config.api("status")).await {
+            Ok(st) => status.cloud = st.get("cloud").and_then(Value::as_bool).unwrap_or(false),
+            Err(Failure::SignedOut) => { status.signed_out = true; return status; }
+            Err(Failure::Other) => {}
         }
         // The badge shows only the number: `count=1` answers with it instead of the full list
         // (over 100 KB every 30 s). An older hub ignores the query and sends the items.
         let needs = if status.cloud { self.config.api("v2/needs-you?count=1") } else { self.config.api("issues?needs_human=1") };
-        if let Some(value) = self.get(app, needs).await {
+        let needs = self.get(app, needs).await;
+        status.signed_out = needs == Err(Failure::SignedOut);
+        if let Ok(value) = needs {
             status.needs = if status.cloud {
                 value.get("count").and_then(Value::as_u64).map(|n| n as usize)
                     .or_else(|| value.get("items").and_then(Value::as_array).map(Vec::len)).unwrap_or(0)
@@ -67,6 +88,39 @@ impl Client {
         }
         status
     }
+}
+
+/// Redirects are followed, except to Cloudflare Access's login page: that one is the answer (signed out), and
+/// following it would read the login page as a failed hub reply.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if is_access_login(attempt.url()) {
+                attempt.stop()
+            } else if attempt.previous().len() >= 10 {
+                attempt.error("too many redirects")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .unwrap()
+}
+
+async fn read_json(http: &reqwest::Client, url: Url, cookie: Option<String>) -> Result<Value, Failure> {
+    let mut request = http.get(url);
+    if let Some(cookie) = cookie {
+        request = request.header("Cookie", cookie);
+    }
+    let response = request.send().await.map_err(|_| Failure::Other)?;
+    if access_signed_out(response.status(), response.headers()) {
+        return Err(Failure::SignedOut);
+    }
+    if !response.status().is_success() {
+        return Err(Failure::Other);
+    }
+    response.json().await.map_err(|_| Failure::Other)
 }
 
 pub(crate) fn same_origin(a: &Url, b: &Url) -> bool {
@@ -385,6 +439,32 @@ mod updater_auth_tests {
         let source = hub.join("download/file/0.3.49/Acme%20Tico.app.tar.gz").unwrap();
         let signed = Url::parse(include_str!("testdata/presigned-artifact-url.txt").trim()).unwrap();
         assert!(policy.allows_hub_artifact_redirect(&source, &signed), "{signed}");
+    }
+
+    #[tokio::test]
+    async fn badge_poller_reads_an_access_login_redirect_or_401_as_signed_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let replies: [&[u8]; 4] = [
+            b"HTTP/1.1 302 Found\r\nLocation: https://team.cloudflareaccess.com/cdn-cgi/access/login/tico.example.test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Cloudflare-Access realm=\"tico.example.test\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"count\":3}",
+        ];
+        let server = thread::spawn(move || {
+            for reply in replies {
+                let (mut socket, _) = listener.accept().unwrap();
+                read_request(&mut socket);
+                socket.write_all(reply).unwrap();
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/api/v2/needs-you?count=1")).unwrap();
+        let http = http_client();
+        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::SignedOut));
+        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::SignedOut));
+        assert_eq!(read_json(&http, url.clone(), None).await, Err(Failure::Other));
+        assert_eq!(read_json(&http, url, None).await, Ok(serde_json::json!({"count": 3})));
+        server.join().unwrap();
     }
 
     fn read_request(socket: &mut std::net::TcpStream) -> String {

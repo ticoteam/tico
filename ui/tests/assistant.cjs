@@ -142,7 +142,7 @@ function fixture() {
       const card = page.locator('.asst-card[data-action="act1"]');
       await card.waitFor();
       assert.equal(await card.locator('[data-what]').innerText(), 'Archive bot Ops', tag + ': the server\'s description leads');
-      assert.ok((await card.locator('.asst-long').innerHTML()).includes('THE-END'), tag + ': a long value is whole, behind Show more');
+      assert.ok((await card.locator('[aria-label="What is sent"] .asst-long').innerHTML()).includes('THE-END'), tag + ': a long value is whole, behind Show more');
       assert.equal(state.decided.length, 0, tag + ': nothing ran before the click');
       await card.locator('[data-confirm]').click();
       await page.locator('.asst-card[data-status="done"]').waitFor();
