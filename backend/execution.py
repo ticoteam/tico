@@ -563,9 +563,18 @@ def unfenced_sql():
             f"OR ({task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))))")
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots):
+def live_tasks(c):
+    """{(bot, task)} with a turn out now. A later wake for that bot about that task waits for the turn even when its
+    lane is another one: a task moved under another of the bot's tasks mid-turn keys a new lane (session_root), and
+    one task never has two turns of the same bot at once."""
+    return {(r[0], r[1]) for r in c.execute("SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
+                                             "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
+
+
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
-    `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs."""
+    `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
+    turn out (live_tasks)."""
     message = H.message(c, job["message_id"])
     if not privacy.message_readable(c, "bot:" + job["bot"], message):
         return "unreadable"
@@ -575,7 +584,8 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots):
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     config = check_models.apply(followed, wanted)
-    if (job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy:
+    if ((job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy
+            or (job["bot"], task_id) in live):
         return "lane_held"
     return None
 
@@ -1079,6 +1089,7 @@ class Execution:
         if not bots:
             return None
         marks = ",".join("?" for _ in bots)
+        live = live_tasks(c)
         limit = turn_limit(share, runner["capacity"], any(held.get(bot, 0) < share for bot in bots))
         full = [bot for bot in bots if held.get(bot, 0) >= limit]
         # Readiness, spend and cooldown are checked once per bot, never once per queued job.
@@ -1099,7 +1110,7 @@ class Execution:
             f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
             (*bots, who.runner_id, *full, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
-            if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots) is None:
+            if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None:
                 return row
         return None
 

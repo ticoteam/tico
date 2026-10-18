@@ -397,10 +397,12 @@ def test_the_server_engine_falls_back_when_jev_is_down_and_is_off_at_the_cap(api
     assert "cost_usd" in engine({"team": "Acme"}, QUESTIONS) and len(jev.calls) == 1 and backup.calls == []
     jev.fail = DOWN
     assert engine({"team": "Acme"}, QUESTIONS)["fallback"] == "unavailable" and len(backup.calls) == 1
+    # A provider's own 422 is its problem, once the request passed the contract here: the next one answers.
     jev.fail = J.JudgeError("invalid", "TypeSafe refused the request", 422)
-    with pytest.raises(J.JudgeError):
-        engine({"team": "Acme"}, QUESTIONS)                  # a refused request is not retried elsewhere
-    assert len(backup.calls) == 1
+    assert engine({"team": "Acme"}, QUESTIONS)["fallback"] == "invalid" and len(backup.calls) == 2
+    with pytest.raises(J.JudgeError) as refused:
+        engine({"team": "Acme"}, {"bucket": {"type": "choice"}})     # the contract refuses it: no provider is asked
+    assert refused.value.code == "invalid" and len(jev.calls) == 3 and len(backup.calls) == 2
     # No key: the company's model alone. Neither: off.
     with store.read() as c:
         assert B.server_engine(store, c, None)({"team": "Acme"}, QUESTIONS)["model"] == "judge-1.13.0"
