@@ -164,7 +164,7 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {team: !!S.me?.cloud && owner, people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
+  const access = {team: settingsIsAdmin(), people: settingsIsAdmin(), history: owner, privacy: owner, storage: owner};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   if (['health', 'history', 'privacy', 'storage', 'recurring', 'triggers'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
