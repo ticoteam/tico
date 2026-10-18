@@ -62,12 +62,15 @@ pub fn is_gateway(model: Option<&str>) -> bool {
 }
 
 /// pi's `models.json` for the Gateway: its OpenAI-chat endpoint at `url`, the key read from GATEWAY_KEY_ENV when pi
-/// makes a request. It holds no secret.
+/// makes a request. It holds no secret. The models take text and tools only (the Gateway refuses images). They reason,
+/// so pi sends the bot's effort as `reasoning_effort`; pi drops it for a model not marked `reasoning`. The Gateway
+/// takes none, minimal, low, medium, high and xhigh, so pi's `max` (`effort_for`) goes as `xhigh`.
 pub fn gateway_models_json(url: &str) -> Value {
     let url = url.trim().trim_end_matches('/');
     let models: Vec<Value> = GATEWAY_MODELS
         .iter()
-        .map(|(id, name)| json!({"id": id, "name": name, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32000}))
+        .map(|(id, name)| json!({"id": id, "name": name, "input": ["text"], "reasoning": true,
+                                 "thinkingLevelMap": {"max": "xhigh"}, "contextWindow": 200000, "maxTokens": 32000}))
         .collect();
     json!({"providers": {GATEWAY_PROVIDER: {
         "baseUrl": if url.is_empty() { GATEWAY_DEFAULT_URL } else { url },
@@ -518,6 +521,12 @@ mod tests {
         // Not the Gateway's: as it came.
         assert_eq!(plain_error("429 rate limit: slow down"), "429 rate limit: slow down");
         assert_eq!(gateway_models_json("")["providers"]["tico"]["baseUrl"], GATEWAY_DEFAULT_URL);
+        // pi sends `reasoning_effort` only for a model marked `reasoning` (checked against pi 1.3.0 and a local fake
+        // chat endpoint: low, high and max went as low, high and xhigh; unmarked, none went); text in, as the Gateway.
+        for model in gateway_models_json("")["providers"]["tico"]["models"].as_array().unwrap() {
+            assert_eq!((&model["reasoning"], &model["thinkingLevelMap"]["max"], &model["input"]),
+                       (&json!(true), &json!("xhigh"), &json!(["text"])), "{model}");
+        }
         // A Tico-model bot needs no OpenRouter grant on its computer.
         let (state, _) = sign_in(&[json!({"bot": "gw-only-bot", "config": {"runtime": "pi", "model": "tico-mid-1.0"}})]);
         assert_eq!(state, "ready");

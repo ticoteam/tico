@@ -194,6 +194,11 @@ def test_openrouter_never_serves_a_tico_model_and_no_default_fallback_spends_the
     assert providers.serves("openrouter", providers.MODEL_BY_ID["kimi-k3"])
     record = {"enabled": ["tico"], "runtime": "pi", "model": "tico-mid-1.0", "auto_fallback": True}
     assert providers.default_fallbacks(record) == []
+    # A Tico company default doesn't reach the fallbacks through another provider on pi: that one's own model does.
+    record = {**record, "enabled": ["anthropic", "openrouter", "tico"]}
+    fallbacks = providers.default_fallbacks(record)
+    assert not any(providers.gateway_model(row["model"]) for row in fallbacks), fallbacks
+    assert {"runtime": "pi", "harness": "pi", "model": providers.recommended("openrouter")["id"]} in fallbacks
 
 
 def test_a_key_the_environment_sets_shows_as_connected_and_is_not_edited_here(api, monkeypatch):
@@ -210,6 +215,13 @@ def test_a_key_the_environment_sets_shows_as_connected_and_is_not_edited_here(ap
         delete(api, "providers/gateway", expected=409)
         assert post(api, "providers/gateway/check", {})["state"] == "connected"
         assert fake.calls == [("/v1/gateway/key", KEY)]
+        # A restart with another key in the environment: the old key's word is not shown for it, and the stored check
+        # names neither key.
+        fake.revoked(OTHER)
+        monkeypatch.setenv("TICO_GATEWAY_KEY", OTHER)
+        assert get(api, "providers/gateway")["state"] == "unchecked"
+        assert post(api, "providers/gateway/check", {})["state"] == "revoked"
+        assert KEY not in everything(api) and OTHER not in everything(api)
 
 
 @pytest.mark.parametrize("answer,state,status,words", [
@@ -486,6 +498,71 @@ def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
     assert status["focus"].startswith("Tico AI Gateway is unavailable, try again"), status["focus"]
     # Nothing ran: back in the queue. A run that had acted is kept for a person, as any interrupted run.
     assert (job, "back in the queue" in status["focus"]) == (("uncertain", False) if acted else ("queued", True))
+
+
+def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api, monkeypatch):
+    """An outage can't loop a run forever: each retry waits longer (and the bot's other work waits with it), and the
+    last try ends the run with the Gateway's plain words."""
+    from backend import execution
+    from backend.repositories import metadata
+    machine, attempt = tico_run(api, monkeypatch)
+    waits = []
+    for n in range(1, execution.NO_EFFECT_TRIES + 1):
+        finish(api, machine, attempt, "Tico AI Gateway is unavailable, try again (upstream_unavailable)")
+        status, job = ended(api, attempt)
+        if n == execution.NO_EFFECT_TRIES:
+            break
+        assert job == "queued" and "retries after" in status["focus"] and f"try {n} of 3" in status["focus"]
+        assert claim(api, machine, "ops") is None, "the bot waits before it asks the Gateway again"
+        with api.app.state.store.transaction() as c:
+            wait = metadata(c, execution.GATEWAY_WAIT + "ops")
+            waits.append((H.parse_ts(wait["until"]) - H.parse_ts(wait["since"])).total_seconds())
+            # The wait has passed.
+            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+                      (json.dumps({**wait, "until": H.shift(H.now(), seconds=-1)}), execution.GATEWAY_WAIT + "ops"))
+        attempt = claim(api, machine, "ops")
+        assert attempt, "after the wait the run is tried again"
+    assert waits == [execution.GATEWAY_BACKOFF, 2 * execution.GATEWAY_BACKOFF]
+    assert job == "uncertain" and status["state"] == "crashed"
+    assert status["focus"] == "Tico AI Gateway is unavailable, try again. This run is saved for later"
+
+
+@pytest.mark.parametrize("error,acted,slow,job,words", [
+    ("Tico AI Gateway: no Tico route for this request (no_route)", False, False, "uncertain",
+     "No Tico route for this request. This run is saved for later"),
+    ("Tico AI Gateway: no Tico route for this request (no_route)", True, False, "uncertain",
+     "No Tico route for this request. This run is saved for later"),
+    ("404 status code (no body)", False, False, "uncertain", "The Tico AI Gateway doesn't serve Tico models at its URL"),
+    ("Tico AI Gateway is unavailable, try again (upstream_unavailable)", False, False, "queued", "retries after"),
+    ("Tico AI Gateway is unavailable, try again (upstream_unavailable)", False, True, "queued", "retries after"),
+    ("Tico AI Gateway is unavailable, try again (upstream_unavailable)", True, False, "uncertain",
+     "Tico AI Gateway is unavailable, try again. This run is saved for later"),
+])
+def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypatch, error, acted, slow, job, words):
+    """A bot on another model whose own fallback is a Tico model: when its limit sent the turn to the fallback and the
+    Gateway refused that, the run is the Gateway's, as on a Tico primary (and slow to fail is no reason to hold it)."""
+    setup(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({
+            **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
+            "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    attempt = claim(api, machine, "ops")
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    if slow:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET started=? WHERE id=?", (H.shift(H.now(), seconds=-600), attempt["id"]))
+    events = [{"seq": 1, "kind": "tool", "payload": {"name": "read"}}] if acted else []
+    events.append({"seq": len(events) + 1, "kind": "error", "payload": {"error": error}})
+    post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": len(events), "text": "",
+         "fallback": "pi", "primary_limited": True}, machine["token"])
+    status, state = ended(api, attempt)
+    assert state == job and words in status["focus"], (state, status["focus"])
 
 
 def test_a_reply_the_gateway_cut_off_is_posted_with_what_happened(api, monkeypatch):

@@ -31,6 +31,9 @@ STALL_MAX = 900
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
 PRE_START_TRIES = 10        # lapsed leases before start: a broken computer must not retry forever
+# A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
+# bot first waits this long, doubled for each try: an outage is not asked again every few seconds.
+GATEWAY_BACKOFF = 60
 NO_EFFECT_WITHIN = 120       # seconds from start; a longer silent run may have used unreported tools
 CHECKPOINT_CHARS = 1500      # a task's checkpoint: the last turn's reply, enough to pick the work back up
 # A deploy drains every bot while it waits for runs to finish (at most 30 minutes) and then
@@ -387,12 +390,20 @@ def person_wrote_since(c, bot, since):
 
 
 def cooling_off(c, bot):
-    """Whether a usage limit still holds the bot: its status is `limited`, the cooldown has not passed,
-    and no person has written to it since (a person's message is worth one try)."""
+    """Whether a usage limit, or the wait after the Tico AI Gateway was unavailable, still holds the bot: its status is
+    `limited` and the cooldown has not passed (or the Gateway's wait has not), and no person has written to it since
+    (a person's message is worth one try)."""
+    from .repositories import metadata
     status = H.status(c, bot) or {}
+    wait = metadata(c, GATEWAY_WAIT + bot)
+    if wait.get("until") and wait["until"] > H.now() and not person_wrote_since(c, bot, wait.get("since") or ""):
+        return True
     return bool(status.get("state") == "limited" and status.get("since")
                 and status["since"] > H.shift(H.now(), seconds=-limit_cooldown(c, bot))
                 and not person_wrote_since(c, bot, status["since"]))
+
+
+GATEWAY_WAIT = "gateway-unavailable:"
 
 
 def clear_limits(c, settings, actor, bot):
@@ -1841,13 +1852,14 @@ class Execution:
         # unlucky but broken, and waits for a person as before.
         # Codex and Claude never report their tool calls, so for them silence is only evidence
         # together with speed: the Grok failures came back within a second or two of starting.
-        # A run on a Tico model the Tico AI Gateway refused ends with the Gateway's code (clients/gateway.py): asking
-        # again gets the same answer for a refusal of the request as sent, and an unavailable model is worth a retry.
+        # A run whose Tico model (its own, or the fallback it names) the Tico AI Gateway refused ends with the Gateway's
+        # code (clients/gateway.py): asking again gets the same answer for a refusal of the request as sent, and an
+        # unavailable model is worth a retry.
         tico_code, tico_error = "", ""
         if body.outcome == "failed" and not stopped and body.auth_rejected is None:
             tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
-            if tico_error and gateway_connection.is_tico(
-                    gateway_connection.run_config(c, self.store.settings, row["bot"], aid).get("model")):
+            if tico_error and gateway_connection.ran_tico(
+                    gateway_connection.run_config(c, self.store.settings, row["bot"], aid), body):
                 tico_code = gateway.run_code(tico_error)
         silent = False
         if body.outcome == "failed" and not limited and not retryable and not stopped:
@@ -2042,6 +2054,17 @@ class Execution:
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
                           ("sign in on this computer to continue" if requeue else "this run is saved for review"),
                           began=row["started"] or row["created"])
+        elif silent and tico_code == gateway.UNAVAILABLE:
+            from .repositories import save_metadata
+            hit = H.now()
+            tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
+            retry = H.shift(hit, seconds=GATEWAY_BACKOFF * 2 ** max(tries - 1, 0))
+            save_metadata(c, GATEWAY_WAIT + row["bot"], {"since": hit, "until": retry})
+            settle_status(c, row["bot"], "idle", f"{refused} ({hit[11:16]} UTC); the run is back in the queue and "
+                          f"retries after {retry[11:16]} UTC (try {tries} of {NO_EFFECT_TRIES})",
+                          began=row["started"] or row["created"])
+            H.event(c, H.KEEPER, "attempt.no_effect_retry", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "runtime": runtime, "retry_after": retry})
         elif silent:
             settle_status(c, row["bot"], "idle",
                           f"{refused} ({H.now()[11:16]} UTC); the run is back in the queue" if refused else

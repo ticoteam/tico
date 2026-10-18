@@ -16,6 +16,7 @@ unasked (`check_soon`: the Gateway answers it 6 times a minute per key), and kep
 Health.
 """
 
+import hashlib
 import json
 import os
 import threading
@@ -112,8 +113,12 @@ def view(c, settings=None, *, manage=False):
 
 
 def _fingerprint(c, settings=None):
-    """Which key a check was made with, without keeping it: the source and the saved revision."""
+    """Which key a check was made with, without keeping it: the source and the saved revision, or for the
+    environment's key (which a restart can replace with no revision) a short one-way digest of it and its URL."""
     where = source(c, settings)
+    if where == "environment":
+        digest = hashlib.sha256(f"tico-gateway-check\n{env_key(settings)}\n{env_url(settings)}".encode()).hexdigest()
+        return f"{where}:{digest[:16]}"
     return f"{where}:{_row(c).get('revision', 0)}" if where else ""
 
 
@@ -260,6 +265,20 @@ def run_config(c, settings, bot, attempt_id):
     if turn and turn["task_id"]:
         config = check_models.apply(config, check_models.of(c, turn["task_id"], bot))
     return providers.fill(providers.load(c, settings), config)
+
+
+def ran_tico(config, body):
+    """Whether the part of a run that ended it (`body`, its completion) ran on a Tico model: the model the runner
+    counted last; else, when a fallback harness ran the turn, the fallback the bot names itself (an automatic one is
+    never a Tico model, providers.default_fallbacks); else the run's own model."""
+    usage = getattr(body, "usage", None)
+    segments = (usage.segments or [usage]) if usage else []
+    if segments and segments[-1].model:
+        return is_tico(segments[-1].model)
+    if getattr(body, "fallback", None):
+        fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+        return fallback.get("harness") == body.fallback and is_tico(fallback.get("model"))
+    return is_tico(config.get("model"))
 
 
 def run_credentials_for(c, vault, settings, who):

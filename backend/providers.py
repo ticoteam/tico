@@ -473,6 +473,12 @@ def view(record):
                           for row in PROVIDERS]}
 
 
+def gateway_model(model):
+    """Whether `model` is served by a Gateway provider (the Tico models), which only runs with the gateway key."""
+    provider = (MODEL_BY_ID.get(str(model or "")) or {}).get("provider")
+    return bool(provider and (PROVIDER_BY_ID.get(provider) or {}).get("gateway"))
+
+
 def default_fallbacks(record):
     """What a runner may run a turn on when the bot's own subscription hits its limit and the bot names no
     fallback: one model per enabled provider's runtime, in the owner's order (the company default on its own
@@ -485,8 +491,9 @@ def default_fallbacks(record):
         if PROVIDER_BY_ID[name].get("gateway"):
             continue                # a fallback the bot did not name never spends the company's gateway key
         runtime = PROVIDER_BY_ID[name]["runtime"]
-        model = (record["model"] if record["runtime"] == runtime and record["model"]
-                 else (recommended(name) or {}).get("id"))
+        # Nor does a company default on a Gateway model reach it through another provider on the same runtime.
+        own = record["model"] if record["runtime"] == runtime and not gateway_model(record["model"]) else ""
+        model = own or (recommended(name) or {}).get("id")
         if runtime in seen or not model:
             continue
         seen.add(runtime)
