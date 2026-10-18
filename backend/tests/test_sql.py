@@ -14,7 +14,7 @@ from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
 
 SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners",
-                 "enrollments", "session_epochs", "settings_changes", "backup_verified_blobs",
+                 "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
                  "sqlite_temp_master", "sqlite_sequence", "_litestream_seq")
 SECRET_COLUMNS = (("attempts", "token_hash"), ("bots", "token_hash"), ("service_jobs", "token_hash"))
 REJECTED = ("PRAGMA table_info(messages)", "DELETE FROM messages", "ATTACH ':memory:' AS other",
