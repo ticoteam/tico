@@ -214,6 +214,16 @@ def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decid
     assert len(net.calls(GATEWAY_URL)) == 3, "the Gateway gets one try per call, never a retry"
 
 
+def test_a_revoked_gateway_key_with_no_provider_after_it_is_decide_off_and_the_caller_carries_on(api, monkeypatch, net):
+    wire(api, monkeypatch, team_llm=False)
+    net.fail[GATEWAY_URL] = 401
+    r = ask(api)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
+    assert len(net.calls(GATEWAY_URL)) == 1 and not net.calls(J.URL)
+    assert audits(api)[-1]["error"] == "auth", "the audit still tells an admin the key was refused"
+    assert SECRET not in r.text
+
+
 def test_without_an_own_key_a_failed_gateway_goes_straight_to_the_team_llm(api, monkeypatch, net):
     wire(api, monkeypatch)
     net.fail[GATEWAY_URL] = 401

@@ -33,9 +33,11 @@ All notable changes to Tico are recorded here. The format follows
   (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
   TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
   the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
-  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
-  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
-  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
+  next, so no caller waits on a broken provider. When none answers, a refused key included, the call is a 503
+  `judge_unavailable` and the caller carries on without Decide. Each decision's audit row names the provider that
+  answered (`Tico AI Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the
+  same way. A Tico Decide call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens,
+  output free).
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when

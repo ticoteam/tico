@@ -465,6 +465,11 @@ def install_judge(app, store, auth):
             code = J.error_code(exc)
             if code == "spend_cap":
                 raise Problem("spend_cap", FAILED[code], 429)
+            if code == "auth":
+                # The server's own key was refused and no provider after it answered: Decide is off for now, as when
+                # every provider is down, and the caller carries on. The audit row above keeps `auth` for an admin.
+                raise Problem("judge_unavailable", FAILED[code] + "; Decide is off until an admin fixes the key. "
+                              "Carry on without it.", 503)
             status = 503 if exc.retryable else (422 if code == "invalid" else 502)
             raise Problem("judge_" + code, FAILED[code], status)
         with store.transaction() as c:
