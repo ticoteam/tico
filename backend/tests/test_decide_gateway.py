@@ -215,6 +215,19 @@ def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decid
     assert len(net.calls(GATEWAY_URL)) == 3, "the Gateway gets one try per call, never a retry"
 
 
+@pytest.mark.parametrize("only", ["gateway key, 401", "own TypeSafe key, 403"])
+def test_a_revoked_key_with_no_provider_after_it_is_decide_off_and_the_caller_carries_on(api, monkeypatch, net, only):
+    gateway_only = only.startswith("gateway")
+    wire(api, monkeypatch, gateway_key="gw-synthetic" if gateway_only else "",
+         own_key="" if gateway_only else "ts-synthetic", team_llm=False)
+    net.fail[GATEWAY_URL if gateway_only else J.URL] = 401 if gateway_only else 403
+    r = ask(api)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
+    assert (len(net.calls(GATEWAY_URL)), len(net.calls(J.URL))) == ((1, 0) if gateway_only else (0, 1))
+    assert audits(api)[-1]["error"] == "auth", "the audit still tells an admin the key was refused"
+    assert SECRET not in r.text
+
+
 def test_without_an_own_key_a_failed_gateway_goes_straight_to_the_team_llm(api, monkeypatch, net):
     wire(api, monkeypatch)
     net.fail[GATEWAY_URL] = 401
@@ -333,7 +346,7 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     # reaches the cap the next call asks no one.
     net.fail[ANTHROPIC] = "shape"
     r = ask(api)
-    assert r.status_code == 502 and r.json()["error"]["code"] == "judge_shape" and B._RESERVED[0] == 0
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable" and B._RESERVED[0] == 0
     assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
         ("tico-decide-1.0", True), ("claude-sonnet-5-5", True)]
     assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)

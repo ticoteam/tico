@@ -494,8 +494,16 @@ def install_judge(app, store, auth):
             code = J.error_code(exc)
             if code == "spend_cap":
                 raise Problem("spend_cap", FAILED[code], 429)
-            status = 503 if exc.retryable else (422 if code == "invalid" else 502)
-            raise Problem("judge_" + code, FAILED[code], status)
+            if code == "invalid" and not exc.status:
+                # The app's own contract check, before any provider was asked: the caller's request is wrong. A
+                # provider's own 422 carries its status and is the provider's failure, below.
+                raise Problem("judge_invalid", FAILED[code], 422)
+            if code in ("unavailable", "unconfigured"):
+                raise Problem("judge_" + code, FAILED[code], 503)
+            # Any other failure is the providers' (a refused key, an error, an unreadable answer) and none after it
+            # answered: Decide is off for this call, as when every provider is down, and the caller carries on. The
+            # audit row above keeps the real code for an admin.
+            raise Problem("judge_unavailable", f"{FAILED[code]}. Decide is off for this call; carry on without it.", 503)
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", label, {
                 **detail, **audit_detail(result), "answers": J.summary(result["answers"])})

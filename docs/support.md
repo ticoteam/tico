@@ -189,7 +189,6 @@ server cannot tell one is connected. One list in `backend/beta.py` drives all of
 - Message bots: mail and calendar: [messaging](messaging.md), [mail](mail.md), [mail-service](mail-service.md)
 - Slack gateway: [slack-gateway](slack-gateway.md)
 - Listening: [listening](listening.md)
-- Market: [librarian](librarian.md#setting-up-the-market)
 - Live Meetings API and Recorder: [live-meetings-api](live-meetings-api.md)
 - Computer screen (View and Control): [install](install.md#screen), [permissions](permissions.md#a-computers-screen)
 - External agents: Hermes, OpenClaw, Grok Bot, Dots, Muse sync: [hermes-agents](hermes-agents.md), [openclaw-agents](openclaw-agents.md), [external-agent-sync](external-agent-sync.md)

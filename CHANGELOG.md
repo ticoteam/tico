@@ -9,22 +9,21 @@ All notable changes to Tico are recorded here. The format follows
 
 ### Added
 - **Tico AI Gateway** in Settings > AI providers: the owner saves the gateway key Tico gives them (or the server's
-  `TICO_GATEWAY_KEY` sets it), and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
+  `TICO_GATEWAY_KEY` sets it, and wins), Decide asks the Gateway with that same key, and bots can then pick **Tico Cheap, Mid and Power 1.0** (Claude Haiku, Sonnet and Opus
   5.5 underneath) like any other model, streamed through the Gateway on pi. The key is sealed and never shown after
   save. No bot holds it: the computer running a bot on a Tico model passes its model calls on with the key, so Tico
   models run only on a computer that runs bots as their own user (Tico's Docker runner). The owner sees the 80% monthly cap warning and a key the Gateway doesn't
   recognise. A bot stopped by the cap says "Gateway cap reached" and waits for next month; every other Gateway
   refusal reads plainly and is retried only when retrying can help, and a reply cut off mid-stream is posted with a
   note ([Tico AI Gateway](docs/ai-gateway.md)).
+- **Stale ticket review** (Settings > Team; off by default, an owner or an admin turns it on): once an hour Tico
+  looks for open tasks that seem finished or forgotten, such as a merged pull request, a done parent or a quiet week,
+  and suggests what to do. Private tasks are never looked at. A bot gets one "Stale check" comment; a person gets one
+  **Stale tickets** card in Needs you with **Accept**, **Skip** and **Accept all**. Nothing changes unless the owner
+  accepts. While it is on, **Still wanted?** questions stop.
+  ([Tasks](docs/tasks.md#stale-ticket-review))
 
 ### Fixed
-- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
-  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
-  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
-- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
-  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
-  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
-  owner's comment) and the bot's other tasks still run side by side.
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still
   remembered the cleared chat and every turn still paid for it. Each turn now carries its conversation's session
@@ -36,23 +35,62 @@ All notable changes to Tico are recorded here. The format follows
   before this keeps today's behaviour ([sessions](docs/sessions.md)).
 
 ### Changed
+- Market is no longer marked Beta: its sidebar item, page title and pages carry no **Beta** pill, and Help no longer
+  lists it under **Beta features**.
+
+## [0.3.60] - 2026-10-18
+
+### Fixed
+- A bot that hits its usage limit now stays paused until the limit resets, even while its other task turns start,
+  restore a lease or finish. Before, a parallel turn cleared the pause, and queued work retried the exhausted
+  subscription every few seconds, thousands of failed attempts in one limit window; now it waits for the reset and
+  then runs normally.
+- A check or review subtask held by its model's usage limit no longer waits unseen. After 12 hours with every turn on
+  it stopped on the limit, the Health Monitor files one setup finding naming the bot, the model, since when and the
+  task, with the fix: wait for the reset, file the check again on another model, or drop it. And a held check whose
+  task is done, closed or declined has its queued turn let go, instead of retrying after every reset and running once
+  on a finished task; checks already in that state are let go on the first scheduler tick after the update.
+- A bot's turn finishes when a comment it had taken in was deleted while it ran. Finishing such a turn failed with a
+  server error on every retry; now the turn and its reply are recorded as usual, and the deleted comment is never held
+  for review or run again.
+- A comment taken back while a bot was working on it no longer breaks or shows through that turn. A bot checking for
+  new comments got a server error each time once the comment that started its turn was deleted; now it carries on.
+  Its reply is no longer posted under the deleted comment, and a reply no longer lists a deleted comment among those
+  it answered.
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches beside the running server. Deleting a comment also finds the questions it answered by index.
+
+### Changed
 - **Decide asks the Tico AI Gateway first**, as Tico Decide 1.0 (`tico-decide-1.0`), with a gateway key
   (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`; `TICO_GATEWAY_URL`, Tico HQ's by default), instead of calling
   TypeSafe. The order is the Gateway, then your own TypeSafe key if you set one (no longer in any default setup), then
   the team's own AI provider, then off; any failure (down, slow, a refused key, the Gateway's cap) moves on to the
-  next, so no caller waits on a broken provider. Each decision's audit row names the provider that answered (`Tico AI
-  Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the same way. A Tico Decide
-  call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens, output free).
+  next, so no caller waits on a broken provider. When none answers, a refused key included, the call is a 503
+  `judge_unavailable` and the caller carries on without Decide. Each decision's audit row names the provider that
+  answered (`Tico AI Gateway`, `TypeSafe`, or the team's provider) and its model, and the Slack gateway routes the
+  same way. A Tico Decide call counts toward the monthly spend cap at the Gateway's price ($0.06 per 1M input tokens,
+  output free).
+
+## [0.3.59] - 2026-10-18
+
+### Fixed
+- A queued job whose message its bot can no longer read (a private task or conversation it was taken off) no longer
+  sits queued for ever. No claim ever takes it, so it aged Health's "queued since" warning. The scheduler now cancels
+  it within a minute and records why (a `job.suppress` event, reason `unreadable`); the message itself stays.
+- A bot no longer gets a second turn on a task while its first is still running there when the task was moved under
+  another of its tasks mid-turn. A wake about a task the bot is working on goes into that turn, or waits for the next
+  turn on the task; it never starts one beside it. Another bot's turn on the same task (the requester woken by the
+  owner's comment) and the bot's other tasks still run side by side.
+
+### Changed
 - PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
   OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
 ### Fixed
-- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
-  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
-  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
-  batches beside the running server. Deleting a comment also finds the questions it answered by index.
 - Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
   purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
   that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job
@@ -3453,7 +3491,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.58...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.60...HEAD
+[0.3.60]: https://github.com/ticoteam/tico/compare/v0.3.59...v0.3.60
+[0.3.59]: https://github.com/ticoteam/tico/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/ticoteam/tico/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/ticoteam/tico/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/ticoteam/tico/compare/v0.3.55...v0.3.56
