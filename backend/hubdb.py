@@ -3210,8 +3210,9 @@ def _unblock(conn, done_task, told=()):
     blocks the task. `told` are the tasks already woken about it (_answered)."""
     for blocked_id in TR.blocked_ids(conn, done_task["id"]):
         row = task(conn, blocked_id)
-        if task_private(conn, done_task) and (not task_private(conn, row) or not all(
-                task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
+        if task_private(conn, done_task) and not subtask_flows_up(conn, done_task, row) and (
+                not task_private(conn, row) or not all(
+                    task_private_readable(conn, party, done_task) for party in (row['owner'], row['requester']))):
             continue                  # do not copy private completion into a wider task
         TR.remove_blocker(conn, KEEPER, row["id"], done_task["id"], keeper_note=f"unblocked: {done_task['title']}")
         conn.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))

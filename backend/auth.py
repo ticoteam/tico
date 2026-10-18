@@ -712,7 +712,8 @@ class Auth:
         clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
         me = A.q(who.actor)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
-        audience = f"({me} IN (owner,requester) OR guest={me} OR (coalesce(private,1)=0 AND ({clear})))"
+        audience = (f"({me} IN (owner,requester) OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)=0 AND ({clear})))")
         if who.task_actor:
             actor = A.q(who.task_actor)
             audience += f" AND (coalesce(private,1)=0 OR {actor} IN (owner,requester) OR guest={actor})"
@@ -921,8 +922,9 @@ class Auth:
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner"], row["requester"])
-        if who.actor not in participants:
-            # A party to a task always sees it; anyone else needs Read on every bot it involves.
+        if who.actor not in participants and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
+            # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
+            # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]
             for slug, level in (self.bot_accesses(c, who, bots).items() if bots else ()):
                 if not level["see"]:

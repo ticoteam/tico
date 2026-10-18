@@ -5,7 +5,7 @@ import pytest
 
 from backend import task_relations as TR
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
 from backend.tests.test_tasks_board import bot_token
 
 ASK = {"title": "Approve the zip triage plan", "body": "Please approve the triage plan: reply yes or no on this task."}
@@ -155,6 +155,66 @@ def test_waiting_on_a_person_makes_them_the_guest_and_reassignment_ends_it(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:cpo", row["id"], owner="bot:cpo")
     assert readers(api, row["id"]) == set()
+
+
+def test_a_guest_who_cannot_read_the_bots_opens_that_task_and_no_other_work_of_theirs(api):
+    for slug in ("cpo", "ops"):
+        current = get(api, f"bots/{slug}/access", "ana-test")
+        put(api, f"bots/{slug}/access", {"see": {"everyone": True}, "read": {"people": ["ana", "ben"]},
+                                        "write": {"everyone": True}, "revision": current["revision"]})
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops weekly sweep", "body": "Routine."})
+    row = task(api, "bot:cpo", "bot:ops", "Zip triage")
+    attempt = run_on(api)
+    post(api, "tasks", subtask(row["id"], "cara"), attempt["token"])
+    # Cara opens the task she was brought into, as its list and SQL already show it to her...
+    assert readers(api, row["id"]) == {"cara"} and sql_sees(api, "cara-test", "Confidential: Zip triage.")
+    assert api.get(f"/api/v2/tasks/{row['id']}/comments", headers=headers("cara-test")).status_code == 200
+    # ...and nothing else of the bots she may not read.
+    assert api.get("/api/v2/tasks/" + other["id"], headers=headers("cara-test")).status_code == 403
+
+
+def test_the_guests_answer_clears_the_wait_for_good(api):
+    row = task(api, "bot:cpo", "bot:ops", "Zip triage")
+    attempt = run_on(api)
+    current = get(api, "tasks/" + row["id"], attempt["token"])["task"]
+    post(api, "tasks/" + row["id"], {"version": current["version"], "status": "waiting", "waiting_on": "ben",
+                                     "note": "Ben, please approve the plan."}, attempt["token"])
+    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner"] == "human:ben")
+    with api.app.state.store.read() as c:
+        assert TR.blocker_ids(c, row["id"]) == [card["id"]]
+    done = post(api, "tasks/" + card["id"], {"version": card["version"], "status": "done", "note": "Approved."},
+                "ben-test")
+    post(api, "tasks/" + card["id"], {"version": done["version"], "status": "open"}, "ben-test")
+    with api.app.state.store.read() as c:
+        assert TR.blocker_ids(c, row["id"]) == [] and H.task(c, row["id"])["status"] == "open"
+
+
+def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
+    own = task(api, "bot:ops", "bot:ops", "Zip triage")
+    theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
+    attempt = run_on(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], theirs["id"]))
+    current = get(api, "tasks/" + own["id"], attempt["token"])["task"]
+    wait = {"version": current["version"], "status": "waiting", "waiting_on": "ben",
+            "note": "Ben, approve the vendor dispute reply? If yes, I will send it."}
+    r = api.post("/api/v2/tasks/" + own["id"], json=wait, headers=headers(attempt["token"]))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
+    for path, body in (("tasks", subtask(own["id"], "ben")),
+                       ("task-questions", {"question": "Send the reply?", "on": "ben", "parent": own["id"],
+                                           "options": [{"label": "Yes"}, {"label": "No"}]})):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
+        assert r.status_code == 403, (path, r.text)
+    # Nothing reached Ben: no guest, no card, and the task's note is unchanged.
+    with api.app.state.store.read() as c:
+        row = H.task(c, own["id"])
+        assert row["guest"] is None and row["status"] != "waiting" and "vendor" not in (row["note"] or "")
+    assert readers(api, own["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
+    # Once Ben reads every task the run carries, the same wait reaches him.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (theirs["id"],))
+    post(api, "tasks/" + own["id"], wait, attempt["token"])
+    assert readers(api, own["id"]) == {"ben"}
 
 
 def test_a_question_reaches_the_guest(api):

@@ -729,8 +729,11 @@ guest: a subtask for them under it (`hub task create --owner <person> --parent <
 (`hub task question`), or setting it waiting on them (`--status waiting --on <person>`). The task's history records
 who it reached, and its Private row names them.
 
-- The guest reads that task as its requester and owner do: its words, comments and files. Nothing else: not the task
-  above it, its other subtasks, or other private work the run carries. Everyone else still gets "not found".
+- The guest reads that task as its requester and owner do: its words, comments and files, even if they may not read
+  those bots' activity. Nothing else: not the task above it, its other subtasks, or the bots' other work. Everyone else
+  still gets "not found".
+- A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
+  wait are all refused.
 - There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
 - Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the guest.
 - A task under a private task that has a person on it cannot reach someone that person's task does not have.

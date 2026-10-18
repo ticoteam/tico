@@ -405,6 +405,17 @@ def require_create(c, who, private, owner, parent, actor=None):
     return guest
 
 
+def require_wait(c, who, row, waiting_on):
+    """A private run's `--status waiting --on <person>` puts its ask in front of that person (hubdb._ask_in_subtask) and,
+    on a private task with no person on it, makes them its guest: so they must read every private task the run carries,
+    as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
+    person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
+    if not person or not H.is_human(person) or not private_execution(c, who):
+        return
+    guest = None if H.task_private_readable(c, person, row) else (row["id"], person)
+    require_destination(c, who, person, None, {}, guest=guest)
+
+
 def public_message(c, message):
     """External channel audiences have no task participant authority."""
     if not message or dict(message).get("deleted_at") or dict(message).get("deleted"):

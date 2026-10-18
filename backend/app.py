@@ -2930,6 +2930,7 @@ def create_app(settings=None):
                 warnings = None
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
+                privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
                 warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
