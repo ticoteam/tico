@@ -54,17 +54,22 @@ def suppressed(c, job_id):
 
 def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api):
     machine = task_bot(api, lanes=True, others=("finance",))
-    secret = secret_taken_away(api)
+    secret, finished = secret_taken_away(api), secret_taken_away(api)
     first = new_task(api, "first")
     store = api.app.state.store
-    with store.read() as c:
+    with store.transaction() as c:
+        # Unreadable too, but no longer queued: the sweep leaves it as it is.
+        c.execute("UPDATE jobs SET state='done' WHERE id=?", (job_of(c, finished["id"])["id"],))
         unreadable, readable = job_of(c, secret["id"]), job_of(c, first["id"])
     assert refusal(api, machine, unreadable) == "unreadable"
     assert refusal(api, machine, readable) is None
     sweep(api)
+    sweep(api)                                                    # a second pass finds nothing left to cancel
     with store.read() as c:
         assert job_of(c, secret["id"])["state"] == "cancelled"
         assert suppressed(c, unreadable["id"]) == [{"reason": "unreadable"}]
+        done = job_of(c, finished["id"])
+        assert done["state"] == "done" and suppressed(c, done["id"]) == []
         assert job_of(c, first["id"])["state"] == "queued" and suppressed(c, readable["id"]) == []
         # The message stays where it was: only the job is let go.
         assert H.message(c, unreadable["message_id"])
