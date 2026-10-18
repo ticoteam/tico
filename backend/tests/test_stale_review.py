@@ -408,6 +408,22 @@ def test_turning_the_switch_off_during_a_pass_stops_its_calls_and_output(stale):
     assert not any(comments(store, t) for t in ids) and len(calls(store)) == 1
 
 
+def test_turning_the_switch_off_between_two_calls_stops_the_next_one(stale, monkeypatch):
+    api, store, task = stale
+    ids = [task(f"Shipped thing {n}", pr="shipped") for n in range(3)]
+    apply = SR._apply
+
+    def then_off(c, *a, **k):
+        out = apply(c, *a, **k)
+        team_rules.save(c, "human:ana", {"stale_review": False})    # right after the first suggestion is written
+        return out
+    monkeypatch.setattr(SR, "_apply", then_off)
+    model = FakeDecide("update")
+    done = SR.run_pass(store, engine=model)
+    assert len(model.calls) == 1 and done["suggested"] == 1 and done["why"] == "switched_off" and done["deferred"] == 2
+    assert sum(bool(comments(store, t)) for t in ids) == 1
+
+
 def test_the_pass_stops_before_the_hour_is_over(stale):
     api, store, task = stale
     for n in range(3):
