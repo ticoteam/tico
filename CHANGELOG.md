@@ -57,6 +57,9 @@ All notable changes to Tico are recorded here. The format follows
 - Screen: the viewer now opens in the computer's mode everywhere it opens (a bot's **More**, its header's **Screen**
   button, Settings > Computers). A computer set to **Control** opens in Control, so its operator or an admin drives it
   at once instead of tapping Control first, with **View** one tap away; a computer set to View opens view only.
+- PRIVACY.md now names OpenRouter: a bot set to Tico Cheap, Mid or Power sends its model calls through Tico HQ to
+  OpenRouter. It lists what is sent (the messages and tools, never the gateway key, its label or the install ID), that
+  HQ keeps no text, that zero retention is enforced only when a call asks for it, and that the region is not confirmed.
 
 ### Fixed
 - A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,

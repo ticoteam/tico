@@ -3,7 +3,7 @@
 What a Tico install sends outside your own server, and what the receiving side keeps: the anonymous usage count, the
 suggestions while you build your team chart, and, only when you press Send, a support ticket. Each has its own switch.
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
-Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Tico's source is available, so you can read the code that
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
@@ -222,6 +222,36 @@ What the server keeps of each call is an audit event, never the text that was se
 questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
+
+## Tico Cheap, Mid and Power through Tico HQ
+
+Only when your team has a Tico AI Gateway key (Settings > AI providers, or `TICO_GATEWAY_KEY`) and a bot is set to
+Tico Cheap, Mid or Power 1.0. That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+(`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
+HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
+Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
+
+**What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
+anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output
+limit, stop words, reasoning effort and answer format. That is all. Not your gateway key, its label or your install ID,
+and not a caller's own id or metadata (`user`, `metadata` and fields like them are dropped at HQ). Images, audio and
+files are refused before anything is sent.
+
+**What HQ keeps:** no text. No message, tool, answer or label is stored or logged, and an error from OpenRouter is
+answered with a fixed code, never its words. Per call, HQ writes the Tico model, its token counts, cost and price (added
+up per key and month, kept 13 months, for the monthly cap) and one route-log row: the time, the route, the outcome code
+and how long it took (kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps
+sending unknown keys; it is never stored or logged.
+
+**What OpenRouter and the provider keep** is under their own terms. Zero retention is enforced only when a call asks
+for it (`"filters": {"zero_retention": true}` in the request): then HQ sends OpenRouter's zero-retention preference, so
+only a provider endpoint that keeps nothing may serve the call and none may collect it for training; if none can, the
+call fails rather than going to one that keeps data. A call that does not ask gets OpenRouter's and the provider's
+normal retention, and Tico's bots do not ask for it today.
+
+**Where it runs:** OpenRouter does not confirm the region a call is served in, so these calls may be handled outside
+the US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
+a route confirmed to stay in the US exists.
 
 ## The AI accounts your computers are signed in to
 
