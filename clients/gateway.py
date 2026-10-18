@@ -145,8 +145,14 @@ class _Unredirected(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# `check`'s transport: a redirect is answered as the HTTP error it is.
-_send = urllib.request.build_opener(_Unredirected).open
+def _send(request, timeout):
+    """`check`'s transport, built for each call so it reads the environment's proxy as it is now. A redirect is
+    answered as the HTTP error it is. Plain HTTP (only ever to this computer, `safe_base`) goes straight there: a proxy
+    would receive the key in clear. HTTPS may use the environment's proxy, which only tunnels it."""
+    handlers = [_Unredirected]
+    if urllib.parse.urlsplit(request.full_url).scheme == "http":
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
 
 
 def state_of_error(status, code):

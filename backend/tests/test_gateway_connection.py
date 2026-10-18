@@ -3,6 +3,8 @@
 import json
 import logging
 import threading
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -365,6 +367,25 @@ def test_a_check_is_about_the_key_it_was_made_with(api, monkeypatch):
         with api.app.state.store.transaction() as c:
             gateway_connection.record_check(c, {"state": "revoked", "message": "old"}, fingerprint, H.now())
         assert get(api, "providers/gateway")["state"] == "connected"
+
+
+def test_a_plain_http_check_to_this_computer_never_goes_through_a_proxy(monkeypatch):
+    """Plain HTTP is allowed only to this computer, so the key must go straight there: an environment HTTP proxy that
+    does not list loopback in no_proxy would otherwise receive the request, Authorization header and all, in clear."""
+    with fake_gateway() as fake, fake_gateway() as proxy:
+        fake.active(KEY, 0.1)
+        proxy.active(KEY, 0.1)                                # a proxy that answers as if it were the Gateway
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy.url.removesuffix("/v1/gateway"))
+        for name in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        # The control: urllib's own opener sends it to the proxy.
+        with pytest.raises(urllib.error.HTTPError):           # no key: the proxy answers 401
+            urllib.request.build_opener().open(urllib.request.Request(fake.url + "/key"), timeout=5)
+        assert proxy.calls and fake.calls == []
+        proxy.calls.clear()
+        assert G.check(KEY, fake.url)["state"] == "connected"
+        assert fake.calls == [("/v1/gateway/key", KEY)] and proxy.calls == []
 
 
 def put_bot_on(api, bot, model):
