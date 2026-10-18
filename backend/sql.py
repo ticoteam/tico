@@ -45,15 +45,17 @@ SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
 DENIED_FUNCTIONS = {"load_extension"}
-# Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}` names,
-# each the unfiltered inner view, and `{bots}`, the caller's readable-bots predicate on a `bot` column). They show
-# totals only, never a row's text or ids, so they count every run of a bot the caller may read.
+# Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
+# caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
+# caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
+# `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
     # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
     # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
-    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome.
+    # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
+    # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                count(*) AS runs,
@@ -76,8 +78,7 @@ DERIVED = {
               FROM {turns} WHERE started IS NOT NULL
               UNION ALL
               SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {turns} t WHERE t.id = a.id))
-        WHERE {bots}
+              FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3"""),
 }
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
@@ -399,10 +400,9 @@ def connect(path, c, auth, who, trace=None):
         for table, (predicate, _) in tables.items():
             projection = "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
-        # `bot_config` is filtered by exactly the readable-bots rule (guarded: bots_visible("bot")).
         for name, (bases, select) in DERIVED.items():
             conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
-                bots=tables["bot_config"][0], **{base: inner(base) for base in bases}))
+                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases}))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):

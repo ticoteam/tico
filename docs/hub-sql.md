@@ -186,8 +186,8 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 
 A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
 a `turns` row (one that failed or expired before it started), counted with no tokens and no outcome. `run_weekly` adds them up per week
-(starting Monday, UTC), bot and trigger, over every run of each bot you may read. It shows totals only, never
-a run's text or ids. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
+(starting Monday, UTC), bot and trigger, over exactly the runs you may read in `turns` and `attempts`: a run on a
+private task, in someone else's room, or one you no longer have access to is left out of your totals. Its `input_tokens` is the run's measured usage (`input_tokens` + `cached_tokens`, every
 fallback segment included) and falls back to `tokens_in` only for a run with no usage recorded.
 Last week's numbers, biggest input first:
 

@@ -264,3 +264,51 @@ def test_open_task_states_match_the_board():
     with pytest.raises(ValueError):
         RT.stamp({}, "nudge")
     assert RT.counts("task.comment") and not RT.counts("status.set") and not RT.counts("attempt.started")
+
+
+def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
+    """A bucket of one run would tell its reader that run happened, what it cost and whether it acted."""
+    as_member(api, "ben@acme.example")
+    r = machine(api)
+    store = api.app.state.store
+
+    def ran(start_with):
+        start_with()
+        attempt = claim(api, r)
+        start(api, r, attempt)
+        finish(api, r, attempt)
+        return attempt
+
+    ran(lambda: post(api, "chat/ops", {"text": "My own numbers, please."}))      # Ana's room: its message and inputs
+    shared = post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+    ran(lambda: None)                                                             # Ben may read this task, for now
+    secret = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only."})
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+    ran(lambda: None)                                                             # a run on Ana's private task
+    # A run Ben may read the attempt of, but not its turn (the turn names Ana's private task): not a turnless
+    # attempt, so not counted at all.
+    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
+    hidden_turn = ran(lambda: None)
+    with store.transaction() as c:
+        c.execute("UPDATE turns SET task_id=? WHERE id=?", (secret["id"], hidden_turn["id"]))
+    post(api, "chat/ops", {"text": "And the rest?"})                              # Ana's room, failed with no turn
+    lost = claim(api, r)
+    with store.transaction() as c:
+        c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))
+        c.execute("UPDATE attempts SET state='failed' WHERE id=?", (lost["id"],))
+
+    def runs(token):
+        return {row["trigger"]: row["runs"] for row in weekly(api, token)}
+
+    def readable(token, table):
+        return query(api, f"SELECT count(*) FROM {table}", token)["rows"][0][0]
+
+    assert runs("ana-test") == {"person_message": 1, "status_or_relation": 3, "unknown": 1}
+    assert runs("ben-test") == {"status_or_relation": 1} and readable("ben-test", "turns") == 1
+    assert readable("ben-test", "attempts") == 2                  # the control's attempt is his to read
+    # Ben's access to the shared task ends after its run: its totals leave his table with it.
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (shared["id"],))
+    assert runs("ben-test") == {} and readable("ben-test", "turns") == 0
+    assert sum(runs("ana-test").values()) == 5
