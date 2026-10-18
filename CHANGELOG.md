@@ -7,6 +7,17 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
+  call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
+  routes to the assistant, mail triage and listening wait, a nightly learning run that reaches it sends nothing and
+  reads the same activity again later). The cap is counted call by call, so a batch stops at it. Jev's price per 1M
+  tokens is a setting (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for
+  when TypeSafe sends no cost.
+- Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
+  at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
+  had no fallback and the learnings run waited up to 20 seconds with two retries per call.
+
 ### Changed
 - Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
   **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
@@ -49,14 +60,6 @@ All notable changes to Tico are recorded here. The format follows
   in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
   out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
   sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
-
-- Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
-  call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
-  routes to the assistant, mail triage and listening wait). Jev's price per 1M tokens is a setting
-  (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`) for when TypeSafe sends no cost.
-- Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
-  at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
-  had no fallback and the learnings run waited up to 20 seconds with two retries per call.
 
 ### Changed
 

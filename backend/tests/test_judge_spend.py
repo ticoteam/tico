@@ -35,8 +35,10 @@ def test_a_calls_cost_is_the_providers_own_figure_else_its_tokens_at_list_price(
     settings = Settings(db_path=tmp_path / "hub.db")
     # OpenRouter (and TypeSafe, if it sends one) says what the call cost: that wins.
     assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 9_000_000, "cost": 0.0123}) == 0.0123
+    # Jev at TypeSafe's published price: input $0.042 per 1M tokens, output free.
+    assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 1_000_000, "output_tokens": 50_000}) == 0.042
     # Jev without a price is unknown: tokens kept, nothing counted.
-    assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 1000, "output_tokens": 10}) is None
+    assert B.cost_usd(priced(settings, 0, 0), "jev-1.14", {"input_tokens": 1000, "output_tokens": 10}) is None
     priced(settings)
     assert B.cost_usd(settings, "jev-1.14", {"input_tokens": 2_000_000, "output_tokens": 500_000}) == 2.0
     # The company's model at providers.PRICES; OpenAI-style counts include the cached tokens.
@@ -115,13 +117,81 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
 def test_from_env_reads_the_monthly_cap_and_jevs_price(monkeypatch, tmp_path):
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
     settings = Settings.from_env()
-    assert settings.decisions_monthly_usd == 50.0 and settings.decisions_jev_usd_per_mtok_input == 0
+    assert (settings.decisions_monthly_usd, settings.decisions_jev_usd_per_mtok_input,
+            settings.decisions_jev_usd_per_mtok_output) == (50.0, 0.042, 0)
     monkeypatch.setenv("TICO_DECISIONS_MONTHLY_USD", "12.5")
     monkeypatch.setenv("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "0.4")
     monkeypatch.setenv("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "1.6")
     settings = Settings.from_env()
     assert (settings.decisions_monthly_usd, settings.decisions_jev_usd_per_mtok_input,
             settings.decisions_jev_usd_per_mtok_output) == (12.5, 0.4, 1.6)
+
+
+class Paid:
+    """A model whose every answer says it cost `usd`."""
+
+    def __init__(self, usd, inner=None):
+        self.usd, self.inner, self.calls = usd, inner or FakeJudge(), []
+
+    def __call__(self, state, questions, label=None):
+        self.calls.append(questions)
+        return {**self.inner(state, questions, label), "usage": {"input_tokens": 10, "cost": self.usd}}
+
+
+def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypatch):
+    """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
+    from backend import learnings as L
+    from backend.listening import judge_pending
+    from backend.tests.test_listening import FakeJudge as Listener, _bots, _post, _token
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    spend(api, 0.5)
+    jev = Paid(0.6)                                    # the first answer takes the month past $1
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
+    with store.read() as c:
+        engine = B.server_engine(c, store.settings, jev)
+    engine({"team": "Acme"}, QUESTIONS)
+    with pytest.raises(J.JudgeError) as refused:
+        engine({"team": "Acme"}, QUESTIONS)
+    assert refused.value.code == "spend_cap" and len(jev.calls) == 1, "no paid call starts over the cap"
+
+    # Listening: the first post is judged, the rest stay unjudged for after the cap.
+    _bots(api)
+    listening = _token(api, "listening")
+    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
+        _post(str(n), f"Creator post {n} [creator]") for n in range(3)]}, token=listening)
+    api.app.state.judge = jev = Paid(0.6, Listener())   # the engine above audits nothing: $0.50 spent
+    out = post(api, "listening/judge", {}, token=listening)
+    assert out["judged"] == 1 and [e["error"] for e in out["errors"]] == ["spend_cap"] and len(jev.calls) == 1
+    with store.read() as c:
+        assert B.spent_this_month(c) == pytest.approx(1.1)
+
+    # Learnings: a night that reaches the cap sends nothing and keeps its cursors, so nothing read is lost.
+    items = [{"key": f"chat:{n}", "source": "chat", "created": H.now(), "audience": None, "label": "Chat",
+              "text": f"Invoices go out on Friday {n}.", "author": "human:ana", "ref": {}} for n in range(3)]
+    team = {"ops": {"profile": "Ops runs invoicing."}}
+    spend(api, -0.6)                                   # back to $0.50, so the night starts
+    night = Paid(0.6, lambda state, questions, label=None: {
+        "model": "judge-1.13.0", "ms": 5, "answers": {qid: {"type": "noul", "noul": 0.9} for qid in questions}})
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: night)
+    monkeypatch.setattr(L, "WORKERS", 1)
+    monkeypatch.setattr(L, "roster", lambda *args, **kwargs: team)
+    monkeypatch.setattr(L, "collect", lambda *args, **kwargs: (items, 0))
+    with store.transaction() as c:
+        run_id = L.claim(c, "2026-10-12")
+    L.run(store, run_id)
+    with store.read() as c:
+        row = c.execute("SELECT status,detail_json FROM learning_runs WHERE id=?", (run_id,)).fetchone()
+        assert row["status"] == "capped" and json.loads(row["detail_json"])["failed"] == {"spend_cap": 2}
+        assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM learning_cursors").fetchone()[0] == 0, "the cursors did not move"
+        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE target=? ORDER BY rowid DESC LIMIT 1",
+                                     (f"{L.QUESTION_SET}@run",)).fetchone()[0])
+        assert audit["calls"] == 1 and audit["cost_usd"] == 0.6, "the call it did make is counted"
+    assert len(night.calls) == 1
+    with store.transaction() as c:                     # a capped night may be run again
+        c.execute("UPDATE learning_runs SET night=? WHERE id=?", (L.night_of(L.datetime.now(L.timezone.utc)), run_id))
+    assert api.post("/api/v2/learnings/run", json={}, headers=headers()).status_code == 200
 
 
 # ----------------------------------------------------------------------------- one engine for every caller
@@ -214,6 +284,45 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
     assert len(gateway.engine.calls) == calls, "at the cap the decision model is not asked"
     assert second["decision"]["routed_by"] == "spend_cap" and "monthly decision spend" in second["decision"]["reason"]
     assert [r["bot"] for r in second["decision"]["recipients"]] == ["coo"]
+
+
+def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gateway, hub):
+    """A big fleet is asked in several calls. When one fails after another answered, the paid answer is counted once:
+    on a retry as a `judge.spend` row (not against the sender's daily calls), on the final failure in its audit."""
+    from backend.tests import test_slack_gateway as S
+    S.add_bots(hub, 50)                                # 56 bots: two calls a message
+    down = J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True)
+
+    class Batches(S.CappedJudge):
+        def __init__(self, outcomes):
+            super().__init__({"asks": 0.9, "bot:legal": 0.9})
+            self.outcomes = outcomes
+
+        def __call__(self, state, questions, label=None):
+            result = super().__call__(state, questions, label)
+            if self.outcomes.pop(0) == "down":
+                raise down
+            return {**result, "usage": {"cost": 0.25}}
+    gateway._judge = Batches(["ok", "down", "ok", "ok"])
+    assert S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message")["state"] == "received"
+    gateway.clock.advance(S.G.RETRY_SECONDS)
+    assert gateway.tick()["events"][-1]["state"] == "routed"
+    with hub.read() as c:
+        rows = [(r["action"], json.loads(r["detail_json"])) for r in
+                c.execute("SELECT action,detail_json FROM events WHERE action IN ('judge.call','judge.spend') ORDER BY rowid")]
+        assert [(a, d["cost_usd"]) for a, d in rows] == [("judge.spend", 0.25), ("judge.call", 0.5)]
+        assert B.spent_this_month(c) == 0.75
+        actor = rows[1][1] and c.execute("SELECT actor FROM events WHERE action='judge.call'").fetchone()[0]
+        assert B.used_today(c, actor) == 1, "the retried try is not one of the sender's calls"
+
+    gateway._judge = Batches(["ok", "down"] * 20)
+    S.send(gateway, "and the NDA", channel=S.DM, kind="message")
+    gateway.clock.advance(S.G.ROUTE_GIVE_UP_SECONDS + 1)
+    assert gateway.tick()["events"][-1]["state"] == "failed"
+    with hub.read() as c:
+        last = json.loads(c.execute("SELECT detail_json FROM events WHERE action='judge.call' ORDER BY rowid DESC").fetchone()[0])
+        assert last["error"] == "unavailable" and last["cost_usd"] == 0.25
+        assert B.spent_this_month(c) == 1.25
 
 
 def test_a_live_meeting_passes_at_the_cap_and_its_audit_keeps_the_tokens_and_cost(api, monkeypatch):

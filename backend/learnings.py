@@ -28,7 +28,7 @@ from clients import judge as J
 from . import models as M
 from . import task_privacy as privacy
 from .harnesses import is_external
-from .judge import jev, server_engine
+from .judge import jev, over_spend_cap, server_engine
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -459,12 +459,14 @@ def run(store, run_id):
                 return
             night, now = row["night"], H.now()
             engine = engine_for(c, settings)
+            capped = engine is None and over_spend_cap(c, settings) is not None
             team = roster(c, settings, now)
             if engine is not None:
                 items, dropped = collect(c, settings, now, team)
             c.execute("COMMIT")
         if engine is None:
-            finish(store, run_id, "unconfigured", {"reason": "no decision model"})
+            finish(store, run_id, *(("capped", {"reason": "monthly decision spend cap"}) if capped else
+                                    ("unconfigured", {"reason": "no decision model"})))
             return
         detail = {"read": dict(Counter(i["source"] for i in items)), "dropped": dropped, "recipients": len(team)}
         chosen, failed = {}, {}
@@ -475,11 +477,17 @@ def run(store, run_id):
             failed = route(engine, qset, items, team)
             chosen = packets(items, qset)
             detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000)})
+        capped = bool(failed.get("spend_cap"))
         with store.transaction() as c:
             if c.execute("SELECT status FROM learning_runs WHERE id=?", (run_id,)).fetchone()["status"] != "running":
                 return
+            if capped:
+                # The month's spend reached the cap during the night: carry on as if Decide were off. Nothing is
+                # sent and the cursors stay, so the same items are read again once calls are allowed.
+                chosen, detail["reason"] = {}, "monthly decision spend cap"
             delivered, routed = dispatch(c, run_id, night, items, chosen, team, detail) if chosen else (0, 0)
-            advance(c, items, now)
+            if not capped:
+                advance(c, items, now)
             if items:
                 # One audit row for the night's calls, as POST /api/v2/decisions keeps one per call: counts, never text.
                 H.event(c, H.KEEPER, "judge.call", f"{QUESTION_SET}@run", {
@@ -489,7 +497,8 @@ def run(store, run_id):
             detail["deliveries"] = delivered
             detail["ms"] = round((time.monotonic() - started) * 1000)
             c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail_json=? WHERE id=?",
-                      ("done" if delivered else "quiet", H.now(), len(items), routed, json.dumps(detail), run_id))
+                      ("capped" if capped else "done" if delivered else "quiet", H.now(), len(items), routed,
+                       json.dumps(detail), run_id))
     except Exception as exc:
         LOG.exception("Nightly learning run %s failed", run_id)
         finish(store, run_id, "failed", {**detail, "error": type(exc).__name__})
@@ -678,9 +687,9 @@ def install(app, store, auth, mutate):
             found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
             if found and found["status"] == "running":
                 raise Problem("conflict", "Tonight's learning run is still running", 409)
-            if found and found["status"] not in ("unconfigured", "failed"):
+            if found and found["status"] not in ("unconfigured", "capped", "failed"):
                 raise Problem("conflict", "Tonight's learning run already ran", 409)
-            if found:          # an unconfigured or failed night is tried again under the same key
+            if found:          # an unconfigured, capped or failed night is tried again under the same key
                 c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
                           (H.now(), found["id"]))
                 return {"id": found["id"], "night": night}

@@ -27,6 +27,7 @@ sender's, and the market ask (`market.ask` events) has its own count under the s
 
 import logging
 import os
+import threading
 from typing import Any
 
 from fastapi import Request
@@ -142,10 +143,11 @@ def cost_usd(settings, model, usage):
 
 
 def spent_this_month(c, at=None):
-    """USD the team's decision calls have cost since the 1st of this UTC month, from the audit."""
+    """USD the team's decision calls have cost since the 1st of this UTC month, from the audit: every `judge.call`,
+    plus `judge.spend`, the paid part of a try that failed later and will be retried (the Slack gateway)."""
     month = (at or H.now())[:7]
     total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      "WHERE ts>=? AND action='judge.call'", (month + "-01T00:00:00",)).fetchone()[0]
+                      "WHERE ts>=? AND action IN ('judge.call','judge.spend')", (month + "-01T00:00:00",)).fetchone()[0]
     return round(float(total or 0), 6)              # a float sum of cents can land a hair under the cap
 
 
@@ -171,22 +173,36 @@ def jev(settings):
 def server_engine(c, settings, primary=None):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, or the month's spend at the cap. `primary` is Jev (`jev(settings)`, or the test's fake); when Jev
-    is slow or down the company's own model answers and the result says `fallback`. Each result carries `cost_usd`."""
+    is slow or down the company's own model answers and the result says `fallback`. Each result carries `cost_usd`.
+
+    A batch (listening, learnings) reuses one engine for many calls, and its rows reach the audit late or only at the
+    end, so the engine adds its own calls' cost to the month's spend it read here and refuses `spend_cap` before any
+    call that would start at or over the cap. Calls already in flight on other threads still finish."""
     if settings.rehearsal or over_spend_cap(c, settings):
         return None
     backup = fallback_engine(providers.load(c, settings))
     first = primary or backup
     if first is None:
         return None
+    cap = float(settings.decisions_monthly_usd or 0)
+    spent, lock = [spent_this_month(c) if cap > 0 else 0.0], threading.Lock()
 
     def engine(state, questions, label=None):
+        with lock:
+            if cap > 0 and spent[0] >= cap:
+                _skip("every caller", f"the month's decision spend ${spent[0]:.2f} has reached the ${cap:.2f} cap")
+                raise J.JudgeError("spend_cap", f"Decide has cost ${spent[0]:.2f} this month; the team's cap is "
+                                   f"${cap:.2f} until the 1st (UTC)", 429)
         try:
             result = first(state, questions, label)
         except J.JudgeError as exc:
             if first is not primary or backup is None or not exc.retryable:
                 raise
             result = {**backup(state, questions, label), "fallback": exc.code}
-        return {**result, "cost_usd": cost_usd(settings, result.get("model"), result.get("usage"))}
+        cost = cost_usd(settings, result.get("model"), result.get("usage"))
+        with lock:
+            spent[0] += cost or 0.0
+        return {**result, "cost_usd": cost}
     engine.model = J.MODEL if first is primary else getattr(backup, "model", "")
     return engine
 
@@ -262,6 +278,8 @@ def install_judge(app, store, auth):
         except J.JudgeError as exc:
             with store.transaction() as c:
                 H.event(c, who.actor, "judge.call", label, {**detail, "error": exc.code, "detail": exc.detail[:300]})
+            if exc.code == "spend_cap":
+                raise Problem("spend_cap", exc.detail + ". Carry on without it.", 429)
             status = 503 if exc.retryable else (422 if exc.code == "invalid" else 502)
             raise Problem("judge_" + exc.code, exc.detail, status)
         with store.transaction() as c:

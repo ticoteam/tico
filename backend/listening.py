@@ -501,7 +501,7 @@ def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
             with store.transaction() as c:
                 H.event(c, who.actor, "judge.call", qset["label"], {"questions": len(questions), "error": exc.code})
             errors.append({"item_id": row["id"], "error": exc.code, "detail": exc.detail[:300]})
-            if exc.retryable:
+            if exc.retryable or exc.code == "spend_cap":    # the rest stay unjudged for the next call
                 break
             continue
         used += 1

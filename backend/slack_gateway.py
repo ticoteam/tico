@@ -745,6 +745,12 @@ class Gateway:
             self.last_cost += cost_usd(self.settings, self.last_model, result.get("usage")) or 0.0
         return answers
 
+    def paid(self):
+        """What the last `ask`'s answered batches cost before one failed, or None when none answered."""
+        if not self.last_usage:
+            return None
+        return {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6)}
+
     def spend_capped(self):
         """Whether the team's decision spend this month is at its cap (backend/judge.py): then every message routes
         as it does with no decision model, to the assistant."""
@@ -936,21 +942,26 @@ class Gateway:
                 {"state": state, "channel": event["channel"], "thread_ts": event["thread_ts"], "reason": reason,
                  "recipients": [r["bot"] for r in (decision or {}).get("recipients") or []]})
 
-    def routing_error(self, event, person, exc, fleet=()):
+    def routing_error(self, event, person, exc, fleet=(), paid=None):
         """The decision model could not answer. A refusal, or an outage that outlasted
         `ROUTE_GIVE_UP_SECONDS`, ends the message as `failed` and tells the human; a short outage
-        leaves it `received` for the next try. Never an endless loop."""
+        leaves it `received` for the next try. Never an endless loop. `paid` is what the batches that did
+        answer cost: a try to be retried keeps it as a `judge.spend` row, which the monthly cap counts and the
+        sender's daily call budget does not; a final failure keeps it on its `judge.call`."""
         actor = "human:" + person["id"]
         expired = H.shift(event["received"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
         if exc.retryable and not expired:
             with self.store.transaction() as c:
+                if paid:
+                    H.event(c, actor, "judge.spend", JUDGE_LABEL, {"via": "slack", "event_id": event["event_id"],
+                                                                  "retry": True, "error": exc.code, **paid})
                 self.finish(c, event, "received", actor=actor, reason=f"decisions: {exc}")
             LOG.error("Event %s waits: %s", event["event_id"], exc)
             return {"event_id": event["event_id"], "state": "received", "reason": str(exc)}
         reason = f"decisions: {exc}" + (f" (still failing after {ROUTE_GIVE_UP_SECONDS // 60} minutes)" if exc.retryable else "")
         with self.store.transaction() as c:
             self.finish(c, event, "failed", actor=actor, reason=reason)
-            self.audit(c, actor, event, fleet, {"error": exc.code, "detail": str(exc.detail)[:300]})
+            self.audit(c, actor, event, fleet, {**(paid or {}), "error": exc.code, "detail": str(exc.detail)[:300]})
         LOG.error("Event %s failed: %s", event["event_id"], reason)
         try:
             self.slack.post_message(event["channel"], event["reply_ts"] or None,
@@ -987,7 +998,7 @@ class Gateway:
             try:
                 answers = self.ask(state, fleet)
             except J.JudgeError as exc:
-                return self.routing_error(event, person, exc, fleet)
+                return self.routing_error(event, person, exc, fleet, paid=self.paid())
             decision = self.decide(answers, fleet)
             called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
                       "ms": round((time.monotonic() - started) * 1000)}

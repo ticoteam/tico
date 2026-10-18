@@ -77,7 +77,10 @@ neither is running it is recorded and Tico tells the human in the thread.
 
 When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
 decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
-with no decisions key. Each `judge.call` the gateway audits also keeps the message's `cost_usd`.
+with no decisions key. Each `judge.call` the gateway audits also keeps the message's `cost_usd`. A big fleet is asked
+in several calls; when one fails after another answered, the answered calls' cost is still kept, once: on a try that
+will be retried as a `judge.spend` event (counted by the monthly cap, not the sender's daily calls), on the final
+failure in its `judge.call`.
 
 Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
