@@ -30,9 +30,10 @@ ENROLLMENT_DIR="$(cd "$(dirname "$ENROLLMENT_INPUT")" && pwd)"
 ENROLLMENT_FILE="$ENROLLMENT_DIR/$(basename "$ENROLLMENT_INPUT")"
 chmod 0600 "$ENROLLMENT_FILE"
 
-PYTHON_BIN="$(command -v python3.12 || true)"
+# The newest supported Python on this Mac; the server images run 3.15, and 3.12 still works.
+PYTHON_BIN="$(command -v python3.15 || command -v python3.14 || command -v python3.13 || command -v python3.12 || true)"
 if [ -z "$PYTHON_BIN" ]; then
-  echo "Python 3.12 is required. Install it, then run this command again." >&2
+  echo "Python 3.12 or newer (3.15 recommended) is required. Install it, then run this command again." >&2
   exit 1
 fi
 
