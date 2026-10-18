@@ -17,6 +17,10 @@ live in the private ticoteam/tico-services repository.
 | `/v1/support/...`, `/v1/staff/...` | Support tickets ([routes](telemetry.md#support-tickets), [support.md](support.md#what-is-sent-and-kept)) and support access, below | The tickets; access sessions and their request log |
 | `GET /healthz` | Liveness | Nothing |
 
+Across every endpoint, HQ also counts the requests it answered per route group (support, support access, recruit, other)
+and result class (2xx to 5xx), in memory only: no install id, address, path or time, never logged or written, and reset
+when HQ restarts. Staff read them on `GET /v1/staff/about`.
+
 ## Support access
 
 A person lets the Tico team into their app from a ticket ([support.md](support.md#letting-tico-support-in)). The install

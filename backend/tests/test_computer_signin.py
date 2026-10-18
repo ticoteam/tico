@@ -47,7 +47,8 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     machine = new_computer(api)
     got = computer_asks(api, machine["token"])
     assert got.status_code == 200
-    assert got.json() == {"credentials": [{"env": "OPENAI_API_KEY", "value": "sk-team-key-0123456789"}]}
+    assert got.json() == {"credentials": [{"env": "OPENAI_API_KEY", "value": "sk-team-key-0123456789",
+                                                   "source": "shared"}]}
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
     assert computer_asks(api, machine["token"], "gemini").status_code == 422
     # Only a computer asks, and the event that records it never holds the key.

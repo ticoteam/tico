@@ -278,7 +278,8 @@ RUNNER_TRIGGERS = [
     ("changes_runner_credential_grants_delete", "DELETE", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_insert", "INSERT", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_update", "UPDATE", "credentials",
-     f"{_changed('env')} OR (OLD.ciphertext IS NULL) IS NOT (NEW.ciphertext IS NULL)", _tell("credentials", _ALL_RUNNERS)),
+     # A new value too: a model key replaced for every computer is fetched again at once (runner-rs/src/signin.rs).
+     f"{_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext", _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credentials_delete", "DELETE", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
     # The company's AI providers (backend/providers.py): a computer installs what is enabled.
     ("changes_runner_providers_insert", "INSERT", "registry_metadata", "NEW.key='providers'", _tell("config", _ALL_RUNNERS)),

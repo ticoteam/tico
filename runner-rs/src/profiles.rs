@@ -413,9 +413,10 @@ pub fn limit_reset(profile: &str, runtime: &str, now: f64) -> Option<String> {
         .map(|at| crate::util::text_of(&crate::util::iso(&json!(at))))
 }
 
-/// A signed-out login's windows go with it: the next sign-in may be someone else's.
+/// A signed-out login's windows go with it, and so does its last usage limit: the next sign-in may be someone else's.
 pub fn forget_windows(profile: &str, runtime: &str) {
     weekly().lock().unwrap().retain(|(p, r, _), _| !(p == profile && r == runtime));
+    crate::fallback::forget_limit(profile, runtime);
 }
 
 struct Cached {

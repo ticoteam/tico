@@ -168,6 +168,21 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#set-machines [data-machine-tool="grok"]', {hasText: "Couldn't check"}).waitFor();
     assert.match((await cells(page.locator('#set-machines [data-machine-tool="grok"]').first()))[3], /^Couldn't check last checked 3h ago/);
 
+    // Desktop apps (a Mac's app driver): only when the computer reports `appdriver`, one row per app with its state
+    // and the driver's detail; still titled on a phone, where the head row is otherwise hidden.
+    assert.equal(await page.locator('#set-machines .machine-apps').count(), 0, 'no driver, no Desktop apps');
+    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
+      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
+    await page.evaluate(() => loadSettings());
+    const apps = page.locator('#set-machines [role=table][aria-label="Desktop apps on Team box"]');
+    await apps.waitFor();
+    assert.deepEqual(await cells(apps.locator('[data-machine-app="grok"]')),
+      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
+    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
+    await page.setViewportSize({width: 1440, height: 900});
+
     // Revoked computers stay hidden until asked for.
     assert.equal(await page.locator('#set-machines [aria-label="AI tools on Old laptop"]').count(), 0);
     await page.locator('#set-machines [data-show-revoked-computers]').check();
@@ -177,6 +192,6 @@ const {unrouted} = require('./support/routes.cjs');
     // The install, pin and update controls stay in their own disclosure.
     assert.equal(await page.locator('#set-machines details[data-machine-details="box:tools"] > summary').innerText(), 'Installation and updates');
     assert.deepEqual(errors, []);
-    console.log('PASS: AI tools rows, sign-in states, usage windows, profiles, long versions, revoked hidden');
+    console.log('PASS: AI tools rows, sign-in states, usage windows, profiles, long versions, desktop apps, revoked hidden');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

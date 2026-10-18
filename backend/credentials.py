@@ -679,6 +679,8 @@ def install_credentials(app,store,delegate=None,propose=None):
             require_admin(c,who,vault.admins)
             row=vault.row(c,cid)
             grants=c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?',(cid,)).fetchone()[0]
+            from .computer_keys import before_delete
+            before_delete(c,who,cid)
             c.execute('DELETE FROM credential_grants WHERE credential_id=?',(cid,))
             c.execute('DELETE FROM credentials WHERE id=?',(cid,))
             H.event(c,who.actor,'credential.deleted',cid,{'name':row['name'],'env':row['env'],'grants':grants})
@@ -719,9 +721,9 @@ def install_credentials(app,store,delegate=None,propose=None):
             return {'credentials':values}
 
     @app.get('/api/v2/runner-model-credentials')
-    def model_credentials(request:Request,runtime:str):
-        """The model key or token the company gave every computer, for a runner whose model CLI is not signed in.
-        Only credentials granted to `computers` and named for this runtime: never one granted to a bot."""
+    def model_credentials(request:Request,runtime:str,login:str=''):
+        """The model key or token this computer signs `runtime` in with: its own, stored from Settings > Computers, or
+        the one the company gave every computer. Only those, named for this runtime: never one granted to a bot."""
         who=request.state.identity
         names=providers.MODEL_KEYS.get(runtime)
         if who.role!='runner':raise Problem('forbidden','Only a registered computer may ask for this',403)
@@ -729,15 +731,10 @@ def install_credentials(app,store,delegate=None,propose=None):
         with store.transaction() as c:
             if not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL',(who.runner_id,)).fetchone():
                 raise Problem('forbidden','Only a registered computer may ask for this',403)
-            # A person signed this computer's login out: the shared key does not sign it back in (model_login).
-            from .model_login import cleared
-            if cleared(c,who.runner_id,runtime):
-                return {'credentials':[],'signed_out':True}
-            found={}
-            held=granted(c,COMPUTERS)
-            for row in c.execute('SELECT * FROM credentials WHERE ciphertext IS NOT NULL ORDER BY id'):
-                if row['env'] in names and row['env'] not in found and row['id'] in held:
-                    found[row['env']]=(row['id'],vault.cipher.decrypt(c,row))
-            for env,(cid,_) in found.items():
-                H.event(c,who.actor,'credential.sent_to_computer',cid,{'env':env,'runner':who.runner_id})
-            return {'credentials':[{'env':env,'value':found[env][1]} for env in names if env in found]}
+            # Which key, in the one order (backend/computer_keys.py): a key staged for its `use_key` job, its own,
+            # else the shared one; none once a person cleared it or signed it out (model_login).
+            from .computer_keys import keys_for
+            reply,sent=keys_for(c,vault,who.runner_id,runtime,login)
+            for cid in sent:
+                H.event(c,who.actor,'credential.sent_to_computer',cid,{'runtime':runtime,'runner':who.runner_id})
+            return reply
