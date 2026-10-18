@@ -30,6 +30,9 @@
 .onb-choices label{display:flex;align-items:center;gap:6px;font-size:var(--t-base)}
 .onb-choices input{flex:none}
 .onb-actions{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s4)}
+.onb-sample{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:0 0 var(--s4);padding:var(--s3) var(--s4);
+  border:1px dashed var(--line);border-radius:12px}
+.onb-sample p{flex:1 1 280px;margin:0;font-size:var(--t-base)}
 .onb-actions .spacer{flex:1}
 .onb-summary{margin:0 0 var(--s3)}
 .onb-summary>div{display:flex;gap:var(--s2);padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);flex-wrap:wrap;overflow-wrap:anywhere}
