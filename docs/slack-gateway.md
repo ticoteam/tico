@@ -77,8 +77,9 @@ neither is running it is recorded and Tico tells the human in the thread.
 
 When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
 decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
-with no decisions key. A big fleet is asked in several calls, and the cap is checked before each: one that would start at
-the cap stops the message there and it goes to the assistant the same way. Each call's cost is written down as it returns
+with no decisions key. A big fleet is asked in several calls, and the cap is checked before each: one whose most (its
+input and the longest answer, at the price of the model that answers) would not fit under the cap stops the message
+there and it goes to the assistant the same way. Each call's cost is written down as it returns
 (a `judge.spend` event, which the monthly cap sums and the sender's daily calls do not count), so a later call failing,
 its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
 `cost_usd` for reading.

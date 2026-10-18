@@ -192,11 +192,12 @@ def reservation(settings, models, state, questions):
 def metered(store, models, state, questions, label, call):
     """One paid decision call under the team's monthly cap, for every caller (server and Slack gateway alike).
 
-    Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here,
-    refuse `spend_cap` at or over the cap, else reserve this call's most. After the call its real cost is written as a
-    `judge.spend` row before the reservation is released, so the next check sees one or the other. Another process
-    (the Slack gateway's container) sees this one's calls once they are written; that is the most the cap can be
-    passed by: the other process's calls in flight, each at most its reservation."""
+    Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here
+    and this call's own most, refuse `spend_cap` if that is over the cap, else reserve it. After the call its real cost
+    is written as a `judge.spend` row before the reservation is released, so the next check sees one or the other.
+    Another process (the Slack gateway's container) sees this one's calls once they are written, and admits its own
+    only if they fit too; so the cap can be passed by at most one process's calls in flight, each at most its
+    reservation."""
     settings = store.settings
     cap = float(settings.decisions_monthly_usd or 0)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
@@ -204,8 +205,8 @@ def metered(store, models, state, questions, label, call):
         if cap > 0:
             with store.read() as c:
                 spent = spent_this_month(c)
-            if spent + _RESERVED[0] >= cap:
-                _skip("every caller", f"the month's decision spend ${spent:.2f} has reached the ${cap:.2f} cap")
+            if spent + _RESERVED[0] + reserved > cap:
+                _skip("every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap")
                 raise J.JudgeError("spend_cap", f"Decide has cost ${spent:.2f} this month; the team's cap is "
                                    f"${cap:.2f} until the 1st (UTC)", 429)
         _RESERVED[0] += reserved

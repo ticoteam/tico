@@ -24,8 +24,9 @@ All notable changes to Tico are recorded here. The format follows
 - Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
   call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
   routes to the assistant, mail triage and listening wait, a nightly learning run that reaches it sends nothing and
-  reads the same activity again later). The cap is checked before every call, counting calls still in flight, so a
-  batch or a burst of requests stops at it. Jev's price per 1M tokens is a setting
+  reads the same activity again later). A call starts only if the most it can cost fits under the cap with what
+  is already spent and the calls still in flight, so a batch or a burst of requests stops at it, even across the
+  server and the Slack gateway. Jev's price per 1M tokens is a setting
   (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`, $0.042 in and $0 out by default) for when TypeSafe sends no
   cost; a model with no known price is counted at the dearest list price, never as free.
 - **Support triage** (`questions/support-triage.json`): when the server has a decision model, each new Tico HQ support
