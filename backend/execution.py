@@ -988,6 +988,7 @@ class Execution:
             with isolated(c, "expire", row["id"]):
                 state = "queued" if row["state"] == "leased" else "uncertain"
                 c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), row["id"]))
+                gateway_connection.forget(c, row["id"])
                 if row["state"] == "leased":
                     tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL "
                                       "AND state='expired' AND finished>=?", (row["job_id"], self.booted)).fetchone()[0]
@@ -1282,6 +1283,7 @@ class Execution:
         config = providers.fill(providers.load(c, self.store.settings), followed)
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
+        gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
@@ -1858,9 +1860,9 @@ class Execution:
         tico_code, tico_error = "", ""
         if body.outcome == "failed" and not stopped and body.auth_rejected is None:
             tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
-            if tico_error and gateway_connection.ran_tico(
-                    gateway_connection.run_config(c, self.store.settings, row["bot"], aid), body):
+            if tico_error and gateway_connection.ran_tico(gateway_connection.handed(c, aid), body):
                 tico_code = gateway.run_code(tico_error)
+        gateway_connection.forget(c, aid)
         silent = False
         if body.outcome == "failed" and not limited and not retryable and not stopped:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}

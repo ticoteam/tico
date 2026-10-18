@@ -373,6 +373,56 @@ def test_only_a_run_on_a_tico_model_is_handed_the_key(api, monkeypatch):
         assert KEY not in everything(api)
 
 
+@pytest.mark.parametrize("change", ["bot_to_tico", "bot_from_tico", "default_to_tico", "check_to_tico"])
+def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkeypatch, change):
+    """A run gets the key by the model its claim handed it out on: a setting changed while it runs (the bot's model,
+    the company default it inherits, or its task's check model) neither hands the key to a run that started on
+    another model nor takes it from one that started on a Tico model."""
+    from backend import check_models
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+    started_on_tico = change == "bot_from_tico"
+    put_bot_on(api, "ops", "tico-mid-1.0" if started_on_tico else "kimi-k3")
+    if change == "default_to_tico":
+        with api.app.state.store.transaction() as c:
+            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                      (json.dumps({k: v for k, v in config.items() if k not in ("runtime", "harness", "model")}),))
+        record = get(api, "providers")
+        put(api, "providers", {"enabled": ["openrouter"], "runtime": "pi", "model": "kimi-k3",
+                               "expected_revision": record["revision"]})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    if change == "check_to_tico":
+        post(api, "tasks", {"owner": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
+    else:
+        post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    attempt = claim(api, machine, "ops")
+    assert attempt["config"]["model"] == ("tico-mid-1.0" if started_on_tico else "kimi-k3")
+    # While the run is under way, the setting moves.
+    if change == "bot_to_tico":
+        put_bot_on(api, "ops", "tico-mid-1.0")
+    elif change == "bot_from_tico":
+        put_bot_on(api, "ops", "kimi-k3")
+    elif change == "default_to_tico":
+        record = get(api, "providers")
+        put(api, "providers", {"enabled": ["openrouter", "tico"], "runtime": "pi", "model": "tico-mid-1.0",
+                               "expected_revision": record["revision"]})
+    else:
+        monkeypatch.setattr(check_models, "of", lambda c, task_id, bot: {
+            "runtime": "pi", "model": "tico-mid-1.0", "harness": "pi"})
+    handed = {r["env"]: r for r in get(api, "credential-runtime", attempt["token"])["credentials"]}
+    assert ("TICOAI_GATEWAY_KEY" in handed) is started_on_tico, (change, list(handed))
+    # Its outcome is read the same way: a refusal by code only for a run that was on a Tico model.
+    finish(api, machine, attempt, "Tico AI Gateway: no Tico route for this request (no_route)")
+    with api.app.state.store.read() as c:
+        assert ("No Tico route" in H.status(c, "ops")["focus"]) is started_on_tico
+        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key LIKE 'gateway-attempt:%'").fetchone()[0] == 0
+
+
 def test_a_tico_bot_is_ready_with_the_connection_not_an_openrouter_grant(api, monkeypatch):
     setup(api, monkeypatch)
     from backend import readiness

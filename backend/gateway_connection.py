@@ -254,17 +254,28 @@ def wanted(config):
     return is_tico(config.get("model")) or is_tico(fallback.get("model"))
 
 
-def run_config(c, settings, bot, attempt_id):
-    """The config a bot's run started on, worked out as the claim did (backend/execution.py): the bot's own or shared
-    config, a check subtask's model on its task, the company default filled in."""
-    from . import check_models, providers
-    from .shared_bots import follow
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
-    turn = c.execute("SELECT task_id FROM turns WHERE id=?", (attempt_id,)).fetchone() if attempt_id else None
-    if turn and turn["task_id"]:
-        config = check_models.apply(config, check_models.of(c, turn["task_id"], bot))
-    return providers.fill(providers.load(c, settings), config)
+HANDED = "gateway-attempt:"
+
+
+def hand_out(c, attempt_id, config):
+    """Remember the Tico models the claim handed this attempt out on (its model, and the fallback it names), when it has
+    any. The key and the run's outcome follow what the run was given, never a setting changed while it runs."""
+    from .repositories import save_metadata
+    if not wanted(config):
+        return
+    fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    save_metadata(c, HANDED + attempt_id, {"model": str(config.get("model") or ""), "fallback": {
+        "harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")}})
+
+
+def handed(c, attempt_id):
+    """What `hand_out` remembered for the attempt, or {} (a run that was given no Tico model)."""
+    from .repositories import metadata
+    return metadata(c, HANDED + attempt_id) if attempt_id else {}
+
+
+def forget(c, attempt_id):
+    c.execute("DELETE FROM registry_metadata WHERE key=?", (HANDED + attempt_id,))
 
 
 def ran_tico(config, body):
@@ -282,9 +293,9 @@ def ran_tico(config, body):
 
 
 def run_credentials_for(c, vault, settings, who):
-    """`run_credentials` for the bot run `who` (a bot identity with its attempt)."""
+    """`run_credentials` for the bot run `who` (a bot identity with its attempt), by what its claim handed it out on."""
     bot = H.actor_id(who.actor)
-    config = run_config(c, settings, bot, who.attempt_id)
+    config = handed(c, who.attempt_id)
     if not wanted(config):
         return []
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
