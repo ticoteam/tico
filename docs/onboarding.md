@@ -13,6 +13,9 @@ owner asks for market research. To choose a first team and get the most from it,
 Nobody else sees the wizard. Only the owner may write it, and the sidebar entry
 **Finish setup** appears only while it is unfinished.
 
+The first screen also offers **Start with a sample company**, which skips the wizard and starts a made-up five-bot
+team instead ([The sample company](sample-company.md)).
+
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`
 (the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
 and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),

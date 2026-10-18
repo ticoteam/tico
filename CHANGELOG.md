@@ -12,6 +12,11 @@ All notable changes to Tico are recorded here. The format follows
   Codex (ChatGPT) in Settings > Computers shows only the provider's link and code, never what else the computer
   printed and never a terminal, and closes by itself once signed in or cancelled. Any other value of `TICO_HOSTED`
   stops the server with a one-line error. A self-hosted Tico signs in as before.
+- **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
+  Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
+  first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
+  the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
+  `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
 
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
