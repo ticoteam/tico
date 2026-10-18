@@ -42,6 +42,10 @@ All notable changes to Tico are recorded here. The format follows
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
 ### Fixed
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches beside the running server. Deleting a comment also finds the questions it answered by index.
 - Health no longer reports a bot's queued work as a Tico bug (Health Monitor `queue_idle`) when an old job is held on
   purpose, or waits behind a person's message, and the job that would start next is still young. It judges a bot by
   that job, a person's message first: slow only once it has waited 15 minutes (a person's message: 2). When every job

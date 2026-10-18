@@ -32,7 +32,8 @@ from .hubdb import now, shift
 EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
-    "meeting_deliveries", "worktree_waits", "idempotency", "blob_media_retries", "github_product_repo_operations",
+    "meeting_deliveries", "worktree_waits", "idempotency", "idempotency_messages", "blob_media_retries",
+    "github_product_repo_operations",
     # routines and watchers
     "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "watcher_runs", "watcher_items", "watcher_refs",
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
