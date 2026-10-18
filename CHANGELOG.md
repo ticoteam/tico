@@ -7,6 +7,13 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Sample company**: a new Tico can start as Sample Co, a made-up team of five bots (Assistant, Head of Product,
+  Builder, Support Agent and Content Marketer) spread over the Claude and ChatGPT subscriptions. Each has a goal and a
+  first task that takes minutes and ends by asking the owner a Yes/No approval in Needs you; nothing is sent outside
+  the company. Start it from the first-run welcome's **Start with a sample company**, or at install with
+  `TICO_SAMPLE_COMPANY=on`. ([The sample company](docs/sample-company.md))
+
 ### Fixed
 - **Clear** on a bot's chat now really starts the bot over. Before, it only trimmed the history Tico sends, and on
   the computer Claude Code, Codex and the other harnesses kept resuming the old provider thread, so the bot still

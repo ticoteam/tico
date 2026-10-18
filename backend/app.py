@@ -114,6 +114,14 @@ def create_app(settings=None):
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
+        # TICO_SAMPLE_COMPANY=1: a new company starts as the sample company, once (backend/sample_company.py).
+        if settings.sample_company:
+            try:
+                from . import sample_company
+                with store.transaction() as c:
+                    sample_company.load_on_start(onboarding, c)
+            except Exception as exc:
+                telemetry.capture("sample_company", exc)
         # A company from before the Librarian was built in gets it on update, once it can run it.
         try:
             with store.transaction() as c:
@@ -1520,6 +1528,13 @@ def create_app(settings=None):
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
+
+    @app.post("/api/v2/onboarding/sample")
+    def onboarding_sample(request: Request, body: M.Empty):
+        """Start as Tico's sample company (backend/sample_company.py): five bots with short starter tasks. The owner,
+        on a company not set up yet; it answers like `complete`."""
+        who = request.state.identity
+        return mutate(request, body, lambda c: onboarding.start_sample(c, who))
 
     @app.get(LOCAL_SIGNIN_PATH)
     def local_signin(token: str = "", next: str = "/"):

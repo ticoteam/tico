@@ -120,6 +120,7 @@ function onbRender(state) {
     ${done ? '' : `<ol class="onb-progress" aria-label="Setup steps">${state.steps.map((step, i) =>
       `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}>${esc(ONB_TITLES[step])}</li>`).join('')}</ol>
       <p class="onb-count" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
+    ${onbSampleHTML(state, done)}
     <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>`;
   onbWire(state, key);
 }
@@ -182,6 +183,14 @@ function onbStepHTML(state, key) {
     <div class="onb-actions">${back}<button class="primary" type="button" id="onb-finish">Create my team</button>
       <span class="spacer"></span><span class="muted" id="onb-status"></span></div>`;
   return onbDoneHTML(state);
+}
+// Before the first answer is saved, the owner may skip the wizard and start as Tico's sample company instead
+// (POST /v2/setup/sample, backend/sample_company.py): five bots with short first tasks, on the first screen only.
+function onbSampleHTML(state, done) {
+  if (done || state.step !== 0 || state.record.completed) return '';
+  return `<div class="onb-sample" id="onb-sample-box"><p><strong>Just trying Tico?</strong>
+    <span class="muted">Start with a made-up company: five bots, each with a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
+    <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 // The UI never learns the environment slug the Mac was created with, so it stays literal here.
 // The label is the one the setup file was written with, so the command and the file agree.
@@ -287,6 +296,8 @@ function onbWire(state, key) {
   }
   const finish = $('#onb-finish');
   if (finish) finish.onclick = () => void onbFinish(state);
+  const sample = $('#onb-sample');
+  if (sample) sample.onclick = () => void onbSample(state);
   const tasks = $('#onb-tasks');
   if (tasks) tasks.onclick = () => { location.hash = TASKS; };
   const connect = $('#onb-connect');
@@ -311,7 +322,7 @@ function onbCollect(state, key) {
 }
 function onbBusy(state, busy, message) {
   state.busy = busy;
-  for (const id of ['#onb-next', '#onb-back', '#onb-finish']) { const el = $(id); if (el) el.disabled = busy; }
+  for (const id of ['#onb-next', '#onb-back', '#onb-finish', '#onb-sample']) { const el = $(id); if (el) el.disabled = busy; }
   const status = $('#onb-status');
   if (status) status.innerHTML = message === undefined ? '' : message;
 }
@@ -389,20 +400,41 @@ async function onbFinish(state) {
     const record = await post('/v2/setup/complete', {});
     if (ONB !== state) return;
     onbApplyNames(state);
-    onbAdopt(state, record);
-    applyConfig({...S.config, onboarding_needed: !!state.record.needed});
-    state.step = state.steps.length;
-    await onbRevisions(state);
-    if (ONB !== state) return;
-    clearInterval(state.poll); state.poll = setInterval(() => void onbPoll(state), 4000);   // repositories appear within seconds
-    onbRender(state);
-    await refresh(true);
-    void window.gsTourAfterSetup?.();
+    await onbCompleted(state, record);
   } catch (error) {
     state.completing = false;
     if (ONB !== state) return;
     onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
   }
+}
+// The sample company is the whole first run done at once: its names, providers and bots come back from the server.
+async function onbSample(state) {
+  if (state.busy || state.completing) return;
+  state.completing = true;
+  onbBusy(state, true, 'Starting the sample company…');
+  try {
+    const record = await post('/v2/setup/sample', {});
+    if (ONB !== state) return;
+    onbAdopt(state, record);
+    onbApplyNames(state);
+    applyConfig({...S.config, providers_configured: true});
+    await onbCompleted(state, record);
+  } catch (error) {
+    state.completing = false;
+    if (ONB !== state) return;
+    onbBusy(state, false, `<span class="err">${esc(error.message)}</span>`);
+  }
+}
+async function onbCompleted(state, record) {
+  onbAdopt(state, record);
+  applyConfig({...S.config, onboarding_needed: !!state.record.needed});
+  state.step = state.steps.length;
+  await onbRevisions(state);
+  if (ONB !== state) return;
+  clearInterval(state.poll); state.poll = setInterval(() => void onbPoll(state), 4000);   // repositories appear within seconds
+  onbRender(state);
+  await refresh(true);
+  void window.gsTourAfterSetup?.();
 }
 async function onbRevisions(state) {
   const bots = await v2Get('/v2/bots?include_archived=1');

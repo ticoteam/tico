@@ -252,6 +252,8 @@ def load(c):
             "selected": dict(stored.get("selected") or {}),
             "completed": stored.get("completed") or None,
             "assigned_to": stored.get("assigned_to") or None,
+            # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
+            "sample": stored.get("sample") or None,
             "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
@@ -476,7 +478,9 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who):
+    def complete(self, c, who, models=None):
+        """Create the plan's bots. `models` names the model a new bot runs on, by slug, in place of its card's
+        (the sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
         self._owner(who)
         record = load(c)
         names = display_names(self.settings, record)
@@ -488,6 +492,8 @@ class Onboarding:
         for slug, choice in plan.items():
             raw = cards.get(choice["template"])
             card = render(raw, names, choice["display_name"]) if raw else {}
+            if (models or {}).get(slug):
+                card["model"] = models[slug]
             starter = bool(card.get("starter")) and not card.get("bootstrap")
             reports_to = str(choice.get("reports_to") or "") or (home if starter else "")
             now = reports_to if reports_to.startswith("human:") or (reports_to and H.bot(c, reports_to)) else ""
@@ -518,6 +524,13 @@ class Onboarding:
         H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan)})
         return self.view(c, who)
 
+    def start_sample(self, c, who):
+        """The welcome's "Start with a sample company": this new company becomes Tico's sample company
+        (backend/sample_company.py). The owner only; refused once the company is set up."""
+        self._owner(who)
+        from . import sample_company
+        return sample_company.load(self, c, who)
+
     def _make_starter(self, c, who, slug, template, rank=None):
         """A starter template's bot, as first run creates it: it records the template and its version,
         waits for the computer to materialize its repository (`materialize`), seeds its first routine
@@ -534,10 +547,11 @@ class Onboarding:
         self._seed_routines(c, who, slug, template)
         H.event(c, who.actor, "bot.needs_onboarding", slug, {"template": template})
 
-    def onboarded(self, c, who, slug):
+    def onboarded(self, c, who, slug, arm=True):
         """The bot's own word, or its manager's, that its setup is done: it stops being
         parked, its routines may run and its work is claimed. A member's bot counts toward their
-        limit from here on, so the limit is checked now."""
+        limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
+        company's bots, set up by the sample's own answers)."""
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
         if not (who.role == "bot" and H.actor_id(who.actor) == slug):
@@ -558,7 +572,7 @@ class Onboarding:
         H.setup_finished(c, slug)
         # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
         # would have given it; once only, so one already armed or turned off by a person is left alone.
-        routine = self.arm_first_routine(c, who, slug)
+        routine = self.arm_first_routine(c, who, slug) if arm else None
         return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True, "routine": routine}
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
