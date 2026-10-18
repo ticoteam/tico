@@ -2338,12 +2338,9 @@ def computers(api, args):
       {"computer": _s("The computer's label or id (hub computer list)"),
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
+    # The route takes a label or an id: the computer list shows a bot only some computers, the route every one.
     wanted = str(args["computer"]).strip()
-    rows = (api.get("computers") or {}).get("computers") or []
-    match = [r for r in rows if wanted in (r.get("id"), r.get("label"))]
-    if not match:
-        raise ValueError(f"No computer named {wanted!r}; hub computer list names them")
-    seen = api.get(f"computers/{match[0]['id']}/performance?hours={int(args.get('hours') or 24)}")
+    seen = api.get(f"computers/{quote(wanted, safe='')}/performance?hours={int(args.get('hours') or 24)}")
     points = seen.get("points") or []
     step = max(1, -(-len(points) // 96))
     return {**{k: seen.get(k) for k in ("computer", "performance", "hours", "summary", "overloads", "busiest",

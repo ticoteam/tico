@@ -58,6 +58,9 @@ All notable changes to Tico are recorded here. The format follows
 - A caller that hangs up while the server reads its request body is recorded as 499 (client closed request), with
   no traceback, instead of an HTTP 500: it no longer counts as a server error in the flight recorder's 5xx count,
   Sentry or the server log. All seven 5xx counted on v0.3.55 were this.
+- A bot can read any computer's performance by its name or id with `hub computer performance`, as the docs say. It
+  used to look the computer up in the computer list first, which shows a bot only some computers, so most bots got "No
+  computer named".
 - A pull request a release merged and then reverted (a change dropped after QA failed) is no longer marked
   shipped, and its task gets no "Shipped" notice. Tico now checks with GitHub that the pull request's own lines are
   still in the running release, not only that its merge commit comes before it.
