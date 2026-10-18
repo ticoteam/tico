@@ -15,6 +15,13 @@ HUB="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="${TICO_MAIL_VENV:-${TICO_PROJECTS_DIR:-$(dirname "$HUB")}/runtime/mail/venv}"
 REQ="$HUB/connectors/mail/requirements.txt"
 
+# A venv belongs to the Python that built it: after a new runner image (or a Python upgrade on a Mac) its
+# bin/python still runs, but the packages sit under the old lib/pythonX.Y, so build it again.
+PY="python$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+if [ -x "$VENV/bin/python" ] && [ ! -d "$VENV/lib/$PY" ]; then
+  echo "mail: the venv at $VENV was built by another Python, rebuilding it for $PY" >&2
+  rm -rf "$VENV"
+fi
 if [ ! -x "$VENV/bin/python" ]; then
   echo "mail: building the venv at $VENV (first use, about a minute)" >&2
   mkdir -p "$(dirname "$VENV")"

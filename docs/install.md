@@ -1048,7 +1048,9 @@ TICO_IMAGE=tico TICO_TAG=local docker compose up -d
 TICO_RUNNER_IMAGE=tico-runner docker/smoke.sh     # local image checks
 ```
 
-Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The
+Tool versions and their sha256 digests are in `docker/versions.env` and are checked during the build. The images
+run Python 3.15 on Debian trixie with SQLite from `SQLITE_VERSION` there, built from source by `docker/sqlite.sh`
+in place of Debian's older copy; the build fails unless Python's `sqlite3` reports that version. The
 model CLIs are not in the image; the runner installs them (see [harnesses](harnesses.md)).
 
 ## Advanced installs

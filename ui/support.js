@@ -634,6 +634,22 @@
     return pop;
   }
   const visibleQuestion = () => ['help-open', 'mobile-support'].map(id => document.getElementById(id)).find(el => el?.getClientRects().length);
+  // On a phone the sheet sits on the bottom of what is visible: with the keyboard up, the space above it. The browser
+  // reports that space in the visual viewport, whose height shrinks both for the keyboard and for pinch zoom, so
+  // height × scale is the visible height in page pixels with zoom taken out. At normal scale the sheet follows the
+  // visual viewport where the browser has panned it; zoomed in, it stands on the bottom of the page, where panning
+  // reaches it, so a keyboard opened or closed while zoomed still resizes it and nothing from before the zoom lingers.
+  function fit() {
+    if (!pop) return;
+    const vv = window.visualViewport, page = document.documentElement.clientHeight || window.innerHeight;
+    const scale = vv?.scale || 1, height = Math.min(page, (vv?.height || window.innerHeight) * scale);
+    const bottom = Math.abs(scale - 1) < 0.01 ? (vv?.offsetTop || 0) + height : page;
+    for (const [name, px] of [['--support-visible', height], ['--support-bottom', bottom]])
+      if (pop.style.getPropertyValue(name) !== px + 'px') pop.style.setProperty(name, px + 'px');   // only on a change: typing fires these
+  }
+  window.visualViewport?.addEventListener('resize', fit);
+  window.visualViewport?.addEventListener('scroll', fit);
+  window.addEventListener('resize', fit);
   function focusBox() {
     if (!isOpen()) return;
     const box = pop.querySelector('[data-view]:not([hidden]) [data-compose]:not([hidden]) [name=message]');
@@ -658,6 +674,7 @@
       opener = document.activeElement !== document.body ? document.activeElement : null;
       pop.showModal();
     }
+    fit();
     // Where it is going is set before anything loads, so the chat left open last time is not shown or read on the way.
     if (how.list) view = 'list';
     else if (how.fresh || how.ticket) { view = 'chat'; selected = how.fresh ? '' : how.ticket; }
