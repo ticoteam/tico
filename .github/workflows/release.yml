@@ -15,13 +15,48 @@ on:
         type: boolean
         default: true
 
+# Read-only by default; only the two jobs that write to the GitHub release (release, desktop-assets) get contents: write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # A tag publishes only a commit that passed Release validation (ci.yml) exactly. v0.2.10 to v0.2.12 shipped while main's
+  # checks were red; since Oct 16 the Release Manager tags only a validated candidate by hand, and this makes that a check.
+  # A manual rebuild may reuse an already published release; an unpublished tag still needs exact-commit validation.
+  # The job always runs (never skipped), because a skipped job would also skip every job after it.
+  validated:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read   # lists Release validation runs
+      contents: read  # verifies an existing release before allowing a manual rebuild
+    steps:
+      - name: A successful Release validation of this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ]; then
+            echo "::error::Release must run from a version tag."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            published="$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || true)"
+            if [ "$published" = false ]; then
+              echo "Rebuilding an already published release."
+              exit 0
+            fi
+          fi
+          titles="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --status success --limit 200 --json displayTitle -q '.[].displayTitle')"
+          if grep -q "^Validate $GITHUB_SHA " <<<"$titles"; then
+            echo "Release validation passed for $GITHUB_SHA."
+          else
+            echo "::error::No successful Release validation of $GITHUB_SHA. Validate this exact commit before tagging (docs/releasing.md)."
+            exit 1
+          fi
+
   # The Rust runner for computers that run from a checkout (Mac, Linux): runner/engine.py downloads the one for its
   # platform and checks it against tico-runner-SHA256SUMS. Linux builds are static (musl), so any distribution runs them.
   runner-binaries:
+    needs: validated
     strategy:
       matrix:
         include:
@@ -34,14 +69,14 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Rust toolchain (the image's)
-        run: rustup toolchain install 1.92 --profile minimal --target "${{ matrix.target }}" && rustup default 1.92
-      - uses: swatinem/rust-cache@v2
         with:
-          workspaces: |
-            runner-rs
-            relay-rs
-          key: ${{ matrix.target }}
+          persist-credentials: false
+      - name: Rust toolchain (the image's)
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+      # No build cache here: the shipped runner binaries always build clean from the tag, so a poisoned cache entry
+      # can never end up in a release.
       - name: Build tico-runner
         env:
           TARGET: ${{ matrix.target }}
@@ -67,8 +102,12 @@ jobs:
   release:
     needs: runner-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creates the GitHub release
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: runner-*
@@ -114,6 +153,7 @@ jobs:
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
+    needs: validated
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -124,6 +164,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: diff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -146,6 +187,8 @@ jobs:
     needs: desktop-changes
     if: needs.desktop-changes.outputs.build == 'true'
     uses: ./.github/workflows/app.yml
+    # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
+    # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
     secrets: inherit
     permissions:
       contents: read
@@ -157,8 +200,12 @@ jobs:
     needs: [release, desktop-changes, desktop]
     if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # uploads the desktop files to the published release
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.desktop-changes.outputs.build == 'true'
         with:
@@ -206,6 +253,8 @@ jobs:
       enabled: ${{ steps.matrix.outputs.enabled }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - name: Read private company list
         id: matrix
         env:
@@ -223,7 +272,7 @@ jobs:
     uses: ./.github/workflows/company-app.yml
     with:
       company: ${{ matrix.company }}
-    secrets: inherit
+    secrets: inherit   # company-app.yml on main declares no secrets; narrowing waits for it (see the desktop job)
     permissions:
       contents: read
-      id-token: write
+      id-token: write   # company-app.yml's publish job assumes each company's AWS role

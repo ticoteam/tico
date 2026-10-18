@@ -22,7 +22,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     const bots = [['coo', 'COO', 'leadership'], ['cpo', 'AI CPO', 'product'], ['cmo', 'AI CMO', 'marketing'],
       ['cto', 'CTO', 'engineering']].map(([name, display_name, team]) =>
       ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team,
-        runtime: {cpo: 'codex', cmo: 'claude'}[name]}));
+        runtime: {cpo: 'codex', cmo: 'claude'}[name], ...{
+          cpo: {resolved_model: 'gpt-6.1-sol', resolved_effort: 'high', model_source: 'bot'},
+          cmo: {resolved_model: 'claude-opus-5-5', resolved_effort: '', model_source: 'company'}}[name]}));
     const now = new Date().toISOString();
     const task = (id, over) => ({id, title: id, body: 'Details.', owner: 'bot:cmo', requester: 'human:reviewer', status: 'open',
       lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
@@ -403,9 +405,12 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.waitForFunction(() => location.hash === '#/bot/cmo/tasks');
     assert.equal(new URL(page.url()).search, '', 'the entry query is removed after routing');
     // The org panel shows a bot's harness as a small mark, not a word; a bot with no harness shows none.
+    // Hover and screen readers say harness, model and effort, nothing more; no effort, nothing after the model.
     const rt = name => page.locator(`#tree a.node[href="#/bot/${name}"] .rt`);
-    assert.equal(await rt('cpo').getAttribute('aria-label'), 'Runs on Codex');
-    assert.equal(await rt('cmo').getAttribute('aria-label'), 'Runs on Claude Code');
+    assert.equal(await rt('cpo').getAttribute('aria-label'), 'Codex GPT 6.1 Sol High');
+    assert.equal(await rt('cpo').getAttribute('title'), 'Codex GPT 6.1 Sol High');
+    assert.equal(await rt('cmo').getAttribute('aria-label'), 'Claude Code Opus 5.5');
+    assert.equal(await rt('cmo').getAttribute('title'), 'Claude Code Opus 5.5');
     assert.equal(await rt('cpo').locator('svg').count(), 1);
     assert.equal((await rt('cpo').innerText()).trim(), '', 'the mark has no text');
     assert.equal(await rt('cto').count(), 0, 'no harness, no mark');

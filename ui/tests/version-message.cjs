@@ -1,5 +1,5 @@
 // Offline browser regression: Tico HQ's message for this version appears once per person (a reload does not bring it
-// back), and Help lists the known issues in the running version, or says it could not check.
+// back), and What's new lists the known issues in the running version, or says it could not check.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,7 +10,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({ctx, update, hash = '#/help', me = 'ana'} = {}) => {
+    const visit = async ({ctx, update, hash = '#/changelog', me = 'ana'} = {}) => {
       ctx = ctx || await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
       const errors = [];
@@ -45,8 +45,8 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     await v.page.locator('#version-message').waitFor({state: 'visible'});
     assert.equal(await v.page.locator('#version-message-text').textContent(), MESSAGE.body);
     assert.equal(await v.page.locator('#version-message-link').getAttribute('href'), MESSAGE.url);
-    // Help: the known issues, the link only when it is https, the title as text.
-    const ki = v.page.locator('#help-known-issues');
+    // What's new: the known issues, the link only when it is https, the title as text.
+    const ki = v.page.locator('#changelog-known-issues');
     await ki.waitFor({state: 'visible'});
     assert.equal(await ki.locator('h2').textContent(), 'Known issues in your version');
     assert.equal(await ki.locator('li').count(), 2);
@@ -59,18 +59,18 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     assert.deepEqual(v.errors, []);
     await v.page.close();
     let again = await visit({ctx: v.ctx, update: {...base, message: MESSAGE, known_issues: [], known_issues_checked: true}});
-    await again.page.locator('#help-known-issues').waitFor({state: 'visible'});
+    await again.page.locator('#changelog-known-issues').waitFor({state: 'visible'});
     assert.equal(await again.page.locator('#version-message').isVisible(), false, 'a reload does not show it again');
-    assert.equal(await again.page.locator('#help-known-issues .help-ki-none').textContent(), 'None known in v0.3.52.');
+    assert.equal(await again.page.locator('#changelog-known-issues .changelog-ki-none').textContent(), 'None known in v0.3.52.');
     await again.page.close();
     again = await visit({ctx: v.ctx, me: 'riley', update: {...base, message: MESSAGE, known_issues_checked: true}});
     await again.page.locator('#version-message').waitFor({state: 'visible'});
     await v.ctx.close();
 
-    // HQ not reached: no message, and Help says it could not check rather than "none".
+    // HQ not reached: no message, and What's new says it could not check rather than "none".
     v = await visit({update: {...base, message: null, known_issues: [], known_issues_checked: false}});
-    await v.page.locator('#help-known-issues').waitFor({state: 'visible'});
-    assert.match(await v.page.locator('#help-known-issues').textContent(), /Could not check/);
+    await v.page.locator('#changelog-known-issues').waitFor({state: 'visible'});
+    assert.match(await v.page.locator('#changelog-known-issues').textContent(), /Could not check/);
     assert.equal(await v.page.locator('#version-message').isVisible(), false);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

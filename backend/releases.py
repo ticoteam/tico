@@ -12,7 +12,7 @@ The check asks Tico HQ first (`GET <TICO_HQ_URL>/v1/latest`), which is also how 
 (backend/census.py, PRIVACY.md). With counting off, with `TICO_RELEASES_URL` set (a mirror), or when HQ does not
 answer, it asks GitHub directly and sends no id.
 
-HQ's answer also carries short messages for given versions and the known issues by version (hq/notices.py). The
+HQ's answer also carries short messages for given versions and the known issues by version (docs/tico-hq.md). The
 install keeps them with the release and shows its own version's: a message once in the app, and the known issues in
 Help. Nothing more is sent for them; an answer from GitHub has none, and then Help says it could not check.
 """

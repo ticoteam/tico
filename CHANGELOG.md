@@ -8,6 +8,102 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+
+- The Overview shows **Bot hours vs human hours**: bot hours per human hour over the last 7 days, and a weekly line for
+  up to 12 weeks (Monday to Sunday, Pacific time) with a dashed Parity line at 1× and the current week dotted as "so far".
+  Hover or tap a week for its numbers; click the card for the table by week. Bot hours are the time bot runs spent
+  working, with silences over 30 minutes inside a run left out; human hours are the people on the org chart × 40 h a
+  week. Totals only, for every person who can open the Overview.
+- The owner can change their own sign-in email and stay the same person, with every task, approval, bot and role:
+  **Settings > Humans**, the ⋯ menu on their own row, **Change my sign-in email**, typed twice. One step moves the
+  address everywhere Tico keeps it (the roster, the owner record with the old address in its history, the allow list,
+  the Admins, meetings filed for them) and writes an `owner.email_changed` audit event. The old address stops signing
+  in at once and never joins as a new person. Set up the new address in Cloudflare Access first. If you are locked
+  out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
+  sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
+
+### Changed
+
+- On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over
+  HTTPS, behind Caddy): 8-14x less CPU than gzip at the same or smaller size. Python 3.12 keeps gzip.
+- Tico HQ's code (the service at `https://updates.tico.team`) moved out of this repository. Installs talk to
+  `https://updates.tico.team` as before, with one fix: with `TICO_SUPPORT=off`, in a rehearsal or in demo mode, a live
+  support session now ends without the install telling HQ (it used to send the end notice), so with support off nothing
+  is sent.
+- Bots can create private repositories by default; the Owner can switch it off per bot. **Create product
+  repositories** is on for every bot, BotOps and new bots included. The Owner or an admin switches it off in the bot's
+  **Settings → Repositories**; an off stays off, and only the Owner switches it back on. A bot's turn acting for
+  someone (BotOps, the Assistant) or an external agent still can't create one.
+- **Bots can create product repositories**, not only the Owner. A new switch in a bot's **Settings → Repositories**,
+  **Create product repositories**, lets it make a private, empty repository in the connected GitHub organization with
+  the same preview, exact confirmation and retry-safe receipt as the Owner (`hub repo product-create <name> --confirm
+  <org>/<name>` in a bot's turn, or the `hub_repo_product_create` tool). Private only: a public repository is publishing and
+  stays a person's step, and bots can't delete, rename, transfer or change a repository's visibility. The bot gets write
+  to the repository it made and the Owner gets a notice ("Head of Engineering created private repo tico-services…"); a
+  bot on All ticked repos with read access moves to Chosen repos, keeping read on what it reached, and the notice says
+  so.
+  Without the right a bot is refused with the right named; if the GitHub App lacks Administration: write, the refusal
+  says so and links the app's permissions page, where the Owner turns it on once. Connecting and disconnecting GitHub
+  stay the Owner's ([Permissions](docs/permissions.md#bots-that-create-repositories),
+  [GitHub App](docs/github-app.md#bots-that-create-product-repositories)).
+- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
+  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
+  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
+  included), and a computer that already offered its screen keeps its setting.
+
+### Fixed
+
+- `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
+  so every call failed before it reached the computer's CPU, memory and disk history.
+- The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
+  of "No current status available" until the next refresh (up to two minutes).
+- The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
+  sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
+- The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
+  the next refresh (up to two minutes).
+- One bot's quarantine no longer spreads to the bots that work with it. A message or task comment to a paused or
+  quarantined bot is kept and runs when it is back, and the sender is told when that is. A new task or hand-off to
+  one is refused as `target_inactive`, saying when the bot is back. That refusal opens no review of the sender and
+  never counts as a repeat toward its quarantine; it counts only toward the 30 refusals a day that stop a loop.
+
+## [0.3.54] - 2026-10-17
+
+### Added
+- **Sign out** and **Switch account** for Codex (ChatGPT) and Claude Code logins, from Settings > Computers and Manage
+  subscription, for the computer's own login and each named subscription. Sign out names the bots that stop first;
+  Switch account signs the new account in on the side, so cancelling keeps the old one, and puts the old login back if
+  the new one doesn't take; it isn't offered for Claude Code on a Mac, which keeps its login in the Keychain. After any
+  of these the page waits for the computer's next report before redrawing. A computer login someone signed
+  out stays signed out: the model key given to every computer no longer signs it back in, until someone signs in or
+  chooses **Use the shared key**. No restart. Needs a current runner on the computer.
+- The team chart keeps the order you put a manager's reports in, for everyone who views it, instead of A–Z. Drag a
+  human or a bot above or below another report of the same manager, or use **Move up** / **Move down** in its row's
+  menu (keyboard too). A new report goes last. The Goals tree, a person's page and Updates follow the same order.
+  Whoever may put reports under that manager may order them, and a bot its own; a drop onto someone you may not put
+  it under says so and moves nothing. Bots read and set it with `hub org order <manager> [--set a,b,c]`
+  ([team chart](docs/org-chart.md#the-order-of-reports)).
+- **Subscribe to updates** in a bot's settings: its managers choose **Default employee settings** (changes to the
+  template it was made from, from tico.team's template changelog feeds), **Tico updates** (published releases,
+  including MCP and tool changes), both or neither. Each update is one quiet note for the bot's next run, with a
+  short quoted summary, release or commit links and whether action may be needed, and why. It wakes nothing and
+  changes nothing about the bot; turning a category back on starts from the newest update, without a backlog
+  (`hub bot update --subscribe-updates`, [Creating bots](docs/creating-bots.md#subscribe-to-updates)).
+- Tico HQ answers the setup page on tico.team before its assistant launches: `GET /v1/onboarding/health` says
+  `{"ok": false}`, and `POST /v1/onboarding/event` takes the page's download and message counts. Counts are kept only when
+  `HQ_ONBOARDING_COUNTS=on`: one row per planning session with the furthest step, whether the file was downloaded,
+  how many messages were sent, turns and cost, and no message text or address; a session ID shaped like a key is
+  refused before it is hashed. Only `https://tico.team` may call these routes from a browser
+  (`HQ_ONBOARDING_ORIGINS`). Staff read the daily totals at `GET /v1/staff/onboarding`, including how many sessions
+  with 2 or more messages downloaded the file.
+- Claude Haiku 5.5 (`claude-haiku-5-5`) in the model picker, at low, medium (the default), high, xhigh or max effort.
+  Usage estimates its cost at Anthropic's list price: $0.10 in, $0.01 cached and $0.50 out per million tokens for a
+  prompt up to 100,000 tokens, five times that for a longer one.
+- HQ: **Talk to a person** on tico.team/setup files a support ticket of kind `setup-website` through HQ's support desk
+  (`POST /v1/support`, from `https://tico.team` only, with its CORS preflight). The ticket is fixed text (email, step, mode,
+  turns); the visitor's note, and their plan only if they ticked it, are an attachment marked Untrusted public input, with
+  key-shaped strings removed before the spam and injection check or the database see them. Never the chat. One ticket per
+  visit, 3 a day per address and per email, `HQ_SETUP_TICKETS_DAILY_CAP` a day (default 50): `429 {"busy": true}`. The
+  answer is the reply page's link on `HQ_DOMAIN`. The Support bot's task shows the kind and the attachment's label.
 - People post updates too, in the same shape as a bot's (one to five bullets; on Friday the week in review), and
   everyone on the team sees them on **Updates**. A person's card shows their name and picture and has no Reply. An
   update the Assistant drafted for someone says **Drafted by Assistant** until they replace it with their own words.
@@ -29,8 +125,21 @@ All notable changes to Tico are recorded here. The format follows
   default, and **Whole org** shows the chart from the top (the choice is kept). The badge and unread dots count only
   your direct reports, so a report's report never alerts. **List** keeps the plain newest-first feed. On Friday the
   **Weekly** tab has your week in review to write or edit as its slides (goal, done, focus, blockers, KPIs). A
-  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card;
+  manager's card says **From:** with the reports' updates it was written from, each a link that opens that card (in
+  **List**, an older one not on the page opens under the card that links it, not the author's latest);
   `hub update show` lists them too, and you only see those you may read.
+- Public roadmaps: choose which bot receives visitor suggestions with `suggestions_bot` in roadmap settings
+  (`hub roadmap settings --suggestions-bot SLUG`, or `--automatic`), owners and admins only. Automatic, the default,
+  is today's Product Manager rule, then a Head of Product bot, so a team without a Product Manager still takes
+  suggestions; an archived bot never gets them. Reading the settings shows the bot suggestions go to now. With no
+  receiving bot a visitor gets "Suggestions aren't being accepted right now." instead of an internal setup error,
+  and trying to change a task type's manager says where to choose the bot instead. In Settings → Tasks → Public
+  roadmap, **Suggestions go to** picks it and says which bot Automatic means now; a chosen bot that has since been
+  archived shows as archived, not as a blank. Members see the Public roadmap settings read-only.
+- Settings > Health warns owners and admins when public roadmap suggestions reach no bot ("No bot receives roadmap
+  suggestions"), or when the bot chosen for them is archived or not active and they go to another bot instead. It
+  shows only while a public label is enabled and clears by itself. Its **Open Public roadmap** link goes straight
+  to the Public roadmap settings.
 - Docs: [The software factory](docs/software-factory.md), Tico's recommended way to build software with bots: the
   roles in order from Builder to DevOps, which model and effort each runs on, the Dev tickets steps and who moves each.
   Linked from the README, Public roadmaps and Starter bots.
@@ -44,12 +153,43 @@ All notable changes to Tico are recorded here. The format follows
   only, **Full access**, for a time they choose (24 hours by default). A banner shows on every screen while it lasts, Stop
   ends it at once, and every request support makes is listed under the request. The install dials out to Tico HQ; nothing
   connects in. The team rule **Owners and admins may let Tico support in** turns it off ([support](docs/support.md#letting-tico-support-in)).
+- A bot's **More** always has a **Screen** row, so the screen stays findable when it isn't working: ready (open it, View
+  or Control), or why not and what to do. Screen off: the computer's operator or an admin turns it on (View) there.
+  No screen offered: the steps on the computer, with commands to copy; on Docker the main one turns the screen on live
+  inside the runner's container, with no restart (install.md says the same). Also a Mac, an offline computer, no computer, or
+  not yours to open. The header's Screen button now shows only when the row is ready (not while the computer is offline).
+  Someone who may only see the bot is told its computer isn't shown to them. The row and the button follow each refresh.
 
 ### Changed
-- Screen: the first time a new computer offers its screen, its **Screen** setting in Settings > Computers starts at
-  **Control** instead of **View**, so its operator or an admin can drive it at once. Who may open a screen is
-  unchanged (the computer's operator and admins), a Screen setting someone already chose stays (View and Off
-  included), and a computer that already offered its screen keeps its setting.
+- **What's new** clears on its own: opening the changelog marks the product updates it shows as read, older ones
+  too as you load them, and they stay listed as **New** until you leave. The **Mark shown as read** button is gone.
+- Bots: hovering the small harness mark beside a bot's name reads harness, model and effort, such as
+  "Codex GPT 6.1 Sol High" or "Claude Code Opus 5.5 Med", with nothing after the model when the bot has no effort
+  set (it used to say "Runs on Codex · gpt-6.1-sol (this bot's own choice)"). GPT models are written "GPT 6.1 Sol"
+  everywhere a model is named.
+- What the Help page held now also has a home of its own, ahead of the Help page going away: **Setup check** is a
+  button on **Settings → Health**, with the same checks, fixes and **Send to support**; **Show the app's log** sits on
+  the version line at the top of **Settings**; **Beta features** and **Known issues in your version** open the
+  **Changelog** page; and **Take the tour** is in the account menu.
+- **Support** is a pop-up from the **?** at the bottom of the sidebar (the **Support** tab on a phone, where it opens
+  as a sheet): it opens on your latest request that isn't closed, keeps words you haven't sent, and lists every
+  request under **Your requests**, with **View docs** and **What's new** beside it. A reply puts a count on the **?**.
+  **Talk to us** and the Help page are gone; old Help links open the pop-up over Overview ([support](docs/support.md)).
+- Faster image handling and startup with Pillow 13, plus pydantic 2.14, pypdf 6.21, Starlette 1.8 and Uvicorn 0.54.
+  Python and browser tests use one Playwright version (1.64), so they share one Chromium and WebKit.
+- Tasks: when a bot files a task for a person, that person's comment on it now wakes the bot, with or without an
+  @mention, so a reply such as "I don't know why this is assigned to me" gets an answer. Comments from anyone else on
+  the task wake the bot only as before (an @mention, or the task waits on them); edits and deletes wake nobody.
+- A bot may now add and remove classification labels (`qa`, an area, a priority) on a task it manages: one it
+  owns, asked for, or whose type it manages, such as Head of Product on its roadmap items or Head of Engineering on
+  Dev tickets. Before, only a person on the leadership, product or engineering teams could, and bots trying it were
+  quarantined. A public roadmap label still needs an approved publish approval (`hub task label --approval-id`), both
+  to add and to remove, and `goal:on`/`goal:off` still need a person; the refusal says which label and why, and
+  counts toward a quarantine once per task an hour. Lane and number are unchanged: a person's.
+- A bot back from a quarantine finds a note in its next run with the refusal that stopped it and "Do not retry this
+  action; leave a note for a person if you still need it", whether the cooldown lifted it or a person cleared it.
+  While a bot is quarantined, its manager bot's messages, notes and task comments are kept for when it is back
+  instead of refused, as a person's already were (and a person's notes to a paused or quarantined bot now are too).
 - Steering is out of Beta: a message sent while a bot answers, which goes into that turn, no longer carries the
   **Beta** pill in chat, and Help lists only chat goals under **Beta features**.
 - Roadmaps: a database that ran an unreleased build of roadmaps from main has the internal text it copied into public
@@ -59,6 +199,45 @@ All notable changes to Tico are recorded here. The format follows
   `docker compose down`, run `docker compose up -d` first).
 
 ### Fixed
+- Tico HQ answers a support ticket or follow-up whose message, email or diagnostics hold an unpaired surrogate (JSON
+  `"\ud800"`) with the usual 422 naming the field, instead of a server error. Nothing is stored or judged.
+- Settings > Health's **Sign-in settings** fix (no identity proxy) opened Settings on Computers, a tab that has nothing
+  about sign-in. It now opens the sign-in section of the install guide. Every link that names a Settings tab is now checked
+  against the tabs that exist, and chat's and the Goal Manager's links to a tab are tested by clicking them.
+- BotOps and Assistant Confirm cards read in plain words: a repository change says who gets what and what they lose
+  ("Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder."), never
+  `PUT /api/v2/...` or a word like "chosen" or "all"; any other card without a sentence of its own gets a plain one, and
+  a card made before this reads plainly too, its old line kept under Details. The method, path and fields are under a
+  closed **Details**; the words a message, comment or support request sends stay on the card. Confirm or Cancel on one
+  card no longer makes the chat jump: the other cards stay exactly as they were, with any **Show more** or Details you
+  opened still open, and focus stays where it was.
+- Usage prices each model request at its own rate when the model charges more for long prompts (Claude Haiku 5.5, over
+  100,000 tokens). It used to price a whole run at the lower rate, so a Haiku 5.5 run could read up to five times too
+  low. A run from a runner that doesn't report each request (update the runner) says **estimate, may be low**.
+- Roadmaps keep working after the bot that managed the Product roadmap or Dev tickets type is archived or replaced.
+  Tico found both types by their manager's name (`product-manager`, `engineering-lead`), so a type that moved to
+  another bot lost its Approved → Building → Shipped sync, its Roadmap tab and its ranked list. Each type now has a
+  role (`role` in `hub task types` and the API), given once on upgrade without changing any task; setting up the
+  default types never replaces a manager a type already has. A Dev tickets type made in Settings → Types, even beside
+  Engineering, now moves its roadmap item to Building and Shipped too; before, only a type managed by Head of
+  Engineering did.
+- A subscription you sign in from **Settings > AI providers > Subscriptions > Sign in** shows up on that computer at
+  once, and bots assigned to it run on it, without restarting the computer's runner. Before, a new named subscription
+  stayed hidden until a restart. One whose sign-in failed or was cancelled stays listed as not signed in, so you can
+  sign it in again; one taken out of the computer's `runner.json` goes from the list within 15 seconds.
+- A Linux computer's screen now comes up when another X server (say a headless IDE's own `Xvfb :99`) already holds
+  display `:99`. The runner takes the first free display from `:99` to `:120`, and bots get that `DISPLAY`. Set
+  `TICO_SCREEN_DISPLAY` (like `:101`) to use one display exactly. When the display it needs is taken, the computer's
+  screen says so, with the process holding it when the runner can read it: "Display :99 is in use by another X
+  server (Xvfb, pid 1234). Stop it or set TICO_SCREEN_DISPLAY to a free display." It used to say only "Xvfb :99 did
+  not start".
+- A roadmap item no longer moves to **Shipped** when its Dev tickets all ended at **Closed** without reaching
+  **Done**, for example as duplicates or after **Won't do**; it goes back to **Approved**. A Dev ticket closed
+  straight from Done still counts as shipped, as does the default Engineering type's Done step.
+- When a sign-in ends (a Cloudflare Access session expiring, or built-in sign-in), the web app and the desktop app say
+  **You've been signed out** with **Sign in again**, instead of bots looking frozen while every request fails in the
+  background. The live updates stop retrying until then; signing in brings you back to the same page with what you had
+  typed. The desktop app's Dock badge shows "!" while signed out. A dropped network still just reconnects.
 - The **Message bots** heading in the sidebar's team chart shows its Beta pill. Before, only the separate Message bots
   section had one, and that section is hidden when message bots sit in the chart.
 - A Claude bot that answered while its subagents or background commands were still running now reads a follow-up at
@@ -67,6 +246,12 @@ All notable changes to Tico are recorded here. The format follows
   not to wait inside a long poll or sleep loop, where a follow-up waits until the command returns.
 - A task page's "Working" line, and a bot's reply as it streams into a chat, no longer slow to one update every 15
   seconds after you come back to its browser tab; each keeps its own pace.
+- The desktop app keeps a whole sign-in in its window with any identity provider: Cloudflare Access with Microsoft,
+  Okta, GitHub or another provider, and built-in sign-in with Okta or Microsoft Entra. Before, only Cloudflare's and
+  Google's pages stayed; any other provider's page opened in the default browser, the sign-in landed there and the app
+  stayed signed out. Links to other sites still open in the browser.
+- **Usage** prices Claude Sonnet 5.5 cache reads at $0.10 per million tokens, Anthropic's list price. It used $0.20,
+  so a Sonnet 5.5 bot's estimated cost was too high on runs that read from the prompt cache.
 
 ## [0.3.52] - 2026-10-16
 
@@ -3054,7 +3239,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.54...HEAD
+[0.3.54]: https://github.com/ticoteam/tico/compare/v0.3.52...v0.3.54
 [0.3.52]: https://github.com/ticoteam/tico/compare/v0.3.50...v0.3.52
 [0.3.50]: https://github.com/ticoteam/tico/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ticoteam/tico/compare/v0.3.48...v0.3.49

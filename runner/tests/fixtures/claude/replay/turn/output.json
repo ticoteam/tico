@@ -36,7 +36,8 @@
         "usage": {
           "input": 16419,
           "cached": 10584,
-          "output": 8
+          "output": 8,
+          "requests": [[5835, 10584, 8]]
         },
         "cost_usd": 0.0489488,
         "input": 16419,

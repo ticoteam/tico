@@ -11,8 +11,9 @@ updated never drags its computers ahead of it.
 **What's new** in the sidebar and **Changelog** in the account menu show product changes you
 have not acknowledged. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
-Search changes, expand a release's remaining bullets, or open its full release notes. **Mark shown
-as read** acknowledges just the product entries in the current view, including any search filter.
+Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
+page marks the product entries it shows as read, and **Load older changes** does the same for the ones
+it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
 
 Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
@@ -341,7 +342,7 @@ Tico HQ can also show a short message for a version once in the app ([tico-hq.md
 
 - **v0.2.16 to v0.2.18:** the update is in the app, with no manual steps. Browser tabs left open show "New version · Reload".
   A Mac runner's background jobs now restart on their own after an update; on v0.2.17 or older, run `scripts/tico restart all` once
-  after updating. If you run your own HQ, its `backup` service in `hq/compose.yaml` must run as uid 10005 (fixed in v0.2.18).
+  after updating.
 
 ## For maintainers
 

@@ -58,6 +58,23 @@ function slugFromName(name) {
   return slug || (words[0] || '').slice(0, 40);
 }
 
+// Subscribe to updates (backend/update_feeds.py): what the bot hears about as quiet notes. Information only, so it
+// changes nothing about the bot; the feeds' state comes from the server's config.
+function settingsUpdateSubscriptions(e) {
+  const feeds = S.config.update_feeds || {}, chosen = new Set(e?.update_subscriptions || []);
+  const unreleased = feeds.unreleased ? ' <span class="pill unreleased" title="Not in a published release yet">Unreleased</span>' : '';
+  const templateNote = !feeds.templates?.feed ? feeds.templates?.status || 'No feed yet.'
+    : !e?.template ? feeds.templates?.no_template || '' : `Changes to its template, ${e.template}: public source changes, which may not be released yet.`;
+  return `<h3 class="bot-editor-sec bot-editor-wide">Subscribe to updates${unreleased}</h3>
+        <p class="bot-editor-hint bot-editor-wide">Each update waits as a note for the bot's next run and wakes nothing. It never changes the bot's Instructions, settings or access.</p>
+        <label class="bot-editor-check"><input type="checkbox" name="update_templates" ${chosen.has('templates') ? 'checked' : ''}><span>Default employee settings<small>${esc(templateNote)}</small></span></label>
+        <label class="bot-editor-check"><input type="checkbox" name="update_tico" ${chosen.has('tico') ? 'checked' : ''}><span>Tico updates<small>Published Tico releases, including MCP and tool changes.</small></span></label>`;
+}
+function settingsUpdateSubscriptionsChange(form, e) {
+  const picked = ['templates', 'tico'].filter(name => form.elements['update_' + name]?.checked);
+  const before = ['templates', 'tico'].filter(name => (e?.update_subscriptions || []).includes(name));
+  return picked.join() === before.join() ? {} : {update_subscriptions: picked};
+}
 function settingsEditBot(slug = '') {
   const editing = !!slug, e = editing ? S.emps.find(row => row.name === slug) : null;
   const dialog = $('#bot-editor');
@@ -94,6 +111,7 @@ function settingsEditBot(slug = '') {
         <label class="bot-editor-check bot-editor-wide"><input type="checkbox" name="private_tasks_default" ${e?.private_tasks_default ? 'checked' : ''}><span>Create private tasks by default<small>Tasks created by or assigned to this bot start private. A human requester can choose company visibility.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
+        ${editing ? settingsUpdateSubscriptions(e) : ''}
         ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Each of these saves as soon as you change it.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
@@ -215,7 +233,8 @@ function settingsEditBot(slug = '') {
           bot_contact: form.elements.bot_contact.value,
           private_tasks_default: form.elements.private_tasks_default.checked,
           repo: form.elements.repo.value, thread_mode: form.elements.thread_mode.value,
-          temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev});
+          temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev,
+          ...settingsUpdateSubscriptionsChange(form, e)});
       } else {
         const choice = settingsChoiceFromValue(form.elements.model_effort.value);
         if (!choice.harness || !choice.model || !choice.effort) throw new Error('Choose a harness, model and effort.');

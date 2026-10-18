@@ -490,7 +490,8 @@ const REPLY_WAIT_MS = 20 * 60000;
 function v2PendingText(state) {
   const x = state.execution, name = botDisplayName(state.slug);
   if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
-  if (state.live?.interrupted) return {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
+  if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
+    : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
     if (x.label && x.label !== 'Saved — queued') return {word: x.label, tip: x.label, mode: 'wait'};   // the server's reason
@@ -600,9 +601,12 @@ function v2ChatRender(state) {
   if (html !== state.html) {
     state.html = html;
     state.stick.update(() => {
+      // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
+      const focused = thread.contains(document.activeElement) ? document.activeElement : null;
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
       if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
     }, {fresh: state.rendered && v2Jump(state), prepended: state.prepending});

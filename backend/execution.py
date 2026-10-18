@@ -776,9 +776,9 @@ class Execution:
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
         c.execute("UPDATE runners SET last_seen=?,awake_since=?,version=?,platform=coalesce(nullif(platform,''),?),"
-                  "capacity=?,readiness_json=?,capabilities_json=? WHERE id=?",
-                  (H.now(), awake_since, body.version, body.platform, body.capacity,
-                   encode(readiness), encode(sorted(set(body.capabilities))), who.runner_id))
+                  "capacity=?,readiness_json=?,capabilities_json=?,readiness_at=? WHERE id=?",
+                  (now, awake_since, body.version, body.platform, body.capacity,
+                   encode(readiness), encode(sorted(set(body.capabilities))), now, who.runner_id))
         if not offered_before and screen.CAPABILITY in body.capabilities:
             screen.first_offer(c, who.runner_id)
         from . import bot_tools
@@ -1456,7 +1456,8 @@ class Execution:
     def run_usage(self, c, row, body):
         """The turn's usage columns from the tokens its runner counted, or None when it counted none.
         The model is the runner's choice for each primary/fallback portion. Unknown values stay
-        unknown; the cost is the list-price estimate, empty for a model with no price."""
+        unknown; the cost is the list-price estimate, empty for a model with no price, and `est_cost_low` says
+        it may be low: a model whose long prompts cost more, without every request's counts (providers.estimate)."""
         used = body.usage
         if not used:
             return None
@@ -1464,9 +1465,10 @@ class Execution:
             model, runtime = item.model, item.runtime
             catalog = providers.MODEL_BY_ID.get(model) or {}
             provider = catalog.get("provider") or providers.runtime_provider(runtime or catalog.get("runtime"))
+            cost, low = providers.estimate(model, item.input_tokens, item.cached_tokens, item.output_tokens, item.requests)
             return {"input_tokens": item.input_tokens, "cached_tokens": item.cached_tokens,
                     "output_tokens": item.output_tokens, "model": model or None, "provider": provider or None,
-                    "est_cost_usd": providers.estimate_cost(model, item.input_tokens, item.cached_tokens, item.output_tokens),
+                    "est_cost_usd": cost, "est_cost_low": int(low),
                     "billing": item.billing, "runtime": runtime or None, "harness": item.harness or None,
                     "effort": item.effort or None, "profile": item.profile_used or None}
         segments = [part(item) for item in (used.segments or [used])
