@@ -37,15 +37,28 @@ def test_only_a_known_code_is_kept_and_anything_else_is_unreadable():
     assert caught.value.code == "invalid" and SECRET in caught.value.detail
 
 
-def test_the_decide_routes_audit_keeps_the_code_not_the_echoed_request(api, monkeypatch):
+def test_the_decide_route_answers_and_audits_the_code_not_the_echoed_request(api, monkeypatch):
     monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     api.app.state.judge = echoing()
-    result = api.post("/api/v2/decisions", json={"state": {"ticket": SECRET}, "questions": QUESTIONS,
-                                                 "label": "mail-triage@1"}, headers=headers())
+    ask = {"state": {"ticket": SECRET}, "questions": QUESTIONS, "label": "mail-triage@1"}
+    result = api.post("/api/v2/decisions", json=ask, headers=headers())
     assert result.status_code == 422 and result.json()["error"]["code"] == "judge_invalid"
+    assert result.json()["error"]["detail"] == B.FAILED["invalid"] and "7Q4X" not in result.text
     (target, detail), = events(api, "human:ana")
     assert target == "mail-triage@1" and detail["error"] == "invalid" and "detail" not in detail
     assert "7Q4X" not in json.dumps(detail)
+
+    # Every other branch, the spend cap included, keeps its status and says only its fixed sentence.
+    for error, status, code in ((J.JudgeError("spend_cap", SECRET), 429, "spend_cap"),
+                                (J.JudgeError("unavailable", SECRET, 503, retryable=True), 503, "judge_unavailable"),
+                                (J.JudgeError("http", SECRET, 418), 502, "judge_http"),
+                                (J.JudgeError(SECRET, SECRET), 502, "judge_unreadable")):
+        def failing(state, questions, label=None, error=error):
+            raise error
+        api.app.state.judge = failing
+        result = api.post("/api/v2/decisions", json=ask, headers=headers())
+        assert (result.status_code, result.json()["error"]["code"]) == (status, code), error.code
+        assert "7Q4X" not in result.text
 
 
 def test_the_listening_api_answers_with_the_code_and_audits_it_not_the_echoed_post(api, monkeypatch):

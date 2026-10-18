@@ -265,6 +265,21 @@ def server_engine(store, c, primary=None):
     return engine
 
 
+# What a caller is told when the call fails: a fixed sentence per code, never the provider's text, which can carry more
+# than the caller's own request.
+FAILED = {
+    "auth": "The decision model refused the server's key",
+    "http": "The decision model answered with an error",
+    "invalid": "The decision model refused the request; check the state and questions against the contract",
+    "not_found": "The decision model was not found",
+    "shape": "The decision model's answer could not be read",
+    "spend_cap": "Decide has reached the team's monthly spend cap until the 1st (UTC). Carry on without it.",
+    "unavailable": "The decision model did not answer; try again shortly",
+    "unconfigured": "No decision model is configured on this server",
+    "unreadable": "The decision call failed",
+}
+
+
 def audit_detail(result):
     """What a `judge.call` row keeps of one answer: model, tokens, latency, cost and any fallback. Never the state."""
     detail = {"ms": result.get("ms"), "model": result.get("model"), "usage": result.get("usage") or {},
@@ -336,10 +351,11 @@ def install_judge(app, store, auth):
         except J.JudgeError as exc:
             with store.transaction() as c:
                 H.event(c, who.actor, "judge.call", label, {**detail, "error": J.error_code(exc)})
-            if exc.code == "spend_cap":
-                raise Problem("spend_cap", exc.detail + ". Carry on without it.", 429)
-            status = 503 if exc.retryable else (422 if exc.code == "invalid" else 502)
-            raise Problem("judge_" + exc.code, exc.detail, status)
+            code = J.error_code(exc)
+            if code == "spend_cap":
+                raise Problem("spend_cap", FAILED[code], 429)
+            status = 503 if exc.retryable else (422 if code == "invalid" else 502)
+            raise Problem("judge_" + code, FAILED[code], status)
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", label, {
                 **detail, **audit_detail(result), "answers": J.summary(result["answers"])})

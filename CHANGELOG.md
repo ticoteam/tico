@@ -73,7 +73,8 @@ All notable changes to Tico are recorded here. The format follows
 - A failed Decide call now keeps only its error code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`,
   `unavailable`, `unconfigured`, else `unreadable`) in the `judge.call` audit of `POST /api/v2/decisions` and the Slack
   gateway, in the Slack event's reason and log line, and in the listening API's per-post `errors`, never the provider's
-  error text. One shared list (`clients/judge.py`, `error_code`), the same as support triage.
+  error text. `POST /api/v2/decisions` answers a failed call with that code and a fixed sentence per code, with the same
+  HTTP status as before. One shared list (`clients/judge.py`, `error_code`), the same as support triage.
 - A doc saved through the API or a bot's doc tool now reads back exactly as sent: its final newline and any leading
   indentation (an indented code block on line 1) are kept, and a change to only the ends is a new version. Titles
   and paths still drop surrounding spaces.
