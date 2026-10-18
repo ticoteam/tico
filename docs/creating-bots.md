@@ -590,7 +590,8 @@ Levers set in **Settings → Bots**, not in the repository:
   and what its computer is signed in to.
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
-  the runtime refused). **None (fail)** is the default. The hop starts a fresh session. OpenRouter
+  the runtime refused). **None (fail)** is the default. A pick is saved with **Apply** next to it or with
+  **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → AI providers** (docs/how-it-works.md).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),

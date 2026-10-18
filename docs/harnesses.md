@@ -88,7 +88,11 @@ Bot settings, new bots, fallbacks and bulk model changes use three separate fiel
 **Harness / provider**, then **Model**, then **Effort**. Model choices follow the selected harness
 and the team's enabled providers; effort choices follow that model. For an existing bot's primary model, choose
 all three and press **Apply** to use the existing confirmation and checkpoint transition. Changing
-a field alone does not switch the running bot. Cancel restores the saved selection.
+a field alone does not switch the running bot. Cancel restores the saved selection. In the bot editor,
+**Save bot** with a model picked but not applied opens the same confirmation; press **Prepare change** to
+save the bot and start the change, or **Cancel** to keep the editor open with "Model change not applied".
+A fallback picked in the bot editor is saved by its **Apply** button or by **Save bot**; if it can't be
+saved, the editor stays open with the reason.
 
 A subscription quota response is a usage limit. The runner uses its configured fallback, or another
 signed-in provider when automatic fallback is on. Without a fallback it keeps the work queued; an explicit
