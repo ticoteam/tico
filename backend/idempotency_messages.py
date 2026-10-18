@@ -91,19 +91,24 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
     """The quoted ids of every answer written before the triggers existed. Runs at every start until it has finished
     once; the search reads `span` rowids at a time outside the write lock, and each `batch` of answers that may quote
     a message is indexed in its own short write transaction. Answers written meanwhile are indexed by the triggers.
-    Idempotent; a pass that is stopped starts again at the next start. Returns how many answers it read."""
+    Idempotent; a pass that is stopped (checked before each write) starts again at the next start. Returns how many
+    answers it read."""
     if _get(conn, READY):
         return 0
     done, after = 0, 0
     top = conn.execute("SELECT coalesce(max(rowid), 0) FROM idempotency").fetchone()[0]
+    def stopped():
+        return stop is not None and stop.is_set()
     while after < top:
-        if stop is not None and stop.is_set():
+        if stopped():
             return done
         rowids = [r[0] for r in conn.execute(
             f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response_json')}",
             (after, after + span))]
         after += span
         for start in range(0, len(rowids), batch):
+            if stopped():                   # between batches too: shutdown waits for this thread
+                return done + start
             chunk = rowids[start:start + batch]
             chosen = f"i.rowid IN ({','.join('?' * len(chunk))})"
             _write(conn, lambda: conn.execute(f"INSERT OR IGNORE INTO idempotency_messages {_quoted('i', chosen)}",

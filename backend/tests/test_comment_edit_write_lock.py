@@ -209,6 +209,21 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         stopped.set()
         assert IM.backfill(c, span=400, stop=stopped) == 0       # the server stopping: the next start goes again
         assert IM.quoting(c, said["id"]) is None
+        writes, real_write = [], IM._write
+
+        class StopAfterFirstWrite:
+            def is_set(self):
+                return bool(writes)
+
+        def counted(conn, work):
+            writes.append(1)
+            real_write(conn, work)
+        IM._write = counted
+        try:
+            assert IM.backfill(c, batch=50, span=3000, stop=StopAfterFirstWrite()) == 50   # stops mid-span
+        finally:
+            IM._write = real_write
+        assert writes == [1] and IM.quoting(c, said["id"]) is None   # one write, not ready
         assert IM.backfill(c, batch=50, span=400) == 601         # the answers that may quote a message
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
         assert IM.backfill(c) == 0                               # once
