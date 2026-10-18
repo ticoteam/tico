@@ -161,6 +161,8 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - `hub computer performance` and the `hub_computer_performance` tool work again: they read the computers reply as a list,
   so every call failed before it reached the computer's CPU, memory and disk history.
+- The Overview campus opened before the bots' status arrived now shows each desk's state as soon as it does, instead
+  of "No current status available" until the next refresh (up to two minutes).
 - The Librarian no longer turns a team's own "runner" into "Computer" because a Tico word turns up later in the
   sentence, after a semicolon: "the runner pulls a hamstring; read the stretching instructions" stays as written.
 - The Overview campus moves a bot's desk as soon as its status changes, while live updates are connected, instead of at
