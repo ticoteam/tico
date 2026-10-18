@@ -465,6 +465,7 @@ class Gateway:
         self.heartbeat = None               # called every loop turn; the process uses it for health
         self._auth = None                   # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage = "", []   # the last `ask`'s model and usage per call, for the audit
+        self.last_cost = 0.0                        # and what its calls cost, in USD (backend/judge.py cost_usd)
 
     # ------------------------------------------------------------------ start-up
     @property
@@ -733,14 +734,23 @@ class Gateway:
         map. A call that fails fails the whole ask; nothing is routed from half the answers."""
         questions = self.questions(fleet)
         ids = list(questions)
-        answers, self.last_model, self.last_usage = {}, "", []
+        from .judge import cost_usd
+        answers, self.last_model, self.last_usage, self.last_cost = {}, "", [], 0.0
         for start in range(0, len(ids), J.MAX_QUESTIONS):
             batch = {qid: questions[qid] for qid in ids[start:start + J.MAX_QUESTIONS]}
             result = self.judge(state, batch, JUDGE_LABEL)
             answers.update(result["answers"])
             self.last_model = str(result.get("model") or "")
             self.last_usage.append(result.get("usage") or {})
+            self.last_cost += cost_usd(self.settings, self.last_model, result.get("usage")) or 0.0
         return answers
+
+    def spend_capped(self):
+        """Whether the team's decision spend this month is at its cap (backend/judge.py): then every message routes
+        as it does with no decision model, to the assistant."""
+        from .judge import over_spend_cap
+        with self.store.read() as c:
+            return over_spend_cap(c, self.settings) is not None
 
     # ------------------------------------------------------------------ budget and audit
     def over_budget(self, actor, person):
@@ -810,11 +820,13 @@ class Gateway:
             return self.settings.assistant_bot
         return "botops" if "botops" in active else None
 
-    def default_decision(self, fleet, budget=False):
-        """No decision model, or the sender's daily cap is used: everything goes to the fallback bot and says so."""
+    def default_decision(self, fleet, budget=False, spend=False):
+        """No decision model, the sender's daily cap is used, or the team's monthly decision spend is at its cap:
+        everything goes to the fallback bot and says so."""
         asker = self.fallback_bot([bot["slug"] for bot in fleet])
-        why = "the sender's daily decision budget is used" if budget else "no decisions key configured"
-        return {"routed_by": "budget" if budget else "default", "model": None, "scores": {}, "asks": None,
+        why = ("the sender's daily decision budget is used" if budget else
+               "the team's monthly decision spend cap is reached" if spend else "no decisions key configured")
+        return {"routed_by": "budget" if budget else "spend_cap" if spend else "default", "model": None, "scores": {}, "asks": None,
                 "reply_to_last": None, "names_bot": None,
                 "recipients": [{"bot": asker, "confidence": None}] if asker else [],
                 "candidates": [], "fallback": True, "dropped": [],
@@ -966,6 +978,8 @@ class Gateway:
         called = None
         if self.judge is None:
             decision = self.default_decision(fleet)
+        elif self.spend_capped():
+            decision = self.default_decision(fleet, spend=True)
         elif self.over_budget(actor, person):
             decision = self.default_decision(fleet, budget=True)
         else:
@@ -975,7 +989,8 @@ class Gateway:
             except J.JudgeError as exc:
                 return self.routing_error(event, person, exc, fleet)
             decision = self.decide(answers, fleet)
-            called = {"model": self.last_model, "usage": self.last_usage, "ms": round((time.monotonic() - started) * 1000)}
+            called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
+                      "ms": round((time.monotonic() - started) * 1000)}
         with self.store.transaction() as c:
             if called:
                 self.audit(c, actor, event, fleet, called)

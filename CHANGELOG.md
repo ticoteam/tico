@@ -22,6 +22,14 @@ All notable changes to Tico are recorded here. The format follows
   out, `python -m backend.manage owner-email <db> --to <address> --apply` on the server changes it back without a
   sign-in ([Humans and access](docs/people.md#change-the-owners-sign-in-email)).
 
+- Decide has a **spend cap for the team: $50 a month** by default (`TICO_DECISIONS_MONTHLY_USD`). Each decision
+  call's cost is kept in its audit row; at the cap every caller carries on as if Decide were off (the Slack gateway
+  routes to the assistant, mail triage and listening wait). Jev's price per 1M tokens is a setting
+  (`TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT` / `_OUTPUT`) for when TypeSafe sends no cost.
+- Listening, the nightly learnings and live meetings now ask Jev the way `POST /api/v2/decisions` does: one try of
+  at most 8 seconds, and the company's own model answers when Jev is slow or down. Before, listening and live meetings
+  had no fallback and the learnings run waited up to 20 seconds with two retries per call.
+
 ### Changed
 
 - On Python 3.14 and later the server compresses API JSON with zstd for clients that accept it (browsers over

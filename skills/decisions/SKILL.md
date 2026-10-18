@@ -179,6 +179,9 @@ version for a bot:
   access request (`policies/access.md`).
 - There is a budget per actor per day (`GET /api/v2/decisions` reports it; the server sets it with
   `TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN` and `_BOT`). A loop that spends it is a bug; stop and say so.
+- There is also a spend cap for the whole team per UTC month (`TICO_DECISIONS_MONTHLY_USD`, $50 by default;
+  `GET /api/v2/decisions` shows `spent_this_month_usd`). At the cap a call is a 429 `spend_cap`: carry on as you
+  would without Decide (your own judgment, or a person), and do not retry before the 1st.
 - Test before you trust. Run a new question over ten rows you already know the answer to and
   read the misses: missing evidence in the state, a literal reading of your words, a model
   miss, or a code bug are four different fixes. Cookbook thresholds are examples, not rules.
@@ -196,7 +199,8 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
 ## Limits and the audit
 
 - Tico's audit keeps each call's label, question ids, the value and confidence per answer,
-  token usage and latency, never the state. Read a set's history back with `hub sql "SELECT ts,
+  token usage, latency, cost (`cost_usd`, when the price is known) and `fallback` when the company's own
+  model answered because Jev was slow or down, never the state. Read a set's history back with `hub sql "SELECT ts,
   actor, target, detail_json FROM events WHERE action='judge.call' AND target='mail-triage@1'
   ORDER BY ts DESC LIMIT 200"`.
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with

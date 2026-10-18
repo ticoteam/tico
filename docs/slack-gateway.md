@@ -75,6 +75,10 @@ text). A message counts once, when it is routed or finally fails, however many t
 model is not asked: the message goes to the assistant (or BotOps) with `routed_by: budget` and the reason on it, and when
 neither is running it is recorded and Tico tells the human in the thread.
 
+When the team's decision spend for the month has reached its cap (`TICO_DECISIONS_MONTHLY_USD`, backend/judge.py), the
+decision model is not asked either: the message goes to the assistant (or BotOps) with `routed_by: spend_cap`, as it would
+with no decisions key. Each `judge.call` the gateway audits also keeps the message's `cost_usd`.
+
 Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
 A misroute is fixed by a better description in the bot's registry entry, not by a rule.

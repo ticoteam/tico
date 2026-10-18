@@ -17,7 +17,10 @@ bodies and transcripts pass through here, and the audit is not the place for the
 (`questions/README.md`, a set's `id@version`) is how a month of calls is read back per decision.
 
 A budget per actor and day, so a loop cannot spend the key: the cap is on calls, counted from
-the events, and a call over it is a 429 that says when to try again. The caps per role are settings
+the events, and a call over it is a 429 that says when to try again. And a spend cap for the team per UTC month
+(`TICO_DECISIONS_MONTHLY_USD`, $50 by default), summed from each call's `cost_usd` in the audit: at the cap every
+server-side caller (this route, listening, learnings, live meetings, the Slack gateway) carries on as if Decide were
+off. Each of them gets its model from `server_engine`, so Jev's one short try and the fallback are the same for all. The caps per role are settings
 (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 """
@@ -100,6 +103,103 @@ def fallback_engine(record, env=None):
     return J.llm(*found) if found else None
 
 
+def tokens(usage):
+    """(uncached input, cached input, output) tokens from a provider's usage, whichever names it uses."""
+    usage = usage if isinstance(usage, dict) else {}
+
+    def first(*keys, within=usage):
+        for key in keys:
+            value = within.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return int(value)
+        return 0
+    details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    cached = first("cache_read_input_tokens", "cachedContentTokenCount") or first("cached_tokens", within=details)
+    if "prompt_tokens" in usage:                    # OpenAI-style counts include the cached tokens
+        return max(0, first("prompt_tokens") - cached), cached, first("completion_tokens")
+    return (first("input_tokens", "promptTokenCount"), cached,
+            first("output_tokens", "completion_tokens", "candidatesTokenCount"))
+
+
+def cost_usd(settings, model, usage):
+    """What one call cost in USD: the provider's own figure when it sends one (OpenRouter's `usage.cost`), else its
+    tokens at list price (Jev at the settings' rates, the company's models at `providers.PRICES`). None when the price
+    is unknown; such a call keeps its tokens in the audit and counts nothing toward the monthly cap."""
+    usage = usage if isinstance(usage, dict) else {}
+    for key in ("cost_usd", "cost"):
+        value = usage.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return round(float(value), 6)
+    fresh, cached, out = tokens(usage)
+    if str(model or "").lower().startswith("jev"):
+        rate_in = settings.decisions_jev_usd_per_mtok_input
+        rate_out = settings.decisions_jev_usd_per_mtok_output
+        if not (rate_in or rate_out):
+            return None
+        return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
+    found = providers.estimate_cost(model, fresh, cached, out)
+    return None if found is None else round(found, 6)
+
+
+def spent_this_month(c, at=None):
+    """USD the team's decision calls have cost since the 1st of this UTC month, from the audit."""
+    month = (at or H.now())[:7]
+    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
+                      "WHERE ts>=? AND action='judge.call'", (month + "-01T00:00:00",)).fetchone()[0]
+    return round(float(total or 0), 6)              # a float sum of cents can land a hair under the cap
+
+
+def over_spend_cap(c, settings, at=None):
+    """(spent, cap) when the month's decision spend has reached the cap, else None. A cap of 0 is no cap."""
+    cap = float(settings.decisions_monthly_usd or 0)
+    if cap <= 0:
+        return None
+    spent = spent_this_month(c, at)
+    if spent < cap:
+        return None
+    _skip("every caller", f"the month's decision spend ${spent:.2f} has reached the ${cap:.2f} cap")
+    return spent, cap
+
+
+def jev(settings):
+    """TypeSafe as the server asks it: one try of at most JEV_TIMEOUT seconds. None without a key."""
+    if not settings.typesafe_api_key or settings.rehearsal:
+        return None
+    return J.direct(settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0)
+
+
+def server_engine(c, settings, primary=None):
+    """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
+    model at all, or the month's spend at the cap. `primary` is Jev (`jev(settings)`, or the test's fake); when Jev
+    is slow or down the company's own model answers and the result says `fallback`. Each result carries `cost_usd`."""
+    if settings.rehearsal or over_spend_cap(c, settings):
+        return None
+    backup = fallback_engine(providers.load(c, settings))
+    first = primary or backup
+    if first is None:
+        return None
+
+    def engine(state, questions, label=None):
+        try:
+            result = first(state, questions, label)
+        except J.JudgeError as exc:
+            if first is not primary or backup is None or not exc.retryable:
+                raise
+            result = {**backup(state, questions, label), "fallback": exc.code}
+        return {**result, "cost_usd": cost_usd(settings, result.get("model"), result.get("usage"))}
+    engine.model = J.MODEL if first is primary else getattr(backup, "model", "")
+    return engine
+
+
+def audit_detail(result):
+    """What a `judge.call` row keeps of one answer: model, tokens, latency, cost and any fallback. Never the state."""
+    detail = {"ms": result.get("ms"), "model": result.get("model"), "usage": result.get("usage") or {},
+              "cost_usd": result.get("cost_usd")}
+    if result.get("fallback"):
+        detail["fallback"] = result["fallback"]
+    return detail
+
+
 class Ask(Contract):
     state: Any
     questions: dict[str, dict] = Field(min_length=1, max_length=J.MAX_QUESTIONS)
@@ -114,7 +214,7 @@ def used_today(c, actor, at=None, action="judge.call"):
 
 def install_judge(app, store, auth):
     settings = store.settings
-    app.state.judge = J.direct(settings.typesafe_api_key, timeout=JEV_TIMEOUT, retries=0) if settings.typesafe_api_key and not settings.rehearsal else None
+    app.state.judge = jev(settings)
 
     @app.get("/api/v2/judge")
     def config(request: Request):
@@ -123,8 +223,10 @@ def install_judge(app, store, auth):
         with store.read() as c:
             used = used_today(c, who.actor)
             engine = None if settings.rehearsal else app.state.judge or fallback_engine(providers.load(c, settings))
+            spent = spent_this_month(c)
         return {"configured": engine is not None, "model": (J.MODEL if app.state.judge else getattr(engine, "model", "")) if engine else "",
                 "daily_calls": daily_cap(settings, who.role), "used_today": used,
+                "monthly_usd": float(settings.decisions_monthly_usd or 0), "spent_this_month_usd": round(spent, 4),
                 "max_questions": J.MAX_QUESTIONS, "max_state_chars": J.MAX_STATE_CHARS}
 
     @app.post("/api/v2/judge")
@@ -134,7 +236,11 @@ def install_judge(app, store, auth):
         if settings.rehearsal:
             raise Problem("rehearsal", "Decisions are off in rehearsal mode; nothing is sent to a provider", 503)
         with store.read() as c:
-            engine = app.state.judge or fallback_engine(providers.load(c, settings))
+            capped = over_spend_cap(c, settings)
+            engine = None if capped else server_engine(c, settings, app.state.judge)
+        if capped:
+            raise Problem("spend_cap", f"Decide has cost ${capped[0]:.2f} this month; the team's cap is "
+                          f"${capped[1]:.2f} until the 1st (UTC). Carry on without it.", 429)
         if engine is None:
             raise Problem("judge_unconfigured", "No decision model is configured on this server: set a TypeSafe key, "
                           "or the API key of one of the team's AI providers", 503)
@@ -152,15 +258,7 @@ def install_judge(app, store, auth):
         detail = {"label": label, "questions": len(body.questions),
                   "types": sorted({q["type"] for q in body.questions.values()})}
         try:
-            try:
-                result = engine(body.state, body.questions, body.label)
-            except J.JudgeError as exc:
-                with store.read() as c:
-                    backup = fallback_engine(providers.load(c, settings)) if engine is app.state.judge and exc.retryable else None
-                if backup is None:
-                    raise
-                detail["fallback"] = exc.code
-                result = backup(body.state, body.questions, body.label)
+            result = engine(body.state, body.questions, body.label)
         except J.JudgeError as exc:
             with store.transaction() as c:
                 H.event(c, who.actor, "judge.call", label, {**detail, "error": exc.code, "detail": exc.detail[:300]})
@@ -168,6 +266,6 @@ def install_judge(app, store, auth):
             raise Problem("judge_" + exc.code, exc.detail, status)
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", label, {
-                **detail, "ms": result["ms"], "model": result["model"], "usage": result.get("usage") or {},
-                "answers": J.summary(result["answers"])})
-        return {**result, "label": body.label}
+                **detail, **audit_detail(result), "answers": J.summary(result["answers"])})
+        return {"model": result["model"], "answers": result["answers"], "usage": result.get("usage") or {},
+                "ms": result["ms"], "label": body.label}

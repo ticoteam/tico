@@ -26,10 +26,9 @@ from fastapi import Request
 
 from clients import judge as J
 from . import models as M
-from . import providers
 from . import task_privacy as privacy
 from .harnesses import is_external
-from .judge import fallback_engine
+from .judge import jev, server_engine
 from .statuses import PARKED_SQL
 from .store import H, Problem
 from .updates import ZONE
@@ -267,12 +266,34 @@ def collect(c, settings, now, team):
 
 # ----------------------------------------------------------------------------- route
 def engine_for(c, settings):
-    """The decision model: TypeSafe when the server holds the key, else the company's own provider, else None."""
-    if settings.rehearsal:
-        return None
-    if settings.typesafe_api_key:
-        return J.direct(settings.typesafe_api_key)
-    return fallback_engine(providers.load(c, settings))
+    """The server's decision model (backend/judge.py `server_engine`): Jev in one short try with the company's
+    own provider behind it; None when there is neither, or the month's decision spend is at its cap."""
+    return server_engine(c, settings, jev(settings))
+
+
+class Tally:
+    """An engine that adds up what its calls cost, for the run's one audit row. Calls run on several threads."""
+
+    def __init__(self, engine):
+        self.engine, self.lock = engine, threading.Lock()
+        self.calls, self.fallbacks, self.models = 0, 0, Counter()
+        self.usage, self.cost = Counter(), 0.0
+
+    def __call__(self, state, questions, label=None):
+        result = self.engine(state, questions, label)
+        with self.lock:
+            self.calls += 1
+            self.fallbacks += bool(result.get("fallback"))
+            self.models[str(result.get("model") or "")] += 1
+            self.usage.update({k: v for k, v in (result.get("usage") or {}).items()
+                               if isinstance(v, int) and not isinstance(v, bool)})
+            self.cost += result.get("cost_usd") or 0.0
+        return result
+
+    def detail(self):
+        return {"calls": self.calls, "fallbacks": self.fallbacks, "models": dict(self.models),
+                "model": self.models.most_common(1)[0][0] if self.models else "", "usage": dict(self.usage),
+                "cost_usd": round(self.cost, 6)}
 
 
 def question_set(settings):
@@ -450,6 +471,7 @@ def run(store, run_id):
         if items:
             qset = question_set(settings)
             routed_at = time.monotonic()
+            engine = Tally(engine)
             failed = route(engine, qset, items, team)
             chosen = packets(items, qset)
             detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000)})
@@ -462,7 +484,8 @@ def run(store, run_id):
                 # One audit row for the night's calls, as POST /api/v2/decisions keeps one per call: counts, never text.
                 H.event(c, H.KEEPER, "judge.call", f"{QUESTION_SET}@run", {
                     "label": f"{QUESTION_SET}@run", "run": run_id, "items": len(items), "failed": failed,
-                    "routed": routed, "deliveries": delivered, "ms": detail.get("route_ms", 0)})
+                    "routed": routed, "deliveries": delivered, "ms": detail.get("route_ms", 0),
+                    **(engine.detail() if isinstance(engine, Tally) else {})})
             detail["deliveries"] = delivered
             detail["ms"] = round((time.monotonic() - started) * 1000)
             c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail_json=? WHERE id=?",

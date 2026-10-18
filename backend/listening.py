@@ -472,7 +472,7 @@ def scores_from(answers, questions):
 def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
     """Score posts that have no judgment from the current set and route them. One decision call a post,
     each audited as a `judge.call` the way `/api/v2/decisions` audits, so the caller's budget counts it."""
-    from .judge import daily_cap, used_today
+    from .judge import audit_detail, daily_cap, used_today
     try:
         qset = question_set(store.settings)
     except J.JudgeError:
@@ -507,8 +507,8 @@ def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
         used += 1
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", qset["label"], {
-                "questions": len(questions), "types": ["noul"], "ms": answer.get("ms"), "model": answer.get("model"),
-                "usage": answer.get("usage") or {}, "answers": J.summary(answer["answers"])})
+                "questions": len(questions), "types": ["noul"], **audit_detail(answer),
+                "answers": J.summary(answer["answers"])})
             results.append(add_judgment(c, who.actor, row["id"], qset["label"],
                                         scores_from(answer["answers"], questions), dests))
     return {"question_set": qset["label"], "judged": len(results),
@@ -595,7 +595,13 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         require_listener(who)
-        engine = getattr(app.state, "judge", None)
+        from .judge import over_spend_cap, server_engine
+        with store.read() as c:
+            capped = over_spend_cap(c, store.settings)
+            engine = None if capped else server_engine(c, store.settings, getattr(app.state, "judge", None))
+        if capped:
+            raise Problem("spend_cap", "Decide has reached the team's monthly spend cap; posts stay unjudged "
+                          "until the 1st (UTC)", 429)
         if engine is None:
             raise Problem("judge_unconfigured", "No decision model is configured on this server", 503)
         return judge_pending(store, engine, who, body.limit, body.item_ids or None)
