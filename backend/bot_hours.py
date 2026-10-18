@@ -4,10 +4,10 @@ Nothing new is recorded. Bot hours are read from the runs Tico already keeps (`t
 BotOps and the Assistant included, failed or not) and their output events (`attempt_events`, keyed by the same id):
 
 - A run counts from its start to its finish (to now while it is still going).
-- A silence longer than GAP inside it is left out: between the start, each output event and the finish. `status` and
-  `diagnostic` events are the runner's own notes, not the bot working, so they don't break a silence. A run with no
-  output inside it counts start to finish. A run no longer than GAP cannot hold such a silence, so only longer runs have
-  their events read; most runs are a minute or two.
+- A silence longer than GAP inside it is left out: between the start, each event and the finish. A run with no event
+  inside it counts start to finish.
+- A run no longer than GAP cannot hold such a silence, so only longer runs have their events read; most runs are a
+  minute or two. A long run can have thousands of events, so `sampled` reads only the few that find its silences.
 
 Human hours are the people on the org chart (`people.visible_people`) times HOURS_PER_PERSON a week. The roster keeps
 no history, so every week uses today's count.
@@ -29,10 +29,8 @@ from .updates import ZONE
 GAP = timedelta(minutes=30)
 WEEKS = 12
 HOURS_PER_PERSON = 40
-QUIET_KINDS = ("status", "diagnostic")
 LONGEST_RUN = timedelta(days=2)     # a run that started earlier than this before the window is not looked for
 CACHE_S = 60                        # the Overview may open often; the answer is an estimate and keeps a minute
-CHUNK = 400
 
 
 def stamp(at):
@@ -78,6 +76,34 @@ def ratio(bot_hours, human_hours):
     return round(bot_hours / human_hours, 2) if human_hours else None
 
 
+def sampled(c, rid):
+    """Event times of run `rid` that give `worked` the same answer as all of them: halve the run's events by sequence
+    number until each stretch spans GAP or less, or is two neighbours further apart than that (a silence). Every
+    stretch left between neighbouring times read is then either short or a true silence. Each read is one lookup on
+    the (attempt_id, seq) key: a run with thousands of events costs a few dozen."""
+    lo, hi = c.execute("SELECT MIN(seq), MAX(seq) FROM attempt_events WHERE attempt_id=?", (rid,)).fetchone()
+    if lo is None:
+        return []
+    times = {}
+
+    def at(seq):
+        if seq not in times:
+            row = c.execute("SELECT created FROM attempt_events WHERE attempt_id=? AND seq=?", (rid, seq)).fetchone()
+            times[seq] = H.parse_ts(row[0]) if row else None
+        return times[seq]
+
+    todo = [(lo, hi)]
+    while todo:
+        a, b = todo.pop()
+        first, last = at(a), at(b)
+        if b - a < 2 or first is None or last is None or last - first <= GAP:
+            continue
+        mid = (a + b) // 2
+        at(mid)
+        todo += [(a, mid), (mid, b)]
+    return [t for t in times.values() if t is not None]
+
+
 class Counter:
     """Each finished run's working stretches are kept once read: a finished run doesn't change."""
 
@@ -105,16 +131,7 @@ class Counter:
                     keep[row["id"]] = out[row["id"]]
             else:
                 wanted[row["id"]] = (start, stop, end is not None)
-        ids = list(wanted)
-        activity = {i: [] for i in ids}
-        for at in range(0, len(ids), CHUNK):
-            part = ids[at:at + CHUNK]
-            marks = ",".join("?" * len(part))
-            for event in c.execute(f"SELECT attempt_id, created FROM attempt_events WHERE attempt_id IN ({marks}) "
-                                   f"AND kind NOT IN ({','.join('?' * len(QUIET_KINDS))})", (*part, *QUIET_KINDS)):
-                when = H.parse_ts(event["created"])
-                if when is not None:
-                    activity[event["attempt_id"]].append(when)
+        activity = {rid: sampled(c, rid) for rid in wanted}
         for rid, (start, stop, finished) in wanted.items():
             out[rid] = worked(start, stop, activity[rid], finished)
             if finished:

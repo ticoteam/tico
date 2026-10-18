@@ -95,16 +95,22 @@ def test_a_silence_over_thirty_minutes_is_left_out():
     assert B.worked(start, m(240), [m(20)], finished=False) == [(start, m(20))]
 
 
-def test_runner_notes_dont_break_a_silence_and_only_people_read_it(api):
+def test_a_long_runs_few_reads_find_every_silence_and_only_people_read_it(api):
     store, run = api.app.state.store, runs(api)
-    start = datetime.now(ZONE) - timedelta(hours=4)
+    start = datetime.now(ZONE) - timedelta(hours=7)
+    s = lambda n: start + timedelta(seconds=n)  # noqa: E731
+    # A six-hour run with an event every 20 seconds, silent 40 min after 1 h, 31 min after 3 h and 29 min after 4 h,
+    # and quiet for its last 45 minutes: 6 h - 40 - 31 - 45 min = 4 h 4 min.
+    quiet = [(3600, 6000), (10800, 12660), (14400, 16140), (18900, 21600)]
+    times = [s(n) for n in range(20, 21600, 20) if not any(a < n < b for a, b in quiet)]
     with store.transaction() as c:
-        # Ten minutes of work, then three hours of only status notes before the finish: ten minutes count.
-        run(c, "quiet", start, start + timedelta(hours=3, minutes=10),
-            [(start + timedelta(minutes=10), "tool")]
-            + [(start + timedelta(minutes=m), "status") for m in range(20, 190, 10)])
+        run(c, "long", start, s(21600), [(t, "delta") for t in times])
+    with store.read_transaction() as c:
+        reads = B.sampled(c, "long")
+    assert B.worked(start, s(21600), reads) == B.worked(start, s(21600), times)
+    assert len(reads) < len(times) / 4, "a long run's events are not all read"
     answer = get(api, "overview/bot-hours")
-    assert answer["last_7_days"]["bot_hours"] == round(10 / 60, 2)
+    assert answer["last_7_days"]["bot_hours"] == round(244 / 60, 2)
     assert answer["people"] == 3 and answer["last_7_days"]["human_hours"] == 120
     assert set(answer) == {"zone", "now", "first_run", "people", "hours_per_person", "gap_minutes", "last_7_days", "weeks"}
     assert all(set(w) == {"week", "bot_hours", "people", "human_hours", "ratio", "so_far"} for w in answer["weeks"])
