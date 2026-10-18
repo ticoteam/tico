@@ -11,6 +11,7 @@ import yaml
 
 from . import goals as G
 from . import hubdb as H
+from . import idempotency_messages
 from . import message_links
 from . import people as P
 from .harnesses import EXTERNAL_HARNESSES
@@ -684,6 +685,8 @@ class Store:
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
+            # Which stored retry answers quote which message (backend/idempotency_messages.py).
+            idempotency_messages.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -1304,6 +1307,8 @@ class Store:
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
+            # Until it has finished once: the quoted messages of answers written before the triggers existed.
+            idempotency_messages.backfill(c)
         c.close()
 
     @contextmanager

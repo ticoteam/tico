@@ -75,6 +75,7 @@ from urllib.parse import urlsplit
 from pathlib import Path
 
 from .batch_work import isolated
+from . import idempotency_messages
 from . import task_relations as TR
 from . import task_roles as TRo
 from . import task_snooze as TS
@@ -1021,6 +1022,9 @@ def migrate(conn, adopt_legacy=False):
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
+    # The questions a comment answered, reopened when it is deleted (`task_comment_delete`, inside the write
+    # transaction): without it that lookup read every message.
+    conn.execute("CREATE INDEX IF NOT EXISTS messages_answered_by ON messages(answered_by) WHERE answered_by IS NOT NULL")
     # The media check visits blobs often; an unindexed version lookup multiplies both histories.
     conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)")
     # The media poll's pending rows, a handful even when blobs number in the tens of thousands.
@@ -1049,6 +1053,10 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
+    # A comment's edit and delete history, rewritten on each edit or delete (`_refresh_comment_replies`) inside the
+    # write transaction: without it that update read every event.
+    conn.execute("CREATE INDEX IF NOT EXISTS events_message_change ON events(target) "
+                 "WHERE action IN ('message.edited','message.deleted')")
     conn.execute("CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")
@@ -3984,8 +3992,12 @@ def _refresh_comment_replies(conn, msg):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
                     and v.get("id") == msg["id"] and "from_actor" in v)]
         return value
-    for row in conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
-                            (msg["id"],)).fetchall():
+    # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
+    rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
+    if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
+        rows = conn.execute("SELECT rowid,response_json FROM idempotency WHERE instr(response_json,?)>0",
+                            (msg["id"],)).fetchall()
+    for row in rows:
         conn.execute("UPDATE idempotency SET response_json=? WHERE rowid=?",
                      (_dump(refresh(_json(row["response_json"], {}))), row["rowid"]))
 

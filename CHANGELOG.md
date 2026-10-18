@@ -13,6 +13,12 @@ All notable changes to Tico are recorded here. The format follows
   HQ keeps none of the call's text (only the key's label and per-call counts), that zero retention is enforced only when
   a call asks for it (OpenRouter's policy still allows in-memory prompt caching), and that the region is not confirmed.
 
+### Fixed
+- Editing or deleting a task comment no longer holds the database write lock while it reads every stored retry
+  answer. On a large install that read took 35-37 s, and other writes timed out waiting for it. The answers that
+  quote a comment are now found by index; the index is filled for existing answers at the first start, in short
+  batches. Deleting a comment also finds the questions it answered, and an edit or delete its own history, by index.
+
 ## [0.3.58] - 2026-10-18
 
 ### Added
