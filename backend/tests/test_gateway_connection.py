@@ -666,6 +666,22 @@ def test_a_request_the_gateway_refused_as_sent_is_not_retried(api, monkeypatch, 
     assert job == "uncertain" and status["state"] == "crashed"
 
 
+def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_not_retried(api, monkeypatch):
+    """The runner refuses the turn before it starts (runner-rs/src/gateway_relay.rs NOT_ISOLATED): the bot says why
+    and what to do, and the run waits for a person rather than coming back to the same runner."""
+    machine, attempt = tico_run(api, monkeypatch)
+    error = ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, "
+             "so pick another model or move the bot (not_isolated)")
+    post(api, f"attempts/{attempt['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": error}},
+        {"seq": 2, "kind": "diagnostic", "payload": {"text": f"RuntimeError: execution interrupted ({error})"}}]},
+         machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 2, "text": ""}, machine["token"])
+    status, job = ended(api, attempt)
+    assert status["focus"] == error.removesuffix(" (not_isolated)") + ". This run is saved for later", status["focus"]
+    assert job == "uncertain" and claim(api, machine, "ops") is None
+
+
 @pytest.mark.parametrize("acted", [False, True])
 def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
     machine, attempt = tico_run(api, monkeypatch)

@@ -57,12 +57,15 @@ NOT_FOUND = "not_found"
 # How long the Gateway's `rate_limited` asks a caller to wait (its Retry-After): more refused keys extend the block.
 RETRY_AFTER = 3600
 UNAVAILABLE = "upstream_unavailable"
-# Refusals of the request as it was sent: asking again gets the same answer, so a bot's run is not retried.
-FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused", "no_route", NOT_FOUND)
+# A Tico model on a runner that runs bots as itself (runner-rs/src/gateway_relay.rs NOT_ISOLATED): it never asks.
+NOT_ISOLATED = "not_isolated"
+# Refusals of the request as it was sent, and a runner that can't run Tico models: asking again gets the same answer,
+# so a bot's run is not retried.
+FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused", "no_route", NOT_FOUND, NOT_ISOLATED)
 # Every code a bot's model call can end with, as the runner names it at the end of its error
 # (runner-rs/src/hosts/pi.rs `plain_error`).
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
-         "upstream_refused", "no_route", UNAVAILABLE)
+         "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
 TICO_MODELS = "Tico Cheap 1.0, Tico Mid 1.0, Tico Power 1.0"
 # The only hosts the key goes to over plain HTTP: this computer, named exactly (a fake Gateway, a local proxy).
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -237,6 +240,9 @@ def run_status(code, text=""):
         return NOT_SERVED + "; check the Gateway URL in Settings > AI providers"
     if code == UNAVAILABLE:
         return "Tico AI Gateway is unavailable, try again"
+    if code == NOT_ISOLATED:
+        return ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer "
+                "can't, so pick another model or move the bot")
     # unsupported_field, bad_request, upstream_refused: the Gateway's own (fixed) words on what it refused.
     said = re.search(r"refused the request as sent: (.+?) \(" + re.escape(code) + r"\)", str(text or ""))
     return "The Tico AI Gateway refused the request as sent" + (f": {said[1][:200]}" if said else "")

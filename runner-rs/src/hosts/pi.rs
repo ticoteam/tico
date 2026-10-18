@@ -39,6 +39,8 @@ pub const GATEWAY_MODELS: &[(&str, &str)] =
     &[("tico-cheap-1.0", "Tico Cheap 1.0"), ("tico-mid-1.0", "Tico Mid 1.0"), ("tico-power-1.0", "Tico Power 1.0")];
 pub const GATEWAY_KEY_ENV: &str = "TICOAI_GATEWAY_KEY";
 pub const GATEWAY_URL_ENV: &str = "TICOAI_GATEWAY_URL";
+/// The turn's own directory for pi's Gateway configuration, set with the relay (gateway_relay.rs `turn_dir`).
+pub const GATEWAY_DIR_ENV: &str = "TICOAI_GATEWAY_DIR";
 const GATEWAY_DEFAULT_URL: &str = "https://updates.tico.team/v1/gateway";
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";
 
@@ -80,10 +82,12 @@ pub fn gateway_models_json(url: &str) -> Value {
     }}})
 }
 
-/// The agent directory a Gateway turn's pi reads its `models.json` from: `<workspace>/runtime/pi-gateway`.
-fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
+/// The agent directory a Gateway turn's pi reads its `models.json` from: the turn's own (GATEWAY_DIR_ENV, removed with
+/// its relay), else `<workspace>/runtime/pi-gateway`.
+pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBuf> {
     let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
-    let dir = PathBuf::from(root).join("runtime").join("pi-gateway");
+    let dir = env.get(GATEWAY_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(root).join("runtime").join("pi-gateway"));
     crate::isolation::mkdir(&dir, 0o755).ok()?;
     let body = serde_json::to_vec_pretty(&gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default())).ok()?;
     std::fs::write(dir.join("models.json"), body).ok()?;

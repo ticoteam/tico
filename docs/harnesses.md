@@ -91,9 +91,13 @@ and OpenRouter's catch-all does not offer them. The key is the one Decide uses; 
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
 preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
 
-A bot on a Tico model, or whose own fallback is one, gets the key and the Gateway's URL as `TICOAI_GATEWAY_KEY` and
-`TICOAI_GATEWAY_URL` from `GET /api/v2/credential-runtime`; no other bot does. pi reads them through a `tico` provider
-in its `models.json` (OpenAI chat completions, streamed). The server reads the Gateway's word on the key
+No bot gets the key. For a bot on a Tico model, or whose own fallback is one, the runner fetches it
+(`GET /api/v2/runner-gateway-credentials`, runner only) and starts a relay on 127.0.0.1 for that turn
+(`runner-rs/src/gateway_relay.rs`); the turn gets the relay's URL and a token good for that turn's model calls only, as
+`TICOAI_GATEWAY_URL` and `TICOAI_GATEWAY_KEY`. pi reads them through a `tico` provider in the turn's own `models.json`
+(OpenAI chat completions, streamed), in a directory removed when the turn ends. A runner hands out the key only when
+it runs bot code as another user (Tico's Docker runner); elsewhere a Tico model's turn is refused once
+(`not_isolated`, not retried) and a Tico fallback is left out. The server reads the Gateway's word on the key
 (`<gateway>/key`) on save, on **Check now**, hourly, and when an owner opens the page (at most once a minute, since
 the Gateway answers that six times a minute per key): the owner sees the 80% warning, **Gateway cap reached** and a
 key the Gateway doesn't recognise (revoked or unknown, one plain message) in Settings and Health. A Gateway that

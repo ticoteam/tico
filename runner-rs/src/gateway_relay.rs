@@ -25,15 +25,16 @@ use crate::client::Client;
 use crate::env::{Env, Vault};
 use crate::util::text_of;
 
-pub use crate::hosts::pi::{GATEWAY_KEY_ENV as KEY_ENV, GATEWAY_URL_ENV as URL_ENV};
+pub use crate::hosts::pi::{GATEWAY_DIR_ENV as DIR_ENV, GATEWAY_KEY_ENV as KEY_ENV, GATEWAY_URL_ENV as URL_ENV};
 
 /// The relay's path; what follows it goes after the Gateway's base URL.
 const PREFIX: &str = "/gateway";
 /// The one Gateway route a turn may reach: an OpenAI-chat model call.
 const MODEL_CALL: &str = "/chat/completions";
-/// Why a turn on a Tico model is refused on a runner that does not run bot code as another user.
-pub const NOT_ISOLATED: &str = "Tico models run only on a computer that runs bots as their own user (Tico's Docker \
-runner); this computer runs them as itself, where a bot's commands could read the Gateway's key";
+/// Why a turn on a Tico model is refused on a runner that does not run bot code as another user, ending with the code
+/// the server reads it by (clients/gateway.py `not_isolated`): the run is not retried, since it would be refused again.
+pub const NOT_ISOLATED: &str = "Tico models need a runner that runs bots as their own user (Tico's Docker runner). This \
+computer can't, so pick another model or move the bot (not_isolated)";
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_BODY: usize = 32 * 1024 * 1024;
 /// Request headers never passed on: the turn's token, and what belongs to this connection only.
@@ -45,17 +46,37 @@ const DROP_REQUEST: &[&str] = &[
 const DROP_RESPONSE: &[&str] =
     &["connection", "keep-alive", "transfer-encoding", "content-length", "proxy-authenticate", "trailer", "upgrade", "te"];
 
-/// A running relay for one turn. Dropping it (with the turn's vault) stops it and every call still open on it.
+/// A running relay for one turn. Dropping it (with the turn's vault) stops it and every call still open on it, and
+/// removes the turn's own pi configuration directory (`dir`).
 pub struct Relay {
     pub url: String,
     pub token: String,
+    pub dir: Option<std::path::PathBuf>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for Relay {
     fn drop(&mut self) {
         self.task.abort();
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
+}
+
+/// Where the turn of attempt `aid` keeps the pi configuration that names its relay: one directory per attempt, since
+/// every turn of every bot shares the workspace and two turns starting together would otherwise overwrite each other's
+/// relay URL.
+fn turn_dir(env: &Env, aid: &str) -> std::path::PathBuf {
+    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| ".".into());
+    let name: String = aid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    std::path::PathBuf::from(root).join("runtime").join("pi-gateway").join(if name.is_empty() { "turn".into() } else { name })
+}
+
+/// The fallback `hop`, unless it is a Tico model and this turn has no relay (a runner without isolation, or no key):
+/// such a hop could only fail, and the primary's own outcome is the truer one.
+pub fn admit(hop: Option<crate::fallback::Hop>, relayed: bool) -> Option<crate::fallback::Hop> {
+    hop.filter(|h| relayed || !crate::hosts::pi::is_gateway(Some(&h.model)))
 }
 
 struct Shared {
@@ -120,6 +141,7 @@ pub async fn hand_to_turn(
     }
     env.remove(KEY_ENV);
     env.remove(URL_ENV);
+    env.remove(DIR_ENV);
     if !isolated {
         if crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str()) {
             return Err(NOT_ISOLATED.into());
@@ -129,9 +151,12 @@ pub async fn hand_to_turn(
     }
     if let Some((key, url)) = credentials(client, &text_of(&attempt["id"])).await? {
         vault.values.push(key.clone());
-        let relay = start(&url, key).await?;
+        let mut relay = start(&url, key).await?;
+        let dir = turn_dir(env, &text_of(&attempt["id"]));
         env.insert(URL_ENV.into(), relay.url.clone());
         env.insert(KEY_ENV.into(), relay.token.clone());
+        env.insert(DIR_ENV.into(), dir.display().to_string());
+        relay.dir = Some(dir);
         vault.relay = Some(relay);
     }
     Ok(())
@@ -165,7 +190,7 @@ pub async fn start(upstream: &str, key: String) -> Result<Relay, String> {
             }
         }
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, task })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -438,6 +463,73 @@ mod tests {
             assert!(!env.contains_key(KEY_ENV) && !env.contains_key(URL_ENV) && vault.relay.is_none() && vault.values.is_empty());
         }
         assert!(asked.lock().unwrap().is_empty());                // the key is never even fetched
+    }
+
+    /// The hub's answer to the runner's credential request: the Gateway at `gateway` with KEY.
+    async fn hub_for(gateway: &str) -> (Client, Arc<Mutex<Vec<String>>>) {
+        let answer = serde_json::json!({"credentials": [
+            {"id": "gateway-key", "env": KEY_ENV, "kind": "api_key", "value": KEY},
+            {"id": "gateway-url", "env": URL_ENV, "kind": "text", "value": gateway}]}).to_string();
+        let (hub, asked) = upstream(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).into_bytes()).await;
+        (Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap(), asked)
+    }
+
+    #[tokio::test]
+    async fn two_turns_starting_together_each_reach_their_own_relay_and_leave_no_configuration_behind() {
+        let ws = std::env::temp_dir().join(format!("relay-overlap-{}", std::process::id()));
+        let mut turns = vec![];
+        for aid in ["att-a", "att-b"] {
+            let (gateway, seen) = upstream(SSE.to_vec()).await;
+            let (client, _) = hub_for(&gateway).await;
+            let (mut env, mut vault) = (Env::new(), Vault::default());
+            env.insert("HUB_WORKSPACE".into(), ws.display().to_string());
+            hand_to_turn(&client, &serde_json::json!({"id": aid, "gateway": true}), &mut env, &mut vault, true).await.unwrap();
+            turns.push((env, vault, seen));
+        }
+        // Both turns' pi configurations are written before either turn calls.
+        let settings = crate::hosts::Settings::default();
+        let dirs: Vec<_> = turns.iter().map(|(env, ..)| crate::hosts::pi::gateway_agent_dir(&settings, env).unwrap()).collect();
+        assert_ne!(dirs[0], dirs[1]);
+        let (a, b) = (turns[0].1.relay.as_ref().unwrap(), turns[1].1.relay.as_ref().unwrap());
+        assert!(a.url != b.url && a.token != b.token);
+        for ((env, vault, seen), dir) in turns.iter().zip(&dirs) {
+            assert!(dir.starts_with(ws.join("runtime/pi-gateway")));
+            let relay = vault.relay.as_ref().unwrap();
+            let models: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("models.json")).unwrap()).unwrap();
+            assert_eq!(models["providers"]["tico"]["baseUrl"], relay.url.as_str());
+            let out = call(relay, &env[KEY_ENV], "/gateway/chat/completions", "{}").await;
+            assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+            assert_eq!(seen.lock().unwrap().len(), 1);              // its own Gateway, not the other turn's
+        }
+        drop(turns);
+        assert!(dirs.iter().all(|d| !d.exists()), "{dirs:?}");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[tokio::test]
+    async fn a_runner_without_isolation_skips_a_tico_fallback_and_keeps_the_primarys_outcome() {
+        // What execute.rs does for a Claude turn that hit its limit: hand the turn the Gateway, then admit its fallback.
+        let (hub, asked) = upstream(b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
+        let client = Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap();
+        let config = serde_json::json!({"runtime": "claude", "model": "opus-5-5", "fallback": {"harness": "pi", "model": "tico-mid-1.0"}});
+        let (mut env, mut vault) = (Env::new(), Vault::default());
+        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": true, "config": config}), &mut env, &mut vault, false).await.unwrap();
+        assert!(vault.relay.is_none() && asked.lock().unwrap().is_empty());   // no Gateway credential fetched
+        let hop = crate::fallback::configured(&config);
+        assert_eq!(hop.as_ref().unwrap().model, "tico-mid-1.0");
+        assert_eq!(admit(hop, vault.relay.is_some()), None);                  // no hop: the primary's limit stands
+        // The company's default row too; any other fallback still hops, and a Tico one does with a relay.
+        let tico = crate::fallback::Hop { harness: "pi".into(), runtime: "pi".into(), model: "tico-mid-1.0".into(), reasoning_effort: None, default: true };
+        let codex = crate::fallback::Hop { harness: "codex".into(), runtime: "codex".into(), model: "gpt-5".into(), reasoning_effort: None, default: true };
+        assert_eq!(admit(Some(tico.clone()), false), None);
+        assert_eq!(admit(Some(codex.clone()), false), Some(codex));
+        assert_eq!(admit(Some(tico.clone()), true), Some(tico));
+    }
+
+    #[test]
+    fn the_refusal_says_why_and_what_to_do_with_the_code_the_server_reads() {
+        assert!(NOT_ISOLATED.starts_with("Tico models need a runner that runs bots as their own user (Tico's Docker runner)."));
+        assert!(NOT_ISOLATED.contains("pick another model or move the bot") && NOT_ISOLATED.ends_with("(not_isolated)"));
     }
 
     #[test]

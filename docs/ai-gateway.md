@@ -46,9 +46,11 @@ model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
-that run and only for model calls. That is why Tico models run only on a computer that runs bots as their own user:
-Tico's Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops with "Tico models
-run only on a computer that runs bots as their own user", and a Tico fallback is left out.
+that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
+Docker runner does. On a computer that runs bots as itself (a Mac), a bot on a Tico model stops once with "Tico models
+need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, so pick another model or
+move the bot", and the run is saved for later rather than tried again. A Tico fallback is left out there: the bot's
+own model's outcome stands.
 
 ## What the card says
 
